@@ -41,7 +41,7 @@ dot['edgecolor'] = (0, 0, 0, 1)
 dot['facecolor'] = (0, 0, 0, 1)
 dot['direction'] = forward
 
-stim['speed'] = 30  # cm/s
+stim['speed'] = 3  # cm/s
 stim['length'] = 10  # cm
 
 stim['frameDuration'] = 1  # milliseconds
@@ -77,8 +77,17 @@ def init():
 
 def update(frame_number):
     curr = int(1000*(time.time()-stim['start_t']) / stim['frameDuration']) % stim["traj_len"]
-    dot['position'][0, x] = trajectory[curr]
     #print(curr)
+
+    s = stim['step']
+    if dot['direction'] == forward:
+        dot['position'][0, x] += s
+        if (dot['position'][0, x] + s) >= 1:
+            dot['direction'] = backward
+    else:
+        dot['position'][0, x] -= s
+        if (dot['position'][0, x] - s) <= 0:
+            dot['direction'] = forward
 
     # Update the scatter collection with the new position.
     scat.set_offsets(dot['position'])
