@@ -13,16 +13,14 @@ class AudioManager:
         pygame.mixer.init()
 
         self.soundFileName_base = './' + folderName + '/'
-        self.currentCue = pygame.mixer.Sound('./' + folderName + '/attention - short.wav')
+        self.currentCue = None  # pygame.mixer.Sound('./' + folderName + '/attention - short.wav')
         self.goStopCue = pygame.mixer.Sound('./' + folderName + '/go-stop.wav')
 
+    def get_soundFileName(self, fileName):
+        return self.soundFileName_base + fileName
 
-    def get_soundFileName(self, _type):
-        return self.soundFileName_base + _type + ' - short.wav'
-
-    def setSound(self, trialCue):
-        self.currentCue = pygame.mixer.Sound(self.get_soundFileName(trialCue))
-
+    def setSound(self, trialCue, appendix=" - short.wav"):
+        self.currentCue = pygame.mixer.Sound(self.get_soundFileName(trialCue+appendix))
         return self
 
     def play(self):
