@@ -1,41 +1,78 @@
 import os
 from psychopy import core, data, gui
 
-os.chdir(os.path.dirname(os.path.realpath(__file__)))
-from modules.ui_management import UserInterfaceExpt, ui_get_initialData
+from modules.arduino_comm import ArduinoComm
+from modules.kinect_comm import KinectComm
+from modules.file_management import FileManager
+from modules.audio_management import AudioManager
+
+script_path = os.path.dirname(os.path.realpath(__file__))
+os.chdir(script_path)
 
 # -- GET INPUT FROM THE EXPERIMENTER --
 expt_info = {
-    'Participant Code': 'ST12',
-    'Unit Number': '0',
-    'Number of repeats': 30
+    '01. Experiment Name': 'controlled-touch-MNG',
+    '02. Participant Code': 'ST12',
+    '03. Unit Number': 0,
+    '04. Folder for saving data': 'data'
     }
 dlg = gui.DlgFromDict(expt_info, title='Experiment details')
-# add the time when the user pressed enter:
-expt_info['Date and time'] = data.getDateStr(format='%Y-%m-%d_%H-%M-%S')
 if dlg.OK:
     pass  # continue
 else:
     core.quit()  # the user hit cancel so exit
 
+# add the time when the user pressed enter:
+expt_info['Date and time'] = data.getDateStr(format='%Y-%m-%d_%H-%M-%S')
+date_time = expt_info['Date and time']
+experiment_name = expt_info['01. Experiment Name']
+participant_id = expt_info['02. Participant Code']
+unit_name = expt_info['03. Unit Number']
+data_folder = expt_info['04. Folder for saving data']
+
+# -- MAKE FOLDER/FILES TO SAVE DATA --
+filename_core = experiment_name + '_' + participant_id + '_' + unit_name
+filename_prefix = date_time + '_' + filename_core
+fm = FileManager(data_folder, filename_prefix)
+fm.generate_infoFile(expt_info)
+
 # -- SETUP STIMULUS CONTROL --
-types = ['tap','stroke']
-speeds = [1.0, 3.0, 6.0, 9.0, 15.0, 18.0, 21.0, 24.0] #cm/s
+types = ['tap', 'stroke']
 contact_areas = ['one finger tip', 'two finger pads', 'whole hand']
+speeds = [1.0, 3.0, 6.0, 9.0, 15.0, 18.0, 21.0, 24.0] #cm/s
 forces = ['light', 'moderate', 'strong']
 
 stim_list = []
 for type in types:
-    for speed in speeds:
-        for contact_area in contact_areas:
+    for contact_area in contact_areas:
+        for speed in speeds:
             for force in forces:
                 stim_list.append({
-                    'type': type,
-                    'speed': speed,
-                    'contact_area': contact_area,
-                    'force': force
+                'type': type,
+                'contact_area': contact_area,
+                'speed': speed,
+                'force': force
                 })
 
+n_stim_per_block = len(speeds)*len(forces)
+n_blocks = int(len(stim_list)/n_stim_per_block)
+
+# -- SETUP AUDIO --
+sounds_folder = "sounds"
+am = AudioManager(sounds_folder)
+
+# -- SETUP TRIGGER BOX CONNECTION --
+ac = ArduinoComm()
+
+# -- SETUP KINECT CONNECTION --
+kinect_recorder_path = r'C:\Program Files\Azure Kinect SDK v1.2.0\tools'
+kinect = KinectComm(kinect_recorder_path, fm.data_folder)
+
+# -- MAIN EXPERIMENT LOOP --
+
+for block_no in range(n_blocks):
+    for current_stim in stim_list:
+        pass
 # trigger kinect recording
 #
 # visual and/or audio cue with the name of the upcoming stimulus
