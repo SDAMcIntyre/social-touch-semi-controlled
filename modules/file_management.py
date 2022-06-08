@@ -7,19 +7,18 @@ class FileManager:
     def __init__(self, _data_folder, _filename_prefix):
         self.data_folder = './' + _data_folder + '/'
         self.filename_prefix = _filename_prefix
-        if not os.path.exists(self.dataFolder):
-            os.makedirs(self.dataFolder)
+        if not os.path.exists(self.data_folder):
+            os.makedirs(self.data_folder)
 
         # initialise files
-        self.filename_prefix
         try:
-            self.dataFile = open(self.filename_prefix + '_stimuli.csv', 'w')
+            self.dataFile = open(self.data_folder + self.filename_prefix + '_stimuli.csv', 'w')
             self.dataFile.write('trial,type,speed,contact_area,force,pulse_code,kinect_recording\n')
         except IOError:
             input("Could not open" + self.filename_prefix + '_stimuli.csv' + " file!")
 
         try:
-            self.logFile = open(self.filename_prefix + '_log.csv', 'w')
+            self.logFile = open(self.data_folder + self.filename_prefix + '_log.csv', 'w')
             self.logFile.write('time,event\n')
         except IOError:
             input("Could not open" + self.filename_prefix + '_log.csv' + " file!")
@@ -27,7 +26,7 @@ class FileManager:
     def generate_infoFile(self, exptInfo):
         infoFile = None
         try:
-            infoFile = open(self.filename_prefix + '_info.csv', 'w')
+            infoFile = open(self.data_folder + self.filename_prefix + '_info.csv', 'w')
         except IOError:
             input("Could not open" + self.filename_prefix + '_info.csv' + " file!")
 

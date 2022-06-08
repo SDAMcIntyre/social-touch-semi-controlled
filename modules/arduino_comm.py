@@ -26,8 +26,6 @@ class ArduinoComm:
             while self.timer.getTime() < self.pulse_duration/1000*2:
                 pass
 
-        self.send_on_signal()
-
         return self
 
     def send_on_signal(self):
