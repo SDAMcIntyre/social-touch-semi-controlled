@@ -14,7 +14,8 @@ expt_info = {
     '01. Experiment Name': 'controlled-touch-MNG',
     '02. Participant Code': 'ST12',
     '03. Unit Number': 0,
-    '04. Folder for saving data': 'data'
+    '04. Folder for saving data': 'data',
+    '05. Start from block no.': 1
     }
 dlg = gui.DlgFromDict(expt_info, title='Experiment details')
 if dlg.OK:
@@ -29,6 +30,7 @@ experiment_name = expt_info['01. Experiment Name']
 participant_id = expt_info['02. Participant Code']
 unit_name = expt_info['03. Unit Number']
 data_folder = expt_info['04. Folder for saving data']
+block_no = expt_info['05. Start from block no.']
 
 # -- MAKE FOLDER/FILES TO SAVE DATA --
 filename_core = experiment_name + '_' + participant_id + '_' + unit_name
@@ -69,10 +71,15 @@ kinect_recorder_path = r'C:\Program Files\Azure Kinect SDK v1.2.0\tools'
 kinect = KinectComm(kinect_recorder_path, fm.data_folder)
 
 # -- MAIN EXPERIMENT LOOP --
+stim_no = (block_no-1)*n_stim_per_block
+expt_clock = core.Clock()
+fm.logEvent(expt_clock,"experiment started")
+while stim_no < len(stim_list:)
 
-for block_no in range(n_blocks):
-    for current_stim in stim_list:
-        pass
+    # check if it's time to iterate the block no.
+    if stim_no % n_stim_per_block == 0:
+        fm.logEvent(expt_clock,"block {} of {} complete" .format(block_no,n_blocks))
+        block_no += 1
 # trigger kinect recording
 #
 # visual and/or audio cue with the name of the upcoming stimulus
