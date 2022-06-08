@@ -24,6 +24,8 @@ class Metronome:
     x, y = [0, 1]
     x_init, y_init = [0, 0.5]
 
+    prev_traj_id = 0
+
     cm2inch = 0.393701
     screen_adj_x = 0.95
     screen_adj_y = 0.95
@@ -40,7 +42,8 @@ class Metronome:
         self.stim = Stimulus()
 
         self.trajectory = None
-        self.traj_len = None
+        self.traj_len = 0
+        self.traj_lenHalf = 0
 
         self.fig_frameDuration = 1  # width of the visual frame duration (milliseconds)
         self.fig_frameHz = 1000 / self.fig_frameDuration  # refresh rate of the window (Hz)
@@ -60,21 +63,29 @@ class Metronome:
 
     def update(self, i):
         t = time.time()
+        elapsed_t = t - self.start_t
         if t > self.end_t:
             self.ani.event_source.stop()
             del self.ani
             plt.close()
-
-        curr = int(1000 * (t - self.start_t) / self.fig_frameDuration)  # ms/frame dur
-        self.dot.x = self.trajectory[curr % self.traj_len]
-
+        curr = int(1000*elapsed_t/self.fig_frameDuration)  # ms/frame dur
+        traj_id = curr % self.traj_len
+        self.dot.x = self.trajectory[traj_id]
         # Update the scatter collection with the new position.
         self.scat.set_offsets([self.dot.x, self.dot.y])
 
+        # display short sound (audio metronome)
+        if elapsed_t > self.audiom.countDownDuration:
+            if self.prev_traj_id > traj_id:  # the loop has been made
+                self.audiom.playMetronomeCue()
+            elif self.prev_traj_id < self.traj_lenHalf <= traj_id:  # went through half of the period (bouncing back)
+                self.audiom.playMetronomeCue()
+        self.prev_traj_id = traj_id
+
     def init_anim(self):
-        time.sleep(3)
+        self.prev_traj_id = 0
         self.start_t = time.time()  # sec
-        self.end_t = self.start_t + self.stim.duration  # sec
+        self.end_t = self.start_t + self.stim.duration + self.audiom.countDownDuration  # sec
 
     def init_metronome(self, contact, size, force, audio_version, speed=5, vertical=False, duration=3):
         audioFile = contact + "_" + size + "_" + force + "_" + str(speed) + "_" + audio_version
@@ -113,3 +124,4 @@ class Metronome:
         half_traj_2 = np.arange(1, 0, -self.stim.step)
         self.trajectory = np.concatenate((half_traj_1, half_traj_2), axis=None)
         self.traj_len = len(self.trajectory)
+        self.traj_lenHalf = int(self.traj_len/2)

@@ -15,6 +15,7 @@ class AudioManager:
         self.soundFileName_base = './' + folderName + '/'
         self.currentCue = None  # pygame.mixer.Sound('./' + folderName + '/attention - short.wav')
         self.goStopCue = pygame.mixer.Sound('./' + folderName + '/go-stop.wav')
+        self.bitMetronome = pygame.mixer.Sound('./' + folderName + '/metronome_bit.mp3')
 
     def get_soundFileName(self, fileName):
         return self.soundFileName_base + fileName
@@ -28,3 +29,7 @@ class AudioManager:
 
     def playStopCue(self):
         return self.goStopCue.play()
+
+    def playMetronomeCue(self):
+        return self.bitMetronome.play()
+
