@@ -26,13 +26,14 @@ class ArduinoComm:
             while self.timer.getTime() < self.pulse_duration/1000*2:
                 pass
 
-        #time.sleep(0.175)  # Sleep for 70 milliseconds
-
-        self.trigger.ser.write(self.running)
+        self.send_on_signal()
 
         return self
 
-    def stop_recording(self):
+    def send_on_signal(self):
+        self.trigger.ser.write(self.running)
+
+    def stop_signal(self):
         self.trigger.ser.write(self.stop)
 
         return self

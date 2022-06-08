@@ -74,25 +74,73 @@ kinect = KinectComm(kinect_recorder_path, fm.data_folder)
 stim_no = (block_no-1)*n_stim_per_block
 expt_clock = core.Clock()
 fm.logEvent(expt_clock,"experiment started")
-while stim_no < len(stim_list:)
+while stim_no < len(stim_list):
 
-    # check if it's time to iterate the block no.
-    if stim_no % n_stim_per_block == 0:
-        fm.logEvent(expt_clock,"block {} of {} complete" .format(block_no,n_blocks))
-        block_no += 1
-# trigger kinect recording
-#
-# visual and/or audio cue with the name of the upcoming stimulus
-#
-# trigger/sync signal -> TTL to nerve recording and LED to camera (make sure it is visible)
-#
-# metronome for timing during stimulus delivery
-#
-# trigger/sync signal off
-#
-# Kinect off
-#
-# log files
+    # start kinect recording
+
+    kinect.start_recording(filename_core + '_block{}' .format(block_no))
+    kinect_start_time = expt_clock.getTime()
+    fm.logEvent(kinect_start_time, "kinect started recording {}" .format(kinect.filename))
+
+    kinect_start_delay = 0.2 # how long to wait to make sure the kinect has started
+    while expt_clock.getTime() < kinect_start_time + kinect_start_delay:
+        pass
+
+    # - BLOCK LOOP --
+
+        # visual and/or audio cue with the name of the upcoming stimulus
+        #
+        # trigger/sync signal -> TTL to nerve recording and LED to camera (make sure it is visible)
+        if start_of_block:
+            fm.logEvent(
+                expt_clock.getTime(),
+                "sending {} pulses for block number" .format(block_no)
+            )
+            ac.send_pulses(block_no)
+            start_of_block = False
+
+        ac.send_on_signal()
+        fm.logEvent(expt_clock.getTime(), "TTL/LED on")
+
+        # metronome for timing during stimulus delivery
+        #
+
+        # trigger/sync signal off
+
+        ac.stop_signal()
+        fm.logEvent(expt_clock.getTime(), "TTL/LED off")
+
+        # Kinect off
+
+        kinect.stop_recording(2) # stop recording with a delay
+        fm.logEvent(expt_clock.getTime(), "Kinect stopped")
+
+        # write to data file
+        fm.dataWrite(
+            stim_no+1,
+            stim_list[stim_no]['type'],
+            stim_list[stim_no]['speed'],
+            stim_list[stim_no]['contact_area'],
+            stim_list[stim_no]['force'],
+            block_no,
+            kinect.filename
+        )
+
+        fm.logEvent(
+            expt_clock.getTime(),
+            "stimulus {} of {} complete (in block {})" .format(stim_no, len(stim_list), block_no)
+        )
+        stim_no += 1
+
+        # check if it's time to iterate the block no.
+        if stim_no % n_stim_per_block == 0:
+            fm.logEvent(
+                expt_clock.getTime(),
+                "block {} of {} complete" .format(block_no, n_blocks)
+            )
+            block_no += 1
+            start_of_block = True
+
 #
 # can cancel at any time, saves data so far (data saved after every stimulus)
 #

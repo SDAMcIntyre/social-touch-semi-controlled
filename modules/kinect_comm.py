@@ -19,10 +19,10 @@ class KinectComm:
     def start_recording(self, filename_core):
         filename_prefix = (data.getDateStr(format='%Y-%m-%d_%H-%M-%S') + '_' + filename_core)
 
-        videoPath = self.outputDir + '\\' + filename_prefix + '.mkv'
+        self.filename = self.outputDir + '\\' + filename_prefix + '.mkv'
 
         self.process = subprocess.Popen(
-            [self.scriptPath, videoPath],
+            [self.scriptPath, self.filename],
             stdin=PIPE,
             stdout=PIPE,
             stderr=PIPE,

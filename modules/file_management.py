@@ -14,7 +14,7 @@ class FileManager:
         self.filename_prefix
         try:
             self.dataFile = open(self.filename_prefix + '_stimuli.csv', 'w')
-            self.dataFile.write('trial,type,speed,contact_area,force,kinect_recording,pulse_code\n')
+            self.dataFile.write('trial,type,speed,contact_area,force,pulse_code,kinect_recording\n')
         except IOError:
             input("Could not open" + self.filename_prefix + '_stimuli.csv' + " file!")
 
@@ -45,8 +45,10 @@ class FileManager:
 
         return self
 
-    def dataWrite(self, trial_id, trialCue, nbPulseCue):
-        self.dataFile.write('{},{},{}\n'.format(trial_id, trialCue, nbPulseCue))
+    def dataWrite(self, trial, type, speed, contact_area, force, pulse_code, kinect_recording):
+        self.dataFile.write('{},{},{},{},{},{},{}\n'.format(
+            trial, type, speed, contact_area, force, pulse_code, kinect_recording
+        ))
 
         return self
 
