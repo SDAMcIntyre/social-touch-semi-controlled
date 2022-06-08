@@ -98,13 +98,13 @@ while stim_no < len(stim_list):
 
         start_of_block = False
 
-    ac.send_on_signal()
-    fm.logEvent(expt_clock.getTime(), "TTL/LED on")
-
     # pre-stimulus waiting period
     stim_clock.reset()
-    while stim_clock.getTime() < 0.1:
+    while stim_clock.getTime() < 1.5:
         pass
+
+    ac.send_on_signal()
+    fm.logEvent(expt_clock.getTime(), "TTL/LED on")
 
     # metronome for timing during stimulus delivery
     #
@@ -120,7 +120,7 @@ while stim_no < len(stim_list):
 
     # stand-in for stimulus duration
     stim_clock.reset()
-    while stim_clock.getTime() < 0.1:
+    while stim_clock.getTime() < 1:
         pass
 
     # trigger/sync signal off
