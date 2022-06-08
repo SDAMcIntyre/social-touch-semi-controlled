@@ -4,31 +4,32 @@ import os
 
 class FileManager:
 
-    def __init__(self, _dataFolder, _datetime, experimentName, _participant_ID):
-        self.dataFolder = './' + _dataFolder + '/'
+    def __init__(self, _data_folder, _filename_prefix):
+        self.data_folder = './' + _data_folder + '/'
+        self.filename_prefix = _filename_prefix
         if not os.path.exists(self.dataFolder):
             os.makedirs(self.dataFolder)
 
         # initialise files
-        self.fileName_core = self.dataFolder + experimentName + '_' + _datetime + '_neural_P' + _participant_ID
+        self.filename_prefix
         try:
-            self.dataFile = open(self.fileName_core + '_communication-data.csv', 'w')
-            self.dataFile.write('trial,cued,triggerNbPulse\n')
+            self.dataFile = open(self.filename_prefix + '_stimuli.csv', 'w')
+            self.dataFile.write('trial,type,speed,contact_area,force,kinect_recording,pulse_code\n')
         except IOError:
-            input("Could not open" + self.fileName_core + '_communication-data.csv' + " file!")
+            input("Could not open" + self.filename_prefix + '_stimuli.csv' + " file!")
 
         try:
-            self.logFile = open(self.fileName_core + '_log.csv', 'w')
+            self.logFile = open(self.filename_prefix + '_log.csv', 'w')
             self.logFile.write('time,event\n')
         except IOError:
-            input("Could not open" + self.fileName_core + '_log.csv' + " file!")
+            input("Could not open" + self.filename_prefix + '_log.csv' + " file!")
 
     def generate_infoFile(self, exptInfo):
         infoFile = None
         try:
-            infoFile = open(self.fileName_core + '_info.csv', 'w')
+            infoFile = open(self.filename_prefix + '_info.csv', 'w')
         except IOError:
-            input("Could not open" + self.fileName_core + '_info.csv' + " file!")
+            input("Could not open" + self.filename_prefix + '_info.csv' + " file!")
 
         for k, v in exptInfo.items():
             infoFile.write(k + ',' + str(v) + '\n')
