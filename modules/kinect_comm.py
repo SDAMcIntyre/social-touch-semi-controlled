@@ -15,6 +15,7 @@ class KinectComm:
 
         self.scriptPath = _locationScript + '\\k4arecorder.exe'
         self.outputDir = r'' + os.path.realpath(_outputDirectory)
+        self.filename = self.outputDir + '\\_.mkv'
         self.process = None
 
     def start_recording(self, filename_core):
