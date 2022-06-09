@@ -1,4 +1,5 @@
 import os
+from pynput import keyboard
 from psychopy import core, data, gui
 
 from modules.arduino_comm import ArduinoComm
@@ -69,6 +70,20 @@ ac = ArduinoComm()
 # -- SETUP KINECT CONNECTION --
 kinect_recorder_path = r'C:\Program Files\Azure Kinect SDK v1.2.0\tools'
 kinect = KinectComm(kinect_recorder_path, fm.data_folder)
+
+# -- ABORT/EXIT ROUTNE --
+def abort_experiment():
+    ac.stop_signal()
+    ac.trigger.ser.close()
+    kinect.stop_recording(2)
+    fm.logEvent(expt_clock.getTime(), "experiment aborted")
+    os._exit(0)
+
+listener = keyboard.Listener(
+    on_press=abort_experiment(),
+    on_release=abort_experiment())
+
+listener.start() # now the script will exit if you press escape
 
 # -- MAIN EXPERIMENT LOOP --
 stim_no = (block_no-1)*n_stim_per_block
