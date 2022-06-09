@@ -69,7 +69,8 @@ ac = ArduinoComm()
 
 # -- SETUP KINECT CONNECTION --
 kinect_recorder_path = r'C:\Program Files\Azure Kinect SDK v1.2.0\tools'
-kinect = KinectComm(kinect_recorder_path, fm.data_folder)
+kinect_output_subfolder = fm.data_folder + './' + date_time
+kinect = KinectComm(kinect_recorder_path, kinect_output_subfolder)
 
 # -- ABORT/EXIT ROUTNE --
 def abort_experiment():
@@ -86,31 +87,31 @@ listener = keyboard.Listener(
 listener.start() # now the script will exit if you press escape
 
 # -- MAIN EXPERIMENT LOOP --
-stim_no = (block_no-1)*n_stim_per_block
+stim_no = (block_no-1)*n_stim_per_block # start with the first stimulus in the block
 start_of_block = True
 stim_clock = core.Clock()
 expt_clock = core.Clock()
-fm.logEvent(expt_clock.getTime(),"experiment started")
+fm.logEvent(expt_clock.getTime(), "experiment started")
 while stim_no < len(stim_list):
 
     if start_of_block:
 
         # start kinect recording
+        fm.logEvent(expt_clock.getTime(), "about to tell kinect to start recording")
         kinect.start_recording(filename_core + '_block{}' .format(block_no))
         kinect_start_time = expt_clock.getTime()
-        fm.logEvent(kinect_start_time, "kinect started recording {}" .format(kinect.filename))
-
+        fm.logEvent(kinect_start_time, "told kinect to start recording {}" .format(kinect.filename))
         kinect_start_delay = 2.0 # how long to wait to make sure the kinect has started
         while expt_clock.getTime() < kinect_start_time + kinect_start_delay:
             pass
 
         # trigger/sync signal -> TTL to nerve recording and LED to camera (make sure it is visible)
+        fm.logEvent(expt_clock.getTime(), "about to tell triggerbox to send pulses/flashes")
+        ac.send_pulses(block_no)
         fm.logEvent(
             expt_clock.getTime(),
-            "sending {} pulses for block number" .format(block_no)
+            "told triggerbox to send {} pulses/flashes for block number" .format(block_no)
         )
-        ac.send_pulses(block_no)
-
         start_of_block = False
 
     # pre-stimulus waiting period
