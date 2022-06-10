@@ -87,6 +87,7 @@ class Metronome:
 
     # End routine called when the stimulus is finished
     def end(self):
+        pass
         #self.audio.stopCue.play()
         #time.sleep(self.audio.durationStop)
 

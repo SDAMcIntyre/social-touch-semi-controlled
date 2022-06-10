@@ -3,6 +3,7 @@ import time
 from libraries.triggerbox import TriggerBox
 from psychopy import core
 
+
 # Interact with arduino connected through USB port
 
 
@@ -10,7 +11,7 @@ class ArduinoComm:
 
     def __init__(self):
         self.trigger = TriggerBox()
-        self.pulse_duration = 70 # in ms
+        self.pulse_duration = 70  # in ms
         self.pulse = self.trigger.make_analog_signal(channel=3, voltage=5, duration=self.pulse_duration)  # in ms
         self.running = self.trigger.make_analog_signal(channel=3, voltage=5, duration=0)  # infinite
         self.stop = self.trigger.make_cancel_signal(channel=3)  # stop ch 3
@@ -23,7 +24,7 @@ class ArduinoComm:
         for current_pulse in range(nb_pulse):
             self.timer.reset()
             self.trigger.ser.write(self.pulse)
-            while self.timer.getTime() < self.pulse_duration/1000*2:
+            while self.timer.getTime() < self.pulse_duration / 1000 * 2:
                 pass
 
         return self
@@ -35,10 +36,11 @@ class ArduinoComm:
             pass
 
     def stop_signal(self):
-        self.trigger.ser.write(self.stop)
+        try:
+            self.trigger.ser.write(self.stop)
+        except:
+            pass
         return self
 
     def close(self):
         self.trigger.ser.close()
-
-
