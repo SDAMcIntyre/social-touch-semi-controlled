@@ -72,25 +72,38 @@ kinect_recorder_path = r'C:\Program Files\Azure Kinect SDK v1.2.0\tools'
 kinect_output_subfolder = fm.data_folder + './' + date_time
 kinect = KinectComm(kinect_recorder_path, kinect_output_subfolder)
 
+# -- SETUP EXPERIMENT CLOCKS --
+expt_clock = core.Clock()
+stim_clock = core.Clock()
+
 # -- ABORT/EXIT ROUTNE --
-def abort_experiment():
-    ac.stop_signal()
-    ac.trigger.ser.close()
-    kinect.stop_recording(2)
-    fm.logEvent(expt_clock.getTime(), "experiment aborted")
-    os._exit(0)
+def abort_experiment(key):
+    if key == keyboard.Key.esc:
+        try:
+            ac.stop_signal()
+        except:
+            pass
+        try:
+            ac.trigger.ser.close()
+        except:
+            pass
+        try:
+            kinect.stop_recording(2)
+        except:
+            pass
+        fm.logEvent(expt_clock.getTime(), "experiment aborted")
+        os._exit(0)
 
 listener = keyboard.Listener(
-    on_press=abort_experiment(),
-    on_release=abort_experiment())
+    on_press=abort_experiment,
+    on_release=abort_experiment)
 
 listener.start() # now the script will exit if you press escape
 
 # -- MAIN EXPERIMENT LOOP --
 stim_no = (block_no-1)*n_stim_per_block # start with the first stimulus in the block
 start_of_block = True
-stim_clock = core.Clock()
-expt_clock = core.Clock()
+expt_clock.reset()
 fm.logEvent(expt_clock.getTime(), "experiment started")
 while stim_no < len(stim_list):
 
