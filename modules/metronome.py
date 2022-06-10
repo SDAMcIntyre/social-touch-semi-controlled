@@ -84,6 +84,7 @@ class Metronome:
             self.n_period += 1  # increments the number of period made
         elif self.prev_id < self.traj_lenHalf <= id_curr:  # went through half of the period (bouncing back)
             self.audio.bitMetronome.play()
+        self.prev_id = id_curr
 
     # End routine called when the stimulus is finished
     def end(self):
