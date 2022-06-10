@@ -1,7 +1,8 @@
 
 import subprocess
 import os
-from subprocess import Popen, PIPE, CREATE_NEW_CONSOLE
+from subprocess import Popen, PIPE, CREATE_NEW_CONSOLE, CREATE_NEW_PROCESS_GROUP
+from signal import CTRL_C_EVENT
 import keyboard
 # import time
 from psychopy import data, core
@@ -31,7 +32,7 @@ class KinectComm:
             stdin=PIPE,
             stdout=PIPE,
             stderr=PIPE,
-            creationflags=subprocess.CREATE_NEW_CONSOLE #| subprocess.CREATE_NEW_PROCESS_GROUP
+            creationflags= CREATE_NEW_CONSOLE | CREATE_NEW_PROCESS_GROUP
         )
         return self
 
@@ -41,7 +42,9 @@ class KinectComm:
         # wait for delay
         while delay_timer.getTime() > 0:
             pass
-        keyboard.press_and_release('ctrl+c')
+        #keyboard.press_and_release('ctrl+c')
+        self.process.send_signal(CTRL_C_EVENT)
+        self.process.terminate()
         self.process.wait()
 
         return self
