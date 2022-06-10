@@ -41,9 +41,9 @@ fm = FileManager(data_folder, filename_prefix)
 fm.generate_infoFile(expt_info)
 
 # -- SETUP STIMULUS CONTROL --
-types = ['stroke','tap']
-contact_areas = ['one finger tip', 'whole hand', 'two finger pads']
-speeds = [1.0, 3.0, 6.0, 9.0, 15.0, 18.0, 21.0, 24.0] #cm/s
+types = ['stroke', 'tap']
+contact_areas = ['one finger tip']#, 'whole hand', 'two finger pads']
+speeds = [1.0, 3.0, 6.0]#, 9.0, 15.0, 18.0, 21.0, 24.0] #cm/s
 forces = ['light', 'moderate', 'strong']
 
 stim_list = []
@@ -159,9 +159,9 @@ while stim_no < len(stim_list):
     )
 
     # stand-in for stimulus duration
-    stim_clock.reset()
-    while stim_clock.getTime() < 1:
-        pass
+    # stim_clock.reset()
+    # while stim_clock.getTime() < 1:
+    #     pass
 
     # trigger/sync signal off
 
