@@ -52,9 +52,6 @@ class KinectComm:
     def is_stopped(self):
         return self.process.poll() is None
 
-    # import signal
-    # self.p.send_signal(signal.CTRL_C_EVENT)
-
     def record_trial(self, filename_core, duration):
         trial_timer = core.CountdownTimer()
         trial_timer.add(duration)
@@ -62,7 +59,6 @@ class KinectComm:
         # wait for recording duration
         while trial_timer.getTime() > 0:
             pass
-            # keyboard.record('esc')
 
         self.stop_recording()
         return self
