@@ -41,7 +41,7 @@ fm = FileManager(data_folder, filename_prefix)
 fm.generate_infoFile(expt_info)
 
 # -- SETUP STIMULUS CONTROL --
-types = ['stroke', 'tap']
+types = ['tap', 'stroke']
 contact_areas = ['one finger tip']#, 'whole hand', 'two finger pads']
 speeds = [24.0, 1.0, 3.0, 6.0]#, 9.0, 15.0, 18.0, 21.0, 24.0] #cm/s
 forces = ['light', 'moderate', 'strong']

@@ -31,7 +31,7 @@ class KinectComm:
             stdin=PIPE,
             stdout=PIPE,
             stderr=PIPE,
-            creationflags=subprocess.CREATE_NEW_CONSOLE
+            creationflags=subprocess.CREATE_NEW_CONSOLE #| subprocess.CREATE_NEW_PROCESS_GROUP
         )
         return self
 
