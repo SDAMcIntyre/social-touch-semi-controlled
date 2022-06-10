@@ -14,6 +14,7 @@ class AudioCues:
         self.goCue = pygame.mixer.Sound(self.soundFileName_base + 'go.wav')
         self.stopCue = pygame.mixer.Sound(self.soundFileName_base + 'stop.wav')
         self.bitMetronome = pygame.mixer.Sound(self.soundFileName_base + 'metronome_bit.mp3')
+        self.bitMetronome24 = pygame.mixer.Sound(self.soundFileName_base + 'metronome_bit24.mp3')
 
         self.durationGo = 0  # self.goCue.get_length()
         self.durationStop = 0  # self.stopCue.get_length()
@@ -29,6 +30,7 @@ class Metronome:
     audio: AudioCues
     ball: matplotlib.axes.Axes.scatter
 
+    is24: bool
     vertical: bool
     step: float
     prev_id: int
@@ -44,6 +46,7 @@ class Metronome:
         self.traj_len = 0  # length of the trajectory array
         self.traj_lenHalf = 0  # half the length to avoid repetitive calculation
 
+        self.is24 = False
         self.vertical = False
         self.step = 0.0
         self.prev_id = 0
@@ -56,10 +59,13 @@ class Metronome:
         self.n_period = 0
         self.prev_id = 0
         #self.audio.goCue.play()
+        if self.is24:
+            self.audio.bitMetronome24.play()
 
     # provides the window's area where to draw the metronome
     #  - vertical
     def initialise(self, ax, gesture, speed, distance, frameHz):
+        self.is24 = (speed == 24)
         self.vertical = (gesture == "tap")
         # if vert: do something about vertical/horizontal
         if self.vertical:
@@ -80,10 +86,13 @@ class Metronome:
         self.ball.set_offsets(self.trajectory[id_curr])
 
         if self.prev_id > id_curr:  # the loop has been made in the traj array
-            self.audio.bitMetronome.play()
             self.n_period += 1  # increments the number of period made
-        elif self.prev_id < self.traj_lenHalf <= id_curr:  # went through half of the period (bouncing back)
-            self.audio.bitMetronome.play()
+
+        if not self.is24:
+            if self.prev_id > id_curr:  # the loop has been made in the traj array
+                self.audio.bitMetronome.play()
+            elif self.prev_id < self.traj_lenHalf <= id_curr:  # went through half of the period (bouncing back)
+                self.audio.bitMetronome.play()
         self.prev_id = id_curr
 
     # End routine called when the stimulus is finished
@@ -110,7 +119,7 @@ class Metronome:
                                facecolors=self.facecolor)
         return self.ball
 
-    # define the trajectory baed on the steps
+    # define the trajectory based on the steps
     def __init_traj(self, distGesture):
         min_val = 0
         max_val = distGesture
