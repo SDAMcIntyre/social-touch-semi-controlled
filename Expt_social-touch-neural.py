@@ -140,7 +140,7 @@ while stim_no < len(stim_list):
     fm.logEvent(expt_clock.getTime(), "TTL/LED on")
 
     # metronome for timing during stimulus delivery
-    
+
     ei = ExpertInterface(audioFolder="cues", imgFolder="img")
     ei.initialise(stim_list[stim_no]['type'],
                   stim_list[stim_no]['contact_area'],

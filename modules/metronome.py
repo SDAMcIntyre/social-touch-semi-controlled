@@ -79,14 +79,16 @@ class Metronome:
         id_curr = self.get_traj_id(elapsed_t)
         self.ball.set_offsets(self.trajectory[id_curr])
 
+        if self.prev_id > id_curr:  # the loop has been made in the traj array
+            self.audio.bitMetronome.play()
+        elif self.prev_id < self.traj_lenHalf <= id_curr:  # went through half of the period (bouncing back)
+            self.audio.bitMetronome.play()
+
         # if stimulus started, turn on audio metronome
         if elapsed_t > self.audio.durationGo:
             # check if one extremity of the stimulus is reached
             if self.prev_id > id_curr:  # the loop has been made in the traj array
-                self.audio.bitMetronome.play()
                 self.n_period += 1  # increments the number of period made
-            elif self.prev_id < self.traj_lenHalf <= id_curr:  # went through half of the period (bouncing back)
-                self.audio.bitMetronome.play()
         self.prev_id = id_curr
 
         #return self.ball
