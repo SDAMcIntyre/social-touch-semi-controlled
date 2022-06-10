@@ -15,8 +15,8 @@ class AudioCues:
         self.stopCue = pygame.mixer.Sound(self.soundFileName_base + 'stop.wav')
         self.bitMetronome = pygame.mixer.Sound(self.soundFileName_base + 'metronome_bit.mp3')
 
-        self.durationGo = self.goCue.get_length()
-        self.durationStop = self.stopCue.get_length()
+        self.durationGo = 0  # self.goCue.get_length()
+        self.durationStop = 0  # self.stopCue.get_length()
 
 
 class Metronome:
@@ -55,7 +55,7 @@ class Metronome:
     def start(self):
         self.n_period = 0
         self.prev_id = 0
-        self.audio.goCue.play()
+        #self.audio.goCue.play()
 
     # provides the window's area where to draw the metronome
     #  - vertical
@@ -81,22 +81,14 @@ class Metronome:
 
         if self.prev_id > id_curr:  # the loop has been made in the traj array
             self.audio.bitMetronome.play()
+            self.n_period += 1  # increments the number of period made
         elif self.prev_id < self.traj_lenHalf <= id_curr:  # went through half of the period (bouncing back)
             self.audio.bitMetronome.play()
 
-        # if stimulus started, turn on audio metronome
-        if elapsed_t > self.audio.durationGo:
-            # check if one extremity of the stimulus is reached
-            if self.prev_id > id_curr:  # the loop has been made in the traj array
-                self.n_period += 1  # increments the number of period made
-        self.prev_id = id_curr
-
-        #return self.ball
-
     # End routine called when the stimulus is finished
     def end(self):
-        self.audio.stopCue.play()
-        time.sleep(self.audio.durationStop)
+        #self.audio.stopCue.play()
+        #time.sleep(self.audio.durationStop)
 
     def get_n_period(self):
         return self.n_period
