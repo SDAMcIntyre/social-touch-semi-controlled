@@ -67,11 +67,14 @@ sounds_folder = "sounds"
 
 # -- SETUP TRIGGER BOX CONNECTION --
 ac = ArduinoComm()
+#ac = ArduinoCommMock()
 
 # -- SETUP KINECT CONNECTION --
 kinect_recorder_path = r'C:\Program Files\Azure Kinect SDK v1.2.0\tools'
 kinect_output_subfolder = fm.data_folder + './' + date_time
 kinect = KinectComm(kinect_recorder_path, kinect_output_subfolder)
+#kinect = KinectCommMock(kinect_recorder_path, kinect_output_subfolder)
+
 
 # -- SETUP EXPERIMENT CLOCKS --
 expt_clock = core.Clock()
