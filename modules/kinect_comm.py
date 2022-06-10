@@ -44,7 +44,7 @@ class KinectComm:
             pass
         #keyboard.press_and_release('ctrl+c')
         self.process.send_signal(CTRL_C_EVENT)
-        self.process.terminate()
+        #self.process.terminate()
         self.process.wait()
 
         return self
