@@ -1,12 +1,11 @@
 import numpy as np
-import matplotlib.gridspec as gridspec
 import matplotlib.image as mpimg
 import matplotlib.pyplot as plt
-from matplotlib import animation, artist
+from matplotlib import animation
 import matplotlib.patches as mpatches
 import time
 
-from metronome import Metronome
+from modules.metronome import Metronome
 
 
 class StimulusController:
