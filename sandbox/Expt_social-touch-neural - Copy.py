@@ -3,10 +3,15 @@ from pynput import keyboard
 from psychopy import core, data, gui
 
 from modules.arduino_comm import ArduinoComm
+
 from modules.kinect_comm import KinectComm
 from modules.file_management import FileManager
 from modules.expert_interface import ExpertInterface
 from modules.audio_management import AudioManager
+
+from modules.arduino_comm_mock import ArduinoCommMock
+from modules.kinect_comm_mock import KinectCommMock
+
 
 script_path = os.path.dirname(os.path.realpath(__file__))
 os.chdir(script_path)
@@ -66,12 +71,20 @@ sounds_folder = "sounds"
 #am = AudioManager(sounds_folder)
 
 # -- SETUP TRIGGER BOX CONNECTION --
-ac = ArduinoComm()
+#ac = ArduinoComm()
+ac = ArduinoCommMock()
 
 # -- SETUP KINECT CONNECTION --
 kinect_recorder_path = r'C:\Program Files\Azure Kinect SDK v1.2.0\tools'
 kinect_output_subfolder = fm.data_folder + './' + date_time
-kinect = KinectComm(kinect_recorder_path, kinect_output_subfolder)
+#kinect = KinectComm(kinect_recorder_path, kinect_output_subfolder)
+kinect = KinectCommMock(kinect_recorder_path, kinect_output_subfolder)
+
+
+# -- SETUP EXPERIMENT CLOCKS --
+expt_clock = core.Clock()
+stim_clock = core.Clock()
+
 
 # -- SETUP EXPERIMENT CLOCKS --
 expt_clock = core.Clock()
@@ -99,7 +112,7 @@ listener = keyboard.Listener(
     on_press=abort_experiment,
     on_release=abort_experiment)
 
-listener.start() # now the script will exit if you press escape
+#listener.start() # now the script will exit if you press escape
 
 # -- MAIN EXPERIMENT LOOP --
 stim_no = (block_no-1)*n_stim_per_block # start with the first stimulus in the block
@@ -137,7 +150,6 @@ while stim_no < len(stim_list):
     fm.logEvent(expt_clock.getTime(), "TTL/LED on")
 
     # metronome for timing during stimulus delivery
-    
     ei = ExpertInterface(audioFolder="cues", imgFolder="img")
     ei.initialise(stim_list[stim_no]['type'],
                   stim_list[stim_no]['contact_area'],
@@ -197,4 +209,4 @@ while stim_no < len(stim_list):
         start_of_block = True
 
 fm.logEvent(expt_clock.getTime(), "Experiment finished")
-ac.trigger.ser.close()
+ac.close()
