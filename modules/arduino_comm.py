@@ -20,12 +20,14 @@ class ArduinoComm:
         self.trigger.ser.write(self.stop)
 
     def send_pulses(self, nb_pulse):
-
-        for current_pulse in range(nb_pulse):
-            self.timer.reset()
-            self.trigger.ser.write(self.pulse)
-            while self.timer.getTime() < self.pulse_duration / 1000 * 2:
-                pass
+        try:
+            for current_pulse in range(nb_pulse):
+                self.timer.reset()
+                self.trigger.ser.write(self.pulse)
+                while self.timer.getTime() < self.pulse_duration / 1000 * 2:
+                    pass
+        except:
+            pass
 
         return self
 
