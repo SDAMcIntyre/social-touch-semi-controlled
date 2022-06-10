@@ -74,12 +74,10 @@ class Metronome:
 
         self.isRecorded = (speed >= 15)
         if self.isRecorded:
-            fn = 'metronome_bit' + str(speed) + '.mp3'
-            self.audio.bitMetronomeRecorded = pygame.mixer.Sound(self.soundFileName_base + fn)
+            fn = 'metronome_bit' + str(int(speed)) + '.mp3'
+            self.audio.bitMetronomeRecorded = pygame.mixer.Sound(self.audio.soundFileName_base + fn)
             self.isRecorded = True
 
-        self.is21 = (speed == 21)
-        self.is24 = (speed == 24)
         self.vertical = (gesture == "tap")
         # if vert: do something about vertical/horizontal
         if self.vertical:
