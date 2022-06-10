@@ -33,10 +33,9 @@ class ArduinoComm:
 
     def stop_signal(self):
         self.trigger.ser.write(self.stop)
-
         return self
 
-
-
+    def close(self):
+        self.trigger.ser.close()
 
 
