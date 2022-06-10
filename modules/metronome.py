@@ -14,10 +14,6 @@ class AudioCues:
         self.goCue = pygame.mixer.Sound(self.soundFileName_base + 'go.wav')
         self.stopCue = pygame.mixer.Sound(self.soundFileName_base + 'stop.wav')
         self.bitMetronome = pygame.mixer.Sound(self.soundFileName_base + 'metronome_bit.mp3')
-        self.bitMetronome18 = pygame.mixer.Sound(self.soundFileName_base + 'metronome_bit18.mp3')
-        self.bitMetronome21 = pygame.mixer.Sound(self.soundFileName_base + 'metronome_bit21.mp3')
-        self.bitMetronome24 = pygame.mixer.Sound(self.soundFileName_base + 'metronome_bit24.mp3')
-
         self.durationGo = 0  # self.goCue.get_length()
         self.durationStop = 0  # self.stopCue.get_length()
 
@@ -35,6 +31,8 @@ class Metronome:
     is18: bool
     is21: bool
     is24: bool
+
+    isRecorded: bool
     vertical: bool
     step: float
     prev_id: int
@@ -53,6 +51,8 @@ class Metronome:
         self.is18 = False
         self.is21 = False
         self.is24 = False
+
+        self.isRecorded = False
         self.vertical = False
         self.step = 0.0
         self.prev_id = 0
@@ -65,17 +65,19 @@ class Metronome:
         self.n_period = 0
         self.prev_id = 0
         #self.audio.goCue.play()
-        if self.is24:
-            self.audio.bitMetronome24.play()
-        elif self.is21:
-            self.audio.bitMetronome21.play()
-        elif self.is18:
-            self.audio.bitMetronome18.play()
+        if self.isRecorded:
+            self.audio.bitMetronomeRecorded.play()
 
     # provides the window's area where to draw the metronome
     #  - vertical
     def initialise(self, ax, gesture, speed, distance, frameHz):
-        self.is18 = (speed == 18)
+
+        self.isRecorded = (speed >= 15)
+        if self.isRecorded:
+            fn = 'metronome_bit' + str(speed) + '.mp3'
+            self.audio.bitMetronomeRecorded = pygame.mixer.Sound(self.soundFileName_base + fn)
+            self.isRecorded = True
+
         self.is21 = (speed == 21)
         self.is24 = (speed == 24)
         self.vertical = (gesture == "tap")
@@ -100,7 +102,7 @@ class Metronome:
         if self.prev_id > id_curr:  # the loop has been made in the traj array
             self.n_period += 1  # increments the number of period made
 
-        if not self.is24 and not self.is21 and not self.is18:
+        if not self.isRecorded:
             if self.prev_id > id_curr:  # the loop has been made in the traj array
                 self.audio.bitMetronome.play()
             elif self.prev_id < self.traj_lenHalf <= id_curr:  # went through half of the period (bouncing back)
