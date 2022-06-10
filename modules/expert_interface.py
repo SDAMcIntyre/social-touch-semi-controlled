@@ -22,7 +22,7 @@ class StimulusController:
         self.min_n_rep = 3  # minimum of period
         self.min_time = 6  # seconds
         self.distance_gesture = distance_gesture
-        self.min_time += prep_duration
+        self.min_time = 6  # prep_duration
 
     def isOver(self, n_period_curr, time_curr):
         return time_curr >= self.min_time and n_period_curr >= self.n_rep_threshold
