@@ -16,12 +16,14 @@ class FileManager:
             self.dataFile.write('trial,type,speed,contact_area,force,pulse_code,kinect_recording\n')
         except IOError:
             input("Could not open" + self.filename_prefix + '_stimuli.csv' + " file!")
+        self.dataFile.close()
 
         try:
             self.logFile = open(self.data_folder + self.filename_prefix + '_log.csv', 'w')
             self.logFile.write('time,event\n')
         except IOError:
             input("Could not open" + self.filename_prefix + '_log.csv' + " file!")
+        self.logFile.close()
 
     def generate_infoFile(self, exptInfo):
         infoFile = None
@@ -39,15 +41,18 @@ class FileManager:
     # def logEvent(time,event,logFile)
     # @brief: Write event with its time into logFile.
     def logEvent(self, time, event):
+        self.logFile = open(self.data_folder + self.filename_prefix + '_log.csv', 'a')
         self.logFile.write('{},{}\n'.format(time, event))
+        self.logFile.close()
         print('LOG: {} {}'.format(time, event))
 
         return self
 
-    def dataWrite(self, trial, type, speed, contact_area, force, pulse_code, kinect_recording):
-        self.dataFile.write('{},{},{},{},{},{},{}\n'.format(
-            trial, type, speed, contact_area, force, pulse_code, kinect_recording
-        ))
+    def dataWrite(self, trialData):
+        lineFormatting = ','.join(['{}']*len(trialData))+'\n'
+        self.dataFile = open(self.data_folder + self.filename_prefix + '_stimuli.csv', 'a')
+        self.dataFile.write(lineFormatting.format(*trialData))
+        self.dataFile.close()
 
         return self
 

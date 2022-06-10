@@ -15,6 +15,9 @@ class KinectComm:
 
         self.scriptPath = _locationScript + '\\k4arecorder.exe'
         self.outputDir = r'' + os.path.realpath(_outputDirectory)
+        if not os.path.exists(self.outputDir):
+            os.makedirs(self.outputDir)
+
         self.filename = self.outputDir + '\\_.mkv'
         self.process = None
 
