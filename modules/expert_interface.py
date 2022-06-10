@@ -1,92 +1,196 @@
 import numpy as np
+import matplotlib.gridspec as gridspec
+import matplotlib.image as mpimg
 import matplotlib.pyplot as plt
-from matplotlib import animation
+from matplotlib import animation, artist
+import matplotlib.patches as mpatches
 import time
 
-from psychopy import visual, core, event
+from metronome import Metronome
 
 
-class StimuliInfo:
-    types: str(2, )
-    sizes: str(3, )
-    forces: str(3, )
-    speeds: int(8, )
+class StimulusController:
+    gesture: str
+    size: str
+    force: str
+    speed: int = 5  # cm/sec
+
+    distance_gesture: int = 3  # cm
+    n_rep_threshold: int = 3  # nb of full period
+    min_time: int = 3  # second
+
+    def __init__(self, prep_duration, distance_gesture=3):
+        self.min_n_rep = 3  # minimum of period
+        self.min_time = 3  # seconds
+        self.distance_gesture = distance_gesture
+        self.min_time += prep_duration
+
+    def isOver(self, n_period_curr, time_curr):
+        return time_curr >= self.min_time and n_period_curr >= self.n_rep_threshold
+
+    def defineNewStimulus(self, gesture, size, force, speed):
+        self.gesture = gesture
+        self.size = size
+        self.force = force
+        self.speed = speed
+
+    def get_distance_gesture(self):
+        return self.distance_gesture
 
 
-class ContactWindowInfo:
-    blocks: float(2, )
-    forces: float(2, )
-    speeds: float(2, )
+class StimulusDisplay:
+    extension = ".png"
+
+    def __init__(self, imgFolder="../img"):
+        self.imgFolder = imgFolder + "/"
+
+    def initialise(self, imgAxs, gesture, size, force, speed):
+        # nested division
+        self.define_block(imgAxs[0], gesture, size)
+        self.define_force(imgAxs[1], force)
+        self.define_speed(imgAxs[2], speed)
+
+    def define_block(self, imgAx, gesture, size):
+        if size == 'one finger tip':
+            size = '1f'
+        elif size == 'two finger pads':
+            size = '2f'
+        else:
+            size = 'palm'
+
+        fn = size + "_" + gesture + self.extension
+        imgAx.imshow(mpimg.imread(self.imgFolder + fn))
+
+    def define_force(self, imgAx, force):
+        fn = "force_" + force + self.extension
+        imgAx.imshow(mpimg.imread(self.imgFolder + fn))
+
+    def define_speed(self, imgAx, speed):
+        edgecolor: float(4, ) = (0, 0, 0, 1)
+        facecolor: float(4, ) = (0, 0, 0, 0.1)
+        imgAx.add_patch(mpatches.Circle((0.5, 0.5), 0.5, ec=edgecolor, color=facecolor))
+        imgAx.text(0.5, 0.5, str(speed) + "cm/sec", ha="center", va="center", family='sans-serif', size=16)
 
 
 class ExpertInterface:
-    image_block = None
-    image_force = None
-    text_speed = None
+    cm2inch = 0.393701
+    sec2ms = 1000
+    screen_adj_x = 0.95
+    screen_adj_y = 0.95
+    frame_x = 18 * cm2inch * screen_adj_x
+    frame_y = 3 * cm2inch * screen_adj_y
 
-    # parameter information
-    contacts = None
-    iLoc = None
-    scale = 1
+    start_t: float = 0.0  # time when the stimulus starts
+    rep: int = 0  # current number of repetition (end condition)
 
-    def __init__(self, folderImg, contact_types, contact_sizes, contact_forces, contact_speeds, screen=0):
-        self.win = visual.Window(size=[900, 500], pos=[20, 40], screen=screen)
+    stimController = StimulusController
+    images = StimulusDisplay
+    metr = Metronome
+    fig = object
 
-        self.imgFolder = folderImg
+    artists = []
 
-        # basic information about the values of the experiment parameters
-        self.contacts = StimuliInfo()
-        self.contacts.types = contact_types
-        self.contacts.sizes = contact_sizes
-        self.contacts.forces = contact_forces
-        self.contacts.speed = contact_speeds
+    def __init__(self, audioFolder="../cues", imgFolder="../img"):
+        self.audioFolder = audioFolder
+        self.imgFolder = imgFolder
 
-        # Location of each paramaters' information
-        self.iLoc = ContactWindowInfo()
-        self.iLoc.blocks = [-0.5, 0.4]
-        self.iLoc.forces = [0.2, 0.4]
-        self.iLoc.speeds = [0.75, 0.4]
+        # visual metronome
+        self.frameDuration = 1  # milliseconds (width of the visual frame duration)
+        self.frameHz = self.sec2ms / self.frameDuration  # Hz (refresh rate of the window)
 
-        img_force = folderImg + "/force_" + self.contacts.forces[0] + ".png"
-        text_speed = str(self.contacts.speed[0]) + " cm/s"
+        self.metr = Metronome(audioFolder, self.frameHz)  # visual/auditive metronome
+        self.images = StimulusDisplay(imgFolder)  # stimulus information
+        self.stimController = StimulusController(self.metr.audio.durationGo)  # stimulus information
 
-        self.update_block(self.contacts.sizes[0], self.contacts.types[0], flip=False)
-        self.update_force(img_force, flip=False)
-        self.update_speed(text_speed, flip=False)
+        self.imgAxs, self.metrAx = self.__init_fig(self.stimController.get_distance_gesture())
 
-        self.win.flip()
+        self.ani = None  # animation object for visual metronome
+        self.artists = []
 
-    def update_block(self, size_str, type_str, flip=True):
-        img_path = self.imgFolder + "/" + size_str + "_" + type_str + ".png"
-        self.image_block = visual.ImageStim(self.win, image=img_path,
-                                            pos=self.iLoc.blocks,
-                                            opacity=1.0)
-        ratio = self.image_block.size[0] / self.image_block.size[1]
-        self.image_block.setSize((self.scale * ratio, self.scale))
-        self.image_block.setAutoDraw(True)
-        self.image_block.draw()
-        if flip:
-            self.win.flip()
+    '''
+         ------------------       public functions       ------------------
+    '''
 
-    def update_force(self, img_path, flip=True):
-        self.image_force = visual.ImageStim(self.win, image=img_path,
-                                            pos=self.iLoc.forces,
-                                            opacity=1.0)
-        ratio = self.image_force.size[0] / self.image_force.size[1]
-        self.image_force.setSize((self.scale * ratio, self.scale))
-        self.image_force.setAutoDraw(True)
-        self.image_force.draw()
-        if flip:
-            self.win.flip()
+    # initialise the stimulus data, the window and the dot trajectory
+    # input:
+    #   - speed (cm/sec): speed of the motion
+    #   - contactType (String): type of motion (tap/stroking)
+    def initialise(self, gesture, size, force, speed):
+        self.stimController.defineNewStimulus(gesture, size, force, speed)
+        gestDistance = self.stimController.get_distance_gesture()
+        self.images.initialise(self.imgAxs, gesture, size, force, speed)
+        self.metr.initialise(self.metrAx, gesture, speed, gestDistance, self.frameHz)
+        self.artists.append(self.metr.get_ball())
 
-    def update_speed(self, text, flip=True):
-        self.text_speed = visual.TextStim(self.win, text,
-                                          pos=self.iLoc.speeds,
-                                          opacity=1.0)
-        self.text_speed.setAutoDraw(True)
-        self.text_speed.draw()
-        if flip:
-            self.win.flip()
+    def start_sequence(self):
+        self.ani = animation.FuncAnimation(self.fig, self.__update,
+                                           init_func=self.__init_anim,
+                                           interval=self.frameDuration,
+                                           repeat=False,
+                                           blit=True)
+        self.metr.start()
+        plt.show()
 
-    def flip(self):
-        self.win.flip()
+    '''
+         ------------------       PRIVATE FUNCTIONS       ------------------
+    '''
+
+    def __update(self, i):
+        elapsed_t = time.time() - self.start_t
+        self.metr.update(elapsed_t)
+        if self.stimController.isOver(self.metr.get_n_period(), elapsed_t):
+            print("exit condition raised!")
+            self.metr.end()
+            self.__stop_interface()
+            return []
+        else:
+            return self.artists
+
+    # careful! Can be called twice by FuncAnimation
+    # see https://stackoverflow.com/questions/49451405/matplotlibs-funcanimation-calls-init-func-more-than-once
+    def __init_anim(self):
+        self.fig.canvas.draw_idle()
+        self.start_t = time.time()  # sec
+        return self.artists
+
+    def __init_fig(self, distGesture):
+        ax = np.zeros(4, dtype=object)
+
+        # gridspec inside gridspec
+        fig = plt.figure(constrained_layout=True, figsize=(10, 4))
+        fig.suptitle('Social Touch Semi-controlled', fontsize='xx-large', ha='right')
+        gs = fig.add_gridspec(1, 4, width_ratios=[1, 1, 1, 3], wspace=0.07, hspace=0.1)
+
+        # images divisions
+
+        for s in range(4):
+            ax[s] = fig.add_subplot(gs[s])
+            if s != 3:
+                ax[s].get_xaxis().set_visible(False)
+                ax[s].get_yaxis().set_visible(False)
+            else:
+                ax[s].set_xlim([0, distGesture])
+                ax[s].set_ylim([0, distGesture])
+
+        ax[2].set_xlim([0, 1])
+        ax[2].set_ylim([0, 1])
+        ax[2].set_aspect('equal', adjustable='box')
+        ax[2].axis('off')
+
+        self.fig = fig
+
+        return ax[0:2 + 1], ax[3]
+
+    def __stop_interface(self):
+        self.fig.canvas.draw_idle()
+        self.ani.event_source.stop()
+        self.__clear_figure()
+        plt.close('all')
+
+        # plt.close()
+
+    def __clear_figure(self):
+        self.ani = None  # animation object for visual metronome
+        self.artists = []
+        for ax in self.fig.get_axes():
+            ax.clear()
