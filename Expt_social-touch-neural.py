@@ -88,7 +88,7 @@ def abort_experiment(key):
         except:
             pass
         try:
-            ac.trigger.ser.close()
+            ac.close()
         except:
             pass
         try:

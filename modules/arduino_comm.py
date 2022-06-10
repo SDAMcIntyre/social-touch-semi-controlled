@@ -29,7 +29,10 @@ class ArduinoComm:
         return self
 
     def send_on_signal(self):
-        self.trigger.ser.write(self.running)
+        try:
+            self.trigger.ser.write(self.running)
+        except:
+            pass
 
     def stop_signal(self):
         self.trigger.ser.write(self.stop)
