@@ -158,7 +158,7 @@ while stim_no < len(stim_list):
     fm.logEvent(expt_clock.getTime(), "TTL/LED off")
 
     # write to data file
-    fm.dataWrite(
+    fm.dataWrite([
         stim_no+1,
         stim_list[stim_no]['type'],
         stim_list[stim_no]['speed'],
@@ -166,7 +166,7 @@ while stim_no < len(stim_list):
         stim_list[stim_no]['force'],
         block_no,
         kinect.filename
-    )
+    ])
 
     fm.logEvent(
         expt_clock.getTime(),
