@@ -14,13 +14,13 @@ class StimulusController:
     force: str
     speed: int = 5  # cm/sec
 
-    distance_gesture: int = 3  # cm
-    n_rep_threshold: int = 3  # nb of full period
-    min_time: int = 3  # second
+    distance_gesture: int  # cm
+    n_rep_threshold: int  # nb of full period
+    min_time: int  # second
 
     def __init__(self, prep_duration, distance_gesture=3):
         self.min_n_rep = 3  # minimum of period
-        self.min_time = 3  # seconds
+        self.min_time = 6  # seconds
         self.distance_gesture = distance_gesture
         self.min_time += prep_duration
 
@@ -32,6 +32,11 @@ class StimulusController:
         self.size = size
         self.force = force
         self.speed = speed
+
+        if gesture == "tap":
+            self.n_rep_threshold = 6
+        else:
+            self.n_rep_threshold = 3
 
     def get_distance_gesture(self):
         return self.distance_gesture
