@@ -71,14 +71,14 @@ sounds_folder = "sounds"
 #am = AudioManager(sounds_folder)
 
 # -- SETUP TRIGGER BOX CONNECTION --
-#ac = ArduinoComm()
-ac = ArduinoCommMock()
+ac = ArduinoComm()
+#ac = ArduinoCommMock()
 
 # -- SETUP KINECT CONNECTION --
 kinect_recorder_path = r'C:\Program Files\Azure Kinect SDK v1.2.0\tools'
 kinect_output_subfolder = fm.data_folder + './' + date_time
-#kinect = KinectComm(kinect_recorder_path, kinect_output_subfolder)
-kinect = KinectCommMock(kinect_recorder_path, kinect_output_subfolder)
+kinect = KinectComm(kinect_recorder_path, kinect_output_subfolder)
+#kinect = KinectCommMock(kinect_recorder_path, kinect_output_subfolder)
 
 
 # -- SETUP EXPERIMENT CLOCKS --
@@ -112,7 +112,7 @@ listener = keyboard.Listener(
     on_press=abort_experiment,
     on_release=abort_experiment)
 
-#listener.start() # now the script will exit if you press escape
+listener.start() # now the script will exit if you press escape
 
 # -- MAIN EXPERIMENT LOOP --
 stim_no = (block_no-1)*n_stim_per_block # start with the first stimulus in the block
