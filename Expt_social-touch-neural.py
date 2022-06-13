@@ -1,4 +1,5 @@
 import os
+import time
 
 import win32api
 import win32con
@@ -64,9 +65,10 @@ fm.generate_infoFile(expt_info)
 
 # -- SETUP STIMULUS CONTROL --
 types = ['tap', 'stroke']
-contact_areas = ['one finger tip']#, 'whole hand', 'two finger pads']
-speeds = [9.0, 24.0] #[1.0, 3.0, 6.0, 9.0, 15.0, 18.0, 21.0, 24.0] #cm/s
-forces = ['light']#, 'moderate', 'strong']
+contact_areas = ['one finger tip', 'whole hand', 'two finger pads']
+speeds = [3.0, 6.0, 9.0, 15.0, 18.0, 21.0, 24.0] #cm/s
+# speeds = [1.0] #cm/s
+forces = ['light', 'moderate', 'strong']
 
 stim_list = []
 for type in types:
@@ -162,14 +164,14 @@ while stim_no < len(stim_list):
     fm.logEvent(expt_clock.getTime(), "TTL/LED on")
 
     # metronome for timing during stimulus delivery
-
-    ei = ExpertInterface(audioFolder="cues", imgFolder="img")
-    ei.initialise(stim_list[stim_no]['type'],
-                  stim_list[stim_no]['contact_area'],
-                  stim_list[stim_no]['force'],
-                  stim_list[stim_no]['speed'])
-    ei.start_sequence()
-    del ei
+    time.sleep(3)
+    #ei = ExpertInterface(audioFolder="cues", imgFolder="img")
+    #ei.initialise(stim_list[stim_no]['type'],
+    #              stim_list[stim_no]['contact_area'],
+    #              stim_list[stim_no]['force'],
+    #              stim_list[stim_no]['speed'])
+    #ei.start_sequence()
+    #del ei
 
     fm.logEvent(
         expt_clock.getTime(),
