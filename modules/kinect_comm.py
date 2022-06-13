@@ -3,9 +3,10 @@ import subprocess
 import os
 from subprocess import Popen, PIPE, CREATE_NEW_CONSOLE, CREATE_NEW_PROCESS_GROUP
 from signal import CTRL_C_EVENT
-import keyboard
+import keyboard as kb
 # import time
 from psychopy import data, core
+from modules.win_manager import WindowMgr
 
 # Interact with the Virginia's software
 
@@ -36,13 +37,22 @@ class KinectComm:
         )
         return self
 
+    def bring_to_front(self):
+        w = WindowMgr()
+        w.find_window_wildcard(".*k4arecorder.*")
+        w.set_foreground()
+
+        return self
+
     def stop_recording(self, delay):
         delay_timer = core.CountdownTimer()
+        delay_timer.reset()
         delay_timer.add(delay)
         # wait for delay
         while delay_timer.getTime() > 0:
             pass
-        keyboard.press_and_release('ctrl+c')
+        self.bring_to_front()
+        kb.press_and_release('ctrl+c')
         #self.process.send_signal(CTRL_C_EVENT)
         #self.process.terminate()
         self.process.wait()

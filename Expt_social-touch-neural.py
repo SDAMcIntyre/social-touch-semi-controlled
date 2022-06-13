@@ -65,8 +65,8 @@ fm.generate_infoFile(expt_info)
 # -- SETUP STIMULUS CONTROL --
 types = ['tap', 'stroke']
 contact_areas = ['one finger tip']#, 'whole hand', 'two finger pads']
-speeds = [15.0, 24.0, 18, 21, 9] #[1.0, 3.0, 6.0, 9.0, 15.0, 18.0, 21.0, 24.0] #cm/s
-forces = ['light', 'moderate', 'strong']
+speeds = [9.0, 24.0] #[1.0, 3.0, 6.0, 9.0, 15.0, 18.0, 21.0, 24.0] #cm/s
+forces = ['light']#, 'moderate', 'strong']
 
 stim_list = []
 for type in types:
@@ -114,7 +114,7 @@ def abort_experiment(key):
         except:
             pass
         try:
-            kinect.stop_recording(2)
+            kinect.stop_recording(1.5)
         except:
             pass
         fm.logEvent(expt_clock.getTime(), "experiment aborted")
@@ -169,6 +169,7 @@ while stim_no < len(stim_list):
                   stim_list[stim_no]['force'],
                   stim_list[stim_no]['speed'])
     ei.start_sequence()
+    del ei
 
     fm.logEvent(
         expt_clock.getTime(),
@@ -211,6 +212,7 @@ while stim_no < len(stim_list):
     if stim_no % n_stim_per_block == 0:
 
         # Kinect off
+        fm.logEvent(expt_clock.getTime(), "about to tell the Kinect to stop")
         kinect.stop_recording(2)  # stop recording with a delay
         fm.logEvent(expt_clock.getTime(), "Kinect stopped")
 
