@@ -39,3 +39,14 @@ randomise stimulus sequence
 get participant response
 
 no need to sync with nerve recording (no TTL), but LED still needed to sync with camera
+
+
+# to remove IR track
+
+open command prommpt as admin
+
+copy opened folder path
+
+cd path
+
+FOR /F "delims=*" %A IN ('dir /b *.MKV') DO "C:\Program Files\MKVToolNix\mkvmerge.exe" -o "NoIR_%A" -d !2 --compression -1:none "%A"
