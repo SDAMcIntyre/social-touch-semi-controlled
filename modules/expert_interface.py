@@ -34,9 +34,9 @@ class StimulusController:
         self.speed = speed
 
         if gesture == "tap":
-            self.n_rep_threshold = 6
+            self.n_rep_threshold = 4
         else:
-            self.n_rep_threshold = 3
+            self.n_rep_threshold = 2
 
     def get_distance_gesture(self):
         return self.distance_gesture

@@ -1,9 +1,6 @@
 import os
 import time
 
-import win32api
-import win32con
-import win32process
 from psychopy import core, data, gui
 from pynput import keyboard
 
@@ -12,32 +9,13 @@ from modules.expert_interface import ExpertInterface
 from modules.file_management import FileManager
 from modules.kinect_comm import KinectComm
 
-
-def setpriority(pid=None, priority=5):
-    """ Set The Priority of a Windows Process.  Priority is a value between 0-5 where
-        2 is normal priority.  Default sets the priority of the current
-        python process but can take any valid process ID. """
-
-    priorityclasses = [win32process.IDLE_PRIORITY_CLASS,
-                       win32process.BELOW_NORMAL_PRIORITY_CLASS,
-                       win32process.NORMAL_PRIORITY_CLASS,
-                       win32process.ABOVE_NORMAL_PRIORITY_CLASS,
-                       win32process.HIGH_PRIORITY_CLASS,
-                       win32process.REALTIME_PRIORITY_CLASS]
-    if pid is None:
-        pid = win32api.GetCurrentProcessId()
-    handle = win32api.OpenProcess(win32con.PROCESS_ALL_ACCESS, True, pid)
-    win32process.SetPriorityClass(handle, priorityclasses[priority])
-
-setpriority()
-
 script_path = os.path.dirname(os.path.realpath(__file__))
 os.chdir(script_path)
 
 # -- GET INPUT FROM THE EXPERIMENTER --
 expt_info = {
     '01. Experiment Name': 'controlled-touch-MNG',
-    '02. Participant Code': 'ST12',
+    '02. Participant Code': 'ST13',
     '03. Unit Number': 0,
     '04. Folder for saving data': 'data',
     '05. Start from block no.': 1
@@ -65,9 +43,11 @@ fm.generate_infoFile(expt_info)
 
 # -- SETUP STIMULUS CONTROL --
 types = ['tap', 'stroke']
-contact_areas = ['one finger tip', 'whole hand', 'two finger pads']
-speeds = [3.0, 6.0, 9.0, 15.0, 18.0, 21.0, 24.0] #cm/s
-# speeds = [1.0] #cm/s
+contact_areas = ['one finger tip', 'whole hand']
+# contact_areas = ['two finger pads'] # if stable recording
+#speeds = [3.0, 9.0, 18.0, 24.0] #cm/s
+speeds = [1.0] #cm/s # if stable recording (before additional contact area)
+# speeds = [6.0, 15.0, 21.0] #cm/s # lowest priority if stable recording
 forces = ['light', 'moderate', 'strong']
 
 stim_list = []
@@ -104,7 +84,8 @@ kinect = KinectComm(kinect_recorder_path, kinect_output_subfolder)
 expt_clock = core.Clock()
 stim_clock = core.Clock()
 
-# -- ABORT/EXIT ROUTNE --
+# -- ABORT/EXIT ROUTINE --
+
 def abort_experiment(key):
     if key == keyboard.Key.esc:
         try:
@@ -116,7 +97,7 @@ def abort_experiment(key):
         except:
             pass
         try:
-            kinect.stop_recording(1.5)
+            kinect.stop_recording(0.5)
         except:
             pass
         fm.logEvent(expt_clock.getTime(), "experiment aborted")
@@ -126,7 +107,8 @@ listener = keyboard.Listener(
     on_press=abort_experiment,
     on_release=abort_experiment)
 
-listener.start() # now the script will exit if you press escape
+listener.start()  # now the script will exit if you press escape
+
 
 # -- MAIN EXPERIMENT LOOP --
 stim_no = (block_no-1)*n_stim_per_block # start with the first stimulus in the block
@@ -142,7 +124,7 @@ while stim_no < len(stim_list):
         kinect.start_recording(filename_core + '_block{}' .format(block_no))
         kinect_start_time = expt_clock.getTime()
         fm.logEvent(kinect_start_time, "told kinect to start recording {}" .format(kinect.filename))
-        kinect_start_delay = 2.0 # how long to wait to make sure the kinect has started
+        kinect_start_delay = 2.0  # how long to wait to make sure the kinect has started
         while expt_clock.getTime() < kinect_start_time + kinect_start_delay:
             pass
 
@@ -164,14 +146,14 @@ while stim_no < len(stim_list):
     fm.logEvent(expt_clock.getTime(), "TTL/LED on")
 
     # metronome for timing during stimulus delivery
-    time.sleep(3)
-    #ei = ExpertInterface(audioFolder="cues", imgFolder="img")
-    #ei.initialise(stim_list[stim_no]['type'],
-    #              stim_list[stim_no]['contact_area'],
-    #              stim_list[stim_no]['force'],
-    #              stim_list[stim_no]['speed'])
-    #ei.start_sequence()
-    #del ei
+    if 1:
+        ei = ExpertInterface(audioFolder="cues", imgFolder="img")
+        ei.initialise(stim_list[stim_no]['type'],
+                      stim_list[stim_no]['contact_area'],
+                      stim_list[stim_no]['force'],
+                      stim_list[stim_no]['speed'])
+        ei.start_sequence()
+        del ei
 
     fm.logEvent(
         expt_clock.getTime(),

@@ -23,10 +23,21 @@ class KinectComm:
         self.filename = self.outputDir + '\\_.mkv'
         self.process = None
 
+    def record_trial(self, filename_core, duration):
+        trial_timer = core.CountdownTimer()
+        trial_timer.add(duration)
+        self.start_recording(filename_core)
+        # wait for recording duration
+        while trial_timer.getTime() > 0:
+            pass
+
+        self.stop_recording()
+        return self
+
     def start_recording(self, filename_core):
         filename_prefix = (data.getDateStr(format='%Y-%m-%d_%H-%M-%S') + '_' + filename_core)
 
-        self.filename = self.outputDir + '\\' + filename_prefix + '.mkv'
+        self.filename = self.outputDir + '\\' + filename_prefix + '.mkv'  # + "-l 20"
 
         self.process = subprocess.Popen(
             [self.scriptPath, self.filename],
@@ -44,7 +55,7 @@ class KinectComm:
 
         return self
 
-    def stop_recording(self, delay):
+    def stop_recording(self, delay=2.0):
         delay_timer = core.CountdownTimer()
         delay_timer.reset()
         delay_timer.add(delay)
@@ -61,14 +72,3 @@ class KinectComm:
 
     def is_stopped(self):
         return self.process.poll() is None
-
-    def record_trial(self, filename_core, duration):
-        trial_timer = core.CountdownTimer()
-        trial_timer.add(duration)
-        self.start_recording(filename_core)
-        # wait for recording duration
-        while trial_timer.getTime() > 0:
-            pass
-
-        self.stop_recording()
-        return self
