@@ -115,6 +115,7 @@ dmypy.json
 
 # data files
 data/
+test/
 
 # pycharm settings
 .idea/
