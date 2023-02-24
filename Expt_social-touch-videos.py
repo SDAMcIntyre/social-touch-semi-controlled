@@ -1,7 +1,7 @@
 import os
 import time
 
-from psychopy import core, data, gui
+from psychopy import core, data, gui, event
 from pynput import keyboard
 
 from modules.arduino_comm import ArduinoComm
@@ -44,14 +44,19 @@ fm.generate_infoFile(expt_info)
 # -- SETUP STIMULUS CONTROL --
 types = ['tap', 'stroke']
 #types = ['stroke'] # demo
+
 contact_areas = ['one finger tip', 'whole hand']
+#contact_areas = ['whole hand']
 # contact_areas = ['two finger pads'] # if stable recording
 #contact_areas = ['whole hand'] # demo
+
 #speeds = [3.0, 9.0, 18.0, 24.0] #cm/s
 speeds = [3.0, 9.0, 18.0] # video
+#speeds = [18.0] # video
 #speeds = [3.0, 18.0] #cm/s # demo
 #speeds = [1.0] #cm/s # if stable recording (before additional contact area)
 # speeds = [6.0, 15.0, 21.0] #cm/s # lowest priority if stable recording
+
 #forces = ['light', 'moderate', 'strong']
 forces = ['light', 'strong'] # demo / video
 
@@ -66,8 +71,14 @@ for type in types:
                 'speed': speed,
                 'force': force
                 })
+                stim_list.append({
+                'type': type,
+                'contact_area': contact_area,
+                'speed': speed,
+                'force': force
+                })
 
-n_stim_per_block = len(speeds)*len(forces)
+n_stim_per_block = len(speeds)*len(forces)*2
 n_blocks = int(len(stim_list)/n_stim_per_block)
 
 # -- SETUP AUDIO --
@@ -77,6 +88,7 @@ sounds_folder = "sounds"
 # -- SETUP EXPERIMENT CLOCKS --
 expt_clock = core.Clock()
 stim_clock = core.Clock()
+short_clock = core.Clock()
 
 # -- ABORT/EXIT ROUTINE --
 
@@ -103,6 +115,15 @@ listener = keyboard.Listener(
 
 listener.start()  # now the script will exit if you press escape
 
+def space_to_continue(key):
+    if key in ['space']:
+        continue_cues = True
+
+check_continue = keyboard.Listener(
+    on_press=space_to_continue,
+    on_release=space_to_continue)
+
+check_continue.start()
 
 # -- MAIN EXPERIMENT LOOP --
 stim_no = (block_no-1)*n_stim_per_block # start with the first stimulus in the block
@@ -110,6 +131,8 @@ start_of_block = True
 expt_clock.reset()
 fm.logEvent(expt_clock.getTime(), "experiment started")
 while stim_no < len(stim_list):
+
+    continue_cues = False
 
     if start_of_block:
 
@@ -119,6 +142,13 @@ while stim_no < len(stim_list):
     stim_clock.reset()
     while stim_clock.getTime() < 1.5:
         pass
+
+    # print("press space to continue")
+    # short_clock.reset()
+    # while continue_cues == False:
+    #     while short_clock.getTime() < 0.01:
+    #         pass
+
 
     fm.logEvent(expt_clock.getTime(), "start")
 

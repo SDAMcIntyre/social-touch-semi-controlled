@@ -126,3 +126,4 @@ test/
 #R project files
 ST-analysis/.Rhistory
 ST-analysis/.Rproj*
+.Rproj.user
