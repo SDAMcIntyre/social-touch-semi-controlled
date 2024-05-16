@@ -1,4 +1,6 @@
 import seaborn as sns
+import warnings
+
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -55,17 +57,17 @@ def plot_contact_hist(df_contact, c_feat):
 
             try:
                 vel_range = '[' + str(round(np.nanmin(data_label),2)) +', '+ str(round(np.nanmax(data_label),2)) + ']'
+                print(vel_range)
             except ValueError:
                 pass
 
-            print(vel_range)
             vel_ranges.append(vel_range)
 
     fig, axes = plt.subplots(2, 1, sharex='all', sharey='all')
     fig.set_size_inches(8, 5, forward=True)
     for stim in ['stroke', 'tap']:
         ax = axes[0 if stim == 'stroke' else 1]
-        df_plot = df_contact[df_contact['stimulus'] == stim]
+        df_plot = df_contact[df_contact['stimulus'].values == stim]
         palette = sns.color_palette('Set2', n_colors=len(df_plot[contact_conditions[c_feat]].unique()))
         sns.histplot(df_plot, x=c_feat, hue=contact_conditions[c_feat],
                      bins=50, palette=palette, multiple="stack", ax=ax)
@@ -437,7 +439,7 @@ def vis_contact_condition(df_contact, df_neural, name, per_repeat=False):
     df_neural_temp = df_neural.drop(columns=['type', 'stimulus', 'vel', 'finger', 'force'])
 
     df_combined = pd.merge(df_contact, df_neural_temp, on=['unit', 'trial_id'])
-    df_combined.to_csv(data_dir + 'combined_features.csv', index=False, header=True)
+    df_combined.to_csv(os.path.join(data_dir, 'combined_features.csv'), index=False, header=True)
 
     df_combined = df_combined[df_combined['finger'] != ' two finger pads']
     df_combined.replace({'finger': {' one finger tip': '1f', ' whole hand': 'wh'},
@@ -447,9 +449,9 @@ def vis_contact_condition(df_contact, df_neural, name, per_repeat=False):
                          'force': {'light force': 'lf', 'moderate force': 'mf', 'strong force': 'sf'}},
                         inplace=True)
     if per_repeat:
-        dir_temp = plot_dir + '/per_repeat/contact_neural_reg/'
+        dir_temp = os.path.join(plot_dir, 'per_repeat', 'contact_neural_reg')
     else:
-        dir_temp = plot_dir + '/contact_neural_reg/'
+        dir_temp = os.path.join(plot_dir, 'contact_neural_reg')
     if not os.path.exists(dir_temp):
         os.makedirs(dir_temp)
 
@@ -570,12 +572,12 @@ def adapt_contact_condition(method='actual', split_gesture=False, per_repeat=Fal
     fig = plot_contact_hist(df_contact, 'velAbs_mean')
 
     if per_repeat:
-        output_path_abs = os.path.join(plot_dir,  'per_repeat/adapt_')
+        output_path_abs = os.path.join(plot_dir,  'per_repeat', 'adapt_')
         if not os.path.exists(output_path_abs):
             os.makedirs(output_path_abs)
         fig.savefig(os.path.join(output_path_abs, name + '_velAbs_mean.png'), dpi=200)
     else:
-        output_path_abs = os.path.join(plot_dir,  'contact_neural_reg/adapt_')
+        output_path_abs = os.path.join(plot_dir,  'contact_neural_reg', 'adapt_')
         if not os.path.exists(output_path_abs):
             os.makedirs(output_path_abs)
         fig.savefig(os.path.join(output_path_abs, name + '_velAbs_mean.png'), dpi=200)
@@ -987,13 +989,14 @@ def clf_neuron_type(clf_method, adapt_method='actual', split_gesture=False, appl
     fig.savefig(dir_temp + '/clf_importance_combiend'+name_+'.png', dpi=200)
     plt.show()
 
-if __name__ == '__main__':
 
+if __name__ == '__main__':
     sns.set(style="ticks", font='Arial')
 
-
     ### --------- classification ----------
-    adapt_contact_condition(method='actual', split_gesture=False, per_repeat=True, vis=True) #VarGaussianMix
+    adapt_contact_condition(method='actual', split_gesture=False, per_repeat=True, vis=False) #VarGaussianMix
+    adapt_contact_condition(method='VarGaussianMix', split_gesture=False, per_repeat=True, vis=False) #VarGaussianMix
+
     # clf_contact_condition(data_source='neural', clf_method='RF', adapt_method='actual', split_gesture=False, apply_pca=False, per_repeat=True)
     #clf_neuron_type(clf_method='RF', adapt_method='actual', split_gesture=False, apply_pca=False, per_repeat=True)
 
