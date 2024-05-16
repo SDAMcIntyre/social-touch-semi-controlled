@@ -1,6 +1,4 @@
-import time
-
-from libraries.triggerbox import TriggerBox
+from libraries.acquisition.triggerbox import TriggerBox
 from psychopy import core
 
 
