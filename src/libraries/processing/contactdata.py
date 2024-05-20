@@ -6,7 +6,7 @@ import seaborn as sns
 
 
 class ContactData:
-    def __init__(self, csv_file):
+    def __init__(self, csv_filename):
         # Define properties with types
         self.unit_id: list[str] = []
         self.trial_id: list[str] = []
@@ -22,10 +22,10 @@ class ContactData:
         self.contact_vel: list[float] = []
 
         # Load data from CSV file
-        self.load_data_from_csv(csv_file)
+        self.load_data_from_csv(csv_filename)
 
-    def load_data_from_csv(self, csv_file):
-        contact_dataframe = pd.read_csv(csv_file)
+    def load_data_from_csv(self, csv_filename):
+        contact_dataframe = pd.read_csv(csv_filename)
 
         # remove lines that contains NaN values
         contact_dataframe.dropna(inplace=True)
@@ -46,46 +46,47 @@ class ContactData:
         self.contact_depth = contact_dataframe.depth_mean.values
         self.contact_vel = contact_dataframe.velAbs_mean.values
 
-    def redefine_stimulus_groups(self):
-        #vel_expected = adapt_contact_helper(method, df_contact)
-        #df_contact['vel'] = vel_expected
-        vel = self.contact_vel
-        vel_expected = self.stim_vel
+def redefine_stimulus_groups(self):
+    #vel_expected = adapt_contact_helper(method, df_contact)
+    #df_contact['vel'] = vel_expected
+    vel = self.contact_vel
+    vel_expected = self.stim_vel
 
-        has_nan = np.isnan(vel).any()
-        if has_nan:
-            not_nan = ~np.isnan(vel)
-            vel = vel[not_nan]
-            vel_expected = vel_expected[not_nan]
-        else:
-            not_nan = np.array(True * len(self.stim_vel))
+    has_nan = np.isnan(vel).any()
+    if has_nan:
+        not_nan = ~np.isnan(vel)
+        vel = vel[not_nan]
+        vel_expected = vel_expected[not_nan]
+    else:
+        not_nan = np.array(True * len(self.stim_vel))
 
-        vel = vel.reshape(-1, 1)
-        print('data len:', len(vel), 'label len:', len(vel_expected))
-        
-        # ------------ variational Gaussian Mixture (find the number of clusters)
-        n = 8
-        bgm = BayesianGaussianMixture(n_components=n, weight_concentration_prior=100, random_state=0)
-        bgm.fit(vel)
-        pred = bgm.predict(vel)
-        n_new = len(np.unique(pred))
-        print('number of cluster:', str(n_new))
+    vel = vel.reshape(-1, 1)
+    print('data len:', len(vel), 'label len:', len(vel_expected))
 
-        valid_mean = [bgm.means_[i,0] for i in np.unique(pred)]
-        idx_ord = np.argsort(valid_mean)
-        print(valid_mean, idx_ord)
-        label_ord = np.zeros_like(pred) - 1
-        for i in range(len(idx_ord)):
-            label_ord[pred == np.sort(np.unique(pred))[idx_ord[i]]] = i
-        label_ = label_ord + 1#['# ' + str(int(i)) for i in label_ord + 1]
+    # ------------ variational Gaussian Mixture (find the number of clusters)
+    n = 8
+    bgm = BayesianGaussianMixture(n_components=n, weight_concentration_prior=100, random_state=0)
+    bgm.fit(vel)
+    pred = bgm.predict(vel)
+    n_new = len(np.unique(pred))
+    print('number of cluster:', str(n_new))
 
-        if has_nan:
-            vel_expected = np.array([np.nan] * len(self.stim_vel))
-            vel_expected[not_nan] = label_
-        else:
-            vel_expected = label_
+    valid_mean = [bgm.means_[i,0] for i in np.unique(pred)]
+    idx_ord = np.argsort(valid_mean)
+    print(valid_mean, idx_ord)
+    label_ord = np.zeros_like(pred) - 1
+    for i in range(len(idx_ord)):
+        label_ord[pred == np.sort(np.unique(pred))[idx_ord[i]]] = i
+    label_ = label_ord + 1#['# ' + str(int(i)) for i in label_ord + 1]
 
-        return vel_expected
+    if has_nan:
+        vel_expected = np.array([np.nan] * len(self.stim_vel))
+        vel_expected[not_nan] = label_
+    else:
+        vel_expected = label_
+
+    return vel_expected
+
 
 
 class ContactDataPlot:
@@ -144,7 +145,7 @@ class ContactDataPlot:
 
             sns.histplot(x=recorded_data[mask], hue=expected_data[mask],
                          bins=50, palette=palette, multiple="stack", ax=ax)
-            ax.set_title(tracking_kinect_datatype + '_' + current_type, size=self.label_size)
+            ax.set_title(current_type, size=self.label_size)
             ax.set_xlabel('', fontsize=self.label_size)
             ax.yaxis.label.set_size(self.label_size)
             ax.xaxis.set_tick_params(labelsize=self.tick_size, rotation=0)
@@ -162,6 +163,9 @@ class ContactDataPlot:
 
             type_id += 1
 
+        fig.suptitle(tracking_kinect_datatype, size=self.label_size)
+
         plt.tight_layout()
         sns.despine(trim=True)
+
         return fig
