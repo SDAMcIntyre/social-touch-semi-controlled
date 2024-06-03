@@ -3,8 +3,9 @@ import warnings
 
 
 class Metadata:
-    def __init__(self, csv_filename):
-        self.csv_filename = csv_filename
+    def __init__(self, data_filename, unit_name2type_filename):
+        self.data_filename = data_filename
+        self.unit_name2type_filename = unit_name2type_filename
 
         self.block_id: float = 0
         self.trial_id: float = 0
@@ -17,7 +18,7 @@ class Metadata:
         self.data_Fs = 1/np.median(np.diff(self._time))  # Hz
 
     def get_data_idx(self, idx):
-        md = Metadata(self.csv_filename)
+        md = Metadata(self.data_filename, self.unit_name2type_filename)
         md.time = self.time[idx]
         md.block_id = self.block_id
         md.trial_id = self.trial_id

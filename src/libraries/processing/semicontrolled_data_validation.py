@@ -2,7 +2,7 @@ import tkinter as tk
 from tkinter import ttk
 
 from libraries.materials.semicontrolled_data import SemiControlledData  # noqa: E402
-from libraries.misc.semicontrolled_data_visualizer import SemiControlledDataVisualizer  # noqa: E402
+from libraries.plot.semicontrolled_data_visualizer import SemiControlledDataVisualizer  # noqa: E402
 
 
 class SemiControlledValidatorApp:

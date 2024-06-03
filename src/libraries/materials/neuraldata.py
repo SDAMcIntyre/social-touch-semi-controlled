@@ -1,28 +1,40 @@
 import numpy as np
-
+import pandas as pd
+import chardet
 
 class NeuralData:
-    def __init__(self, csv_filename):
+    def __init__(self, data_filename, unit_name2type_filename):
         self._time: list[float] = []
         self.nsample: int = 0
         self.data_Fs = None  # Hz
 
+        self.unit_id = None
+        self.unit_type = None
+
         try:
-            filename_split = csv_filename.split('/')
+            # get current unit ID
+            filename_split = data_filename.split('/')
             csv_split = filename_split[-1].split('-')
             # Step 4: Find the index of the element that contains "ST"
             index = next((i for i, element in enumerate(csv_split) if "ST" in element), -1)
-            self.unit_id = '-'.join(csv_split[index:index+2])
+
+            participant_id = csv_split[index]
+            unit_occ = csv_split[index + 1].replace("unit", "")
+            if int(unit_occ) < 10:
+                unit_occ = "0" + unit_occ
+            self.unit_id = '-'.join([participant_id, unit_occ])
+
+            # get current unit type
+            df = pd.read_csv(unit_name2type_filename)
+            self.unit_type = df.Unit_type[df.Unit_name == self.unit_id].values[0]
         except:
             pass
-
-        self.unit_type = None
 
         self.spike: list[float] = []
         self.iff: list[float] = []
 
     def get_data_idx(self, idx):
-        neural = NeuralData("")
+        neural = NeuralData("", "")
         neural.time = self.time[idx]
         neural.spike = self.spike[idx]
         neural.iff = self.iff[idx]

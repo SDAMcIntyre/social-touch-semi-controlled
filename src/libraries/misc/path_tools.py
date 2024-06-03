@@ -38,7 +38,7 @@ def get_path_abs_base(mid_dir):
 def select_files(input_dir, mode="manual"):
     match mode:
         case "automatic":
-            selected_files = glob.glob(os.path.join(input_dir, '*.csv'))
+            selected_files = glob.glob(os.path.join(input_dir, '*ST*-unit*-semicontrol.csv'))
         case "manual":
             selected_files = select_files_manual(input_dir)
         case _:

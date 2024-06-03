@@ -156,7 +156,7 @@ class DataVisualizer3D:
         self.fig.canvas.flush_events()
 
 
-def display_one_by_one(scd_list):
+def display_scd_one_by_one(scd_list):
     scd_visualizer = SemiControlledDataVisualizer()
 
     # set up uniform limits to compare the trials
@@ -201,7 +201,7 @@ def display_one_by_one(scd_list):
     root.mainloop()
 
 
-def display_attribute(df, selection=0):
+def display_attribute(df, selection=0, title=None):
     label_size = 20
     tick_size = 17
     legend_size = 14
@@ -223,7 +223,10 @@ def display_attribute(df, selection=0):
         palette = sns.color_palette('Set2', n_colors=len(df_current[current_feature_expected].unique()))
         sns.histplot(df_current, x=current_feature, hue=current_feature_expected,
                      bins=50, palette=palette, multiple="stack", ax=ax)
-        ax.set_title(current_feature + '_stroke', size=label_size)
+        if title is not None:
+            ax.set_title(title, size=label_size)
+        else:
+            ax.set_title(current_feature + '_stroke', size=label_size)
         ax.set_xlabel('', fontsize=label_size)
         ax.yaxis.label.set_size(label_size)
         ax.xaxis.set_tick_params(labelsize=tick_size, rotation=0)
@@ -239,7 +242,10 @@ def display_attribute(df, selection=0):
         palette = sns.color_palette('Set2', n_colors=len(df_current[current_feature_expected].unique()))
         sns.histplot(df_current, x=current_feature, hue=current_feature_expected,
                      bins=50, palette=palette, multiple="stack", ax=ax)
-        ax.set_title(current_feature + '_tap', size=label_size)
+        if title is not None:
+            ax.set_title(title, size=label_size)
+        else:
+            ax.set_title(current_feature + '_tap', size=label_size)
         ax.set_xlabel('', fontsize=label_size)
         ax.yaxis.label.set_size(label_size)
         ax.xaxis.set_tick_params(labelsize=tick_size, rotation=0)
@@ -247,3 +253,6 @@ def display_attribute(df, selection=0):
     except:
         pass
 
+    plt.ion()
+    plt.show(block=False)
+    #plt.draw()

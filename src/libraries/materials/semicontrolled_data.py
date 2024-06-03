@@ -14,10 +14,10 @@ import libraries.misc.time_cost_function as time_cost
 
 
 class SemiControlledData:
-    def __init__(self, csv_filename, loading_process=None):
-        self.md: Metadata = Metadata(csv_filename)
+    def __init__(self, data_csv_filename, unit_name2type_filename, loading_process=None):
+        self.md: Metadata = Metadata(data_csv_filename, unit_name2type_filename)
         self.stim: StimulusInfo = StimulusInfo()
-        self.neural: NeuralData = NeuralData(csv_filename)
+        self.neural: NeuralData = NeuralData(data_csv_filename, unit_name2type_filename)
 
         self.contact: ContactData = ContactData()
 
@@ -39,15 +39,12 @@ class SemiControlledData:
 
     def estimate_contact_averaging(self):
         # define more precisely the location of the contact
-        touch_location = self.get_singular_touch_location()
+        touch_location = self.contact.get_contact_mask(self.stim.curr_max_vel_ratio())
         scd_touch = self.get_data_idx(touch_location)
         v = np.mean(scd_touch.get_instantaneous_velocity())
         d = np.mean(scd_touch.get_depth())
         a = np.mean(scd_touch.get_area())
         return v, d, a
-
-    def get_singular_touch_location(self):
-        return self.contact.get_contact_mask(self.stim.curr_max_vel_ratio())
 
     def get_instantaneous_velocity(self):
         return self.contact.get_instantaneous_velocity()
@@ -67,7 +64,7 @@ class SemiControlledData:
         self.load_neural(df)
 
     def load_dataframe(self):
-        df = pd.read_csv(self.md.csv_filename)
+        df = pd.read_csv(self.md.data_filename)
         # remove lines that contains NaN values
         df.dropna(inplace=True)
         return df
@@ -116,14 +113,11 @@ class SemiControlledData:
             scd.set_data_idx(idx)
         else:
             # cost 0.2 ms
-            scd = SemiControlledData(self.md.csv_filename)
+            scd = SemiControlledData(self.md.data_filename, self.md.unit_name2type_filename)
             scd.stim = self.stim.get_data()
-            try:
-                scd.md = self.md.get_data_idx(idx)
-                scd.contact = self.contact.get_data_idx(idx)
-                scd.neural = self.neural.get_data_idx(idx)
-            except:
-                print("hm.")
+            scd.md = self.md.get_data_idx(idx)
+            scd.contact = self.contact.get_data_idx(idx)
+            scd.neural = self.neural.get_data_idx(idx)
 
         return scd
 

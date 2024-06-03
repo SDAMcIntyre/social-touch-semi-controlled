@@ -4,24 +4,24 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy import signal
 from sklearn.decomposition import PCA
-import timeit
 import warnings
 
 from libraries.materials.semicontrolled_data import SemiControlledData  # noqa: E402
-from libraries.misc.semicontrolled_data_visualizer import SemiControlledDataVisualizer  # noqa: E402
+from libraries.plot.semicontrolled_data_visualizer import SemiControlledDataVisualizer  # noqa: E402
 from libraries.misc.waitforbuttonpress_popup import WaitForButtonPressPopup
 import libraries.misc.time_cost_function as time_cost
 
 
 class SemiControlledDataSplitter:
 
-    def __init__(self, filename):
-        self.filename = filename
+    def __init__(self, data_filename, unit_name2type_filename=""):
+        self.data_filename = data_filename
+        self.unit_name2type_filename = unit_name2type_filename
 
     def split_by_trials(self):
         data = []
 
-        df = SemiControlledData(self.filename).load_dataframe()
+        df = SemiControlledData(self.data_filename, self.unit_name2type_filename).load_dataframe()
 
         # Separate the rows of each block
         for _, block_group in groupby(enumerate(df.block_id), key=itemgetter(1)):
@@ -30,7 +30,7 @@ class SemiControlledDataSplitter:
             # Separate the current block rows of each trial
             for _, group in groupby(enumerate(df_block.trial_id), key=itemgetter(1)):
                 indices = [index for index, _ in group]
-                scd = SemiControlledData(self.filename)
+                scd = SemiControlledData(self.data_filename, self.unit_name2type_filename)
                 scd.set_variables(df_block.iloc[indices])
                 data.append(scd)
         return data
@@ -180,10 +180,7 @@ class SemiControlledDataSplitter:
             duration_recorded = 1000 * (scd.md.time[-1] - scd.md.time[0])
             if duration_recorded < hp_duration_val:
                 if idx == 0:
-                    try:
-                        scd_single[idx].append(scd_single[idx + 1])
-                    except:
-                        print("a")
+                    scd_single[idx].append(scd_single[idx + 1])
                     del scd_single[idx + 1]
                 elif idx == len(scd_single) - 1:
                     scd_single[idx - 1].append(scd_single[idx])

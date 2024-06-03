@@ -1,7 +1,7 @@
-import matplotlib.pyplot as plt
+from collections import defaultdict
 import numpy as np
+from typing import Dict, Tuple
 
-from libraries.misc.semicontrolled_data_visualizer import SemiControlledDataVisualizer  # noqa: E402
 from libraries.materials.semicontrolled_data import SemiControlledData  # noqa: E402
 from .semicontrolled_data_splitter import SemiControlledDataSplitter  # noqa: E402
 
@@ -12,6 +12,10 @@ class SemiControlledDataManager:
         self.data: list[SemiControlledData] = []
         self.data_type: str = "all_together"
 
+    # set new data values (useful if data has been filtered i.e. with sort_per_unit_type)
+    def set_data(self, data_list: list[SemiControlledData]):
+        self.data = data_list
+
     def load_dataframe(self, filename):
         self.data = SemiControlledData(filename, "automatic_load")
 
@@ -21,18 +25,18 @@ class SemiControlledDataManager:
         self.data_type = "trials"
         return self.data
 
-    def load_by_single_touch_event(self, filenames, correction=True, show=False):
+    def load_by_single_touch_event(self, data_filenames, unit_name2type_filename, correction=True, show=False):
         self.data = []
         self.data_type = "single_touch_event"
 
-        if isinstance(filenames, list):
-            for filename in filenames:
-                print("Processing file:", filename)
-                scd_splitter = SemiControlledDataSplitter(filename)
+        if isinstance(data_filenames, list):
+            for data_filename in data_filenames:
+                print("Processing file:", data_filename)
+                scd_splitter = SemiControlledDataSplitter(data_filename, unit_name2type_filename)
                 self.data.extend(scd_splitter.split_by_single_touch_event(correction=correction, show=show))
         else:
-            print("Processing file:", filenames)
-            scd_splitter = SemiControlledDataSplitter(filenames)
+            print("Processing file:", data_filenames)
+            scd_splitter = SemiControlledDataSplitter(data_filenames, unit_name2type_filename)
             self.data.extend(scd_splitter.split_by_single_touch_event(correction=correction, show=show))
 
         return self.data
@@ -91,9 +95,15 @@ class SemiControlledDataManager:
             score[idx] = scd.define_trust_score()
         return score
 
+    def sort_per_unit_type(self, verbose=False) -> Tuple[Dict[str, list[SemiControlledData]], list[str]]:
+        sorted_dict = defaultdict(list)
 
+        for scd in self.data:
+            key = scd.neural.unit_type
+            if key is not None:
+                sorted_dict[key].append(scd)
 
+        sorted_dict = dict(sorted_dict)  # Convert defaultdict to regular dict
+        keys = list(sorted_dict.keys())
 
-
-
-
+        return sorted_dict, keys

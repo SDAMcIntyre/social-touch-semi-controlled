@@ -10,7 +10,6 @@ class WaitForButtonPressPopup:
         self.root.title("Press a key")
 
         def on_key_press(event):
-            #print("Key pressed:", event.char)
             self.close_window()
 
         label = tk.Label(self.root, text="Press any key")
