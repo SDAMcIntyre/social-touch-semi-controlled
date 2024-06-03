@@ -5,7 +5,7 @@ from sklearn.mixture import BayesianGaussianMixture
 import seaborn as sns
 
 
-class ContactData:
+class ContactDataOld:
     def __init__(self, csv_filename):
         # Define properties with types
         self.unit_id: list[str] = []
