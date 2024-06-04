@@ -305,7 +305,6 @@ def contact_per_trail_semiControl(exps):
     plt.show()
 
 
-
 if __name__ == '__main__':
     dir_0 = "D:/Projects/Hand_tracking/OtherProjects/SwedenData/contact_quantities/"
     dir_1 = '2021-12-08/unit1-1/'
