@@ -3,16 +3,20 @@ from matplotlib.figure import Figure
 import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
+from sklearn.decomposition import PCA
 import tkinter as tk
 from tkinter import ttk
 
 from libraries.materials.semicontrolled_data import SemiControlledData  # noqa: E402
 
 
+
 class SemiControlledDataVisualizer:
     def __init__(self, scd=None, plotVel=False, auto_positioning=False):
         # create the figures
-        self.fig2D = DataVisualizer2D(2, "Depth and Area", auto_positioning=auto_positioning)
+        self.fig2D_neur = DataVisualizer2D(2, "Neuron", auto_positioning=auto_positioning)
+
+        self.fig2D_contact = DataVisualizer2D(3, "Depth and Area", auto_positioning=auto_positioning)
         self.figpos = DataVisualizer3D("Position", auto_positioning=auto_positioning)
         if plotVel:
             self.figvel = DataVisualizer3D("Velocity")
@@ -26,7 +30,7 @@ class SemiControlledDataVisualizer:
     def set_lim(self, fig_choice, limits):
         match fig_choice:
             case "Depth and Area":
-                self.fig2D.set_lim(limits)
+                self.fig2D_contact.set_lim(limits)
             case "Position":
                 self.figpos.set_lim(limits)
             case "Velocity":
@@ -35,14 +39,24 @@ class SemiControlledDataVisualizer:
 
     def update(self, scd: SemiControlledData):
         time = scd.md.time
-        info_str = ("Stimulus Info\n"
+        info_str = ("Neuron Info\n"
+                    f"ID: {scd.neural.unit_id}\n"
+                    f"Type: {scd.neural.unit_type}\n"
+                    "Stimulus Info\n"
                     f"Type: {scd.stim.type}\n"
                     f"Force: {scd.stim.force}\n"
                     f"Size: {scd.stim.size}\n"
                     f"Velocity: {scd.stim.vel} cm/s")
 
-        self.fig2D.update(0, time, scd.contact.depth, 'Depth')
-        self.fig2D.update(1, time, scd.contact.area, 'Area size')
+        self.fig2D_neur.update(0, time, scd.neural.spike, 'Spike')
+        self.fig2D_neur.update(1, time, scd.neural.iff, 'iff')
+
+        pca = PCA(n_components=1)
+        pos_1D = np.squeeze(pca.fit_transform(scd.contact.pos.transpose()))
+        self.fig2D_contact.update(0, time, pos_1D, 'PCA Position')
+        self.fig2D_contact.update(1, time, scd.contact.depth, 'Depth')
+        self.fig2D_contact.update(2, time, scd.contact.area, 'Area size')
+
         self.figpos.update(time, scd.contact.pos, info_str)
         if self.plotVel:
             self.figvel.update(time, scd.contact.vel, info_str)
@@ -86,7 +100,10 @@ class DataVisualizer2D:
         self.axs[ax_idx].legend()
 
         if self.limits is not None:
-            self.axs[ax_idx].set_ylim(self.limits[ax_idx][0], self.limits[ax_idx][1])
+            try:
+                self.axs[ax_idx].set_ylim(self.limits[ax_idx][0], self.limits[ax_idx][1])
+            except:
+                pass
 
         self.fig.canvas.draw()
         self.fig.canvas.flush_events()
@@ -160,10 +177,13 @@ def display_scd_one_by_one(scd_list):
     scd_visualizer = SemiControlledDataVisualizer()
 
     # set up uniform limits to compare the trials
+
+    pca = PCA(n_components=1)
+    pos = np.concatenate([np.squeeze(pca.fit_transform(s.contact.pos.transpose())) for s in scd_list])
     depth = np.concatenate([s.contact.depth for s in scd_list])
     area = np.concatenate([s.contact.area for s in scd_list])
-    limits = [[min(depth), max(depth)], [min(area), max(area)]]
-    scd_visualizer.set_lim("Depth and Area", limits)
+    limits = [[min(pos), max(pos)], [min(depth), max(depth)], [min(area), max(area)]]
+    scd_visualizer.set_lim("Position, Depth and Area", limits)
 
     pos = np.concatenate([s.contact.pos for s in scd_list], axis=1)
     limits = [(min(_axis), max(_axis)) for _axis in pos]

@@ -7,6 +7,8 @@ class NeuralData:
         self._time: list[float] = []
         self.nsample: int = 0
         self.data_Fs = None  # Hz
+        self.spike: list[float] = []
+        self.iff: list[float] = []
 
         self.unit_id = None
         self.unit_type = None
@@ -30,8 +32,6 @@ class NeuralData:
         except:
             pass
 
-        self.spike: list[float] = []
-        self.iff: list[float] = []
 
     def get_data_idx(self, idx):
         neural = NeuralData("", "")

@@ -26,16 +26,18 @@ class SemiControlledData_VisualizerNeuralContact:
     def __del__(self):
         self.close_window()
 
-    def set_vars(self,  unit_type, contact_attr_names, categorized_contact_attr, categorized_contact_ranges):
+    def set_vars(self,  unit_type, nunit, contact_attr_names, categorized_contact_attr, categorized_contact_ranges):
         self.unit_type = unit_type
+        self.nunit = nunit
         self.contact_attr_names = contact_attr_names
         self.categorized_contact_attr = categorized_contact_attr
         self.categorized_contact_ranges = categorized_contact_ranges
 
     def update_label(self):
         unit_type_str = "Unit Type: " + self.unit_type
+        nunit_str = "Number of Unit: " + self.nunit
         num_elements = "Number of Singular Touches: " + str(len(self.categorized_contact_attr))
-        self.unit_type_label.config(text=unit_type_str)
+        self.unit_type_label.config(text="{}\n{}".format(unit_type_str, nunit_str))
         self.num_elements_label.config(text=num_elements)
 
         # Calculate the occurrences

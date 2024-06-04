@@ -1,4 +1,4 @@
-from collections import defaultdict
+from collections import defaultdict, Counter
 import matplotlib.pyplot as plt
 import numpy as np
 import os
@@ -25,34 +25,45 @@ def categorize_values(values, num_bins=10):
     return categories, bin_ranges
 
 
-if __name__ == "__main__":
-
-    load_mode = "automatic"  # "manual", "automatic"
-    save_data = False
-
+def load_and_save_data(load_mode="automatic", save_data=False):
+    """
+    Load the CSV data, split them into single touch event, and save the generated variable with pickle.dump
+    """
     [input_dir, output_dir] = path_tools.get_path_abs(input_dir="processed", output_dir="analysed")
     data_files = path_tools.select_files(input_dir, mode=load_mode)
     fname_neur_name2type = os.path.join(input_dir, "semicontrol_unit-name_to_unit-type.csv")
 
     # create a list of SemiControlledData
     scdm = SemiControlledDataManager()
-    list_singular_touches = scdm.load_by_single_touch_event(data_files, fname_neur_name2type,
+    scdm.load_by_single_touch_event(data_files[0], fname_neur_name2type,
                                                             correction=True, show=False)
+    # save data on the hard drive ?
+    if save_data:
+        with open(os.path.join(output_dir, 'semicontrolleddata_period_list.pkl'), 'wb') as file:
+            pickle.dump(scdm, file)
 
-    # get a dictionary of key=unit_types, values=singular touches
-    dict_singular_touches, unit_types = scdm.sort_per_unit_type()
+    return scdm
 
-    for unit_type, singular_touches in dict_singular_touches.items():
+
+def display_single_touch_per_unit_type(scdm):
+    list_single_touches_all = scdm.data
+
+    # get a dictionary of key=unit_types, values=single touches
+    dict_single_touches, unit_types = scdm.sort_per_unit_type()
+
+    for unit_type, single_touches in dict_single_touches.items():
+        # count the number of unit of this type
+        unit_ids = [single_t.neural.unit_id for single_t in single_touches]
+        nunit = Counter(unit_ids).keys()
+
         # set up the manager with the specific dataset
-        scdm.set_data(singular_touches)
+        scdm.set_data(single_touches)
 
         # extract the contact
         [velocity_cm, depth_cm, area_cm] = scdm.estimate_contact_averaging()
         [contact_types, velocity_cm_exp, depth_cm_exp, area_cm_exp] = scdm.get_contact_expected()
-        idx_tap = [index for index, value in enumerate(contact_types) if value == 'tap']
-        idx_stroke = [index for index, value in enumerate(contact_types) if value == 'stroke']
 
-        # formatting to use Shan's plot system
+        # Use Shan's plot system
         data = {
             'estimated_velocity': velocity_cm,
             'estimated_depth': depth_cm,
@@ -67,7 +78,6 @@ if __name__ == "__main__":
         scdata_visualizer.display_attribute(df, selection=1)
         scdata_visualizer.display_attribute(df, selection=2)
 
-
         # Categorize each variable into 10 bins and get the bin ranges
         contact_attr_names = ["velocity", "depth", "area"]
         vel_cat, vel_ranges = categorize_values(velocity_cm, num_bins=7)
@@ -80,19 +90,30 @@ if __name__ == "__main__":
         # characteristics for this unit type
         root = tk.Tk()
         scd_viz_neur = scdata_visualizer_neur.SemiControlledData_VisualizerNeuralContact(root)
-        scd_viz_neur.set_vars(unit_type, contact_attr_names, categorized_contact_attr, categorized_contact_ranges)
+        scd_viz_neur.set_vars(unit_type, nunit, contact_attr_names, categorized_contact_attr, categorized_contact_ranges)
         scd_viz_neur.update_label()
         root.mainloop()
 
+    scdm.set_data(list_single_touches_all)
 
+
+if __name__ == "__main__":
+
+    load_mode = "automatic"  # "manual", "automatic"
+    save_data = True
+    # local function: load and save the csv data
+    scdm = load_and_save_data(load_mode=load_mode, save_data=save_data)
+
+    scdata_visualizer.display_scd_one_by_one(scdm.data)
+    # local function: display the stimulus content/landscape for each unit type
+    display_single_touch_per_unit_type(scdm)
     scdm.define_trust_scores()
     #plt.plot(scdm.get_ratio_durations())
-
-    # save the data on the hard drive ?
-    if save_data:
-        with open(os.path.join(output_dir, 'semicontrolleddata_period_list.pkl'), 'wb') as file:
-            pickle.dump(scdm, file)
-
-    semicontrolled_data_visualizer.display_scd_one_by_one(scdm.data)
+    scdata_visualizer.display_scd_one_by_one(scdm.data)
 
     print("done.")
+
+
+
+
+
