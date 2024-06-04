@@ -6,6 +6,9 @@ import tkinter as tk
 from tkinter import filedialog
 
 import sys
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'libraries'))
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', 'libraries'))
 
 from libraries.processing.contactdata import ContactData, ContactDataPlot  # noqa: E402
