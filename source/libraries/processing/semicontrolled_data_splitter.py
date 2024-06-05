@@ -6,10 +6,10 @@ from scipy import signal
 from sklearn.decomposition import PCA
 import warnings
 
-from libraries.materials.semicontrolled_data import SemiControlledData  # noqa: E402
-from libraries.plot.semicontrolled_data_visualizer import SemiControlledDataVisualizer  # noqa: E402
-from libraries.misc.waitforbuttonpress_popup import WaitForButtonPressPopup
-import libraries.misc.time_cost_function as time_cost
+from ..materials.semicontrolled_data import SemiControlledData  # noqa: E402
+from ..plot.semicontrolled_data_visualizer import SemiControlledDataVisualizer  # noqa: E402
+from ..misc.waitforbuttonpress_popup import WaitForButtonPressPopup
+from ..misc.time_cost_function import time_it
 
 
 class SemiControlledDataSplitter:
@@ -35,27 +35,52 @@ class SemiControlledDataSplitter:
                 data.append(scd)
         return data
 
-    @time_cost.time_it
+    def trials_narrow_time_series(self, data_trials):
+        # remove start and end data (motion/positioning artifact)
+
+        data_trials_cleaned = []
+        for scd in data_trials:
+            match scd.stim.type:
+                case "stroke":
+                    scd = self.remove_contact_artifacts(scd, method="simple")
+                case "tap":
+                    scd = self.remove_contact_artifacts(scd, method="by-peak_soft")
+            data_trials_cleaned = [data_trials_cleaned, scd]
+
+        return data_trials_cleaned
+
+    def trials_align_contact_and_neural(self, data_trials):
+        data_aligned = data_trials
+
+        for scd in data_trials:
+            SemiControlledDataVisualizer(scd)
+            a = 1
+
+        return data_aligned
+
+    @time_it
     def split_by_single_touch_event(self, correction=True, show=False):
         """split_by_single
            split the current semicontrolled data into single touch event
            A period is determined differently based on the type (Tap or Stroke)
            """
         data = []
+
         # first separate the data by trial
         data_trials = self.split_by_trials()
+
+        #  remove start and end data (motion/positioning artifact)
+        data_trials = self.trials_narrow_time_series(data_trials)
+
+        # Correct misalignments between the Kinect and MNG data
+        data_trials = self.trials_align_contact_and_neural(data_trials)
+
         # second split the trial per stimulus/repeat/period/nb. time the POI is stimulated
         for scd in data_trials:
             match scd.stim.type:
                 case "stroke":
-                    # remove start and end data (motion/positioning artifact)
-                    scd = self.remove_contact_artifacts(scd, method="simple")
-                    # split
                     scd_list = self.get_single_strokes(scd, correction=correction, show=show)
                 case "tap":
-                    # remove start and end data (artifact)
-                    scd = self.remove_contact_artifacts(scd, method="by-peak_soft")
-                    # split
                     scd_list = self.get_single_taps(scd, correction=correction, show=show)
                 case _:
                     scd_list = []
