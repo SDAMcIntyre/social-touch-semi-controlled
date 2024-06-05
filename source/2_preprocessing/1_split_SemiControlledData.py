@@ -7,7 +7,8 @@ import pickle
 import sys
 import tkinter as tk
 
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', 'libraries'))
+# homemade libraries
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 from libraries.processing.semicontrolled_data_manager import SemiControlledDataManager  # noqa: E402
 import libraries.misc.path_tools as path_tools  # noqa: E402
 from libraries.misc.waitforbuttonpress_popup import WaitForButtonPressPopup

@@ -30,7 +30,7 @@ def get_path_abs_base(mid_dir):
     # target the current experiment, postprocessing and datatype
     dir_abs = os.path.join(dir_abs,
                            'semi-controlled',
-                           'tracking_and_neural',
+                           'contact_and_neural',
                            'new_axes_3Dposition')  # 'new_axes_3Dposition' or 'new_axes'
     return dir_abs
 
