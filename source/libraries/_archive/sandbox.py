@@ -1,3 +1,73 @@
+
+import numpy as np
+import pandas as pd
+from scipy.signal import correlate
+import matplotlib.pyplot as plt
+
+def load_signals(neuronal_path, other_signal_path):
+    # Charger les signaux à partir des fichiers (à adapter selon le format des fichiers)
+    neuronal_signal = pd.read_csv(neuronal_path).values.flatten()
+    other_signal = pd.read_csv(other_signal_path).values.flatten()
+    return neuronal_signal, other_signal
+
+def convert_position_to_velocity(position_signal, sampling_rate):
+    # Calculer la vitesse à partir de la position (dérivée première)
+    velocity = np.diff(position_signal) * sampling_rate
+    return velocity
+
+def compute_cross_correlation(signal1, signal2):
+    # Calculer la corrélation croisée
+    correlation = correlate(signal1, signal2, mode='full')
+    lags = np.arange(-len(signal1) + 1, len(signal1))
+    return correlation, lags
+
+def find_best_lag(correlation, lags):
+    # Trouver le décalage qui maximise la corrélation
+    best_lag = lags[np.argmax(correlation)]
+    return best_lag
+
+def adjust_signal(signal, lag):
+    # Ajuster le signal neuronal en fonction du décalage
+    if lag > 0:
+        adjusted_signal = np.pad(signal, (lag, 0), 'constant')[:len(signal)]
+    elif lag < 0:
+        adjusted_signal = np.pad(signal, (0, -lag), 'constant')[-lag:]
+    else:
+        adjusted_signal = signal
+    return adjusted_signal
+
+def main(neuronal_path, other_signal_path, signal_type, sampling_rate=1000):
+    neuronal_signal, other_signal = load_signals(neuronal_path, other_signal_path)
+
+    if signal_type == 'caresse':
+        other_signal = convert_position_to_velocity(other_signal, sampling_rate)
+
+    correlation, lags = compute_cross_correlation(neuronal_signal, other_signal)
+    best_lag = find_best_lag(correlation, lags)
+
+    adjusted_neuronal_signal = adjust_signal(neuronal_signal, best_lag)
+
+    # Affichage des résultats
+    plt.figure()
+    plt.plot(neuronal_signal, label='Neuronal Signal')
+    plt.plot(adjusted_neuronal_signal, label='Adjusted Neuronal Signal')
+    plt.legend()
+    plt.show()
+
+    print(f"Best lag: {best_lag}")
+
+# Exemple d'utilisation :
+# main('neuronal_signal.csv', 'other_signal.csv', 'caresse')
+
+# Pour le signal de tapping, on utiliserait :
+# main('neuronal_signal.csv', 'other_signal.csv', 'tapping')
+
+
+
+
+
+
+### qs
 import seaborn as sns
 import matplotlib.pyplot as plt
 

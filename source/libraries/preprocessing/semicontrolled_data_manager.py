@@ -2,7 +2,9 @@ from collections import defaultdict
 import numpy as np
 from typing import Dict, Tuple
 
-from libraries.materials.semicontrolled_data import SemiControlledData  # noqa: E402
+from ..materials.semicontrolled_data import SemiControlledData  # noqa: E402
+from .semicontrolled_data_cleaning import SemiControlledCleaner  # noqa: E402
+from .semicontrolled_data_correct_lag import SemiControlledCorrectLag  # noqa: E402
 from .semicontrolled_data_splitter import SemiControlledDataSplitter  # noqa: E402
 
 
@@ -25,21 +27,45 @@ class SemiControlledDataManager:
         self.data_type = "trials"
         return self.data
 
-    def load_by_single_touch_event(self, data_filenames, unit_name2type_filename, correction=True, show=False):
+    def preprocess_data_files(self, data_filenames, unit_name2type_filename, correction=True, show=False):
         self.data = []
         self.data_type = "single_touch_event"
 
-        if isinstance(data_filenames, list):
-            for data_filename in data_filenames:
-                print("Processing file:", data_filename)
-                scd_splitter = SemiControlledDataSplitter(data_filename, unit_name2type_filename)
-                self.data.extend(scd_splitter.split_by_single_touch_event(correction=correction, show=show))
-        else:
-            print("Processing file:", data_filenames)
-            scd_splitter = SemiControlledDataSplitter(data_filenames, unit_name2type_filename)
-            self.data.extend(scd_splitter.split_by_single_touch_event(correction=correction, show=show))
+        # if one file name is sent, transform the variable into a list
+        if not isinstance(data_filenames, list):
+            data_filenames = [data_filenames]
+
+        for data_filename in data_filenames:
+            print("Processing file:", data_filename)
+            scd_list = self.preprocess_data_file(data_filename, unit_name2type_filename, correction=True, show=False)
+            self.data.extend(scd_list)
 
         return self.data
+
+    def preprocess_data_file(self, data_filename, unit_name2type_filename, correction=True, show=False):
+        scd = SemiControlledData(data_filename, unit_name2type_filename)
+        splitter = SemiControlledDataSplitter()
+        cleaner = SemiControlledCleaner()
+        correctlag = SemiControlledCorrectLag()
+
+        # 1. load the csv file as a dataframe
+        df = scd.load_dataframe()
+        # 2. split full dataframe by blocks
+        df_list = splitter.split_by_column_label(df, label="block_id")
+        # 3. split blocks by trials
+        df_list = splitter.split_by_column_label(df_list, label="trial_id")
+        # 4. transform dataframe list into SemiControlledData list
+        scd_list = scd.create_list_from_df(df_list)
+
+        # 5. correct for contact data issues
+        scd_list = cleaner.trials_narrow_time_series_to_essential(scd_list)
+        # 6. correct for misalignment
+        scd_list = correctlag.trials_align_contact_and_neural(scd_list)
+
+        # 7. split by touch event
+        scd_list = splitter.split_by_touch_event(scd_list, correction=correction, show=show)
+
+        return scd_list
 
     def get_ratio_durations(self):
         ratio = np.array([0] * len(self.data), dtype=float)

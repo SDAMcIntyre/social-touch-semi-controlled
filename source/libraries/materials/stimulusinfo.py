@@ -68,6 +68,10 @@ class StimulusInfo:
             duration_sec /= 2
         return duration_sec
 
+    def print(self):
+        s = "type: {}, vel: {}, size: {}, force: {}".format(self._type, self._vel, self._size, self._force)
+        return s
+
     @property
     def type(self):
         return self._type

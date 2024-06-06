@@ -9,7 +9,7 @@ import tkinter as tk
 
 # homemade libraries
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-from libraries.processing.semicontrolled_data_manager import SemiControlledDataManager  # noqa: E402
+from libraries.preprocessing.semicontrolled_data_manager import SemiControlledDataManager  # noqa: E402
 import libraries.misc.path_tools as path_tools  # noqa: E402
 from libraries.misc.waitforbuttonpress_popup import WaitForButtonPressPopup
 import libraries.plot.semicontrolled_data_visualizer as scdata_visualizer  # noqa: E402
@@ -24,26 +24,6 @@ def categorize_values(values, num_bins=10):
     categories = np.digitize(values, bins, right=True)
     bin_ranges = [(bins[i], bins[i+1]) for i in range(len(bins)-1)]
     return categories, bin_ranges
-
-
-def load_and_save_data(load_mode="automatic", save_data=False):
-    """
-    Load the CSV data, split them into single touch event, and save the generated variable with pickle.dump
-    """
-    [input_dir, output_dir] = path_tools.get_path_abs(input_dir="processed", output_dir="analysed")
-    data_files = path_tools.select_files(input_dir, mode=load_mode)
-    fname_neur_name2type = os.path.join(input_dir, "semicontrol_unit-name_to_unit-type.csv")
-
-    # create a list of SemiControlledData
-    scdm = SemiControlledDataManager()
-    scdm.load_by_single_touch_event(data_files[0], fname_neur_name2type,
-                                                            correction=True, show=False)
-    # save data on the hard drive ?
-    if save_data:
-        with open(os.path.join(output_dir, 'semicontrolleddata_period_list.pkl'), 'wb') as file:
-            pickle.dump(scdm, file)
-
-    return scdm
 
 
 def display_single_touch_per_unit_type(scdm):
@@ -101,9 +81,24 @@ def display_single_touch_per_unit_type(scdm):
 if __name__ == "__main__":
 
     load_mode = "automatic"  # "manual", "automatic"
-    save_data = True
-    # local function: load and save the csv data
-    scdm = load_and_save_data(load_mode=load_mode, save_data=save_data)
+    save_data = False
+
+    """
+    Load the CSV data: preprocess, split into single touch event, and save the generated variable with pickle.dump
+    """
+    [input_dir, output_dir] = path_tools.get_path_abs(input_dir="processed", output_dir="analysed")
+    data_files = path_tools.select_files(input_dir, mode=load_mode)
+    fname_neur_name2type = os.path.join(input_dir, "semicontrol_unit-name_to_unit-type.csv")
+
+    # create a list of SemiControlledData
+    scdm = SemiControlledDataManager()
+    scdm.preprocess_data_files(data_files[0], fname_neur_name2type, correction=True, show=False)
+
+    # save data on the hard drive ?
+    if save_data:
+        with open(os.path.join(output_dir, 'semicontrolleddata_period_list.pkl'), 'wb') as file:
+            pickle.dump(scdm, file)
+
 
     scdata_visualizer.display_scd_one_by_one(scdm.data)
     # local function: display the stimulus content/landscape for each unit type

@@ -3,7 +3,6 @@ from matplotlib.figure import Figure
 import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
-from sklearn.decomposition import PCA
 import tkinter as tk
 from tkinter import ttk
 
@@ -51,9 +50,7 @@ class SemiControlledDataVisualizer:
         self.fig2D_neur.update(0, time, scd.neural.spike, 'Spike')
         self.fig2D_neur.update(1, time, scd.neural.iff, 'iff')
 
-        pca = PCA(n_components=1)
-        pos_1D = np.squeeze(pca.fit_transform(scd.contact.pos.transpose()))
-        self.fig2D_contact.update(0, time, pos_1D, 'PCA Position')
+        self.fig2D_contact.update(0, time, scd.contact.pos_1D, 'Position (Principal Component)')
         self.fig2D_contact.update(1, time, scd.contact.depth, 'Depth')
         self.fig2D_contact.update(2, time, scd.contact.area, 'Area size')
 
@@ -177,9 +174,7 @@ def display_scd_one_by_one(scd_list):
     scd_visualizer = SemiControlledDataVisualizer()
 
     # set up uniform limits to compare the trials
-
-    pca = PCA(n_components=1)
-    pos = np.concatenate([np.squeeze(pca.fit_transform(s.contact.pos.transpose())) for s in scd_list])
+    pos = np.concatenate([s.contact.pos_1D for s in scd_list])
     depth = np.concatenate([s.contact.depth for s in scd_list])
     area = np.concatenate([s.contact.area for s in scd_list])
     limits = [[min(pos), max(pos)], [min(depth), max(depth)], [min(area), max(area)]]

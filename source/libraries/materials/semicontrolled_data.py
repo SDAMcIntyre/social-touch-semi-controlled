@@ -5,11 +5,11 @@ import pandas as pd
 from sklearn.decomposition import PCA
 import warnings
 
-from libraries.materials.metadata import Metadata  # noqa: E402
-from libraries.materials.stimulusinfo import StimulusInfo  # noqa: E402
-from libraries.materials.contactdata import ContactData  # noqa: E402
-from libraries.materials.neuraldata import NeuralData  # noqa: E402
-import libraries.misc.time_cost_function as time_cost
+from ..materials.metadata import Metadata  # noqa: E402
+from ..materials.stimulusinfo import StimulusInfo  # noqa: E402
+from ..materials.contactdata import ContactData  # noqa: E402
+from ..materials.neuraldata import NeuralData  # noqa: E402
+#import ..misc.time_cost_function as time_cost
 #from libraries.misc.semicontrolled_data_visualizer import SemiControlledDataVisualizer  # noqa: E402
 
 
@@ -29,6 +29,14 @@ class SemiControlledData:
             case "automatic_load":
                 df = self.load_dataframe()
                 self.set_variables(df)
+
+    def create_list_from_df(self, df_list):
+        data_trials_out = []
+        for df in df_list:
+            scd = SemiControlledData(self.md.data_filename, self.md.unit_name2type_filename)
+            scd.set_variables(df)
+            data_trials_out.append(scd)
+        return data_trials_out
 
     def get_stimulusInfoContact(self):
         type_ = self.stim.type
@@ -85,6 +93,7 @@ class SemiControlledData:
     def load_contact(self, df):
         self.contact.time = df.t.values
         # contact data
+        self.contact.contact_flag = df.Contact_Flag.values
         self.contact.area = df.areaRaw.values
         self.contact.depth = df.depthRaw.values
         vx = df.velLongRaw.values

@@ -13,10 +13,13 @@ class ContactData:
         self._time: list[float] = []
         self.nsample: int = 0
 
+        self._contact_flag: list[float] = []  # ON/OFF
+
         self._area: list[float] = []  # mm^2
         self._depth: list[float] = []  # mm
         self._vel: list[float] = []  # mm/sec
         self._pos: list[float] = []  # mm
+        self._pos_1D: list[float] = []  # mm
 
         self.data_Fs = None  # Hz
         self.KINECT_FS = 30  # Hz
@@ -85,6 +88,7 @@ class ContactData:
     def get_data_idx(self, idx):
         cd = ContactData()
         cd.time = self.time[idx]
+        cd.contact_flag = self.contact_flag[idx]
         cd.area = self.area[idx]
         cd.depth = self.depth[idx]
         cd.vel = self.vel[:, idx]
@@ -96,6 +100,7 @@ class ContactData:
 
     def set_data_idx(self, idx):
         self.time = self.time[idx]
+        self.contact_flag = self.contact_flag[idx]
         self.area = self.area[idx]
         self.depth = self.depth[idx]
         self.vel = self.vel[:, idx]
@@ -107,6 +112,7 @@ class ContactData:
     def append(self, contact_bis):
         self.time = np.concatenate((self.time, contact_bis.time))
 
+        self.contact_flag = np.concatenate((self.contact_flag, contact_bis.contact_flag))
         self.area = np.concatenate((self.area, contact_bis.area))
         self.depth = np.concatenate((self.depth, contact_bis.depth))
         self.vel = np.concatenate((self.vel, contact_bis.vel), axis=1)
@@ -114,6 +120,14 @@ class ContactData:
             self.pos = np.concatenate((self.pos, contact_bis.pos), axis=1)
         except:
             pass
+
+    @property
+    def contact_flag(self):
+        return self._contact_flag
+
+    @contact_flag.setter
+    def contact_flag(self, value):
+        self._contact_flag = value
 
     @property
     def area(self):
@@ -146,6 +160,22 @@ class ContactData:
     @pos.setter
     def pos(self, value):
         self._pos = value
+        self.update_pos_1D()
+
+    def update_pos_1D(self):
+        # compress the signal into 1D (as the expected motion is supposed to be 1D anyway)
+        pca = PCA(n_components=1)
+        p = np.squeeze(pca.fit_transform(self.pos.transpose()))
+        self.pos_1D = p
+
+    @property
+    def pos_1D(self):
+        return self._pos_1D
+
+    @pos_1D.setter
+    def pos_1D(self, value):
+        self._pos_1D = value
+
 
     @property
     def time(self):

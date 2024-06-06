@@ -32,6 +32,14 @@ class NeuralData:
         except:
             pass
 
+    def shift(self, lag):
+        lag = int(lag)
+        if lag > 0:
+            self.spike = np.pad(self.spike, (lag, 0), 'constant')[:len(self.spike)]
+            self.iff = np.pad(self.iff, (lag, 0), 'constant')[:len(self.iff)]
+        elif lag < 0:
+            self.spike = np.pad(self.spike, (0, -lag), 'constant')[-lag:]
+            self.iff = np.pad(self.iff, (0, -lag), 'constant')[-lag:]
 
     def get_data_idx(self, idx):
         neural = NeuralData("", "")

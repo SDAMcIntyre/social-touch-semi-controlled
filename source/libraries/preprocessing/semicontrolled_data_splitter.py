@@ -2,10 +2,12 @@ from itertools import groupby
 from operator import itemgetter
 import numpy as np
 import matplotlib.pyplot as plt
+import pandas as pd
 from scipy import signal
-from sklearn.decomposition import PCA
 import warnings
 
+from .semicontrolled_data_correct_lag import SemiControlledCorrectLag  # noqa: E402
+from .semicontrolled_data_cleaning import SemiControlledCleaner, smooth_scd_signal  # noqa: E402
 from ..materials.semicontrolled_data import SemiControlledData  # noqa: E402
 from ..plot.semicontrolled_data_visualizer import SemiControlledDataVisualizer  # noqa: E402
 from ..misc.waitforbuttonpress_popup import WaitForButtonPressPopup
@@ -14,69 +16,34 @@ from ..misc.time_cost_function import time_it
 
 class SemiControlledDataSplitter:
 
-    def __init__(self, data_filename, unit_name2type_filename=""):
-        self.data_filename = data_filename
-        self.unit_name2type_filename = unit_name2type_filename
+    def __init__(self):
+        self.data_filename = ""
+        self.unit_name2type_filename = ""
 
-    def split_by_trials(self):
-        data = []
+    def split_by_column_label(self, df_list, label=""):
+        df_out = []
 
-        df = SemiControlledData(self.data_filename, self.unit_name2type_filename).load_dataframe()
+        # if not a list of dataframe, transform the variable into a list
+        if not isinstance(df_list, list):
+            df_list = [df_list]
 
-        # Separate the rows of each block
-        for _, block_group in groupby(enumerate(df.block_id), key=itemgetter(1)):
-            indices_group = [index for index, _ in block_group]
-            df_block = df.iloc[indices_group]
-            # Separate the current block rows of each trial
-            for _, group in groupby(enumerate(df_block.trial_id), key=itemgetter(1)):
-                indices = [index for index, _ in group]
-                scd = SemiControlledData(self.data_filename, self.unit_name2type_filename)
-                scd.set_variables(df_block.iloc[indices])
-                data.append(scd)
-        return data
-
-    def trials_narrow_time_series(self, data_trials):
-        # remove start and end data (motion/positioning artifact)
-
-        data_trials_cleaned = []
-        for scd in data_trials:
-            match scd.stim.type:
-                case "stroke":
-                    scd = self.remove_contact_artifacts(scd, method="simple")
-                case "tap":
-                    scd = self.remove_contact_artifacts(scd, method="by-peak_soft")
-            data_trials_cleaned = [data_trials_cleaned, scd]
-
-        return data_trials_cleaned
-
-    def trials_align_contact_and_neural(self, data_trials):
-        data_aligned = data_trials
-
-        for scd in data_trials:
-            SemiControlledDataVisualizer(scd)
-            a = 1
-
-        return data_aligned
+        for df in df_list:
+            # Separate the rows of each block
+            for _, col_group in groupby(enumerate(df[label]), key=itemgetter(1)):
+                indices_group = [index for index, _ in col_group]
+                df_out.append(df.iloc[indices_group])
+        return df_out
 
     @time_it
-    def split_by_single_touch_event(self, correction=True, show=False):
+    def split_by_touch_event(self, scd_list, correction=True, show=False):
         """split_by_single
            split the current semicontrolled data into single touch event
            A period is determined differently based on the type (Tap or Stroke)
            """
-        data = []
-
-        # first separate the data by trial
-        data_trials = self.split_by_trials()
-
-        #  remove start and end data (motion/positioning artifact)
-        data_trials = self.trials_narrow_time_series(data_trials)
-
-        # Correct misalignments between the Kinect and MNG data
-        data_trials = self.trials_align_contact_and_neural(data_trials)
+        scd_list_out = []
 
         # second split the trial per stimulus/repeat/period/nb. time the POI is stimulated
-        for scd in data_trials:
+        for scd in scd_list:
             match scd.stim.type:
                 case "stroke":
                     scd_list = self.get_single_strokes(scd, correction=correction, show=show)
@@ -85,18 +52,15 @@ class SemiControlledDataSplitter:
                 case _:
                     scd_list = []
             try:
-                data.extend(scd_list)
+                scd_list_out.extend(scd_list)
             except:
                 # then it is not a list but just one SemiControlledData
-                data = [data, scd_list]
-        return data
+                scd_list_out = [scd_list_out, scd_list]
+        return scd_list_out
 
     def get_single_strokes(self, scd, correction=True, show=False):
-        # compress the signal into 1D (as the expected motion is supposed to be 1D anyway)
-        pca = PCA(n_components=1)
-        pos_1D = np.squeeze(pca.fit_transform(scd.contact.pos.transpose()))
-        # smoothing
-        pos_1D_smooth = self.get_smooth_signal(pos_1D, scd, nframe=5, method="blind")
+        # smoothing of the 1D position signal
+        pos_1D_smooth = smooth_scd_signal(scd.contact.pos_1D, scd, nframe=5, method="blind")
 
         # define the minimum distance between expected period/stimulation
         nb_period_expected = scd.stim.get_n_period_expected()
@@ -143,7 +107,7 @@ class SemiControlledDataSplitter:
             of the contact.depth features.
         '''
         # smooth the depth signal
-        depth_smooth = self.get_smooth_signal(scd.contact.depth, scd, nframe=2, method="adjust_with_speed")
+        depth_smooth = self.smooth_scd_signal(scd.contact.depth, scd, nframe=2, method="adjust_with_speed")
 
         # define the minimum distance between expected period/stimulation
         nb_period_expected = scd.stim.get_n_period_expected()
@@ -241,80 +205,6 @@ class SemiControlledDataSplitter:
             print("++++++++++")
 
         return scd_single
-
-    def remove_contact_artifacts(self, scd, method="by-peak"):
-        '''narrow_data_to_essential
-            remove the data based on the contact artifact that occurs
-            at the beginning and at the end of the trial, where the
-            experimenter move its hand toward and away from the
-            stimulation area.
-
-            parameters:
-            scd (SemiControlledData): dataset of a trial
-            method: "soft" will leave some space before and after the
-                        first and last contact respectively (good for Tap)
-                    "hard" will remove any space before and after the
-                        first and last contact respectively (good for Stroke)
-        '''
-        # smooth the depth signal
-        depth_smooth = self.get_smooth_signal(scd.contact.depth, scd, nframe=5)
-
-        # find locations of the periods
-        nb_period_expected = scd.stim.get_n_period_expected()
-        n_sample_per_period = scd.md.nsample/nb_period_expected
-        peaks, _ = signal.find_peaks(depth_smooth, distance=n_sample_per_period*0.8)
-
-        match method:
-            case "simple":
-                # extract the first location of the initial contact
-                starting_idx = next((idx for idx, v in enumerate(depth_smooth) if v), None)
-                # extract the last location of the last contact
-                ending_idx = len(depth_smooth) - next((idx for idx, v in enumerate(np.flip(depth_smooth)) if v), None)
-            case "by-peak_hard":
-                # extract the first location of the initial contact
-                start_depth_values = depth_smooth[:peaks[0]]
-                start_depth_values_r = np.flip(start_depth_values)
-                non_zero_indices = np.nonzero(start_depth_values_r == 0)[0]
-                starting_idx = non_zero_indices[0]
-                # extract the last location of the last contact
-                end_depth_values = depth_smooth[peaks[-1]:]
-                non_zero_indices = np.nonzero(end_depth_values == 0)[0]
-                ending_idx = non_zero_indices[0] if non_zero_indices.size > 0 else scd.md.nsample
-            case "by-peak_soft":
-                periods_idx = np.mean([peaks[1:], peaks[:-1]], axis=0)
-                starting_idx = max(0,  peaks[0] - (periods_idx[0] - peaks[0]))
-                ending_idx = min(scd.md.nsample,  peaks[-1] + (peaks[-1]-periods_idx[-1]))
-            case _:
-                warnings.warn("Warning: remove_contact_artifacts>method couldn't be found")
-                starting_idx = 0
-                ending_idx = scd.md.nsample
-        interval = np.arange(starting_idx, ending_idx, dtype=int)
-        scd.set_data_idx(interval)
-
-        return scd
-
-    def get_smooth_signal(self, sig, scd, nframe=5, method="blind"):
-        '''get_smooth_signal
-            smooth the signal based on the expected speed of the trial:
-             - more smoothing for lower speed
-             - return an array of identical size
-        '''
-        oversampling_to_trueFs = (scd.contact.data_Fs / scd.contact.KINECT_FS)
-        window_size = nframe * oversampling_to_trueFs
-
-        match method:
-            case "adjust_with_speed":
-                # between 0 and 1 of the max speed
-                speed_multiplier = 1/scd.stim.curr_max_vel_ratio()
-                # adjust the window based on the ratio
-                window_size = int(window_size * speed_multiplier)
-            case "blind", _:
-                pass
-
-        weights = np.repeat(1.0, window_size) / window_size
-        sig_smooth = np.convolve(sig, weights, 'same')
-
-        return sig_smooth
 
 
 
