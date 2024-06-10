@@ -1,10 +1,11 @@
 import numpy as np
-from scipy import signal
+from scipy.signal import find_peaks, gaussian
 import warnings
 
 from ..materials.semicontrolled_data import SemiControlledData  # noqa: E402
 from ..materials.neuraldata import NeuralData  # noqa: E402
 from ..plot.semicontrolled_data_visualizer import SemiControlledDataVisualizer  # noqa: E402
+
 
 class SemiControlledCleaner:
     def __init__(self):
@@ -12,6 +13,8 @@ class SemiControlledCleaner:
 
     def trials_narrow_time_series_to_essential(self, scd_list):
         # remove start and end data (motion/positioning artifact)
+        if not isinstance(scd_list, list):
+            scd_list = [scd_list]
         scd_list_out = []
         for scd in scd_list:
             match scd.stim.type:
@@ -21,6 +24,13 @@ class SemiControlledCleaner:
                     scd = self.remove_contact_artifacts(scd, method="by-peak_soft")
             scd_list_out.append(scd)
         return scd_list_out
+
+    def correct_electrode_location_latency(self, scd_list):
+        if not isinstance(scd_list, list):
+            scd_list = [scd_list]
+        for scd in scd_list:
+            scd.neural.correct_conduction_velocity()
+        return scd_list
 
     def remove_contact_artifacts(self, scd, method="by-peak"):
         '''narrow_data_to_essential
@@ -42,7 +52,7 @@ class SemiControlledCleaner:
         # find locations of the periods
         nb_period_expected = scd.stim.get_n_period_expected()
         n_sample_per_period = scd.md.nsample/nb_period_expected
-        peaks, _ = signal.find_peaks(depth_smooth, distance=n_sample_per_period*0.8)
+        peaks, _ = find_peaks(depth_smooth, distance=n_sample_per_period*0.8)
 
         match method:
             case "simple":
@@ -92,7 +102,30 @@ def smooth_scd_signal(sig, scd, nframe=5, method="blind"):
         case "blind", _:
             pass
 
+    if window_size > len(sig):
+        warnings.warn("window_size is longer than sig, shorten it to the signal's length...")
+        window_size = len(sig)
+
     weights = np.repeat(1.0, window_size) / window_size
     sig_smooth = np.convolve(sig, weights, 'same')
 
+    if len(sig_smooth) != len(sig):
+        warnings.warn("sig_smooth is not the size of the original signal")
+
     return sig_smooth
+
+
+def normalize_signal(signal):
+    min_val = min(signal)
+    max_val = max(signal)
+    normalized_signal = [(x - min_val) / (max_val - min_val) for x in signal]
+    return normalized_signal
+
+
+def gaussian_envelope(input_vector, envelope_width=0):
+    """Modulate an input vector with a bell envelope"""
+    length = len(input_vector)
+    if not envelope_width:
+        envelope_width = length/4
+    envelope = gaussian(length, std=envelope_width)
+    return input_vector * envelope

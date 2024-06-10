@@ -1,3 +1,80 @@
+def monitor_green_levels(self, threshold, show=True):
+    if self.cap is None or self.first_frame is None:
+        raise Exception("Error: Video not initialized. Please call initialise() first.")
+
+    # Convert the first frame to the HSV color space
+    hsv_first_frame = cv2.cvtColor(self.first_frame, cv2.COLOR_BGR2HSV)
+    # Convert the frame to the HSV color space
+    hsv = cv2.cvtColor(foreground, cv2.COLOR_BGR2HSV)
+
+    # Create a mask for the green color in the first frame
+    mask = cv2.inRange(hsv_first_frame, self.lower_green, self.upper_green)
+
+    # Create a mask for the circular ROI
+    circle_mask = np.zeros(mask.shape, dtype=np.uint8)
+    cv2.circle(circle_mask, self.circle_center, self.circle_radius, 255, -1)
+
+    # Combine the green mask and the circle mask
+    combined_mask = cv2.bitwise_and(mask, mask, mask=circle_mask)
+
+    # Calculate the average green level in the circular AOI of the first frame
+    AOI = cv2.bitwise_and(self.first_frame, self.first_frame, mask=combined_mask)
+    avg_green = np.mean(AOI[:, :, 1])  # Average of the green channel
+
+    # Store the average green level
+    self.green_levels.append(avg_green)
+
+    # Define the ON/OFF time series
+    self.threshold_value = threshold
+    self.led_on = [avg_green > self.threshold_value]
+
+    return self.green_levels
+
+
+def monitor_green_levels(self, threshold, show=True):
+
+    cv2.namedWindow('Frame', cv2.WND_PROP_FULLSCREEN)
+    cv2.setWindowProperty('Frame', cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+    while True:
+        ret, frame = self.cap.read()
+
+        if not ret:
+            break
+
+        # Subtract the background
+        foreground = cv2.absdiff(frame, self.background_mask)
+
+        # Convert the frame to the HSV color space
+        hsv = cv2.cvtColor(foreground, cv2.COLOR_BGR2HSV)
+
+        # Create a mask for the green color
+        mask = cv2.inRange(hsv, self.lower_green, self.upper_green)
+
+        # Create a mask for the circular ROI
+        circle_mask = np.zeros(mask.shape, dtype=np.uint8)
+        cv2.circle(circle_mask, self.circle_center, self.circle_radius, 255, -1)
+
+        # Combine the green mask and the circle mask
+        combined_mask = cv2.bitwise_and(mask, mask, mask=circle_mask)
+
+        # Calculate the average green level in the circular AOI
+        AOI = cv2.bitwise_and(frame, frame, mask=combined_mask)
+        avg_green = np.mean(AOI[:, :, 1])  # Average of the green channel
+
+        # Store the average green level
+        self.green_levels.append(avg_green)
+
+        # Draw the circle on the frame (optional)
+        cv2.circle(frame, self.circle_center, self.circle_radius, (0, 255, 0), 2)
+
+        if show:
+            # Display the frame (optional)
+            cv2.imshow('Frame', frame)
+
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+
+
 
 import numpy as np
 import pandas as pd

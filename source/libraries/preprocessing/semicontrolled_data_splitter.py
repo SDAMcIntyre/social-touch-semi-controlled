@@ -107,7 +107,7 @@ class SemiControlledDataSplitter:
             of the contact.depth features.
         '''
         # smooth the depth signal
-        depth_smooth = self.smooth_scd_signal(scd.contact.depth, scd, nframe=2, method="adjust_with_speed")
+        depth_smooth = smooth_scd_signal(scd.contact.depth, scd, nframe=2, method="adjust_with_speed")
 
         # define the minimum distance between expected period/stimulation
         nb_period_expected = scd.stim.get_n_period_expected()

@@ -1,6 +1,7 @@
+import chardet
 import numpy as np
 import pandas as pd
-import chardet
+import warnings
 
 class NeuralData:
     def __init__(self, data_filename, unit_name2type_filename):
@@ -12,6 +13,9 @@ class NeuralData:
 
         self.unit_id = None
         self.unit_type = None
+        self.conduction_vel = None  # meter/second
+        self.dist_electrode = None  # cm
+        self.latency = None  # second
 
         try:
             # get current unit ID
@@ -25,12 +29,30 @@ class NeuralData:
             if int(unit_occ) < 10:
                 unit_occ = "0" + unit_occ
             self.unit_id = '-'.join([participant_id, unit_occ])
-
-            # get current unit type
-            df = pd.read_csv(unit_name2type_filename)
-            self.unit_type = df.Unit_type[df.Unit_name == self.unit_id].values[0]
         except:
             pass
+
+        try:
+            # select the metadata information of the current neuron
+            df = pd.read_csv(unit_name2type_filename)
+            df = df[df.Unit_name == self.unit_id]
+
+            # get current unit type
+            self.unit_type = df["Unit_type"].values[0]
+            # get current conduction velocity
+            self.conduction_vel = df["conduction_velocity (m/s)"].values[0]
+            self.dist_electrode = df["electrode_endorgan_distance (cm)"].values[0]
+            self.latency = (self.dist_electrode/100) / self.conduction_vel
+        except:
+            pass
+
+    def correct_conduction_velocity(self):
+        if self.data_Fs is None:
+            warnings.warn("Neural:correct_conduction_velocity> data hasn't been loaded yet. Abort.")
+        # get the number of sample for the latency of the current unit
+        nsample_latency = -1 * int(self.data_Fs * self.latency)
+        # shift the signal by the latency
+        self.shift(nsample_latency)
 
     def shift(self, lag):
         lag = int(lag)
@@ -49,15 +71,16 @@ class NeuralData:
 
         neural.unit_id = self.unit_id
         neural.unit_type = self.unit_type
+        neural.conduction_vel = self.conduction_vel
+        neural.dist_electrode = self.dist_electrode
+        neural.latency = self.latency
+
         return neural
 
     def set_data_idx(self, idx):
         self.time = self.time[idx]
         self.spike = self.spike[idx]
         self.iff = self.iff[idx]
-
-        self.unit_id = self.unit_id
-        self.unit_type = self.unit_type
 
     def append(self, neural_bis):
         self.time = np.concatenate((self.time, neural_bis.time))

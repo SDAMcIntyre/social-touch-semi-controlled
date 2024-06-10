@@ -59,10 +59,12 @@ class SemiControlledDataManager:
 
         # 5. correct for contact data issues
         scd_list = cleaner.trials_narrow_time_series_to_essential(scd_list)
-        # 6. correct for misalignment
+        # 6. correct for neural data latency (electrode vs end organ location)
+        scd_list = cleaner.correct_electrode_location_latency(scd_list)
+        # 7. correct for misalignment
         scd_list = correctlag.trials_align_contact_and_neural(scd_list)
 
-        # 7. split by touch event
+        # 8. split by touch event
         scd_list = splitter.split_by_touch_event(scd_list, correction=correction, show=show)
 
         return scd_list

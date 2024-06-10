@@ -86,13 +86,13 @@ if __name__ == "__main__":
     """
     Load the CSV data: preprocess, split into single touch event, and save the generated variable with pickle.dump
     """
-    [input_dir, output_dir] = path_tools.get_path_abs(input_dir="processed", output_dir="analysed")
+    [input_dir, output_dir] = path_tools.select_files_processed_data(input_dir="processed", output_dir="analysed")
     data_files = path_tools.select_files(input_dir, mode=load_mode)
     fname_neur_name2type = os.path.join(input_dir, "semicontrol_unit-name_to_unit-type.csv")
 
     # create a list of SemiControlledData
     scdm = SemiControlledDataManager()
-    scdm.preprocess_data_files(data_files[0], fname_neur_name2type, correction=True, show=False)
+    scdm.preprocess_data_files(data_files, fname_neur_name2type, correction=True, show=False)
 
     # save data on the hard drive ?
     if save_data:

@@ -36,7 +36,7 @@ class SemiControlledDataVisualizer:
                 if self.plotVel:
                     self.figvel.set_lim(limits)
 
-    def update(self, scd: SemiControlledData):
+    def update(self, scd: SemiControlledData, title=None):
         time = scd.md.time
         info_str = ("Neuron Info\n"
                     f"ID: {scd.neural.unit_id}\n"
@@ -55,6 +55,9 @@ class SemiControlledDataVisualizer:
         self.fig2D_contact.update(2, time, scd.contact.area, 'Area size')
 
         self.figpos.update(time, scd.contact.pos, info_str)
+        if title is not None:
+            self.figpos.fig.suptitle(title)
+
         if self.plotVel:
             self.figvel.update(time, scd.contact.vel, info_str)
 

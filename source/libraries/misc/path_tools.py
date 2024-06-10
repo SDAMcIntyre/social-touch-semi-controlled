@@ -5,13 +5,7 @@ import tkinter as tk
 from tkinter import filedialog
 
 
-def get_path_abs(input_dir, output_dir):
-    input_dir_abs = get_path_abs_base(input_dir)
-    output_dir_abs = get_path_abs_base(output_dir)
-    return input_dir_abs, output_dir_abs
-
-
-def get_path_abs_base(mid_dir):
+def get_path_root_abs():
     # path to onedrive root folder
     match socket.gethostname():
         case "baz":
@@ -25,6 +19,19 @@ def get_path_abs_base(mid_dir):
                                  'touch comm MNG Kinect',
                                  'basil_tmp',
                                  'data')
+    return data_dir_base
+
+
+def get_path_abs(input_dir, output_dir):
+    input_dir_abs = get_path_abs_base(input_dir)
+    output_dir_abs = get_path_abs_base(output_dir)
+    return input_dir_abs, output_dir_abs
+
+
+def get_path_abs_base(mid_dir):
+    # path to database root folder
+    data_dir_base = get_path_root_abs()
+
     # destination
     dir_abs = os.path.join(data_dir_base, mid_dir)
     # target the current experiment, postprocessing and datatype
@@ -35,7 +42,7 @@ def get_path_abs_base(mid_dir):
     return dir_abs
 
 
-def select_files(input_dir, mode="manual"):
+def select_files_processed_data(input_dir, mode="manual"):
     match mode:
         case "automatic":
             selected_files = glob.glob(os.path.join(input_dir, '*ST*-unit*-semicontrol.csv'))
