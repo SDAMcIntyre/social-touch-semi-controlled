@@ -20,6 +20,25 @@ class SemiControlledDataSplitter:
         self.data_filename = ""
         self.unit_name2type_filename = ""
 
+    def merge_data(self, df_list, data_led_list):
+        df_out = []
+
+        # if not a list of dataframe, transform the variable into a list
+        if not isinstance(df_list, list):
+            df_list = [df_list]
+            data_led_list = [data_led_list]
+
+        # https://stackoverflow.com/questions/20625582/how-to-deal-with-settingwithcopywarning-in-pandas
+        with pd.option_context('mode.chained_assignment', None):
+            for idx, df in enumerate(df_list):
+                data_led_list[idx].resample(df["t"].values, show=False)
+                df['led_on'] = data_led_list[idx].led_on
+                df['green_levels'] = data_led_list[idx].green_levels
+
+                df_out.append(df)
+
+        return df_out
+
     def split_by_column_label(self, df_list, label=""):
         df_out = []
 

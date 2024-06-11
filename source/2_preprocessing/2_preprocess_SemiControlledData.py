@@ -1,8 +1,10 @@
 from collections import defaultdict, Counter
+import glob
 import matplotlib.pyplot as plt
 import numpy as np
 import os
 import pandas as pd
+from pathlib import Path
 import pickle
 import sys
 import tkinter as tk
@@ -78,27 +80,151 @@ def display_single_touch_per_unit_type(scdm):
     scdm.set_data(list_single_touches_all)
 
 
+def find_csv_files(sessions):
+    """
+    Given a list of session names,
+    find all CSV files nested inside these directories.
+
+    Args:
+    sessions (list): A list where of directory names.
+
+    Returns:
+    session_led_dict: A dictionary of paths to all CSV files found.
+    """
+
+    data_dir_base = path_tools.get_path_root_abs()
+    input_dir = "processed"
+    experiment = "semi-controlled"
+    datatype_str = os.path.join("contact_and_neural", "new_axes_3Dposition")
+    neural_name2type_filename = "semicontrol_unit-name_to_unit-type.csv"
+
+    # destination
+    dir_abs = os.path.join(data_dir_base, input_dir)
+    # destination
+    dir_abs = os.path.join(dir_abs, experiment)
+    # target the current experiment, postprocessing and datatype
+    dir_abs = os.path.join(dir_abs, datatype_str)
+
+    session_csv_dict = {}
+    for session in sessions:
+        # Create the search pattern
+        file_path = os.path.join(dir_abs, session+"*")
+        # Use glob to find files matching the pattern
+        files_list = glob.glob(file_path)
+
+        if len(files_list) != 1:
+            continue
+
+        filename = files_list[0]
+        if filename.endswith('.csv'):
+            csv_file_info = {"session": session,
+                             "file_path": dir_abs,
+                             "filename": Path(filename).name,
+                             "filename_abs": filename,
+                             "neuron_name2type_filename_abs": os.path.join(dir_abs, neural_name2type_filename)
+                             }
+            session_csv_dict[session] = csv_file_info
+
+    return session_csv_dict
+
+
+def find_led_files(sessions):
+    """
+    Given a list of session names,
+    find all led files nested inside these directories.
+
+    Args:
+    sessions (list): A list where of directory names.
+
+    Returns:
+    session_led_dict: A dictionary of paths to all led files found.
+    """
+    data_dir_base = path_tools.get_path_root_abs()
+    input_dir = "processed"
+    experiment = "semi-controlled"
+    datatype_str = "kinect"
+
+    # destination
+    dir_abs = os.path.join(data_dir_base, input_dir)
+    # destination
+    dir_abs = os.path.join(dir_abs, experiment)
+    # target the current experiment, postprocessing and datatype
+    dir_abs = os.path.join(dir_abs, datatype_str)
+
+    session_led_dict = {}
+
+    for session in sessions:
+        # Create the search pattern
+        session_4led = session.replace("-ST", "_ST").replace("unit", "0")
+        dir_path = os.path.join(dir_abs, session_4led)
+        if not os.path.exists(dir_path):
+            continue
+
+        led_files_info = []
+        block_id = 0
+        for file_path, _, files in os.walk(dir_path):
+            for file in files:
+                if file.endswith('.csv'):
+                    block_id += 1
+                    led_file_info = {"session": session,
+                                     "block_id": block_id,
+                                     "file_path": file_path,
+                                     "timeseries_filename": file,
+                                     "metadata_filename": file.replace(".csv", "_metadata.txt")
+                                     }
+                    led_files_info.append(led_file_info)
+
+        session_led_dict[session] = led_files_info
+
+    return session_led_dict
+
+
 if __name__ == "__main__":
+    """
+    Load the CSV data: preprocess, split into single touch event, and save the generated variable with pickle.dump
+    """
 
     load_mode = "automatic"  # "manual", "automatic"
     save_data = False
 
-    """
-    Load the CSV data: preprocess, split into single touch event, and save the generated variable with pickle.dump
-    """
-    [input_dir, output_dir] = path_tools.select_files_processed_data(input_dir="processed", output_dir="analysed")
-    data_files = path_tools.select_files(input_dir, mode=load_mode)
-    fname_neur_name2type = os.path.join(input_dir, "semicontrol_unit-name_to_unit-type.csv")
+    # Session names
+    sessions = ['2022-06-15-ST13-unit1',
+                '2022-06-15-ST13-unit2',
+                '2022-06-15-ST13-unit3',
+                '2022-06-15-ST14-unit1',
+                '2022-06-15-ST14-unit2',
+                '2022-06-15-ST14-unit3',
+                '2022-06-15-ST14-unit4',
+                '2022-06-15-ST15-unit1',
+                '2022-06-15-ST15-unit2',
+                '2022-06-17-ST16-unit2',
+                '2022-06-17-ST16-unit3',
+                '2022-06-17-ST16-unit4',
+                '2022-06-17-ST16-unit5',
+                '2022-06-22-ST18-unit1',
+                '2022-06-22-ST18-unit2',
+                '2022-06-22-ST18-unit4']
+    sessions = ['2022-06-22-ST18-unit4']
+    session_csv_dict = find_csv_files(sessions)
+    session_led_dict = find_led_files(sessions)
 
-    # create a list of SemiControlledData
-    scdm = SemiControlledDataManager()
-    scdm.preprocess_data_files(data_files, fname_neur_name2type, correction=True, show=False)
+    scd_list = []
+    for session in sessions:
+        led_files_info = session_led_dict[session]
+        data_filename = session_csv_dict[session]["filename_abs"]
+        neuron_name2type_filename = session_csv_dict[session]["neuron_name2type_filename_abs"]
+
+        # create a list of SemiControlledData of touch event
+        scdm = SemiControlledDataManager()
+        data_sliced = scdm.preprocess_data_file(data_filename, neuron_name2type_filename, led_files_info, correction=True, show=False)
+
+        # store the calculated data
+        scd_list.append(data_sliced)
 
     # save data on the hard drive ?
     if save_data:
         with open(os.path.join(output_dir, 'semicontrolleddata_period_list.pkl'), 'wb') as file:
             pickle.dump(scdm, file)
-
 
     scdata_visualizer.display_scd_one_by_one(scdm.data)
     # local function: display the stimulus content/landscape for each unit type

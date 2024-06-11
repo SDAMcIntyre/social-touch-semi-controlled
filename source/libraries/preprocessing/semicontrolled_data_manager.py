@@ -6,6 +6,7 @@ from ..materials.semicontrolled_data import SemiControlledData  # noqa: E402
 from .semicontrolled_data_cleaning import SemiControlledCleaner  # noqa: E402
 from .semicontrolled_data_correct_lag import SemiControlledCorrectLag  # noqa: E402
 from .semicontrolled_data_splitter import SemiControlledDataSplitter  # noqa: E402
+from .semicontrolled_data_KinectLED import SemiControlledDataLED  # noqa: E402
 
 
 class SemiControlledDataManager:
@@ -37,12 +38,12 @@ class SemiControlledDataManager:
 
         for data_filename in data_filenames:
             print("Processing file:", data_filename)
-            scd_list = self.preprocess_data_file(data_filename, unit_name2type_filename, correction=True, show=False)
+            scd_list = self.preprocess_data_file(data_filename, unit_name2type_filename, correction=correction, show=show)
             self.data.extend(scd_list)
 
         return self.data
 
-    def preprocess_data_file(self, data_filename, unit_name2type_filename, correction=True, show=False):
+    def preprocess_data_file(self, data_filename, unit_name2type_filename, led_files_info_list, correction=True, show=False):
         scd = SemiControlledData(data_filename, unit_name2type_filename)
         splitter = SemiControlledDataSplitter()
         cleaner = SemiControlledCleaner()
@@ -52,19 +53,26 @@ class SemiControlledDataManager:
         df = scd.load_dataframe()
         # 2. split full dataframe by blocks
         df_list = splitter.split_by_column_label(df, label="block_id")
-        # 3. split blocks by trials
+
+        # 3. extract green LED
+        led = SemiControlledDataLED()
+        data_led_list = led.load_class_list_from_infos(led_files_info_list)
+        # 4. incorporate green LED into the dataframe + compensate for refresh rate difference
+        df_list = splitter.merge_data(df_list, data_led_list)
+
+        # 5. split blocks by trials
         df_list = splitter.split_by_column_label(df_list, label="trial_id")
-        # 4. transform dataframe list into SemiControlledData list
+        # 6. transform dataframe list into SemiControlledData list
         scd_list = scd.create_list_from_df(df_list)
 
-        # 5. correct for contact data issues
+        # 7. correct for contact data issues
         scd_list = cleaner.trials_narrow_time_series_to_essential(scd_list)
-        # 6. correct for neural data latency (electrode vs end organ location)
+        # 8. correct for neural data latency (electrode vs end organ location)
         scd_list = cleaner.correct_electrode_location_latency(scd_list)
-        # 7. correct for misalignment
+        # 10. correct for misalignment
         scd_list = correctlag.trials_align_contact_and_neural(scd_list)
 
-        # 8. split by touch event
+        # 11. split by touch event
         scd_list = splitter.split_by_touch_event(scd_list, correction=correction, show=show)
 
         return scd_list

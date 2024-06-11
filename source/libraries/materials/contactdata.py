@@ -13,6 +13,9 @@ class ContactData:
         self._time: list[float] = []
         self.nsample: int = 0
 
+        self._led_on: list[float] = []
+        self._green_levels: list[float] = []
+
         self._contact_flag: list[float] = []  # ON/OFF
 
         self._area: list[float] = []  # mm^2
@@ -87,7 +90,11 @@ class ContactData:
 
     def get_data_idx(self, idx):
         cd = ContactData()
+
         cd.time = self.time[idx]
+        cd.led_on = self.led_on[idx]
+        cd.green_levels = self.green_levels[idx]
+
         cd.contact_flag = self.contact_flag[idx]
         cd.area = self.area[idx]
         cd.depth = self.depth[idx]
@@ -100,6 +107,10 @@ class ContactData:
 
     def set_data_idx(self, idx):
         self.time = self.time[idx]
+
+        self.led_on = self.led_on[idx]
+        self.green_levels = self.green_levels[idx]
+
         self.contact_flag = self.contact_flag[idx]
         self.area = self.area[idx]
         self.depth = self.depth[idx]
@@ -112,6 +123,9 @@ class ContactData:
     def append(self, contact_bis):
         self.time = np.concatenate((self.time, contact_bis.time))
 
+        self.led_on = np.concatenate((self.led_on, contact_bis.led_on))
+        self.green_levels = np.concatenate((self.green_levels, contact_bis.green_levels))
+
         self.contact_flag = np.concatenate((self.contact_flag, contact_bis.contact_flag))
         self.area = np.concatenate((self.area, contact_bis.area))
         self.depth = np.concatenate((self.depth, contact_bis.depth))
@@ -120,6 +134,35 @@ class ContactData:
             self.pos = np.concatenate((self.pos, contact_bis.pos), axis=1)
         except:
             pass
+
+        self._led_on: list[float] = []
+        self._green_levels: list[float] = []
+
+    @property
+    def time(self):
+        return self._time
+
+    @time.setter
+    def time(self, value):
+        self._time = value
+        self.nsample = len(self._time)
+        self.data_Fs = 1 / np.median(np.diff(self._time))  # Hz
+
+    @property
+    def led_on(self):
+        return self._led_on
+
+    @led_on.setter
+    def led_on(self, value):
+        self._led_on = value
+
+    @property
+    def green_levels(self):
+        return self._green_levels
+
+    @green_levels.setter
+    def green_levels(self, value):
+        self._green_levels = value
 
     @property
     def contact_flag(self):
@@ -175,14 +218,3 @@ class ContactData:
     @pos_1D.setter
     def pos_1D(self, value):
         self._pos_1D = value
-
-
-    @property
-    def time(self):
-        return self._time
-
-    @time.setter
-    def time(self, value):
-        self._time = value
-        self.nsample = len(self._time)
-        self.data_Fs = 1 / np.median(np.diff(self._time))  # Hz

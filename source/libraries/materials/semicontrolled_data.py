@@ -18,7 +18,6 @@ class SemiControlledData:
         self.md: Metadata = Metadata(data_csv_filename, unit_name2type_filename)
         self.stim: StimulusInfo = StimulusInfo()
         self.neural: NeuralData = NeuralData(data_csv_filename, unit_name2type_filename)
-
         self.contact: ContactData = ContactData()
 
         # allows to determine if the signal is considered good
@@ -92,6 +91,11 @@ class SemiControlledData:
 
     def load_contact(self, df):
         self.contact.time = df.t.values
+
+        # Kinect LED time series
+        self.contact.led_on = df.led_on.values
+        self.contact.green_levels = df.green_levels.values
+
         # contact data
         self.contact.contact_flag = df.Contact_Flag.values
         self.contact.area = df.areaRaw.values
