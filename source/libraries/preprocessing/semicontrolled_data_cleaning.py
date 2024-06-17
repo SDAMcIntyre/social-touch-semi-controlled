@@ -115,10 +115,14 @@ def smooth_scd_signal(sig, scd, nframe=5, method="blind"):
     return sig_smooth
 
 
-def normalize_signal(signal):
+def normalize_signal(signal, dtype=list):
     min_val = min(signal)
     max_val = max(signal)
     normalized_signal = [(x - min_val) / (max_val - min_val) for x in signal]
+    
+    if dtype == np.ndarray:
+        normalized_signal = np.array(normalized_signal)
+
     return normalized_signal
 
 

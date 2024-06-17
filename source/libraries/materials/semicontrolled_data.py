@@ -14,7 +14,7 @@ from ..materials.neuraldata import NeuralData  # noqa: E402
 
 
 class SemiControlledData:
-    def __init__(self, data_csv_filename, unit_name2type_filename, loading_process=None):
+    def __init__(self, data_csv_filename, unit_name2type_filename, loading_process=None, dropna=False):
         self.md: Metadata = Metadata(data_csv_filename, unit_name2type_filename)
         self.stim: StimulusInfo = StimulusInfo()
         self.neural: NeuralData = NeuralData(data_csv_filename, unit_name2type_filename)
@@ -26,7 +26,7 @@ class SemiControlledData:
 
         match loading_process:
             case "automatic_load":
-                df = self.load_dataframe()
+                df = self.load_dataframe(dropna=dropna)
                 self.set_variables(df)
 
     def create_list_from_df(self, df_list):
@@ -62,25 +62,26 @@ class SemiControlledData:
     def get_area(self):
         return self.contact.get_area()
 
-    def set_variables(self, df=None):
+    def set_variables(self, df=None, dropna=False):
         if df is None:
-            df = self.load_dataframe()
+            df = self.load_dataframe(dropna=dropna)
         self.load_metadata(df)
         self.load_stimulus(df)
         self.load_contact(df)
         self.load_neural(df)
 
-    def load_dataframe(self):
+    def load_dataframe(self, dropna=False):
         df = pd.read_csv(self.md.data_filename)
         # remove lines that contains NaN values
-        df.dropna(inplace=True)
+        if dropna:
+            df.dropna(inplace=True)
         return df
 
     def load_metadata(self, df):
         # metadata
         self.md.time = df.t.values
-        self.md.block_id = df.block_id.values[0]
-        self.md.trial_id = df.trial_id.values[0]
+        self.md.block_id = pd.Series(df.block_id.values[0])
+        self.md.trial_id = pd.Series(df.trial_id.values[0])
 
     def load_stimulus(self, df):
         # stimulus info

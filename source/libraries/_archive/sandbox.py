@@ -1,3 +1,52 @@
+
+# mask red and blue to assess if there was occlusion of the LED
+reference_roi_nogreen = self.reference_frame[:, :, [0, 2]]
+reference_roi_nogreen[:, :, 0] = cv2.bitwise_and(reference_roi_nogreen[:, :, 0], circle_mask)
+reference_roi_nogreen[:, :, 1] = cv2.bitwise_and(reference_roi_nogreen[:, :, 1], circle_mask)
+occlusion_threshold = 2
+
+#
+#
+#
+hsv_reference = cv2.cvtColor(self.reference_frame, cv2.COLOR_BGR2HSV)
+green_mask = cv2.inRange(hsv_reference, self.lower_green, self.upper_green)
+background_mask = cv2.bitwise_not(green_mask)
+background_mask = cv2.bitwise_and(self.reference_frame, circle_mask)
+# Reset to the first frame
+self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+# Create the background mask excluding all pixels except the circular region of interest
+circle_mask = np.zeros_like(self.reference_frame[:, :, 0])
+cv2.circle(circle_mask, self.circle_center, self.circle_radius, 255, -1)
+# green
+reference_roi_nogreen = cv2.bitwise_and(self.reference_frame, circle_mask)
+reference_roi_nogreen[:, :, 1] = 0
+
+diff_from_reference_nogreen = foreground[:, :, [0, 2]] - reference_roi_nogreen
+occlusion_threshold
+
+# Check for significant difference in red and blue channels
+reference_red_blue_diff = np.abs(
+    self.reference_frame[:, :, 0].astype(np.int32) - self.reference_frame[:, :, 2].astype(np.int32))
+current_red_blue_diff = np.abs(AOI[:, :, 0].astype(np.int32) - AOI[:, :, 2].astype(np.int32))
+red_blue_diff_threshold = 50  # Adjust this threshold as needed
+
+# Set average green to NaN if red-blue difference exceeds threshold
+red_blue_diff_exceeds_threshold = current_red_blue_diff > reference_red_blue_diff + red_blue_diff_threshold
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 def monitor_green_levels(self, threshold, show=True):
     if self.cap is None or self.first_frame is None:
         raise Exception("Error: Video not initialized. Please call initialise() first.")

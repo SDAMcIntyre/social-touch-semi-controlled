@@ -105,7 +105,7 @@ def find_csv_files(sessions):
     # target the current experiment, postprocessing and datatype
     dir_abs = os.path.join(dir_abs, datatype_str)
 
-    session_csv_dict = {}
+    session_contactneur_dict = {}
     for session in sessions:
         # Create the search pattern
         file_path = os.path.join(dir_abs, session+"*")
@@ -123,9 +123,9 @@ def find_csv_files(sessions):
                              "filename_abs": filename,
                              "neuron_name2type_filename_abs": os.path.join(dir_abs, neural_name2type_filename)
                              }
-            session_csv_dict[session] = csv_file_info
+            session_contactneur_dict[session] = csv_file_info
 
-    return session_csv_dict
+    return session_contactneur_dict
 
 
 def find_led_files(sessions):
@@ -188,9 +188,9 @@ if __name__ == "__main__":
     save_data = False
 
     # Session names
-    sessions = ['2022-06-15-ST13-unit1',
-                '2022-06-15-ST13-unit2',
-                '2022-06-15-ST13-unit3',
+    sessions = ['2022-06-14-ST13-unit1',
+                '2022-06-14-ST13-unit2',
+                '2022-06-14-ST13-unit3',
                 '2022-06-15-ST14-unit1',
                 '2022-06-15-ST14-unit2',
                 '2022-06-15-ST14-unit3',
@@ -204,15 +204,23 @@ if __name__ == "__main__":
                 '2022-06-22-ST18-unit1',
                 '2022-06-22-ST18-unit2',
                 '2022-06-22-ST18-unit4']
-    sessions = ['2022-06-22-ST18-unit4']
-    session_csv_dict = find_csv_files(sessions)
+    # data not fully download on the hard drive, needs to create a sub selection
+    sessions = ['2022-06-14-ST13-unit1',
+                '2022-06-14-ST13-unit2',
+                '2022-06-14-ST13-unit3',
+                '2022-06-15-ST14-unit1',
+                '2022-06-15-ST14-unit2',
+                '2022-06-15-ST14-unit3',
+                '2022-06-22-ST18-unit1',
+                '2022-06-22-ST18-unit4']
+    session_contactneur_dict = find_csv_files(sessions)
     session_led_dict = find_led_files(sessions)
 
     scd_list = []
     for session in sessions:
         led_files_info = session_led_dict[session]
-        data_filename = session_csv_dict[session]["filename_abs"]
-        neuron_name2type_filename = session_csv_dict[session]["neuron_name2type_filename_abs"]
+        data_filename = session_contactneur_dict[session]["filename_abs"]
+        neuron_name2type_filename = session_contactneur_dict[session]["neuron_name2type_filename_abs"]
 
         # create a list of SemiControlledData of touch event
         scdm = SemiControlledDataManager()

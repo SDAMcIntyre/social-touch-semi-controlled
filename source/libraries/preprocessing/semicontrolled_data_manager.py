@@ -3,10 +3,10 @@ import numpy as np
 from typing import Dict, Tuple
 
 from ..materials.semicontrolled_data import SemiControlledData  # noqa: E402
+from ..materials.kinect_led import SemiControlledDataLED  # noqa: E402
 from .semicontrolled_data_cleaning import SemiControlledCleaner  # noqa: E402
 from .semicontrolled_data_correct_lag import SemiControlledCorrectLag  # noqa: E402
 from .semicontrolled_data_splitter import SemiControlledDataSplitter  # noqa: E402
-from .semicontrolled_data_KinectLED import SemiControlledDataLED  # noqa: E402
 
 
 class SemiControlledDataManager:
@@ -45,17 +45,17 @@ class SemiControlledDataManager:
 
     def preprocess_data_file(self, data_filename, unit_name2type_filename, led_files_info_list, correction=True, show=False):
         scd = SemiControlledData(data_filename, unit_name2type_filename)
+        led = SemiControlledDataLED()
         splitter = SemiControlledDataSplitter()
         cleaner = SemiControlledCleaner()
         correctlag = SemiControlledCorrectLag()
 
         # 1. load the csv file as a dataframe
-        df = scd.load_dataframe()
+        df = scd.load_dataframe(dropna=False)
         # 2. split full dataframe by blocks
         df_list = splitter.split_by_column_label(df, label="block_id")
 
         # 3. extract green LED
-        led = SemiControlledDataLED()
         data_led_list = led.load_class_list_from_infos(led_files_info_list)
         # 4. incorporate green LED into the dataframe + compensate for refresh rate difference
         df_list = splitter.merge_data(df_list, data_led_list)

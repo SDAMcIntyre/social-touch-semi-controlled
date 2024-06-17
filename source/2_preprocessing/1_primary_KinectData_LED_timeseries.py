@@ -6,9 +6,9 @@ import sys
 
 # homemade libraries
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-from libraries.preprocessing.semicontrolled_data_KinectLED import KinectLED  # noqa: E402
+from libraries.preprocessing.semicontrolled_Kinect_manager import ProcessKinectLED  # noqa: E402
 import libraries.misc.path_tools as path_tools  # noqa: E402
-
+from libraries.misc.waitforbuttonpress_popup import WaitForButtonPressPopup
 
 def find_mkv_files(sessions):
     """
@@ -67,9 +67,9 @@ def get_output_dir():
 
 
 if __name__ == "__main__":
-    video_path = "E:\\OneDrive - Linköpings universitet\\_Teams\\touch comm MNG Kinect\\basil_tmp\\data\\primary\\semi-controlled\\kinect\\2021-12-10_ST12-01\\NoIR_2021-12-10_13-34-08_ST12_unit1_20bpm-stroke-2fingers.mkv"
-    video_path3 = "E:\\OneDrive - Linköpings universitet\\_Teams\\touch comm MNG Kinect\\basil_tmp\\data\\primary\\semi-controlled\\kinect\\2022-06-22_ST18-04\\2022-06-22_17-36-14\\NoIR_2022-06-22_17-39-03_controlled-touch-MNG_ST18_4_block3.mkv"
-    video_path4 = "E:\\OneDrive - Linköpings universitet\\_Teams\\touch comm MNG Kinect\\basil_tmp\\data\\primary\\semi-controlled\\kinect\\2022-06-22_ST18-04\\2022-06-22_17-36-14\\NoIR_2022-06-22_17-39-51_controlled-touch-MNG_ST18_4_block4.mkv"
+    force_processing = False
+    show = False  # put True if user wants to monitor what's happening
+    save_results = True
 
     # Session names
     sessions = ['2022-06-15_ST13-01',
@@ -79,8 +79,8 @@ if __name__ == "__main__":
                 '2022-06-15_ST14-02',
                 '2022-06-15_ST14-03',
                 '2022-06-15_ST14-04',
-                '2022-06-15_ST15-01',
-                '2022-06-15_ST15-02',
+                '2022-06-16_ST15-01',
+                '2022-06-16_ST15-02',
                 '2022-06-17_ST16-02',
                 '2022-06-17_ST16-03',
                 '2022-06-17_ST16-04',
@@ -88,18 +88,79 @@ if __name__ == "__main__":
                 '2022-06-22_ST18-01',
                 '2022-06-22_ST18-02',
                 '2022-06-22_ST18-04']
-    sessions = ['2022-06-22_ST18-04']
     mkv_files_abs, mkv_files, mkv_files_session = find_mkv_files(sessions)
     output_dir_abs = get_output_dir()
 
+    # 1. Determine:
+    #   a. If the file contains the LED (not out of frame)
+    #   b. If there is a good frame (no occlusion)
+    #   c. Then extract LED location if both are fulfilled
+    led_in_frames = []
+    frame_idx = []
+    square_center = []
+    square_radius = []
+
+    print("Step 1: Determine manually the location of the LED.")
     for mkv_filename_abs, mkv_filename, session in zip(mkv_files_abs, mkv_files, mkv_files_session):
-        kinect_led = KinectLED(mkv_filename_abs)
-        kinect_led.select_led()
-        kinect_led.monitor_green_levels(threshold=.0025, show=True)
+        print(f"File '{mkv_filename}'")
 
-        plt.plot(kinect_led.time, kinect_led.led_on)
-
-        # Save to CSV
+        # Saving info
         output_dirname = os.path.join(output_dir_abs, session)
         output_filename = mkv_filename.replace(".mkv", "") + "_LED_timeseries"
-        kinect_led.save(output_dirname, output_filename)
+        # create Kinect processing manager
+        kinect_led = ProcessKinectLED(mkv_filename_abs, output_dirname, output_filename)
+
+        kinect_led.led_in_frame = False
+        frame_number = None
+        center = None
+        radius = None
+
+        # force processing or if the video hasn't been processed yet
+        if force_processing or not kinect_led.is_already_processed():
+            kinect_led.initialise_video()
+            frame_number = kinect_led.select_good_frame()
+
+            # if the LED is not occluded or not out of bounds
+            if frame_number is not None:
+                kinect_led.led_in_frame = True
+                kinect_led.define_reference_frame(frame_number)
+                [center, radius] = kinect_led.select_led_location()
+
+        # keep the variables
+        led_in_frames.append(kinect_led.led_in_frame)
+        frame_idx.append(frame_number)
+        square_center.append(center)
+        square_radius.append(radius)
+
+    print("Step 2: Automatic processing...")
+    # 2. Process LED blinking
+    for idx, (mkv_filename_abs, mkv_filename, session) in enumerate(zip(mkv_files_abs, mkv_files, mkv_files_session)):
+        print(f"File '{mkv_filename}'")
+        # Saving info
+        output_dirname = os.path.join(output_dir_abs, session)
+        output_filename = mkv_filename.replace(".mkv", "") + "_LED_timeseries"
+        # create Kinect processing manager
+        kinect_led = ProcessKinectLED(mkv_filename_abs, output_dirname, output_filename)
+
+        kinect_led.led_in_frame = led_in_frames[idx]
+
+        if not force_processing and kinect_led.is_already_processed():
+            kinect_led.load_results()
+        elif kinect_led.led_in_frame:
+            # if the video hasn't been processed yet or redo the processing (load results = False)
+            kinect_led.initialise_video()
+            kinect_led.led_is_visible = True
+            kinect_led.define_reference_frame(frame_idx[idx])
+            kinect_led.select_led_location(square_center[idx], square_radius[idx])
+            kinect_led.extract_aoi()
+            kinect_led.monitor_green_levels(show=show)
+            kinect_led.process_led_on(threshold=.20)
+            # correct for any occlusion
+            kinect_led.define_occlusion(threshold=40, show=show)
+
+            if save_results:
+                kinect_led.save_results()
+
+        if show:
+            plt.plot(kinect_led.time, kinect_led.led_on)
+            plt.show()
