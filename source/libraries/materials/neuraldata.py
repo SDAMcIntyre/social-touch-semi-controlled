@@ -96,4 +96,6 @@ class NeuralData:
         self._time = value
         self.nsample = len(self._time)
         dt = np.diff(self._time)
-        self.data_Fs = 1 / np.median(dt, skipna=True)  # Hz
+        self.data_Fs = 1 / np.nanmedian(dt)  # Hz
+        print(np.nanmedian(dt))
+        print(self.data_Fs)

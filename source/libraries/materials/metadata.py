@@ -5,6 +5,7 @@ import warnings
 class Metadata:
     def __init__(self, data_filename, unit_name2type_filename):
         self.data_filename = data_filename
+        self.data_filename_short = data_filename.split("\\")[-1]
         self.unit_name2type_filename = unit_name2type_filename
 
         self.block_id: float = 0

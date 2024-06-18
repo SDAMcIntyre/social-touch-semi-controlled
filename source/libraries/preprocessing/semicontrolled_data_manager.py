@@ -3,7 +3,7 @@ import numpy as np
 from typing import Dict, Tuple
 
 from ..materials.semicontrolled_data import SemiControlledData  # noqa: E402
-from ..materials.kinect_led import SemiControlledDataLED  # noqa: E402
+from ..materials.kinect_led import SemiControlledKinectLED  # noqa: E402
 from .semicontrolled_data_cleaning import SemiControlledCleaner  # noqa: E402
 from .semicontrolled_data_correct_lag import SemiControlledCorrectLag  # noqa: E402
 from .semicontrolled_data_splitter import SemiControlledDataSplitter  # noqa: E402
@@ -43,22 +43,26 @@ class SemiControlledDataManager:
 
         return self.data
 
-    def preprocess_data_file(self, data_filename, unit_name2type_filename, led_files_info_list, correction=True, show=False):
+    def preprocess_data_file(self, data_filename, unit_name2type_filename, led_files_info_list, correction=True, show=False, verbose=False):
         scd = SemiControlledData(data_filename, unit_name2type_filename)
-        led = SemiControlledDataLED()
+        led = SemiControlledKinectLED()
         splitter = SemiControlledDataSplitter()
         cleaner = SemiControlledCleaner()
         correctlag = SemiControlledCorrectLag()
+
+        if verbose:
+            print(f"filename: {scd.md.data_filename_short}")
+            scd.stim.print()
 
         # 1. load the csv file as a dataframe
         df = scd.load_dataframe(dropna=False)
         # 2. split full dataframe by blocks
         df_list = splitter.split_by_column_label(df, label="block_id")
 
-        # 3. extract green LED
-        data_led_list = led.load_class_list_from_infos(led_files_info_list)
-        # 4. incorporate green LED into the dataframe + compensate for refresh rate difference
-        df_list = splitter.merge_data(df_list, data_led_list)
+        # 3. extract green LED fileS that correspond to the CSV file_
+        kinect_led_list = led.load_class_list_from_infos(led_files_info_list)
+        # 4. incorporate green LED files list into the dataframe + compensate for refresh rate difference
+        df_list = splitter.merge_data(df_list, kinect_led_list, verbose=verbose)
 
         # 5. split blocks by trials
         df_list = splitter.split_by_column_label(df_list, label="trial_id")

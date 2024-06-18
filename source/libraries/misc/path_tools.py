@@ -5,7 +5,7 @@ import tkinter as tk
 from tkinter import filedialog
 
 
-def get_path_root_abs():
+def get_database_path():
     # path to onedrive root folder
     match socket.gethostname():
         case "baz":
@@ -30,7 +30,7 @@ def get_path_abs(input_dir, output_dir):
 
 def get_path_abs_base(mid_dir):
     # path to database root folder
-    data_dir_base = get_path_root_abs()
+    data_dir_base = get_database_path()
 
     # destination
     dir_abs = os.path.join(data_dir_base, mid_dir)

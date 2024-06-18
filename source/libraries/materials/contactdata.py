@@ -20,9 +20,11 @@ class ContactData:
 
         self._area: list[float] = []  # mm^2
         self._depth: list[float] = []  # mm
-        self._vel: list[float] = []  # mm/sec
+
         self._pos: list[float] = []  # mm
+
         self._pos_1D: list[float] = []  # mm
+        self._vel: list[float] = []  # mm/sec
 
         self.data_Fs = None  # Hz
         self.KINECT_FS = 30  # Hz

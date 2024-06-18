@@ -29,6 +29,8 @@ class SemiControlledData:
                 df = self.load_dataframe(dropna=dropna)
                 self.set_variables(df)
 
+    # Create a SemiControlledData for each dataframe of the list
+    # presumably each element of the input list is a trial
     def create_list_from_df(self, df_list):
         data_trials_out = []
         for df in df_list:
@@ -101,18 +103,24 @@ class SemiControlledData:
         self.contact.contact_flag = df.Contact_Flag.values
         self.contact.area = df.areaRaw.values
         self.contact.depth = df.depthRaw.values
+        # some dataset doesn't possess the position anymore
+        try:
+            px = df.Position_index_x.values
+            py = df.Position_index_y.values
+            pz = df.Position_index_z.values
+            # if the hand is used, take the point between the index and the hand trackers
+            if "hand" in self.stim.size:
+                px = px - df.Position_x.values
+                py = py - df.Position_y.values
+                pz = pz - df.Position_z.values
+            self.contact.pos = np.array([px, py, pz])
+        except:
+            pass
+
         vx = df.velLongRaw.values
         vy = df.velLatRaw.values
         vz = df.velVertRaw.values
         self.contact.vel = np.array([vx, vy, vz])
-        # some dataset doesn't possess the position anymore
-        try:
-            px = df.Position_x.values
-            py = df.Position_y.values
-            pz = df.Position_z.values
-            self.contact.pos = np.array([px, py, pz])
-        except:
-            pass
 
     def load_neural(self, df):
         self.neural.time = df.t.values

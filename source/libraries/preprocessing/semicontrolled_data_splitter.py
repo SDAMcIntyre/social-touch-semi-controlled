@@ -20,7 +20,8 @@ class SemiControlledDataSplitter:
         self.data_filename = ""
         self.unit_name2type_filename = ""
 
-    def merge_data(self, df_list, data_led_list):
+    # add the kinect data into the dataframe
+    def merge_data(self, df_list, data_led_list, verbose=False):
         df_out = []
 
         # if not a list of dataframe, transform the variable into a list
@@ -31,10 +32,19 @@ class SemiControlledDataSplitter:
         # https://stackoverflow.com/questions/20625582/how-to-deal-with-settingwithcopywarning-in-pandas
         with pd.option_context('mode.chained_assignment', None):
             for idx, df in enumerate(df_list):
-                data_led_list[idx].resample(df["t"].values, show=False)
-                df['led_on'] = data_led_list[idx].led_on
-                df['green_levels'] = data_led_list[idx].green_levels
+                dataframe_time = df["t"].values
+                if verbose:
+                    print(f"SemiControlledDataSplitter> CSVFILE: Number of sample of the current block = {len(dataframe_time)}")
 
+                # resample the kinect data obj to the dataframe
+                kinect_led_curr = data_led_list[idx]
+                kinect_led_curr.resample(dataframe_time, show=False)
+
+                # add the kinect data into the dataframe
+                df['led_on'] = kinect_led_curr.led_on
+                df['green_levels'] = kinect_led_curr.green_levels
+
+                # populate the output dataframe
                 df_out.append(df)
 
         return df_out

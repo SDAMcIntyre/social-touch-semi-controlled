@@ -224,7 +224,8 @@ if __name__ == "__main__":
 
         # create a list of SemiControlledData of touch event
         scdm = SemiControlledDataManager()
-        data_sliced = scdm.preprocess_data_file(data_filename, neuron_name2type_filename, led_files_info, correction=True, show=False)
+        data_sliced = scdm.preprocess_data_file(data_filename, neuron_name2type_filename, led_files_info,
+                                                correction=True, show=False, verbose=True)
 
         # store the calculated data
         scd_list.append(data_sliced)
