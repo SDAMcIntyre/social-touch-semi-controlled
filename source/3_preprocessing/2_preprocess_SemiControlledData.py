@@ -184,6 +184,52 @@ if __name__ == "__main__":
     Load the CSV data: preprocess, split into single touch event, and save the generated variable with pickle.dump
     """
 
+    force_processing = False  # If user wants to force data processing even if results already exist
+    show = False  # If user wants to monitor what's happening
+    save_results = True
+
+    print("Step 0: Extract the videos embedded in the selected sessions.")
+    # get database directory
+    database_path = path_tools.get_database_path()
+    # get input base directory
+    database_path_input = os.path.join(database_path, "semi-controlled", "processed", "kinect", "led")
+    # get output base directory
+    database_path_output = os.path.join(database_path, "semi-controlled", "primary", "kinect", "roi_led")
+    if not os.path.exists(database_path_output):
+        os.makedirs(database_path_output)
+        print(f"Directory '{database_path_output}' created.")
+    # Session names
+    sessions_ST13 = ['2022-06-14-ST13-unit1',
+                     '2022-06-14-ST13-unit2',
+                     '2022-06-14-ST13-unit3']
+
+    sessions_ST14 = ['2022-06-15-ST14-unit1',
+                     '2022-06-15-ST14-unit2',
+                     '2022-06-15-ST14-unit3',
+                     '2022-06-15-ST14-unit4']
+
+    sessions_ST15 = ['2022-06-16-ST15-unit1',
+                     '2022-06-16-ST15-unit2']
+
+    sessions_ST16 = ['2022-06-17-ST16-unit2',
+                     '2022-06-17-ST16-unit3',
+                     '2022-06-17-ST16-unit4',
+                     '2022-06-17-ST16-unit5']
+
+    sessions_ST18 = ['2022-06-22-ST18-unit1',
+                     '2022-06-22-ST18-unit2',
+                     '2022-06-22-ST18-unit4']
+
+    sessions = []
+    sessions = sessions + sessions_ST13
+    #sessions = sessions + sessions_ST14
+    #sessions = sessions + sessions_ST15
+    #sessions = sessions + sessions_ST16
+    #sessions = sessions + sessions_ST18
+    print(sessions)
+
+
+
     load_mode = "automatic"  # "manual", "automatic"
     save_data = False
 

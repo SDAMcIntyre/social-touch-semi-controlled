@@ -49,29 +49,41 @@ if __name__ == "__main__":
     # get database directory
     database_path = path_tools.get_database_path()
     # get input base directory
-    database_path_input = os.path.join(database_path, "semi-controlled", "primary", "kinect", "raw_noIR")
+    database_path_input = os.path.join(database_path, "semi-controlled", "primary", "kinect", "1_standard_name")
     # get output base directory
     database_path_output = os.path.join(database_path, "semi-controlled", "primary", "kinect", "roi_led")
     if not os.path.exists(database_path_output):
         os.makedirs(database_path_output)
         print(f"Directory '{database_path_output}' created.")
     # Session names
-    sessions = ['2022-06-14_ST13-01',
-                '2022-06-14_ST13-02',
-                '2022-06-14_ST13-03',
-                '2022-06-15_ST14-01',
-                '2022-06-15_ST14-02',
-                '2022-06-15_ST14-03',
-                '2022-06-15_ST14-04',
-                '2022-06-16_ST15-01',
-                '2022-06-16_ST15-02',
-                '2022-06-17_ST16-02',
-                '2022-06-17_ST16-03',
-                '2022-06-17_ST16-04',
-                '2022-06-17_ST16-05',
-                '2022-06-22_ST18-01',
-                '2022-06-22_ST18-02',
-                '2022-06-22_ST18-04']
+    sessions_ST13 = ['2022-06-14_ST13-01',
+                     '2022-06-14_ST13-02',
+                     '2022-06-14_ST13-03']
+
+    sessions_ST14 = ['2022-06-15_ST14-01',
+                     '2022-06-15_ST14-02',
+                     '2022-06-15_ST14-03',
+                     '2022-06-15_ST14-04']
+
+    sessions_ST15 = ['2022-06-16_ST15-01',
+                     '2022-06-16_ST15-02']
+
+    sessions_ST16 = ['2022-06-17_ST16-02',
+                     '2022-06-17_ST16-03',
+                     '2022-06-17_ST16-04',
+                     '2022-06-17_ST16-05']
+
+    sessions_ST18 = ['2022-06-22_ST18-01',
+                     '2022-06-22_ST18-02',
+                     '2022-06-22_ST18-04']
+
+    sessions = []
+    #sessions = sessions + sessions_ST13
+    #sessions = sessions + sessions_ST14
+    #sessions = sessions + sessions_ST15
+    #sessions = sessions + sessions_ST16
+    sessions = sessions + sessions_ST18
+    print(sessions)
 
     mkv_files_abs, mkv_files, mkv_files_session = find_mkv_files(database_path_input, sessions)
 
@@ -87,8 +99,12 @@ if __name__ == "__main__":
     for mkv_filename_abs, mkv_filename, session in zip(mkv_files_abs, mkv_files, mkv_files_session):
         print(f"File '{mkv_filename}'")
 
+        # Results filename and location
+        output_dirname = os.path.join(database_path_output, session)
+        output_filename = mkv_filename.replace(".mkv", "") + "_LED_roi"
+
         # create Kinect processing manager
-        led_roi = KinectLEDRegionOfInterest(mkv_filename_abs, "", "")
+        led_roi = KinectLEDRegionOfInterest(mkv_filename_abs, output_dirname, output_filename)
 
         frame_number = None
         center = None
