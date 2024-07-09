@@ -5,6 +5,8 @@ import csv
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import subprocess
+import warnings
 
 from ..misc.time_cost_function import time_it
 from ..misc.waitforbuttonpress_popup import WaitForButtonPressPopup
@@ -40,6 +42,22 @@ class KinectLEDRegionOfInterest:
     def is_already_processed(self):
         metadata_file = os.path.join(self.result_dir_path, self.result_filename + "_metadata.txt")
         return os.path.isfile(metadata_file)
+
+    def load_led_location(self):
+        metadata_file = os.path.join(self.result_dir_path, self.result_filename + "_metadata.txt")
+        # Read the content of the file
+        with open(metadata_file, 'r', encoding='utf-8') as file:
+            data = file.read()
+
+        # Parse the JSON content
+        json_data = json.loads(data)
+
+        # Extract the required values
+        self.reference_frame_idx = json_data['reference_frame_idx']
+        self.square_center = json_data['square_center']
+        self.square_size = json_data['square_size']
+        # if the file exists, then the LED is in frame.
+        self.led_in_frame = True
 
     def initialise_video(self):
         self.cap = cv2.VideoCapture(self.video_path)
@@ -266,14 +284,6 @@ class KinectLEDRegionOfInterest:
     def extract_roi(self):
         if self.cap is None or self.reference_frame is None:
             raise Exception("Error: Video not initialized. Please call initialise_video() first.")
-        # Clean area of interest variable
-        self.roi = []
-        # Define the square region
-        half_size = self.square_size // 2
-        x_start = max(self.square_center[0] - half_size, 0)
-        x_end = min(self.square_center[0] + half_size, self.frame_width)
-        y_start = max(self.square_center[1] - half_size, 0)
-        y_end = min(self.square_center[1] + half_size, self.frame_height)
 
         # Variables for progression and frame counting
         nframes_predicted = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -281,26 +291,57 @@ class KinectLEDRegionOfInterest:
         progression_idx = 0
         nframes = 0
 
-        # Reset video to the first frame
-        self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+        # CV2 read tends to sometimes not fully scan the video
+        # It can stop at 50%, which will give wrong results.
+        # Hence, we will use FFMPEG window library with the terminal to read frames after frames
+        self.cap.release()
 
-        # Extract the square region
-        while self.cap.isOpened():
-            correctly_read, frame = self.cap.read()
-            if not correctly_read:
-                break
-            nframes += 1
-            if (100 * nframes / nframes_predicted) > progression_list[progression_idx]:
-                print("Create Area of Interest> Progression:", int(progression_list[progression_idx]), "% ( Frame:",
-                      nframes, "/",
-                      nframes_predicted, ")")
-                progression_idx += 1
-            self.roi.append(frame[y_start:y_end, x_start:x_end])
+        cmd = ["ffmpeg", "-i", self.video_path]
+        # COLOR/RGB channels (or stream) in Kinect videos are located in 0
+        probe = subprocess.run([
+            *"ffprobe -v quiet -print_format json -show_format -show_streams".split(),
+            self.video_path
+        ], capture_output=True)
+        probe.check_returncode()
+        stream_rgb = json.loads(probe.stdout)["streams"][0]
+
+        index = stream_rgb["index"]
+        if stream_rgb["codec_type"] != "video":
+            warnings.warn("PROBLEM: Expected stream for RGB video is not a video")
+        cmd += "-map", f"0:{index}", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"
+
+        # Clean area of interest variable
+        self.roi = []
+
+        # Define the square region
+        half_size = self.square_size // 2
+        x_start = max(self.square_center[0] - half_size, 0)
+        x_end = min(self.square_center[0] + half_size, self.frame_width)
+        y_start = max(self.square_center[1] - half_size, 0)
+        y_end = min(self.square_center[1] + half_size, self.frame_height)
+
+        frame_shape = np.array([self.frame_height, self.frame_width, 3])
+        nelem = frame_shape.prod()
+        nframes = 0
+        with subprocess.Popen(cmd, stdout=subprocess.PIPE) as proc:
+            while True:
+                data = proc.stdout.read(nelem)  # One byte per each element
+                if not data:
+                    break
+                nframes += 1
+                frame = np.frombuffer(data, dtype=np.uint8).reshape(frame_shape)
+
+                if (100 * nframes / nframes_predicted) > progression_list[progression_idx]:
+                    print("Create Area of Interest> Progression:", int(progression_list[progression_idx]), "% ( Frame:",
+                          nframes, "/",
+                          nframes_predicted, ")")
+                    progression_idx += 1
+                self.roi.append(frame[y_start:y_end, x_start:x_end])
+
         # convert into array
         self.roi = np.array(self.roi)
         # take advantage to store the correct number of frames
         self.nframes = nframes
-        self.cap.release()
 
     def save_results(self):
         if not os.path.exists(self.result_dir_path):

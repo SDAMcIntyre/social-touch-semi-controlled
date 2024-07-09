@@ -23,6 +23,9 @@ def find_mkv_files(input_path, sessions):
     Returns:
     list: A list of absolute paths to all .mkv files found.
     """
+    if not isinstance(sessions, list):
+        sessions = [sessions]
+
     mkv_files_session = []
     mkv_files = []
     mkv_files_abs = []
@@ -42,6 +45,7 @@ def find_mkv_files(input_path, sessions):
 
 if __name__ == "__main__":
     force_processing = True  # If user wants to force data processing even if results already exist
+    load_led_location = True  # If user wants to load already defined LED location if it already exists
     show = False  # If user wants to monitor what's happening
     save_results = True
 
@@ -49,9 +53,9 @@ if __name__ == "__main__":
     # get database directory
     database_path = path_tools.get_database_path()
     # get input base directory
-    database_path_input = os.path.join(database_path, "semi-controlled", "primary", "kinect", "1_standard_name")
+    database_path_input = os.path.join(database_path, "semi-controlled", "primary", "kinect", "1_block-order")
     # get output base directory
-    database_path_output = os.path.join(database_path, "semi-controlled", "primary", "kinect", "roi_led")
+    database_path_output = os.path.join(database_path, "semi-controlled", "primary", "kinect", "2_roi_led")
     if not os.path.exists(database_path_output):
         os.makedirs(database_path_output)
         print(f"Directory '{database_path_output}' created.")
@@ -78,10 +82,10 @@ if __name__ == "__main__":
                      '2022-06-22_ST18-04']
 
     sessions = []
-    #sessions = sessions + sessions_ST13
-    #sessions = sessions + sessions_ST14
-    #sessions = sessions + sessions_ST15
-    #sessions = sessions + sessions_ST16
+    sessions = sessions + sessions_ST13
+    sessions = sessions + sessions_ST14
+    sessions = sessions + sessions_ST15
+    sessions = sessions + sessions_ST16
     sessions = sessions + sessions_ST18
     print(sessions)
 
@@ -101,7 +105,7 @@ if __name__ == "__main__":
 
         # Results filename and location
         output_dirname = os.path.join(database_path_output, session)
-        output_filename = mkv_filename.replace(".mkv", "") + "_LED_roi"
+        output_filename = mkv_filename.replace("_kinect.mkv", "") + "_LED_roi"
 
         # create Kinect processing manager
         led_roi = KinectLEDRegionOfInterest(mkv_filename_abs, output_dirname, output_filename)
@@ -111,14 +115,18 @@ if __name__ == "__main__":
         radius = None
 
         # force processing or if the video hasn't been processed yet
-        if force_processing or not led_roi.is_already_processed():
-            led_roi.initialise_video()
-            frame_number = led_roi.select_good_frame()
+        if force_processing:
+            led_roi.is_already_processed()
+            if load_led_location and led_roi.is_already_processed():
+                led_roi.load_led_location()
+            else:
+                led_roi.initialise_video()
+                frame_number = led_roi.select_good_frame()
 
-            # if the LED is not occluded or not out of bounds
-            if frame_number is not None:
-                led_roi.set_reference_frame(frame_number)
-                led_roi.select_led_location()
+                # if the LED is not occluded or not out of bounds
+                if frame_number is not None:
+                    led_roi.set_reference_frame(frame_number)
+                    led_roi.select_led_location()
 
         # keep the variables
         led_in_frames.append(led_roi.led_in_frame)

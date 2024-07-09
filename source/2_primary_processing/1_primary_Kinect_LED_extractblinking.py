@@ -97,7 +97,7 @@ if __name__ == "__main__":
             os.makedirs(output_dirname)
 
         # modify input filename to match standard
-        output_filename = mkv_filename.replace("_roi.mp4", "")
+        output_filename = mkv_filename.replace("_kinect_LED_roi.mp4", "_LED")
 
         # create Kinect processing manager
         led_blink = KinectLEDBlinking(mkv_filename_abs, output_dirname, output_filename)

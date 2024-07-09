@@ -5,6 +5,9 @@ import csv
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import subprocess
+import warnings
+
 
 from ..misc.time_cost_function import time_it
 from ..misc.waitforbuttonpress_popup import WaitForButtonPressPopup
@@ -37,22 +40,45 @@ class KinectLEDBlinking:
         return os.path.isfile(csv) and os.path.isfile(txt)
 
     def load_video(self):
-        cap = cv2.VideoCapture(self.video_path)
-        if not cap.isOpened():
-            raise Exception("Error: Could not open video file.")
-
+        # Clean area of interest variable
         self.roi = []
 
-        self.fps = cap.get(cv2.CAP_PROP_FPS)
-        while cap.isOpened():
-            ret, frame = cap.read()
-            if not ret:
-                break
+        # COLOR/RGB channels (or stream) in Kinect videos are located in 0
+        info = subprocess.run([
+            *"ffprobe -v quiet -print_format json -show_format -show_streams".split(),
+            self.video_path
+        ], capture_output=True)
+        info.check_returncode()
+        stream_rgb = json.loads(info.stdout)["streams"][0]
+        if stream_rgb["codec_type"] != "video":
+            warnings.warn("PROBLEM: Expected stream for RGB video is not a video")
+        # get mp4 channel's rgb
+        index = stream_rgb["index"]
+        # get frame X.Y
+        frame_height = stream_rgb["height"]
+        frame_width = stream_rgb["width"]
+        # get fps
+        frame_rate = stream_rgb['avg_frame_rate']
+        num, denom = map(int, frame_rate.split('/'))
+        self.fps = num / denom
 
-            self.roi.append(frame)
+        frame_shape = np.array([frame_height, frame_width, 3])
+        nelem = frame_shape.prod()
+        nframes = 0
+
+        cmd = ["ffmpeg", "-i", self.video_path]
+        cmd += "-map", f"0:{index}", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"
+        with subprocess.Popen(cmd, stdout=subprocess.PIPE) as proc:
+            while True:
+                data = proc.stdout.read(nelem)  # One byte per each element
+                if not data:
+                    break
+                nframes += 1
+                frame = np.frombuffer(data, dtype=np.uint8).reshape(frame_shape)
+                self.roi.append(frame)
+
         self.roi = np.array(self.roi)
         self.nframes = self.roi.shape[0]
-        cap.release()
 
     @time_it
     def monitor_green_levels(self, show=False):
