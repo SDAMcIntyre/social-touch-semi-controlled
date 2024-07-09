@@ -5,6 +5,39 @@ import tkinter as tk
 from tkinter import filedialog
 
 
+def find_files_in_sessions(input_path, sessions, ending='.csv'):
+    if not isinstance(sessions, list):
+        sessions = [sessions]
+
+    files_abs = []
+    files = []
+    files_session = []
+
+    for session in sessions:
+        dir_path = os.path.join(input_path, session)
+        [curr_files_abs, curr_files] = find_files_in_directory(dir_path, ending=ending)
+
+        files_abs.append(curr_files_abs)
+        files.append(curr_files)
+        files_session.append([session * len(curr_files)])
+
+    return files_abs, files, files_session
+
+
+def find_files_in_directory(dir_path, ending='.csv'):
+    files = []
+    files_abs = []
+
+    # Walk through the directory recursively
+    for root, _, f in os.walk(dir_path):
+        for file in f:
+            if file.endswith(ending):
+                files.append(file)
+                files_abs.append(os.path.join(root, file))
+
+    return files_abs, files
+
+
 def get_database_path():
     # path to onedrive root folder
     match socket.gethostname():
@@ -19,6 +52,23 @@ def get_database_path():
                                  'touch comm MNG Kinect',
                                  'basil_tmp',
                                  'data')
+    return data_dir_base
+
+
+def get_metadata_path():
+    # path to onedrive root folder
+    match socket.gethostname():
+        case "baz":
+            data_dir_base = "E:\\"
+        case _:
+            data_dir_base = 'C:\\Users\\basdu83'
+    # path to database root folder
+    data_dir_base = os.path.join(data_dir_base,
+                                 'OneDrive - Linköpings universitet',
+                                 '_Teams',
+                                 'touch comm MNG Kinect',
+                                 'basil_tmp',
+                                 'metadata')
     return data_dir_base
 
 
