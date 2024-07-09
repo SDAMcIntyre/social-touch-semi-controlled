@@ -8,7 +8,7 @@ import sys
 import warnings
 
 # homemade libraries
-sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 import libraries.misc.path_tools as path_tools  # noqa: E402
 
 
@@ -160,6 +160,6 @@ if __name__ == "__main__":
                 filtered_group = group[desired_columns]
 
                 # create the standard filename
-                filename_output = date + "_" + neuron_id + "_semicontrolled_block" + str(global_block_id) + "_stimuli.csv"
+                filename_output = date + "_" + neuron_id + "_semicontrolled_block-order" + str(global_block_id) + "_stimuli.csv"
                 filename_output_abs = os.path.join(output_dirname, filename_output)
                 filtered_group.to_csv(filename_output_abs, index=False)

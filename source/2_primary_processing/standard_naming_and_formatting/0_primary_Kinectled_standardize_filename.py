@@ -8,7 +8,7 @@ import sys
 import warnings
 
 # homemade libraries
-sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 import libraries.misc.path_tools as path_tools  # noqa: E402
 
 
@@ -121,7 +121,7 @@ if __name__ == "__main__":
                 global_block_id_str = "0" + global_block_id_str
 
             # create the standard filename
-            filename_output = date + "_" + neuron_id + "_semicontrolled_block" + global_block_id_str + "_LED_roi.mp4"
+            filename_output = date + "_" + neuron_id + "_semicontrolled_block-order" + global_block_id_str + "_LED_roi.mp4"
             filename_output_abs = os.path.join(output_dirname, filename_output)
 
             filename_input_abs = os.path.join(output_dirname, filename_input)
