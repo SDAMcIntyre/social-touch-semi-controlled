@@ -9,7 +9,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', 'libraries')
 from libraries.misc.path_tools import get_path_abs  # noqa: E402
 from libraries.processing.semicontrolled_data_splitter import SemiControlledDataManager  # noqa: E402
 from libraries.plot.semicontrolled_data_visualizer import SemiControlledDataVisualizer  # noqa: E402
-from libraries.processing.semicontrolled_data_validation import SemiControlledValidatorApp  # noqa: E402
+from libraries.preprocessing.semicontrolled_data_validation import SemiControlledValidatorApp  # noqa: E402
 
 
 if __name__ == "__main__":

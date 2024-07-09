@@ -43,20 +43,41 @@ class SemiControlledDataManager:
 
         return self.data
 
-    def preprocess_data_file(self, data_filename, md_stimuli_filename, md_neuron_filename, correction=True, show=False, verbose=False):
-        # ressources
-        scd = SemiControlledData(data_filename, md_stimuli_filename, md_neuron_filename)
-        # tools
+    def preprocess_data_file(self, data_filename, unit_name2type_filename, led_files_info_list, correction=True, show=False, verbose=False):
+        scd = SemiControlledData(data_filename, unit_name2type_filename)
+        led = SemiControlledKinectLED()
         splitter = SemiControlledDataSplitter()
+        cleaner = SemiControlledCleaner()
+        correctlag = SemiControlledCorrectLag()
 
         if verbose:
             print(f"filename: {scd.md.data_filename_short}")
             scd.stim.print()
 
-        # 1. load the data
-        scd.set_variables(dropna=False)
-        # 3. split by touch event
-        scd_list = splitter.split_by_touch_event(scd, correction=correction, show=show)
+        # 1. load the csv file as a dataframe
+        df = scd.load_dataframe(dropna=False)
+        # 2. split full dataframe by blocks
+        df_list = splitter.split_by_column_label(df, label="block_id")
+
+        # 3. extract green LED fileS that correspond to the CSV file_
+        kinect_led_list = led.load_class_list_from_infos(led_files_info_list)
+        # 4. incorporate green LED files list into the dataframe + compensate for refresh rate difference
+        df_list = splitter.merge_data(df_list, kinect_led_list, verbose=verbose)
+
+        # 5. split blocks by trials
+        df_list = splitter.split_by_column_label(df_list, label="trial_id")
+        # 6. transform dataframe list into SemiControlledData list
+        scd_list = scd.create_list_from_df(df_list)
+
+        # 7. correct for contact data issues
+        scd_list = cleaner.trials_narrow_time_series_to_essential(scd_list)
+        # 8. correct for neural data latency (electrode vs end organ location)
+        scd_list = cleaner.correct_electrode_location_latency(scd_list)
+        # 10. correct for misalignment
+        scd_list = correctlag.trials_align_contact_and_neural(scd_list)
+
+        # 11. split by touch event
+        scd_list = splitter.split_by_touch_event(scd_list, correction=correction, show=show)
 
         return scd_list
 

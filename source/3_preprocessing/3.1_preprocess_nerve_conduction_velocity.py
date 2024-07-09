@@ -2,6 +2,8 @@ import os
 import pandas as pd
 import sys
 import warnings
+import csv
+import matplotlib.pyplot as plt
 
 # homemade libraries
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
@@ -10,8 +12,9 @@ import libraries.misc.path_tools as path_tools  # noqa: E402
 
 if __name__ == "__main__":
     force_processing = True  # If user wants to force data processing even if results already exist
-    show = True  # If user wants to monitor what's happening
-    save_results = True
+    show = False  # If user wants to monitor what's happening
+    save_results = False
+    generate_report = True
 
     print("Step 0: Extract the videos embedded in the selected sessions.")
     # get database directory
@@ -58,6 +61,8 @@ if __name__ == "__main__":
     print(sessions)
 
     diff_ms_all = []
+    names_contact = []
+    names_led = []
     # it is important to split by MNG files / neuron recordings to create the correct subfolders.
     for session in sessions:
         curr_contact_path_dir = os.path.join(db_path_input_contact, session)
@@ -119,6 +124,12 @@ if __name__ == "__main__":
             result = pd.merge(led, contact, on='t', how='outer')
             df_output = pd.merge(df_output, led,  on='t', how='outer')
 
+            # keep variables for the report
+            if generate_report:
+                diff_ms_all.append(len(contact)-len(led))
+                names_contact.append(file_contact)
+                names_led.append(file_led)
+
             if show:
                 print(df_output)
 
@@ -126,7 +137,18 @@ if __name__ == "__main__":
             if save_results:
                 df_output.to_csv(output_filename_abs, index=False)
 
-            print("done.")
+    if generate_report:
+        report_filename = os.path.join(db_path_output, "frame_differences_report.csv")
+        report_data = []
+        for name_contact, name_led, diff_ms in zip(names_contact, names_led, diff_ms_all):
+            report_data.append({"filename_contact": name_contact, "filename_led": name_led, "frame_difference": diff_ms})
+        with open(report_filename, mode='w', newline='') as file:
+            writer = csv.DictWriter(file, fieldnames=["filename_contact", "filename_led", "frame_difference"])
+            writer.writeheader()
+            for row in report_data:
+                writer.writerow(row)
+
+    print("done.")
 
 
 

@@ -42,8 +42,8 @@ def reconstruct_original_signal(shrinked_signal, estimated_shift, estimated_scal
 
 
 if __name__ == "__main__":
-    force_processing = False  # If user wants to force data processing even if results already exist
-    show = True  # If user wants to monitor what's happening
+    force_processing = True  # If user wants to force data processing even if results already exist
+    show = False  # If user wants to monitor what's happening
     save_results = True
 
     print("Step 0: Extract the videos embedded in the selected sessions.")
@@ -158,6 +158,7 @@ if __name__ == "__main__":
             lags = signal.correlation_lags(TTL_kinect_corr.size, TTL_nerve_corr.size, mode="full")
             lag = int(lags[np.argmax(correlation)] / downsampling)
             del correlation, lags
+
             # align signals by shifting nerve data
             if lag > 0:
                 # to the right
@@ -166,28 +167,36 @@ if __name__ == "__main__":
                 nerve_shifted = np.concatenate((zeros, nerve["Nervespike1"].values))
                 freq_shifted = np.concatenate((zeros, nerve["Freq"].values))
                 TTL_Aut = np.concatenate((zeros, nerve["TTL_Aut"].values))
+                nerve_t = np.concatenate((zeros, nerve["Sec_FromStart"].values))
             else:
                 # to the left
                 nerve_shifted = nerve["Nervespike1"].iloc[abs(lag):].values
                 freq_shifted = nerve["Freq"].iloc[abs(lag):].values
                 TTL_Aut = nerve["TTL_Aut"].iloc[abs(lag):].values
+                nerve_t = nerve["Sec_FromStart"].iloc[abs(lag):].values
+
             # if necessary, modify the nerve signal to match kinect data length
-            if len(nerve_shifted) > len(kinect_scaled):
-                nerve_shifted = nerve_shifted[:len(kinect_scaled)]
-                freq_shifted = freq_shifted[:len(kinect_scaled)]
-                TTL_Aut = TTL_Aut[:len(kinect_scaled)]
-            elif len(nerve_shifted) < len(kinect_scaled):
-                # to the right
-                zeros = np.zeros(len(kinect_scaled)-len(nerve_shifted))
+            nsample_kinect = len(kinect_scaled)
+            nsample_nerve = len(nerve_shifted)
+            if nsample_nerve > nsample_kinect:
+                nerve_shifted = nerve_shifted[:nsample_kinect]
+                freq_shifted = freq_shifted[:nsample_kinect]
+                TTL_Aut = TTL_Aut[:nsample_kinect]
+                nerve_t = nerve_t[:nsample_kinect]
+            elif nsample_nerve < nsample_kinect:
+                zeros = np.zeros(nsample_kinect-nsample_nerve)
                 nerve_shifted = np.concatenate((nerve_shifted, zeros))
                 freq_shifted = np.concatenate((freq_shifted, zeros))
                 TTL_Aut = np.concatenate((TTL_Aut, zeros))
+                nerve_t = np.concatenate((nerve_t, zeros))
 
             # create output dataframe
+            kinect_scaled.rename(columns={'t': 't_Kinect'})
             df_output = kinect_scaled
             df_output["Nerve_spike"] = nerve_shifted
             df_output["Nerve_freq"] = freq_shifted
             df_output["Nerve_TTL"] = TTL_Aut
+            df_output["t"] = nerve_t
 
             if show:
                 plt.figure(figsize=(10, 12))  # Increase height for two subplots

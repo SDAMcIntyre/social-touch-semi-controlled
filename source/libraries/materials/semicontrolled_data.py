@@ -14,10 +14,10 @@ from ..materials.neuraldata import NeuralData  # noqa: E402
 
 
 class SemiControlledData:
-    def __init__(self, data_csv_filename, unit_name2type_filename, loading_process=None, dropna=False):
-        self.md: Metadata = Metadata(data_csv_filename, unit_name2type_filename)
-        self.stim: StimulusInfo = StimulusInfo()
-        self.neural: NeuralData = NeuralData(data_csv_filename, unit_name2type_filename)
+    def __init__(self, data_csv_filename, md_stim_filename, md_neuron_filename, loading_process=None, dropna=False):
+        self.md: Metadata = Metadata(data_csv_filename, md_stim_filename, md_neuron_filename)
+        self.stim: StimulusInfo = StimulusInfo(md_stim_filename)
+        self.neural: NeuralData = NeuralData(data_csv_filename, md_neuron_filename)
         self.contact: ContactData = ContactData()
 
         # allows to determine if the signal is considered good
@@ -68,7 +68,7 @@ class SemiControlledData:
         if df is None:
             df = self.load_dataframe(dropna=dropna)
         self.load_metadata(df)
-        self.load_stimulus(df)
+        self.load_stimulus()
         self.load_contact(df)
         self.load_neural(df)
 
@@ -82,27 +82,26 @@ class SemiControlledData:
     def load_metadata(self, df):
         # metadata
         self.md.time = df.t.values
-        self.md.block_id = pd.Series(df.block_id.values[0])
-        self.md.trial_id = pd.Series(df.trial_id.values[0])
 
-    def load_stimulus(self, df):
+    def load_stimulus(self):
+        df = pd.read_csv(self.md.md_stim_filename)
+        current_row = df[df['trial_id'] == self.md.trial_id]
         # stimulus info
-        self.stim.type = df.stimulus.values[0]
-        self.stim.vel = df.vel.values[0]
-        self.stim.size = df.finger.values[0]
-        self.stim.force = df.force.values[0]
+        self.stim.type = current_row.type.values[0]
+        self.stim.vel = current_row.speed.values[0]
+        self.stim.size = current_row.contact_area.values[0]
+        self.stim.force = current_row.force.values[0]
 
     def load_contact(self, df):
         self.contact.time = df.t.values
 
         # Kinect LED time series
-        self.contact.led_on = df.led_on.values
-        self.contact.green_levels = df.green_levels.values
+        self.contact.led_on = df["LED on"].values
 
         # contact data
         self.contact.contact_flag = df.Contact_Flag.values
-        self.contact.area = df.areaRaw.values
-        self.contact.depth = df.depthRaw.values
+        self.contact.area = df.Contact_Area.values
+        self.contact.depth = df.Depth.values
         # some dataset doesn't possess the position anymore
         try:
             px = df.Position_index_x.values
@@ -116,17 +115,20 @@ class SemiControlledData:
             self.contact.pos = np.array([px, py, pz])
         except:
             pass
-
-        vx = df.velLongRaw.values
-        vy = df.velLatRaw.values
-        vz = df.velVertRaw.values
-        self.contact.vel = np.array([vx, vy, vz])
+        # some dataset doesn't possess the velocity anymore
+        try:
+            vx = df.velLongRaw.values
+            vy = df.velLatRaw.values
+            vz = df.velVertRaw.values
+            self.contact.vel = np.array([vx, vy, vz])
+        except:
+            pass
 
     def load_neural(self, df):
         self.neural.time = df.t.values
         # neural data
-        self.neural.spike = df.spike.values
-        self.neural.iff = df.IFF.values
+        self.neural.spike = df.Nerve_spike.values
+        self.neural.iff = df.Nerve_freq.values
 
     def get_data_idx(self, idx, hardcopy=False):
         if hardcopy:
@@ -135,7 +137,7 @@ class SemiControlledData:
             scd.set_data_idx(idx)
         else:
             # cost 0.2 ms
-            scd = SemiControlledData(self.md.data_filename, self.md.unit_name2type_filename)
+            scd = SemiControlledData(self.md.data_filename, self.md.md_stim_filename, self.md.unit_name2type_filename)
             scd.stim = self.stim.get_data()
             scd.md = self.md.get_data_idx(idx)
             scd.contact = self.contact.get_data_idx(idx)

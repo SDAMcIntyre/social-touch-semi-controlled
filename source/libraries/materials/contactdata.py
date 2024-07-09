@@ -95,30 +95,44 @@ class ContactData:
 
         cd.time = self.time[idx]
         cd.led_on = self.led_on[idx]
-        cd.green_levels = self.green_levels[idx]
+        # since 2024/07/09, dataset doesn't contain green levels anymore
+        try:
+            cd.green_levels = self.green_levels[idx]
+        except:
+            pass
 
         cd.contact_flag = self.contact_flag[idx]
         cd.area = self.area[idx]
         cd.depth = self.depth[idx]
-        cd.vel = self.vel[:, idx]
         try:
             cd.pos = self.pos[:, idx]
         except:
             pass
+        try:
+            cd.vel = self.vel[:, idx]
+        except:
+            pass
+
         return cd
 
     def set_data_idx(self, idx):
         self.time = self.time[idx]
 
         self.led_on = self.led_on[idx]
-        self.green_levels = self.green_levels[idx]
+        try:
+            self.green_levels = self.green_levels[idx]
+        except:
+            pass
 
         self.contact_flag = self.contact_flag[idx]
         self.area = self.area[idx]
         self.depth = self.depth[idx]
-        self.vel = self.vel[:, idx]
         try:
             self.pos = self.pos[:, idx]
+        except:
+            pass
+        try:
+            self.vel = self.vel[:, idx]
         except:
             pass
 
@@ -126,14 +140,20 @@ class ContactData:
         self.time = np.concatenate((self.time, contact_bis.time))
 
         self.led_on = np.concatenate((self.led_on, contact_bis.led_on))
-        self.green_levels = np.concatenate((self.green_levels, contact_bis.green_levels))
+        try:
+            self.green_levels = np.concatenate((self.green_levels, contact_bis.green_levels))
+        except:
+            pass
 
         self.contact_flag = np.concatenate((self.contact_flag, contact_bis.contact_flag))
         self.area = np.concatenate((self.area, contact_bis.area))
         self.depth = np.concatenate((self.depth, contact_bis.depth))
-        self.vel = np.concatenate((self.vel, contact_bis.vel), axis=1)
         try:
             self.pos = np.concatenate((self.pos, contact_bis.pos), axis=1)
+        except:
+            pass
+        try:
+            self.vel = np.concatenate((self.vel, contact_bis.vel), axis=1)
         except:
             pass
 

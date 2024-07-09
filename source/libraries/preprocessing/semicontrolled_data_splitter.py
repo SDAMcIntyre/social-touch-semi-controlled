@@ -67,8 +67,11 @@ class SemiControlledDataSplitter:
     def split_by_touch_event(self, scd_list, correction=True, show=False):
         """split_by_single
            split the current semicontrolled data into single touch event
-           A period is determined differently based on the type (Tap or Stroke)
+           A period, or touch event, is determined differently based on the type (Tap or Stroke)
            """
+        if not isinstance(scd_list, list):
+            scd_list = [scd_list]
+
         scd_list_out = []
 
         # second split the trial per stimulus/repeat/period/nb. time the POI is stimulated

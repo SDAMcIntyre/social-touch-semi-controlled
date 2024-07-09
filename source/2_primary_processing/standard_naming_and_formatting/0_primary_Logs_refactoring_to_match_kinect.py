@@ -160,6 +160,6 @@ if __name__ == "__main__":
                 filtered_group = group[desired_columns]
 
                 # create the standard filename
-                filename_output = date + "_" + neuron_id + "_semicontrolled_block-order" + str(global_block_id) + "_stimuli.csv"
+                filename_output = date + "_" + neuron_id + f"_semicontrolled_block-order{global_block_id:02}" + "_stimuli.csv"
                 filename_output_abs = os.path.join(output_dirname, filename_output)
                 filtered_group.to_csv(filename_output_abs, index=False)

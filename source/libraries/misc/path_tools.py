@@ -72,6 +72,23 @@ def get_metadata_path():
     return data_dir_base
 
 
+def get_result_path():
+    # path to onedrive root folder
+    match socket.gethostname():
+        case "baz":
+            data_dir_base = "E:\\"
+        case _:
+            data_dir_base = 'C:\\Users\\basdu83'
+    # path to database root folder
+    data_dir_base = os.path.join(data_dir_base,
+                                 'OneDrive - Linköpings universitet',
+                                 '_Teams',
+                                 'touch comm MNG Kinect',
+                                 'basil_tmp',
+                                 'figures')
+    return data_dir_base
+
+
 def get_path_abs(input_dir, output_dir):
     input_dir_abs = get_path_abs_base(input_dir)
     output_dir_abs = get_path_abs_base(output_dir)

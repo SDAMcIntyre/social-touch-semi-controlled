@@ -2,6 +2,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import os
 import pandas as pd
+import re
+import shutil
 import sys
 import warnings
 
@@ -90,8 +92,12 @@ if __name__ == "__main__":
 
         for file_abs, file in zip(files_abs, files):
             print(f"current file: {file}")
+            match = re.search(r'block-order(\d+)', file)
+            if not match:
+                print("Substring 'block-orderXX' not found in the string.")
+                continue
 
-            block_order_str = file.replace("_kinect_and_nerve.csv", "")
+            block_order_str = match.group(0)
             output_dir_abs = os.path.join(output_session_abs, block_order_str)
             if not os.path.exists(output_dir_abs):
                 os.makedirs(output_dir_abs)
@@ -148,6 +154,10 @@ if __name__ == "__main__":
 
                 # save data on the hard drive ?
                 if save_results:
+                    # https://answers.microsoft.com/en-us/msoffice/forum/all/excel-file-open-the-file-name-is-too-long-rename/ef736fec-0bd4-42a9-806d-5b22dbfdda81#:~:text=To%20resolve%20this%20issue%2C%20you,structure%2C%20is%20still%20too%20long.
+                    #  Excel indicates that the total path length,
+                    #  including the filename and its directory structure,
+                    #  exceeds the Windows maximum limit of 260 characters.
                     data_trial.to_csv(output_filename_abs, index=False)
             
             print("done.")

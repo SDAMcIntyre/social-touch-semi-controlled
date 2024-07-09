@@ -2,7 +2,8 @@ import numpy as np
 
 
 class StimulusInfo:
-    def __init__(self):
+    def __init__(self, md_stim_filename):
+        self.md_stim_filename = md_stim_filename
         self._type: str = ""
         self._vel: float = 0
         self._size: str = ""
@@ -28,7 +29,7 @@ class StimulusInfo:
         return data
 
     def get_data(self):
-        stim = StimulusInfo()
+        stim = StimulusInfo(self.md_stim_filename)
         stim.type = self._type
         stim.vel = self._vel
         stim.size = self._size
