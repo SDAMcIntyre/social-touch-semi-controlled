@@ -13,34 +13,6 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 import libraries.misc.path_tools as path_tools  # noqa: E402
 
 
-def cross_correlation_shift(signal1, signal2):
-    correlation = correlate(signal1, signal2, mode='full')
-    shift = np.argmax(correlation) - (len(signal2) - 1)
-    return shift
-
-
-def cost_function(params, signal1, signal2):
-    shift, scale = params
-    shifted_indices = (np.arange(len(signal2)) * scale) + shift
-    interpolator = interp1d(shifted_indices, signal2, bounds_error=False, fill_value=0)
-    shifted_scaled_signal2 = interpolator(np.arange(len(signal1)))
-    return np.nansum((signal1 - shifted_scaled_signal2) ** 2)
-
-
-def reconstruct_original_signal(shrinked_signal, estimated_shift, estimated_scale, original_length):
-    # Generate indices for the original signal length
-    original_indices = np.arange(original_length)
-
-    # Reverse the scaling and shifting
-    shrinked_indices = (original_indices - estimated_shift) / estimated_scale
-
-    # Interpolate the shrinked signal to reconstruct the original signal
-    interpolator = interp1d(np.arange(len(shrinked_signal)), shrinked_signal, bounds_error=False, fill_value=np.nan)
-    reconstructed_signal = interpolator(shrinked_indices)
-
-    return reconstructed_signal
-
-
 if __name__ == "__main__":
     force_processing = True  # If user wants to force data processing even if results already exist
     show = False  # If user wants to monitor what's happening
@@ -51,7 +23,7 @@ if __name__ == "__main__":
     db_path = os.path.join(path_tools.get_database_path(), "semi-controlled")
     # get input base directory
     db_path_input_kinect = os.path.join(db_path, "merged", "kinect", "1_block-order")
-    db_path_input_nerve = os.path.join(db_path, "processed", "nerve", "2_block-order")
+    db_path_input_nerve = os.path.join(db_path, "processed", "nerve", "3_cond-velocity-adj")
     # get output base directory
     db_path_output = os.path.join(db_path, "merged", "kinect_and_nerve", "0_block-order")
     if not os.path.exists(db_path_output):
