@@ -10,7 +10,7 @@ import warnings
 
 from ..misc.time_cost_function import time_it
 from ..misc.waitforbuttonpress_popup import WaitForButtonPressPopup
-from ..preprocessing.semicontrolled_data_cleaning import normalize_signal
+from ..processing.semicontrolled_data_cleaning import normalize_signal
 
 
 class KinectLEDRegionOfInterest:

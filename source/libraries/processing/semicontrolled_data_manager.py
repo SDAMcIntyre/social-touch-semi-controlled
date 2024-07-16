@@ -44,7 +44,7 @@ class SemiControlledDataManager:
         return self.data
 
     def preprocess_data_file(self, data_filename, md_stimuli_filename, md_neuron_filename, correction=True, show=False, verbose=False):
-        # ressources
+        # resources
         scd = SemiControlledData(data_filename, md_stimuli_filename, md_neuron_filename)
         # tools
         splitter = SemiControlledDataSplitter()

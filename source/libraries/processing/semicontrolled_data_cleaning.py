@@ -84,14 +84,14 @@ class SemiControlledCleaner:
         return scd
 
 
-def smooth_scd_signal(sig, scd, nframe=5, method="blind"):
+def smooth_scd_signal(sig, scd, nframe=5, method="blind", normalise=True):
     '''get_smooth_signal
         smooth the signal based on the expected speed of the trial:
          - more smoothing for lower speed
          - return an array of identical size
     '''
     oversampling_to_trueFs = (scd.contact.data_Fs / scd.contact.KINECT_FS)
-    window_size = nframe * oversampling_to_trueFs
+    window_size = int(nframe * oversampling_to_trueFs)
 
     match method:
         case "adjust_with_speed":
@@ -106,18 +106,37 @@ def smooth_scd_signal(sig, scd, nframe=5, method="blind"):
         warnings.warn("window_size is longer than sig, shorten it to the signal's length...")
         window_size = len(sig)
 
-    weights = np.repeat(1.0, window_size) / window_size
-    sig_smooth = np.convolve(sig, weights, 'same')
+    # Create a function to handle NaN values
+    def nan_convolve(signal, weights):
+        half_window = len(weights) // 2
+        sig_padded = np.pad(signal, (half_window, half_window), mode='constant', constant_values=np.nan)
+        smoothed = np.full_like(signal, np.nan)
+        for i in range(len(signal)):
+            window = sig_padded[i:i + len(weights)]
+            smoothed[i] = np.nanmean(window * weights)
+        return smoothed
+
+    try:
+        weights = np.repeat(1.0, window_size) / window_size
+    except:
+        pass
+    if np.isnan(sig).any():
+        sig_smooth = nan_convolve(sig, weights)
+    else:
+        sig_smooth = np.convolve(sig, weights, 'same')
 
     if len(sig_smooth) != len(sig):
         warnings.warn("sig_smooth is not the size of the original signal")
+
+    # ensure the output is an array
+    sig_smooth = np.array(sig_smooth)
 
     return sig_smooth
 
 
 def normalize_signal(signal, dtype=list):
-    min_val = min(signal)
-    max_val = max(signal)
+    min_val = np.nanmin(signal)
+    max_val = np.nanmax(signal)
     normalized_signal = [(x - min_val) / (max_val - min_val) for x in signal]
     
     if dtype == np.ndarray:
