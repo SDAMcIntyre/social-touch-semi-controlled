@@ -53,9 +53,9 @@ if __name__ == "__main__":
     # get database directory
     database_path = path_tools.get_database_path()
     # get input base directory
-    database_path_input = os.path.join(database_path, "semi-controlled", "primary", "kinect", "1_block-order")
+    database_path_input = os.path.join(database_path, "semi-controlled", "1_primary", "kinect", "1_block-order")
     # get output base directory
-    database_path_output = os.path.join(database_path, "semi-controlled", "primary", "kinect", "2_roi_led")
+    database_path_output = os.path.join(database_path, "semi-controlled", "1_primary", "kinect", "2_roi_led")
     if not os.path.exists(database_path_output):
         os.makedirs(database_path_output)
         print(f"Directory '{database_path_output}' created.")
