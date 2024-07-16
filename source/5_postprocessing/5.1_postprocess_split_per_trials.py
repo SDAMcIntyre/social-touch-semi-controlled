@@ -39,13 +39,16 @@ if __name__ == "__main__":
     show = False  # If user wants to monitor what's happening
     save_results = True
 
+    # parameters
+    soft_split = True  # soft_split will find the middle point between the blocks to separate them, else chunk by TTL
+
     print("Step 0: Extract the videos embedded in the selected sessions.")
     # get database directory
     db_path = os.path.join(path_tools.get_database_path(), "semi-controlled")
     # get input base directory
-    db_path_input = os.path.join(db_path, "merged", "kinect_and_nerve", "0_block-order")
+    db_path_input = os.path.join(db_path, "3_merged", "2_kinect_and_nerve", "0_block-order")
     # get output base directory
-    db_path_output = os.path.join(db_path, "merged", "kinect_and_nerve", "1_by-trials")
+    db_path_output = os.path.join(db_path, "3_merged", "2_kinect_and_nerve", "1_by-trials")
     if not os.path.exists(db_path_output):
         os.makedirs(db_path_output)
         print(f"Directory '{db_path_output}' created.")
@@ -106,26 +109,49 @@ if __name__ == "__main__":
             # load current data
             data = pd.read_csv(file_abs)
             # use Nerve_TTL as only the good nerve signal have been kept
-            trials_idx = find_groups_of_ones(data["Nerve_TTL"].values)
+            on_signal_idx = find_groups_of_ones(data["Nerve_TTL"].values)
 
             # extract the block id value and index
             block_id_blinking_dur_sec = .100
             block_id_blinking_nsample = block_id_blinking_dur_sec * 1000
 
-            trial_lengths = [len(sublist) for sublist in trials_idx]
-            is_block_id = [length < block_id_blinking_nsample for length in trial_lengths]
-            block_id_idx = [index for index, value in enumerate(is_block_id) if value]
-            block_id_val = len(block_id_idx)
-
-            if block_id_val == 0:
+            on_signal_lengths = [len(sublist) for sublist in on_signal_idx]
+            is_block_id = [length < block_id_blinking_nsample for length in on_signal_lengths]
+            blocks_id_idx = [index for index, value in enumerate(is_block_id) if value]
+            if len(blocks_id_idx) == 0:
                 warnings.warn("Issue detected: Value of the block id is equal to zero.")
+                continue
 
-            # get trials
+            # remove the identifier blocks to keep only the trial blocks.
+            trials_idx = [trial_indexes for idx, trial_indexes in enumerate(on_signal_idx) if idx not in blocks_id_idx]
+
+            # modify the trials idx if soft_split is decided
+            # find middle point between trials as split locations
+            if soft_split:
+                trials_idx_initial = trials_idx
+                ntrials = len(trials_idx_initial)
+                middles = []
+                avg_rest_time = []
+                for x in range(0, ntrials-1):
+                    last = trials_idx_initial[x][-1]
+                    first = trials_idx_initial[x+1][1]
+                    rest_time = (first-last)
+                    avg_rest_time.append(rest_time)
+                    middle = int(last+rest_time/2)
+                    middles.append(middle)
+                # add starting point of the first trial block based on avg extension
+                middles.insert(0, int(trials_idx_initial[0][0]-np.mean(avg_rest_time)/2))
+                # add end point of the last trial block
+                middles.append(int(trials_idx_initial[-1][-1]+np.mean(avg_rest_time)/2))
+                # redefine trials_idx
+                trials_idx = []
+                for m_idx in range(0, len(middles)-1):
+                    trials_idx.append(np.arange(middles[m_idx], middles[m_idx+1]))
+
+            # split by trials
             data_trials = []
-            for idx, trial_indexes in enumerate(trials_idx):
-                # if it is a block id group, jump to next
-                if idx in block_id_idx:
-                    continue
+            for trial_indexes in trials_idx:
+                # get trials
                 data_curr = data.iloc[trial_indexes].reset_index(drop=True)
                 data_trials.append(data_curr)
 
