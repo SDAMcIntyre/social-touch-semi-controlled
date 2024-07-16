@@ -1,8 +1,9 @@
+import csv
 import os
 import pandas as pd
+import re
 import sys
 import warnings
-import csv
 import matplotlib.pyplot as plt
 
 # homemade libraries
@@ -21,12 +22,12 @@ if __name__ == "__main__":
     db_path = path_tools.get_database_path()
 
     # get input base directory
-    db_path_input = os.path.join(db_path, "semi-controlled", "processed")
+    db_path_input = os.path.join(db_path, "semi-controlled", "2_processed")
     db_path_input_contact = os.path.join(db_path_input, "kinect", "contact", "1_block-order")
     db_path_input_led = os.path.join(db_path_input, "kinect", "led")
 
     # get output base directory
-    db_path_output = os.path.join(db_path, "semi-controlled", "merged", "kinect", "1_block-order")
+    db_path_output = os.path.join(db_path, "semi-controlled", "3_merged", "1_kinect_contact_and_kinect_led", "1_block-order")
     if not os.path.exists(db_path_output):
         os.makedirs(db_path_output)
         print(f"Directory '{db_path_output}' created.")
