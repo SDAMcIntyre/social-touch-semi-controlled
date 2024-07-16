@@ -1,9 +1,10 @@
+import csv
+import matplotlib.pyplot as plt
+import numpy as np
 import os
 import pandas as pd
 import sys
 import warnings
-import csv
-import matplotlib.pyplot as plt
 
 # homemade libraries
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
@@ -13,7 +14,7 @@ import libraries.misc.path_tools as path_tools  # noqa: E402
 if __name__ == "__main__":
     force_processing = True  # If user wants to force data processing even if results already exist
     show = False  # If user wants to monitor what's happening
-    save_results = False
+    save_results = True
     generate_report = True
 
     print("Step 0: Extract the videos embedded in the selected sessions.")
@@ -21,12 +22,14 @@ if __name__ == "__main__":
     db_path = path_tools.get_database_path()
 
     # get input base directory
-    db_path_input = os.path.join(db_path, "semi-controlled", "processed")
-    db_path_input_contact = os.path.join(db_path_input, "kinect", "contact", "1_block-order")
-    db_path_input_led = os.path.join(db_path_input, "kinect", "led")
+    db_path_input = os.path.join(db_path, "semi-controlled", "2_processed", "nerve", "2_block-order")
+
+    # get metadata file
+    md_neuron_filename_abs = os.path.join(db_path, "semi-controlled", "1_primary", "nerve", "semicontrol_unit-name_to_unit-type.csv")
+    md_neuron_df = pd.read_csv(md_neuron_filename_abs)
 
     # get output base directory
-    db_path_output = os.path.join(db_path, "semi-controlled", "merged", "kinect", "1_block-order")
+    db_path_output = os.path.join(db_path, "semi-controlled", "2_processed", "nerve", "3_cond-velocity-adj")
     if not os.path.exists(db_path_output):
         os.makedirs(db_path_output)
         print(f"Directory '{db_path_output}' created.")
@@ -60,33 +63,21 @@ if __name__ == "__main__":
     sessions = sessions + sessions_ST18
     print(sessions)
 
-    diff_ms_all = []
-    names_contact = []
-    names_led = []
+    filenames = []
+    calculated_lag_sec = []
+    calculated_lag_sample = []
     # it is important to split by MNG files / neuron recordings to create the correct subfolders.
     for session in sessions:
-        curr_contact_path_dir = os.path.join(db_path_input_contact, session)
-        curr_contact_led_dir = os.path.join(db_path_input_led, session)
+        curr_path_dir = os.path.join(db_path_input, session)
 
-        files_contact_abs, files_contact = path_tools.find_files_in_directory(curr_contact_path_dir, ending='_contact.csv')
+        files_nerve_abs, files_nerve = path_tools.find_files_in_directory(curr_path_dir, ending='_nerve.csv')
 
-        for file_contact_abs, file_contact in zip(files_contact_abs, files_contact):
-            print(f"current file: {file_contact}")
-            # check if led and nerve files exist for this contact file
-            file_led = file_contact.replace("contact.csv", "LED.csv")
-            file_led_abs = os.path.join(curr_contact_led_dir, file_led)
-            try:
-                with open(file_led_abs, 'r'):
-                    pass
-            except FileNotFoundError:
-                print("Matching LED file does not exist.")
-                continue
-
-            output_filename = file_contact.replace("_contact.csv", "_kinect.csv")
+        for file_nerve_abs, file_nerve in zip(files_nerve_abs, files_nerve):
+            print(f"current file: {file_nerve}")
             output_dir_abs = os.path.join(db_path_output, session)
             if not os.path.exists(output_dir_abs):
                 os.makedirs(output_dir_abs)
-            output_filename_abs = os.path.join(output_dir_abs, output_filename)
+            output_filename_abs = os.path.join(output_dir_abs, file_nerve)
             if not force_processing:
                 try:
                     with open(output_filename_abs, 'r'):
@@ -95,55 +86,82 @@ if __name__ == "__main__":
                 except FileNotFoundError:
                     pass
 
-            contact = pd.read_csv(file_contact_abs)
-            led = pd.read_csv(file_led_abs)
+            nerve = pd.read_csv(file_nerve_abs)
 
-            # check if the two datasets are somewhat similar
-            nframe_contact = len(contact)
-            nframe_led = len(led)
-            ratio = abs(nframe_contact-nframe_led)/nframe_contact
-            # if the ratio of frames is too large, ignore the files
-            if ratio > .05:
-                warnings.warn(f"number of elements are too different between contact and led csv files: {ratio*100}%")
-                contact_tmax = contact['t'].iloc[-1]
-                led_tmax = led['time (second)'].iloc[-1]
-                diff_ms = (contact_tmax-led_tmax) * 1000
-                print(f"current filename = {file_contact.replace('_contact.csv', '')}:")
-                print(f"contact = {contact_tmax:.3f} seconds.")
-                print(f"led = {led_tmax:.3f} seconds.")
-                print(f"diff = {diff_ms:.1f} milliseconds.")
-                print(f"diff = {abs(nframe_contact-nframe_led)} frames.")
-                print(f"------------------\n")
+            # get the neuron code from the file name
+            neuron_id = file_nerve.split("_")[1]
+            # extract the row corresponding to the neuron code / unit name
+            curr_neuron_row = md_neuron_df[md_neuron_df["Unit_name"] == neuron_id]
+            # calculate the expected lag between the mechanoreceptor and the electrode recording
+            cond_vel_m_s = curr_neuron_row["conduction_velocity (m/s)"].values[0]
+            distance_cm = curr_neuron_row["electrode_endorgan_distance (cm)"].values[0]
+            distance_m = distance_cm * .01
+            lag_sec = distance_m / cond_vel_m_s
 
-            # prepare dataframes for merging
-            led = led.rename(columns={"time (second)": "t"}).round(3)
-            contact["t"] = contact["t"].round(3)
+            # calculate the number of samples that needs to be shifted
+            t = nerve.Sec_FromStart.values
+            data_Fs = 1 / np.mean(np.diff(t))
+            lag_nsample = int(data_Fs * lag_sec)
 
-            # generate output dataframe
-            df_output = contact
-            result = pd.merge(led, contact, on='t', how='outer')
-            df_output = pd.merge(df_output, led,  on='t', how='outer')
+            print(f"estimated lag: {lag_sec} seconds ({lag_nsample} samples).")
+            print(f"---")
+
+            # shift the neuron sample, so it matches better the reality, hence the video recordings
+            df_output = nerve.copy()
+            df_output['Nervespike1'] = nerve['Nervespike1'].shift(-lag_nsample, fill_value=0)
+            df_output['Freq'] = nerve['Freq'].shift(-lag_nsample, fill_value=0)
 
             # keep variables for the report
             if generate_report:
-                diff_ms_all.append(len(contact)-len(led))
-                names_contact.append(file_contact)
-                names_led.append(file_led)
+                filenames.append(file_nerve)
+                calculated_lag_sec.append(lag_sec)
+                calculated_lag_sample.append(lag_nsample)
 
             if show:
-                print(df_output)
+                # Create a figure with two subplots
+                fig, (ax1, ax2, ax3) = plt.subplots(3, 1, sharex=True, figsize=(10, 6))
+
+                x = nerve.Sec_FromStart
+                sig1 = nerve["Freq"].values
+                sig2 = df_output["Freq"].values
+
+                # Plot the first signal on the first subplot
+                ax1.plot(x, sig1, label='Original Nerve signal')
+                ax1.set_title('Original Nerve signal')
+                ax1.set_ylabel('Amplitude')
+                ax1.legend()
+
+                # Plot the second signal on the second subplot
+                ax2.plot(x, sig2, label='Shifted nerve signal', color='orange')
+                ax2.set_title(f"Shifted nerve signal by {lag_nsample} samples.")
+                ax2.set_xlabel('Time')
+                ax2.set_ylabel('Amplitude')
+                ax2.legend()
+
+                # Plot the second signal on the second subplot
+                ax3.plot(x, sig1 - sig2, label='sig1 - sig2', color='red')
+                ax3.set_title("Difference")
+                ax3.set_xlabel('Time')
+                ax3.set_ylabel('Amplitude')
+                ax3.legend()
+
+                # Adjust the layout
+                plt.tight_layout()
+                # Show the plot and wait until the window is closed
+                plt.show()
 
             # save data on the hard drive ?
             if save_results:
                 df_output.to_csv(output_filename_abs, index=False)
 
     if generate_report:
-        report_filename = os.path.join(db_path_output, "frame_differences_report.csv")
+        report_filename = os.path.join(db_path_output, "conduction_velocity_lag_report.csv")
         report_data = []
-        for name_contact, name_led, diff_ms in zip(names_contact, names_led, diff_ms_all):
-            report_data.append({"filename_contact": name_contact, "filename_led": name_led, "frame_difference": diff_ms})
+        for filename, lag_sec, lag_sample in zip(filenames, calculated_lag_sec, calculated_lag_sample):
+            report_data.append({"filename": filename, "lag_sec": lag_sec, "lag_sample": lag_sample})
+
         with open(report_filename, mode='w', newline='') as file:
-            writer = csv.DictWriter(file, fieldnames=["filename_contact", "filename_led", "frame_difference"])
+            writer = csv.DictWriter(file, fieldnames=["filename", "lag_sec", "lag_sample"])
             writer.writeheader()
             for row in report_data:
                 writer.writerow(row)
