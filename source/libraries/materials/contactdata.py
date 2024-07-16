@@ -1,11 +1,13 @@
 import warnings
-
 import matplotlib.pyplot as plt
 import numpy as np
+from scipy.interpolate import interp1d
 from sklearn.decomposition import PCA
 
 from .metadata import Metadata  # noqa: E402
 from libraries.materials.stimulusinfo import StimulusInfo  # noqa: E402
+from libraries.misc.interpolate_nan_values import interpolate_nan_values  # noqa: E402
+from pyppca import ppca  # pip install git+https://github.com/el-hult/pyppca
 
 
 class ContactData:
@@ -13,7 +15,7 @@ class ContactData:
         self._time: list[float] = []
         self.nsample: int = 0
 
-        self._led_on: list[float] = []
+        self._TTL: list[float] = []
         self._green_levels: list[float] = []
 
         self._contact_flag: list[float] = []  # ON/OFF
@@ -28,6 +30,30 @@ class ContactData:
 
         self.data_Fs = None  # Hz
         self.KINECT_FS = 30  # Hz
+
+    def interpolate_missing_values(self, method="linear"):
+        if method not in ['linear', 'nearest', 'zero', 'slinear', 'quadratic', 'cubic']:
+            raise ValueError(f"Invalid method. Supported methods are: "
+                             "'linear', 'nearest', 'zero', 'slinear', 'quadratic', 'cubic'")
+
+        def interpolate(v, method="linear"):
+            # Indices where X is not NaN
+            not_nan_indices = np.arange(len(v))[~np.isnan(v)]
+            # Values of X that are not NaN
+            not_nan_values = v[~np.isnan(v)]
+            # Interpolation function
+            interp_func = interp1d(not_nan_indices, not_nan_values, kind=method, fill_value="extrapolate")
+            # Interpolated vector
+            interpolated = v.copy()
+            interpolated[np.isnan(v)] = interp_func(np.arange(len(v))[np.isnan(v)])
+            return interpolated
+
+        # Interpolation
+        self.area = interpolate(self.area, method=method)
+        self.depth = interpolate(self.depth, method=method)
+        self.pos[0, :] = interpolate(self.pos[0, :], method=method)
+        self.pos[1, :] = interpolate(self.pos[1, :], method=method)
+        self.pos[2, :] = interpolate(self.pos[2, :], method=method)
 
     def get_contact_mask(self, curr_max_vel_ratio, mode="hard"):
         depth_smooth = self.get_smooth_depth(curr_max_vel_ratio, nframe=1)
@@ -94,7 +120,7 @@ class ContactData:
         cd = ContactData()
 
         cd.time = self.time[idx]
-        cd.led_on = self.led_on[idx]
+        cd.TTL = self.TTL[idx]
         # since 2024/07/09, dataset doesn't contain green levels anymore
         try:
             cd.green_levels = self.green_levels[idx]
@@ -118,7 +144,7 @@ class ContactData:
     def set_data_idx(self, idx):
         self.time = self.time[idx]
 
-        self.led_on = self.led_on[idx]
+        self.TTL = self.TTL[idx]
         try:
             self.green_levels = self.green_levels[idx]
         except:
@@ -139,7 +165,7 @@ class ContactData:
     def append(self, contact_bis):
         self.time = np.concatenate((self.time, contact_bis.time))
 
-        self.led_on = np.concatenate((self.led_on, contact_bis.led_on))
+        self.TTL = np.concatenate((self.TTL, contact_bis.TTL))
         try:
             self.green_levels = np.concatenate((self.green_levels, contact_bis.green_levels))
         except:
@@ -157,7 +183,7 @@ class ContactData:
         except:
             pass
 
-        self._led_on: list[float] = []
+        self._TTL: list[float] = []
         self._green_levels: list[float] = []
 
     @property
@@ -168,15 +194,15 @@ class ContactData:
     def time(self, value):
         self._time = value
         self.nsample = len(self._time)
-        self.data_Fs = 1 / np.median(np.diff(self._time))  # Hz
+        self.data_Fs = 1 / np.nanmean(np.diff(self._time))  # Hz
 
     @property
-    def led_on(self):
-        return self._led_on
+    def TTL(self):
+        return self._TTL
 
-    @led_on.setter
-    def led_on(self, value):
-        self._led_on = value
+    @TTL.setter
+    def TTL(self, value):
+        self._TTL = value
 
     @property
     def green_levels(self):
@@ -229,9 +255,20 @@ class ContactData:
 
     def update_pos_1D(self):
         # compress the signal into 1D (as the expected motion is supposed to be 1D anyway)
+        # is there is nan, use a github provided PCA to ignore nan
+
+        pos3D = self.pos.transpose()
+
+        if np.isnan(pos3D).any():
+            nsamples, _ = np.shape(pos3D)
+            # detrend the axis
+            M = np.nanmean(pos3D, axis=0)
+            pos3D_centered = pos3D - np.matlib.repmat(M, nsamples, 1)
+            # interpolate the nan values
+            pos3D = interpolate_nan_values(pos3D_centered)
+        # get the first PCA
         pca = PCA(n_components=1)
-        p = np.squeeze(pca.fit_transform(self.pos.transpose()))
-        self.pos_1D = p
+        self.pos_1D = np.squeeze(pca.fit_transform(pos3D))
 
     @property
     def pos_1D(self):

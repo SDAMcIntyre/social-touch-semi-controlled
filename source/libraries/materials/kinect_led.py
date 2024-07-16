@@ -7,7 +7,7 @@ from scipy.interpolate import interp1d
 from ..misc.waitforbuttonpress_popup import WaitForButtonPressPopup
 
 
-# class of the LED green value of videos for the preprocessing
+# class of the LED green value of videos for the processing
 class SemiControlledKinectLED:
     def __init__(self):
         self.session = []

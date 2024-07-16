@@ -1,6 +1,8 @@
 import chardet
 import numpy as np
+import os
 import pandas as pd
+import re
 import warnings
 
 class NeuralData:
@@ -10,6 +12,7 @@ class NeuralData:
         self.data_Fs = None  # Hz
         self.spike: list[float] = []
         self.iff: list[float] = []
+        self.TTL: list[float] = []
 
         self.unit_id = None
         self.unit_type = None
@@ -19,16 +22,12 @@ class NeuralData:
 
         try:
             # get current unit ID
-            filename_split = data_filename.split('/')
-            csv_split = filename_split[-1].split('-')
-            # Step 4: Find the index of the element that contains "ST"
-            index = next((i for i, element in enumerate(csv_split) if "ST" in element), -1)
-
-            participant_id = csv_split[index]
-            unit_occ = csv_split[index + 1].replace("unit", "")
-            if int(unit_occ) < 10:
-                unit_occ = "0" + unit_occ
-            self.unit_id = '-'.join([participant_id, unit_occ])
+            filename = os.path.basename(data_filename)
+            # Use re.search to find the first match of the pattern in the filename
+            match = re.search(r'ST\d{2}-\d{2}', filename)
+            if match:
+                # Extract the matched substring
+                self.unit_id = match.group()
         except:
             pass
 
@@ -36,7 +35,6 @@ class NeuralData:
             # select the metadata information of the current neuron
             df = pd.read_csv(unit_name2type_filename)
             df = df[df.Unit_name == self.unit_id]
-
             # get current unit type
             self.unit_type = df["Unit_type"].values[0]
             # get current conduction velocity
@@ -46,15 +44,7 @@ class NeuralData:
         except:
             pass
 
-    def correct_conduction_velocity(self):
-        if self.data_Fs is None:
-            warnings.warn("Neural:correct_conduction_velocity> data hasn't been loaded yet. Abort.")
-        # get the number of sample for the latency of the current unit
-        nsample_latency = -1 * int(self.data_Fs * self.latency)
-        # shift the signal by the latency
-        self.shift(nsample_latency)
-
-    def shift(self, lag):
+    def shift_tmp(self, lag):
         lag = int(lag)
         if lag > 0:
             self.spike = np.pad(self.spike, (lag, 0), 'constant')[:len(self.spike)]
@@ -68,6 +58,7 @@ class NeuralData:
         neural.time = self.time[idx]
         neural.spike = self.spike[idx]
         neural.iff = self.iff[idx]
+        neural.TTL = self.TTL[idx]
 
         neural.unit_id = self.unit_id
         neural.unit_type = self.unit_type
@@ -81,11 +72,13 @@ class NeuralData:
         self.time = self.time[idx]
         self.spike = self.spike[idx]
         self.iff = self.iff[idx]
+        self.TTL = self.TTL[idx]
 
     def append(self, neural_bis):
         self.time = np.concatenate((self.time, neural_bis.time))
         self.spike = np.concatenate((self.spike, neural_bis.spike))
         self.iff = np.concatenate((self.iff, neural_bis.iff))
+        self.TTL = np.concatenate((self.TTL, neural_bis.TTL))
 
     @property
     def time(self):

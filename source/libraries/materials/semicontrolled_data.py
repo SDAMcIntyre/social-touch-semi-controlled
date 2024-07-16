@@ -39,6 +39,10 @@ class SemiControlledData:
             data_trials_out.append(scd)
         return data_trials_out
 
+    # create a dataframe of the current semicontrolled data
+    def asDataFrame(self):
+        pass
+
     def get_stimulusInfoContact(self):
         type_ = self.stim.type
         velocity = self.stim.vel
@@ -96,7 +100,7 @@ class SemiControlledData:
         self.contact.time = df.t.values
 
         # Kinect LED time series
-        self.contact.led_on = df["LED on"].values
+        self.contact.TTL = df["LED on"].values
 
         # contact data
         self.contact.contact_flag = df.Contact_Flag.values
@@ -104,14 +108,15 @@ class SemiControlledData:
         self.contact.depth = df.Depth.values
         # some dataset doesn't possess the position anymore
         try:
-            px = df.Position_index_x.values
-            py = df.Position_index_y.values
-            pz = df.Position_index_z.values
-            # if the hand is used, take the point between the index and the hand trackers
+            # if the hand is used, take the hand tracker
             if "hand" in self.stim.size:
-                px = px - df.Position_x.values
-                py = py - df.Position_y.values
-                pz = pz - df.Position_z.values
+                px = df.Position_x.values
+                py = df.Position_y.values
+                pz = df.Position_z.values
+            else:
+                px = df.Position_index_x.values
+                py = df.Position_index_y.values
+                pz = df.Position_index_z.values
             self.contact.pos = np.array([px, py, pz])
         except:
             pass
@@ -129,6 +134,7 @@ class SemiControlledData:
         # neural data
         self.neural.spike = df.Nerve_spike.values
         self.neural.iff = df.Nerve_freq.values
+        self.neural.TTL = df.Nerve_TTL.values
 
     def get_data_idx(self, idx, hardcopy=False):
         if hardcopy:
@@ -146,6 +152,11 @@ class SemiControlledData:
         return scd
 
     def set_data_idx(self, idx):
+        if isinstance(idx, range):
+            idx = list(idx)
+        elif isinstance(idx, tuple):
+            idx = list(range(idx[0], idx[1]))
+
         self.md.set_data_idx(idx)
         self.contact.set_data_idx(idx)
         self.neural.set_data_idx(idx)

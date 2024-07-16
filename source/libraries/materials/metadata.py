@@ -28,7 +28,7 @@ class Metadata:
         self.data_Fs = 0  # Hz
 
     def set_refreshRate(self):
-        self.data_Fs = 1/np.mean(np.diff(self._time))  # Hz
+        self.data_Fs = 1/np.nanmean(np.diff(self._time))  # Hz
 
     def get_data_idx(self, idx):
         md = Metadata(self.data_filename, self.md_stim_filename, self.unit_name2type_filename)
