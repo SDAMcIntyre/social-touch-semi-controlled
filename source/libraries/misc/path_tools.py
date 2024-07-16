@@ -5,6 +5,15 @@ import tkinter as tk
 from tkinter import filedialog
 
 
+def winapi_path(dos_path, encoding=None):
+    if not isinstance(dos_path, str) and encoding is not None:
+        dos_path = dos_path.decode(encoding)
+    path = os.path.abspath(dos_path)
+    if path.startswith(u"\\\\"):
+        return u"\\\\?\\UNC\\" + path[2:]
+    return u"\\\\?\\" + path
+
+
 def find_files_in_sessions(input_path, sessions, ending='.csv'):
     if not isinstance(sessions, list):
         sessions = [sessions]
