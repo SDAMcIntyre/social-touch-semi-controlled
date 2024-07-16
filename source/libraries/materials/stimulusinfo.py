@@ -65,7 +65,7 @@ class StimulusInfo:
         duration_sec = self.PERIOD_MOTIONPATH_LENGTH / self.vel  # sec
         # the definition of singular contact differs from Tap and Stroke:
         # For Stroke, there are two singular contacts during one period
-        if self._type[0] == "stroke":
+        if self.type == "stroke":
             duration_sec /= 2
         return duration_sec
 
