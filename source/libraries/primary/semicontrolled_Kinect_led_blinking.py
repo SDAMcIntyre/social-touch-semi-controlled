@@ -5,9 +5,9 @@ import csv
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from sklearn import mixture
 import subprocess
 import warnings
-
 
 from ..misc.time_cost_function import time_it
 from ..misc.waitforbuttonpress_popup import WaitForButtonPressPopup
@@ -38,6 +38,26 @@ class KinectLEDBlinking:
         csv = os.path.join(self.result_dir_path, self.result_file_name + ".csv")
         txt = os.path.join(self.result_dir_path, self.result_file_name + "_metadata.txt")
         return os.path.isfile(csv) and os.path.isfile(txt)
+
+    def create_phantom_result_file(self, metadata_filename_abs):
+        metadata_file = os.path.join(metadata_filename_abs)
+        # Read the content of the file
+        with open(metadata_file, 'r', encoding='utf-8') as file:
+            data = file.read()
+
+        # Parse the JSON content
+        json_data = json.loads(data)
+
+        # Extract the required values
+        self.nframes = json_data['nframes']
+        self.fps = json_data['fps']
+
+        # generate nan values over the entire video as the data were occluded (out of bounds)
+        self.green_levels = np.full(self.nframes, np.nan)
+        self.led_on = np.full(self.nframes, np.nan)
+        self.time = np.linspace(0, 1 / self.fps * (self.nframes - 1), self.nframes)
+
+        self.video_path = "None"
 
     def load_video(self):
         # Clean area of interest variable
@@ -100,10 +120,41 @@ class KinectLEDBlinking:
         self.green_levels = normalize_signal(self.green_levels, dtype=np.ndarray)
         self.time = np.linspace(0, 1 / self.fps * (self.nframes - 1), self.nframes)
 
-    def process_led_on(self, threshold=0.25):
+    def process_led_on(self, method="bimodal", threshold=0.25):
+        match method:
+            case "bimodal":
+                self.process_led_on_bimodal()
+            case "threshold":
+                self.process_led_on_threshold(threshold=threshold)
+
+    def process_led_on_bimodal(self):
+        x = self.green_levels
+        # reshape 1D data to ensure gmm to function correctly --> X.shape = (n_samples, 1).
+        x = x.reshape(-1, 1)
+
+        # create GMM model object
+        gmm = mixture.GaussianMixture(n_components=2, max_iter=1000, random_state=10, covariance_type='full')
+
+        # find useful parameters
+        mean = gmm.fit(x).means_
+        gauss_idx_predicted = gmm.fit(x).predict(x)
+
+        # if the first gaussian is the low green intensity gaussian,
+        # label prediction works perfectly (0 or 1)
+        if mean[0][0] < mean[1][0]:
+            self.led_on = gauss_idx_predicted
+        else:  # otherwise, reverse ON/OFF
+            self.led_on = 1 - gauss_idx_predicted
+
+        # The treshold could be estimated to the intersection rather than putting it to NaN
+        # https://stats.stackexchange.com/questions/311592/how-to-find-the-point-where-two-normal-distributions-intersect
+        self.threshold_value = np.nan
+
+    def process_led_on_threshold(self, threshold=0.25):
         if self.green_levels is None:
             raise Exception("Error: green_levels was not initialized.")
         self.led_on = np.zeros(self.nframes)
+        # put to one when green level is above the threshold
         self.threshold_value = threshold
         self.green_levels = normalize_signal(self.green_levels, dtype=np.ndarray)
         led_on_idx = np.where(self.green_levels > self.threshold_value)[0]
@@ -113,8 +164,8 @@ class KinectLEDBlinking:
         if self.roi is None or self.led_on is None:
             raise Exception("Error: led_on was not initialized.")
         self.occluded = np.full(self.nframes, False, dtype=bool)
-        frame_avg_off_idx = np.where(self.led_on == False)[0]
-        frame_avg_on_idx = np.where(self.led_on == True)[0]
+        frame_avg_off_idx = np.where(self.led_on == 0)[0]
+        frame_avg_on_idx = np.where(self.led_on == 1)[0]
         frame_avg_off = np.round(np.mean(self.roi[frame_avg_off_idx, :, :, :], axis=0)).astype(int)
         frame_avg_on = np.round(np.mean(self.roi[frame_avg_on_idx, :, :, :], axis=0)).astype(int)
         means_off = []
@@ -159,12 +210,14 @@ class KinectLEDBlinking:
             if show:
                 update_result = None
                 confirmation_window = np.zeros((200, 500, 3), dtype=np.uint8)
-                cv2.putText(confirmation_window, "Update led_on?", (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+                cv2.putText(confirmation_window, "Update led_on?", (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 1,
+                            (255, 255, 255), 2)
                 cv2.rectangle(confirmation_window, (50, 100), (150, 150), (0, 255, 0), -1)
                 cv2.putText(confirmation_window, "Yes", (70, 135), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 0), 2)
                 cv2.rectangle(confirmation_window, (250, 100), (350, 150), (0, 0, 255), -1)
                 cv2.putText(confirmation_window, "No", (270, 135), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 0), 2)
                 cv2.imshow('Confirmation', confirmation_window)
+
                 def confirm_square(event, x, y, flags, param):
                     nonlocal update_result
                     if event == cv2.EVENT_LBUTTONUP:
@@ -174,6 +227,7 @@ class KinectLEDBlinking:
                         elif 250 < x < 350 and 100 < y < 150:
                             update_result = False
                             cv2.destroyAllWindows()
+
                 cv2.setMouseCallback('Confirmation', confirm_square)
                 while update_result is None:
                     cv2.waitKey(1)
@@ -186,8 +240,11 @@ class KinectLEDBlinking:
     def update_led_on(self):
         if self.occluded.size == 0:
             raise Exception("Error: occluded was not initialized.")
-        occluded_idx = np.where(self.occluded == True)[0]
-        self.led_on[occluded_idx] = np.nan
+        occluded_idx = np.where(self.occluded == 1)[0]
+        if len(occluded_idx):
+            # convert to float array to allow nan values
+            self.led_on = np.array(self.led_on, dtype=float)
+            self.led_on[occluded_idx] = np.nan
 
     def save_results(self):
         if not os.path.exists(self.result_dir_path):

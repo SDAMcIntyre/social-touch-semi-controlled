@@ -11,47 +11,49 @@ import libraries.misc.path_tools as path_tools  # noqa: E402
 from libraries.misc.waitforbuttonpress_popup import WaitForButtonPressPopup
 
 
-def find_mp4_files(input_path, sessions):
+def find_metadata_files(input_path, sessions):
     """
     Given a dictionary of directory names and their absolute paths,
-    find all .mkv files nested inside these directories.
+    find all _metadata.txt files nested inside these directories.
 
     Args:
     directories (dict): A dictionary where keys are directory names and
                         values are their absolute paths.
 
     Returns:
-    list: A list of absolute paths to all .mkv files found.
+    list: A list of absolute paths to all .md files found.
     """
-    mkv_files_session = []
-    mkv_files = []
-    mkv_files_abs = []
+    md_files_session = []
+    md_files = []
+    md_files_abs = []
 
     for session in sessions:
         dir_path = os.path.join(input_path, session)
         # Walk through the directory recursively
         for root, _, files in os.walk(dir_path):
             for file in files:
-                if file.endswith('.mp4'):
-                    mkv_files.append(file)
-                    mkv_files_abs.append(os.path.join(root, file))
-                    mkv_files_session.append(session)
+                if file.endswith('_metadata.txt'):
+                    md_files.append(file)
+                    md_files_abs.append(os.path.join(root, file))
+                    md_files_session.append(session)
 
-    return mkv_files_abs, mkv_files, mkv_files_session
+    return md_files_abs, md_files, md_files_session
 
 
 if __name__ == "__main__":
     force_processing = True  # If user wants to force data processing even if results already exist
-    show = False  # If user wants to monitor what's happening
+    show_video_by_frames = False  # If user wants to monitor what's happening
+    show_results = False  # If user wants to monitor what's happening
+
     save_results = True
 
     print("Step 0: Extract the videos embedded in the selected sessions.")
     # get database directory
-    database_path = path_tools.get_database_path()
+    database_path = os.path.join(path_tools.get_database_path(), "semi-controlled")
     # get input base directory
-    database_path_input = os.path.join(database_path, "semi-controlled", "1_primary", "kinect", "2_roi_led")
+    database_path_input = os.path.join(database_path, "1_primary", "kinect", "2_roi_led")
     # get output base directory
-    database_path_output = os.path.join(database_path, "semi-controlled", "2_processed", "kinect", "led")
+    database_path_output = os.path.join(database_path, "2_processed", "kinect", "led")
     if not os.path.exists(database_path_output):
         os.makedirs(database_path_output)
         print(f"Directory '{database_path_output}' created.")
@@ -84,39 +86,53 @@ if __name__ == "__main__":
     sessions = sessions + sessions_ST16
     sessions = sessions + sessions_ST18
 
-    mkv_files_abs, mkv_files, mkv_files_session = find_mp4_files(database_path_input, sessions)
+    md_files_abs, md_files, md_files_session = find_metadata_files(database_path_input, sessions)
 
     print("Step 2: Automatic processing...")
     # 2. Process LED blinking
-    for idx, (mkv_filename_abs, mkv_filename, session) in enumerate(zip(mkv_files_abs, mkv_files, mkv_files_session)):
-        print(f"File '{mkv_filename}'")
+    for idx, (md_filename_abs, md_filename, session) in enumerate(zip(md_files_abs, md_files, md_files_session)):
+        print(f"File '{md_filename}'")
 
         # output directory
         output_dirname = os.path.join(database_path_output, session)
         if not os.path.exists(output_dirname):
             os.makedirs(output_dirname)
 
-        # modify input filename to match standard
-        output_filename = mkv_filename.replace("_kinect_LED_roi.mp4", "_LED")
+        # create video filename from metadata filename
+        video_filename_abs = md_filename_abs.replace("_metadata.txt", ".mp4")
+
+        # create output filename from metadata filename
+        output_filename = md_filename.replace("_kinect_LED_roi_metadata.txt", "_LED")
 
         # create Kinect processing manager
-        led_blink = KinectLEDBlinking(mkv_filename_abs, output_dirname, output_filename)
+        led_blink = KinectLEDBlinking(video_filename_abs, output_dirname, output_filename)
 
-        if force_processing or not led_blink.is_already_processed():
+        if led_blink.is_already_processed() and not force_processing:
+            continue
+
+        # Check if the video exists
+        if not os.path.exists(video_filename_abs):
+            print(f"The video_path does not point on an existing file. Creating a phantom result file...")
+            led_blink.create_phantom_result_file(md_filename_abs)
+        else:
             # if the video hasn't been processed yet or redo the processing (load results = False)
             led_blink.load_video()
 
-            led_blink.monitor_green_levels(show=show)
+            led_blink.monitor_green_levels(show=show_video_by_frames)
             led_blink.process_led_on(threshold=.20)
             # correct for any occlusion
-            led_blink.define_occlusion(threshold=40, show=show)
+            led_blink.define_occlusion(threshold=40, show=show_video_by_frames)
 
-            if save_results:
-                led_blink.save_results()
+        if save_results:
+            led_blink.save_results()
 
-            if show:
-                plt.plot(led_blink.time, led_blink.led_on)
-                plt.ion()
-                plt.show()
-                WaitForButtonPressPopup()
-                plt.close()
+        if show_results:
+            plt.plot(led_blink.time, led_blink.led_on)
+            plt.ion()
+            plt.show()
+            WaitForButtonPressPopup()
+            plt.close()
+
+    if save_results:
+        p = database_path_output.replace("\\", "/")
+        print(f"Results saved in:\n{p}")

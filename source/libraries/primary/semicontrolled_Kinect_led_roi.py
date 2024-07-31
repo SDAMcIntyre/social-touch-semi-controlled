@@ -281,6 +281,57 @@ class KinectLEDRegionOfInterest:
         return [self.square_center, self.square_size]
 
     @time_it
+    def extract_metadata_video(self):
+        if self.cap is None:
+            raise Exception("Error: Video not initialized. Please call initialise_video() first.")
+
+        # Variables for progression and frame counting
+        nframes_predicted = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        progression_list = np.linspace(0, 100, 20)
+        progression_idx = 0
+
+        # CV2 read tends to sometimes not fully scan the video
+        # It can stop at 50%, which will give wrong results.
+        # Hence, we will use FFMPEG window library with the terminal to read frames after frames
+        self.cap.release()
+
+        # Check if the video exists
+        if not os.path.exists(self.video_path):
+            print(f"The video_path does not point on an existing file.")
+
+        cmd = ["ffmpeg", "-i", self.video_path]
+        # COLOR/RGB channels (or stream) in Kinect videos are located in 0
+        probe = subprocess.run([
+            *"ffprobe -v quiet -print_format json -show_format -show_streams".split(),
+            self.video_path
+        ], capture_output=True)
+        probe.check_returncode()
+        stream_rgb = json.loads(probe.stdout)["streams"][0]
+
+        index = stream_rgb["index"]
+        if stream_rgb["codec_type"] != "video":
+            warnings.warn("PROBLEM: Expected stream for RGB video is not a video")
+        cmd += "-map", f"0:{index}", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"
+
+        frame_shape = np.array([self.frame_height, self.frame_width, 3])
+        nelem = frame_shape.prod()
+        nframes = 0
+        with subprocess.Popen(cmd, stdout=subprocess.PIPE) as proc:
+            while True:
+                data = proc.stdout.read(nelem)  # One byte per each element
+                if not data:
+                    break
+                nframes += 1
+                if (100 * nframes / nframes_predicted) > progression_list[progression_idx]:
+                    print("Create Area of Interest> Progression:", int(progression_list[progression_idx]),
+                          "% ( Frame:",
+                          nframes, "/",
+                          nframes_predicted, ")")
+                    progression_idx += 1
+        # take advantage to store the correct number of frames
+        self.nframes = nframes
+
+    @time_it
     def extract_roi(self):
         if self.cap is None or self.reference_frame is None:
             raise Exception("Error: Video not initialized. Please call initialise_video() first.")
@@ -295,6 +346,10 @@ class KinectLEDRegionOfInterest:
         # It can stop at 50%, which will give wrong results.
         # Hence, we will use FFMPEG window library with the terminal to read frames after frames
         self.cap.release()
+
+        # Check if the video exists
+        if not os.path.exists(self.video_path):
+            print(f"The video_path does not point on an existing file.")
 
         cmd = ["ffmpeg", "-i", self.video_path]
         # COLOR/RGB channels (or stream) in Kinect videos are located in 0
@@ -343,11 +398,13 @@ class KinectLEDRegionOfInterest:
         # take advantage to store the correct number of frames
         self.nframes = nframes
 
-    def save_results(self):
+    def save_results(self, verbose=False):
         if not os.path.exists(self.result_dir_path):
             os.makedirs(self.result_dir_path)
         self.save_roi_as_video(self.result_dir_path, self.result_filename + ".mp4")
         self.save_result_metadata(self.result_dir_path, self.result_filename + "_metadata.txt")
+        if verbose:
+            print(f"Results saved as {self.result_dir_path}{self.result_filename}*.")
     
     def save_roi_as_video(self, output_path, filename, show=False):
         if self.roi is None:
@@ -372,6 +429,9 @@ class KinectLEDRegionOfInterest:
         cv2.destroyAllWindows()
 
     def save_result_metadata(self, output_path, filename):
+        if self.reference_frame_idx is None:
+            self.reference_frame_idx = -1
+
         filename_abspath = os.path.join(output_path, filename)
         metadata = {
             "video_path": self.video_path,

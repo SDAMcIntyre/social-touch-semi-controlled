@@ -44,18 +44,19 @@ def find_mkv_files(input_path, sessions):
 
 
 if __name__ == "__main__":
-    force_processing = True  # If user wants to force data processing even if results already exist
+    force_processing = False  # If user wants to force data processing even if results already exist
     load_led_location = True  # If user wants to load already defined LED location if it already exists
     show = False  # If user wants to monitor what's happening
+
     save_results = True
 
     print("Step 0: Extract the videos embedded in the selected sessions.")
     # get database directory
-    database_path = path_tools.get_database_path()
+    database_path = os.path.join(path_tools.get_database_path(), "semi-controlled", "1_primary", "kinect")
     # get input base directory
-    database_path_input = os.path.join(database_path, "semi-controlled", "1_primary", "kinect", "1_block-order")
+    database_path_input = os.path.join(database_path, "1_block-order")
     # get output base directory
-    database_path_output = os.path.join(database_path, "semi-controlled", "1_primary", "kinect", "2_roi_led")
+    database_path_output = os.path.join(database_path, "2_roi_led")
     if not os.path.exists(database_path_output):
         os.makedirs(database_path_output)
         print(f"Directory '{database_path_output}' created.")
@@ -87,7 +88,9 @@ if __name__ == "__main__":
     sessions = sessions + sessions_ST15
     sessions = sessions + sessions_ST16
     sessions = sessions + sessions_ST18
-    print(sessions)
+    print("Selected sessions:")
+    print(np.transpose(sessions))
+    print("--- --- --- --- ---")
 
     mkv_files_abs, mkv_files, mkv_files_session = find_mkv_files(database_path_input, sessions)
 
@@ -105,18 +108,16 @@ if __name__ == "__main__":
 
         # Results filename and location
         output_dirname = os.path.join(database_path_output, session)
-        output_filename = mkv_filename.replace("_kinect.mkv", "") + "_LED_roi"
+        output_filename = mkv_filename.replace("_kinect.mkv", "") + "_kinect_LED_roi"
 
         # create Kinect processing manager
         led_roi = KinectLEDRegionOfInterest(mkv_filename_abs, output_dirname, output_filename)
 
-        frame_number = None
-        center = None
-        radius = None
-
-        # force processing or if the video hasn't been processed yet
-        if force_processing:
-            led_roi.is_already_processed()
+        if not force_processing and led_roi.is_already_processed():
+            print(f"Results already exist and user decided to not force processing.")
+            print(f"Go to next file --->")
+        else:
+            # force processing or if the video hasn't been processed yet
             if load_led_location and led_roi.is_already_processed():
                 led_roi.load_led_location()
             else:
@@ -128,7 +129,7 @@ if __name__ == "__main__":
                     led_roi.set_reference_frame(frame_number)
                     led_roi.select_led_location()
 
-        # keep the variables
+        # keep the variables, even if the results already exist (to not mess up idx in step 2)
         led_in_frames.append(led_roi.led_in_frame)
         frame_idx.append(led_roi.reference_frame_idx)
         square_center.append(led_roi.square_center)
@@ -140,18 +141,32 @@ if __name__ == "__main__":
         print(f"File '{mkv_filename}'")
         # Saving info
         output_dirname = os.path.join(database_path_output, session)
-        output_filename = mkv_filename.replace(".mkv", "") + "_LED_roi"
+        output_filename = mkv_filename.replace("_kinect.mkv", "") + "_kinect_LED_roi"
+
         # create Kinect processing manager
         led_roi = KinectLEDRegionOfInterest(mkv_filename_abs, output_dirname, output_filename)
 
-        led_roi.led_in_frame = led_in_frames[idx]
+        if not force_processing and led_roi.is_already_processed():
+            print(f"Results already exist and user decided to not force processing.")
+            print(f"Go to next file --->")
+            continue
 
-        if (force_processing or not led_roi.is_already_processed()) and led_roi.led_in_frame:
+        if led_in_frames[idx]:
             # if the video hasn't been processed yet or redo the processing (load results = False)
+            led_roi.led_in_frame = led_in_frames[idx]
             led_roi.initialise_video()
             led_roi.set_reference_frame(frame_idx[idx])
             led_roi.select_led_location(square_center[idx], square_radius[idx])
             led_roi.extract_roi()
+        else:
+            led_roi.initialise_video()
+            led_roi.extract_metadata_video()
+            print(f"LED is not in frame, extract and save metadata only.")
 
-            if save_results:
-                led_roi.save_results()
+        if save_results:
+            led_roi.save_results(verbose=True)
+
+    if save_results:
+        p = database_path_output.replace("\\", "/")
+        print(f"Results saved in:\n{p}")
+    print(f"All processings are done.")
