@@ -1,11 +1,10 @@
+import csv
 import matplotlib.pyplot as plt
 import numpy as np
 import os
 import pandas as pd
 import re
 import sys
-from scipy.interpolate import interp1d
-from scipy.signal import correlate
 from scipy import signal
 import warnings
 
@@ -18,14 +17,16 @@ if __name__ == "__main__":
     force_processing = True  # If user wants to force data processing even if results already exist
     show = False  # If user wants to monitor what's happening
     scaling_nofilling = True
+
+    generate_report = True
     save_results = True
 
     print("Step 0: Extract the videos embedded in the selected sessions.")
     # get database directory
     db_path = os.path.join(path_tools.get_database_path(), "semi-controlled")
     # get input base directory
-    db_path_input_kinect = os.path.join(db_path, "3_merged", "1_kinect_contact_and_kinect_led", "1_block-order")
     db_path_input_nerve = os.path.join(db_path, "2_processed", "nerve", "3_cond-velocity-adj")
+    db_path_input_kinect = os.path.join(db_path, "3_merged", "1_kinect_contact_and_kinect_led", "1_block-order")
     # get output base directory
     db_path_output = os.path.join(db_path, "3_merged", "2_kinect_and_nerve", "0_block-order")
     if not os.path.exists(db_path_output):
@@ -59,10 +60,14 @@ if __name__ == "__main__":
     sessions = sessions + sessions_ST15
     sessions = sessions + sessions_ST16
     sessions = sessions + sessions_ST18
-    #sessions = ['2022-06-15_ST14-02']
     print(sessions)
 
-    diff_ms_all = []
+    lag_list = []
+    ratio_kinect_list = []
+    ratio_nerve_list = []
+    file_kinect_list = []
+    file_nerve_list = []
+    comment_list = []
     # it is important to split by MNG files / neuron recordings to create the correct subfolders.
     for session in sessions:
         curr_kinect_dir = os.path.join(db_path_input_kinect, session)
@@ -125,23 +130,35 @@ if __name__ == "__main__":
             TTL_kinect = kinect_scaled["LED on"]
             TTL_nerve = nerve["TTL_Aut"]
             # just in case, remove temporarily any nan value for correlation
-            TTL_kinect = np.nan_to_num(TTL_kinect, nan=0.0)
-            TTL_nerve = np.nan_to_num(TTL_nerve, nan=0.0)
+            # for some reason, np.nan_to_num doesn't work.
+            with pd.option_context('future.no_silent_downcasting', True):
+                TTL_kinect = pd.Series(TTL_kinect).fillna(0).values
+                TTL_nerve = pd.Series(TTL_nerve).fillna(0).values
             # down sample for a faster correlation
-            downsampling = .1
+            downsampling = 0.1
             TTL_kinect_corr = TTL_kinect[np.linspace(0, len(TTL_kinect)-1, int(downsampling * len(TTL_kinect)), dtype=int)]
             TTL_nerve_corr = TTL_nerve[np.linspace(0, len(TTL_nerve)-1, int(downsampling * len(TTL_nerve)), dtype=int)]
             # remove the mean for a better estimation of the correlation
             TTL_kinect_corr = TTL_kinect_corr - np.mean(TTL_kinect_corr)
             TTL_nerve_corr = TTL_nerve_corr - np.mean(TTL_nerve_corr)
+
             # lag estimation
             correlation = signal.correlate(TTL_kinect_corr, TTL_nerve_corr, mode="full")
             lags = signal.correlation_lags(TTL_kinect_corr.size, TTL_nerve_corr.size, mode="full")
             lag = int(lags[np.argmax(correlation)] / downsampling)
             del correlation, lags
+            print(f"lag/TTL_kinect length (ratio): {lag} / {len(TTL_kinect)} ({abs(lag)/len(TTL_kinect):.3f})")
+
+            if abs(lag)/len(TTL_kinect) > .30:
+                warnings.warn(f"Most likely, there is a problem: lag/length signal over 30%")
+                warnings.warn(f"Reset the lag to zero.")
+                comment = f"Lag ratio was too high ({abs(lag)/len(TTL_kinect):.3f}); any shift has been ignored."
+                lag = 0
+            else:
+                comment = "Nothing to report"
 
             # align signals by shifting nerve data
-            if lag > 0:
+            if lag >= 0:
                 # to the right
                 zeros = np.zeros(lag)
                 # Concatenate the zeros and the original column
@@ -180,9 +197,48 @@ if __name__ == "__main__":
             df_output["Nerve_TTL"] = TTL_Aut
             df_output["t"] = nerve_t
 
+            # keep the lag for traceability file
+            lag_list.append(lag)
+            ratio_kinect_list.append(abs(lag) / len(TTL_kinect))
+            ratio_nerve_list.append(abs(lag) / len(TTL_nerve))
+            file_kinect_list.append(file_contact)
+            file_nerve_list.append(file_nerve)
+            comment_list.append(comment)
+
             if show:
+                if len(TTL_kinect_corr) > len(TTL_nerve_corr):
+                    x = np.linspace(0, len(TTL_kinect_corr) - 1, len(TTL_kinect_corr))
+                    y1 = TTL_kinect_corr
+                    y2 = np.pad(TTL_nerve_corr, (0, len(TTL_kinect_corr) - len(TTL_nerve_corr)), 'constant')
+                else:
+                    x = np.linspace(0, len(TTL_nerve_corr) - 1, len(TTL_nerve_corr))
+                    y1 = np.pad(TTL_kinect_corr, (0, len(TTL_nerve_corr) - len(TTL_kinect_corr)), 'constant')
+                    y2 = TTL_nerve_corr
+
                 # Create a figure with two subplots
-                fig, (ax1, ax2, ax3, ax4) = plt.subplots(4, 1, sharex=True, figsize=(10, 6))
+                fig1, (ax1, ax2) = plt.subplots(2, 1, sharex=True, figsize=(10, 6))
+
+                # Plot the first signal on the first subplot
+                ax1.plot(x, y1, label='Kinect_TTL signal')
+                ax1.set_title('Kinect_TTL signal')
+                ax1.set_ylabel('Amplitude')
+                ax1.legend()
+
+                # Plot the second signal on the second subplot
+                ax2.plot(x, y2, label='Nerve_TTL signal', color='orange')
+                ax2.set_title(f"Nerve_TTL signal")
+                ax2.set_xlabel('Time')
+                ax2.set_ylabel('Amplitude')
+                ax2.legend()
+
+                # Set the main title using the file names
+                main_title = f'Contact File: {file_contact}\n\nNerve File: {file_nerve}'
+                fig1.suptitle(main_title, fontsize=16)
+                # Adjust the layout
+                plt.tight_layout()
+
+                # Create a figure with two subplots
+                fig2, (ax1, ax2, ax3, ax4) = plt.subplots(4, 1, sharex=True, figsize=(10, 6))
 
                 x = df_output["t"].values
                 sig1 = df_output["Nerve_TTL"].values
@@ -218,19 +274,42 @@ if __name__ == "__main__":
 
                 # Set the main title using the file names
                 main_title = f'Contact File: {file_contact}\n\nNerve File: {file_nerve}'
-                fig.suptitle(main_title, fontsize=16)
+                fig2.suptitle(main_title, fontsize=16)
                 # Adjust the layout
                 plt.tight_layout()
                 # Show the plot and wait until the window is closed
                 plt.show()
+                plt.close('all')
 
             # save data on the hard drive ?
             if save_results:
-                df_output.to_csv(output_filename_abs, index=False)
+                df_output.to_csv(path_tools.winapi_path(output_filename_abs), index=False)
 
             print("done.")
 
+    if generate_report:
+        report_filename = os.path.join(db_path_output, "shift_lag_report.csv")
+        report_data = []
 
+        for f_kinect, f_nerve, lag, r_kinect, r_neuron, comment in zip(file_kinect_list, file_nerve_list, lag_list,
+                                                                       ratio_kinect_list, ratio_nerve_list, comment_list):
+            report_data.append({"Kinect Filename": f_kinect,
+                                "Nerve Filename": f_nerve,
+                                "lag_sample": lag,
+                                "Ratio sample/kinect length": r_kinect,
+                                "Ratio sample/neuron length": r_neuron,
+                                "comments": comment})
+
+        with open(report_filename, mode='w', newline='') as file:
+            writer = csv.DictWriter(file, fieldnames=["Kinect Filename",
+                                                      "Nerve Filename",
+                                                      "lag_sample",
+                                                      "Ratio sample/kinect length",
+                                                      "Ratio sample/neuron length",
+                                                      "comments"])
+            writer.writeheader()
+            for row in report_data:
+                writer.writerow(row)
 
 
 
