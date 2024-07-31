@@ -1,0 +1,11 @@
+numpy
+pandas
+seaborn
+scipy
+sklearn
+matplotlib
+pip install pyglet
+pip install pyppca
+pip install opencv-python
+pip install openpyxl
+

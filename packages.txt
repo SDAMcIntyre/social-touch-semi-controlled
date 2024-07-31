@@ -1,0 +1,2 @@
+To run LED region of interest code, make sure that ffprobe (ffmpeg) is installed and the path is accessible.
+Otherwise, subprocess of ffprobe will return an error.
