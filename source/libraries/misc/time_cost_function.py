@@ -1,5 +1,6 @@
 import timeit
 
+
 def time_it(func):
     def wrapper(*args, **kwargs):
         start_time = timeit.default_timer()
