@@ -14,7 +14,7 @@ from ..materials.neuraldata import NeuralData  # noqa: E402
 
 
 class SemiControlledData:
-    def __init__(self, data_csv_filename, md_stim_filename, md_neuron_filename, loading_process=None, dropna=False):
+    def __init__(self, data_csv_filename, md_stim_filename="", md_neuron_filename="", load_instant=False, dropna=False):
         self.md: Metadata = Metadata(data_csv_filename, md_stim_filename, md_neuron_filename)
         self.stim: StimulusInfo = StimulusInfo(md_stim_filename)
         self.neural: NeuralData = NeuralData(data_csv_filename, md_neuron_filename)
@@ -24,10 +24,9 @@ class SemiControlledData:
         # based on expected stimulus information given to the experimenter
         self.trust_score = 0
 
-        match loading_process:
-            case "automatic_load":
-                df = self.load_dataframe(dropna=dropna)
-                self.set_variables(df)
+        if load_instant:
+            df = self.load_dataframe(dropna=dropna)
+            self.set_variables(df)
 
     # Create a SemiControlledData for each dataframe of the list
     # presumably each element of the input list is a trial
@@ -88,6 +87,10 @@ class SemiControlledData:
         self.md.time = df.t.values
 
     def load_stimulus(self):
+        if self.md.md_stim_filename == "":
+            warnings.warn(f"metadata stimulus filename doesn't exist: Ignore stimulus characteristics.")
+            return
+
         df = pd.read_csv(self.md.md_stim_filename)
         current_row = df[df['trial_id'] == self.md.trial_id]
         # stimulus info
