@@ -14,6 +14,7 @@ import libraries.misc.path_tools as path_tools  # noqa: E402
 if __name__ == "__main__":
     force_processing = True  # If user wants to force data processing even if results already exist
     show = False  # If user wants to monitor what's happening
+
     save_results = True
     generate_report = True
 
