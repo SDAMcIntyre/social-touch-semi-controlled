@@ -1,5 +1,6 @@
 import glob
 import os
+import re
 import socket
 import tkinter as tk
 from tkinter import filedialog
@@ -33,69 +34,65 @@ def find_files_in_sessions(input_path, sessions, ending='.csv'):
     return files_abs, files, files_session
 
 
-def find_files_in_directory(dir_path, ending='.csv'):
+def find_files_in_directory(dir_path, ending=r'.csv$'):
+    # ensure that the ending string written by user finished by a dollar for Regular Expression
+    if not ending.endswith('$'):
+        ending += r'$'
+
     files = []
     files_abs = []
 
     # Walk through the directory recursively
     for root, _, f in os.walk(dir_path):
         for file in f:
-            if file.endswith(ending):
+            if re.search(ending, file):
+            #  if file.endswith(ending):
                 files.append(file)
                 files_abs.append(os.path.join(root, file))
 
     return files_abs, files
 
 
-def get_database_path():
+def get_onedrive_path_abs():
     # path to onedrive root folder
     match socket.gethostname():
-        case "baz":
-            data_dir_base = "E:\\"
+        case "basil":
+            onedrive_path_abs = os.path.join('F:\\', 'OneDrive - Linköpings universitet', '_Teams')
         case _:
-            data_dir_base = 'C:\\Users\\basdu83'
-    # path to database root folder
-    data_dir_base = os.path.join(data_dir_base,
-                                 'OneDrive - Linköpings universitet',
-                                 '_Teams',
-                                 'touch comm MNG Kinect',
-                                 'basil_tmp',
-                                 'data')
-    return data_dir_base
+            onedrive_path_abs = os.path.join('C:\\Users\\basdu83', 'OneDrive - Linköpings universitet', '_Teams')
+    return onedrive_path_abs
 
 
-def get_metadata_path():
+def get_team_path_abs(cloud_location="Teams"):
     # path to onedrive root folder
-    match socket.gethostname():
-        case "baz":
-            data_dir_base = "E:\\"
-        case _:
-            data_dir_base = 'C:\\Users\\basdu83'
+    onedrive_path_abs = get_onedrive_path_abs()
+
     # path to database root folder
-    data_dir_base = os.path.join(data_dir_base,
-                                 'OneDrive - Linköpings universitet',
-                                 '_Teams',
-                                 'touch comm MNG Kinect',
-                                 'basil_tmp',
-                                 'metadata')
-    return data_dir_base
+    match cloud_location:
+        case "Teams":
+            team_path = "Social touch Kinect MNG"
+        case "Sarah repository":  # Sarah's shared folder
+            team_path = os.path.join('touch comm MNG Kinect', 'basil_tmp')
+
+    return os.path.join(onedrive_path_abs, team_path)
 
 
-def get_result_path():
-    # path to onedrive root folder
-    match socket.gethostname():
-        case "baz":
-            data_dir_base = "E:\\"
-        case _:
-            data_dir_base = 'C:\\Users\\basdu83'
+def get_database_path(cloud_location="Teams"):
     # path to database root folder
-    data_dir_base = os.path.join(data_dir_base,
-                                 'OneDrive - Linköpings universitet',
-                                 '_Teams',
-                                 'touch comm MNG Kinect',
-                                 'basil_tmp',
-                                 'figures')
-    return data_dir_base
+    team_path_abs = get_team_path_abs(cloud_location=cloud_location)
+    return os.path.join(team_path_abs, 'data')
+
+
+def get_metadata_path(cloud_location="Teams"):
+    # path to database root folder
+    team_path_abs = get_team_path_abs(cloud_location=cloud_location)
+    return os.path.join(team_path_abs, 'metadata')
+
+
+def get_result_path(cloud_location="Teams"):
+    # path to database root folder
+    team_path_abs = get_team_path_abs(cloud_location=cloud_location)
+    return os.path.join(team_path_abs, 'figures')
 
 
 def get_path_abs(input_dir, output_dir):
