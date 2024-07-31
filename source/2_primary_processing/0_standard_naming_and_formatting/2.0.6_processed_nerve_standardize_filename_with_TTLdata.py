@@ -3,6 +3,7 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 import re
+import shutil
 
 import os
 import sys
@@ -42,17 +43,16 @@ if __name__ == "__main__":
     print("Step 0: Extract the selected sessions.")
     # load base directories
     md_path = path_tools.get_metadata_path()
-    db_path = path_tools.get_database_path()
-    db_path = os.path.join(db_path, "semi-controlled")
+    db_path = os.path.join(path_tools.get_database_path(), "semi-controlled")
 
     # get metadata file
     df_nerve_kinect_filename = os.path.join(md_path, 'semicontrolled_data-collection_quality-check.xlsx')
     df_quality_control = pd.read_excel(df_nerve_kinect_filename)
 
     # get input directory
-    db_path_input = os.path.join(db_path, "processed", "nerve", "1_csv_files")
+    db_path_input = os.path.join(db_path, "2_processed", "nerve", "1_csv_files")
     # get output directory
-    db_path_output = os.path.join(db_path, "processed", "nerve", "2_block-order")
+    db_path_output = os.path.join(db_path, "2_processed", "nerve", "2_block-order")
     if not os.path.exists(db_path_output):
         os.makedirs(db_path_output)
         print(f"Directory '{db_path_output}' created.")
@@ -106,13 +106,10 @@ if __name__ == "__main__":
             block_id = int(filename_chunks[5].replace("block", ""))
 
             # find block order value of the current file/block
-            try:
-                result = df_quality_control.loc[(df_quality_control['Zoom'] == zoom_id) & (df_quality_control['Zoom Block ID'] == block_id), 'Block order']
-                if result.empty:
-                    warnings.warn("Zoom file + block id combination couldn't be found!")
-                block_order_id = int(result.values[0])
-            except:
-                pass
+            result = df_quality_control.loc[(df_quality_control['Zoom'] == zoom_id) & (df_quality_control['Zoom Block ID'] == block_id), 'Block order']
+            if result.empty:
+                warnings.warn("Zoom file + block id combination couldn't be found!")
+            block_order_id = int(result.values[0])
 
             # create the filename using the standard
             filename_output = f"{session}_semicontrolled_block-order{block_order_id:02}_nerve.csv"
@@ -120,9 +117,5 @@ if __name__ == "__main__":
 
             print(f"new filename: {filename_output}")
             print("---\n")
-            try:
-                os.rename(filename_input_abs, filename_output_abs)
-            except:
-                pass
-
-
+            if save_results:
+                shutil.copy(filename_input_abs, filename_output_abs)

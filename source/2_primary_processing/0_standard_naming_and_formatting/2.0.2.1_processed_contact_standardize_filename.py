@@ -3,6 +3,7 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 import re
+import shutil
 
 import os
 import sys
@@ -36,22 +37,25 @@ def find_csv_files(input_path, sessions):
 
 # Extract the file mapping standard from the kinect videos and redo it on data shared by Shan
 if __name__ == "__main__":
-    force_processing = False  # If user wants to force data processing even if results already exist
+    force_processing = True  # If user wants to force data processing even if results already exist
     show = False  # If user wants to monitor what's happening
+
     save_results = True
 
     print("Step 0: Extract the selected sessions.")
     # get database directory
-    database_path = path_tools.get_database_path()
-    # filename mapping location
-    filename_mapping = os.path.join(database_path, "semi-controlled", "primary", "kinect", "1_standard_name", "standard_filename_mapping.csv")
+    database_path = os.path.join(path_tools.get_database_path(), "semi-controlled")
     # get input base directory
-    database_path_input = os.path.join(database_path, "semi-controlled", "processed", "kinect", "contact", "0_raw")
+    database_path_input = os.path.join(database_path, "2_processed", "kinect", "contact", "0_raw_date-adjusted")
     # get output base directory
-    database_path_output = os.path.join(database_path, "semi-controlled", "processed", "kinect", "contact", "1_standard_name")
+    database_path_output = os.path.join(database_path, "2_processed", "kinect", "contact", "1_block-order")
     if not os.path.exists(database_path_output):
         os.makedirs(database_path_output)
         print(f"Directory '{database_path_output}' created.")
+
+    # get metadata dataframe
+    metadata_path = os.path.join(database_path, "1_primary", "logs", "1_kinect-name_to_block-order")
+
     # Session names
     sessions_ST13 = ['2022-06-14_ST13-01',
                      '2022-06-14_ST13-02',
@@ -82,50 +86,45 @@ if __name__ == "__main__":
     sessions = sessions + sessions_ST18
     print(sessions)
 
-    # load the filename mapping csv as a dictionary
-    mapping = {}
-    with open(filename_mapping, mode='r') as file:
-        reader = csv.reader(file)
-        next(reader)  # Skip the header
-        for row in reader:
-            old_filename, new_filename = row
-            mapping[old_filename] = new_filename
 
     # it is important to split by MNG files / neuron recordings to create the correct subfolders.
-    for neuron_sessions in sessions:
-        stim_files_abs, stim_files, stim_files_session = find_csv_files(database_path_input, neuron_sessions)
+    for neuron_session in sessions:
+        # output directory
+        output_dirname = os.path.join(database_path_output, neuron_session)
+        if not os.path.exists(output_dirname):
+            os.makedirs(output_dirname)
+
+        stim_files_abs, stim_files, stim_files_session = find_csv_files(database_path_input, neuron_session)
         print(np.transpose(stim_files))
         print("---\n")
 
+        # load the kinect filename - to - block-order csv file of the session
+        filename_to_blockorder_path_abs = os.path.join(metadata_path, neuron_session + "_kinect-name_to_block-id.csv")
+        df_blockorder = pd.read_csv(filename_to_blockorder_path_abs)
+
         for filename_input_abs, filename_input, session in zip(stim_files_abs, stim_files, stim_files_session):
-            # output directory
-            output_dirname = os.path.join(database_path_output, session)
-            if not os.path.exists(output_dirname):
-                os.makedirs(output_dirname)
+            # Prepare output filename to match standard
+            fname = filename_input.replace("NoIR_", "")
+            substrings = fname.split("_")
+            date = substrings[0]
+            neuron_id = f"{substrings[3]}-{int(substrings[4]):02d}"
 
-            # Iterate through the dictionary
-            standard_kinect_filename = ""
-            for key in mapping:
-                key_noextension = key.replace(".mkv", "")
-                if key_noextension in filename_input:
-                    standard_kinect_filename = mapping[key]
-                    break
-            if standard_kinect_filename == "":
-                warnings.warn("filename not found as a key!")
+            supposed_fname_kinect = fname.replace("-ContQuantAll.csv", ".mkv")
+            matched_row = df_blockorder[df_blockorder["kinect_filenames"] == supposed_fname_kinect]
+            if not matched_row.empty:
+                block_order = matched_row["block_order"].values[0]
+            else:
+                warnings.warn(f"No match found for '{fname}'")
+                block_order = np.nan
 
-            # create the filename using the standard
-            filename_output = standard_kinect_filename.replace("kinect.mkv", "contact.csv")
+            # create the standard filename
+            filename_output = date + "_" + neuron_id + "_semicontrolled_block-order" + f"{block_order:02d}" + "_contact.csv"
             filename_output_abs = os.path.join(output_dirname, filename_output)
-
-            print("current directory:")
             print(output_dirname)
             print("old name:")
             print(filename_input)
             print("new name:")
             print(filename_output)
-            try:
-                os.rename(filename_input_abs, filename_output_abs)
-            except:
-                pass
 
-
+            if save_results:
+                shutil.copy(filename_input_abs, filename_output_abs)

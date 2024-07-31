@@ -1,8 +1,8 @@
+import csv
 from datetime import datetime
 import numpy as np
 import pandas as pd
 import re
-
 import os
 import sys
 import warnings
@@ -40,15 +40,16 @@ def find_stimuli_files(input_path, sessions):
 if __name__ == "__main__":
     force_processing = False  # If user wants to force data processing even if results already exist
     show = False  # If user wants to monitor what's happening
+
     save_results = True
 
     print("Step 0: Extract the selected sessions.")
     # get database directory
     database_path = path_tools.get_database_path()
     # get input base directory
-    database_path_input = os.path.join(database_path, "semi-controlled", "primary", "logs", "raw")
+    database_path_input = os.path.join(database_path, "semi-controlled", "1_primary", "logs", "0_raw")
     # get output base directory
-    database_path_output = os.path.join(database_path, "semi-controlled", "primary", "logs", "stimuli_by_blocks")
+    database_path_output = os.path.join(database_path, "semi-controlled", "1_primary", "logs", "1_kinect-name_to_block-order")
     if not os.path.exists(database_path_output):
         os.makedirs(database_path_output)
         print(f"Directory '{database_path_output}' created.")
@@ -83,8 +84,11 @@ if __name__ == "__main__":
     print(sessions)
 
     # it is important to split by MNG files / neuron recordings to get the correct block order.
-    for neuron_sessions in sessions:
-        stim_files_abs, stim_files, stim_files_session = find_stimuli_files(database_path_input, neuron_sessions)
+    for neuron_session in sessions:
+        # output filename
+        filename_output_abs = os.path.join(database_path_output, neuron_session + "_kinect-name_to_block-id.csv")
+
+        stim_files_abs, stim_files, stim_files_session = find_stimuli_files(database_path_input, neuron_session)
 
         # ensure that the extracted files are in the time order (to set the correct block order)
         # Step 1: Extract and convert strings to datetime objects
@@ -103,63 +107,41 @@ if __name__ == "__main__":
         print(sorted_indices)
         print("---\n")
 
-        global_block_id = 0
+        kinect_filenames = []
         for filename_input_abs, filename_input, session in zip(stim_files_abs, stim_files, stim_files_session):
-            # output directory
-            output_dirname = os.path.join(database_path_output, session)
-            if not os.path.exists(output_dirname):
-                os.makedirs(output_dirname)
-            # Prepare output filename to match standard
-            fname = filename_input.replace(".csv", "")
-            substrings = fname.split("_")
-            date = substrings[0]
-            neuron_id = substrings[3] + "-0" + substrings[4]
-
             # load stimulus characteristics
             df = pd.read_csv(filename_input_abs)
-
-            # if dataframe is empty, the run has been canceled before doing anything
+            # if the log file is empty, the run has been canceled before doing anything
             if df.empty:
                 continue
 
-            # extract the block id for the current set of stimuli
-            block_ids = []
-            for kinect_filename in df['kinect_recording']:
-                res = re.search(r'_block(\d+)', kinect_filename)
-                block_ids.append(int(res.group(1)))
+            kinect_filenames_current = df.kinect_recording.values
 
-            # add block_id to the dataframe to group them afterward
-            df["run_block_id"] = block_ids
+            # Extract only the filename from each path
+            kinect_filenames_current = [os.path.basename(filepath) for filepath in kinect_filenames_current]
+            # save them
+            kinect_filenames.extend(kinect_filenames_current)
 
-            # for each block:
-            # - artificially recreate block id (repeated block's sets have block ids that always starts to 1
-            # - renamed trial into trial_id
-            # - select the columns of interest
-            # - adjust for the trial ids
-            # - save into a separate file
-            for run_block_id, group in df.groupby('run_block_id'):
-                if not pd.notna(run_block_id):
-                    warnings.warn("The extracted block doesn't contain any data!")
-                    continue
-                global_block_id += 1
+        # Keep only unique filenames
+        unique_kinect_filenames = list(set(kinect_filenames))
 
-                # make a hard copy to avoid issues with dataframe slices
-                group = group.copy()
+        # Sort the list alphabetically and numerically
+        unique_kinect_filenames = sorted(unique_kinect_filenames, key=lambda x: (re.split(r'(\d+)', x.lower()), x))
 
-                # renamed trial into trial id
-                group["trial_id"] = group["trial"]
-                # adjust the trial ids
-                id_start = np.min(group["trial_id"])
-                group["trial_id"] = group["trial_id"] - id_start + 1
+        block_ids = [int(re.search(r'block(\d+)', filename).group(1)) for filename in unique_kinect_filenames]
 
-                # add global block ids
-                group['global_block_id'] = global_block_id
+        # Create a list of tuples where each tuple contains (filename, block-order)
 
-                # Keep only certain columns based on the label
-                desired_columns = ['global_block_id', 'run_block_id', 'trial_id', 'type', 'speed', 'contact_area', 'force']
-                filtered_group = group[desired_columns]
+        filename_block_tuples = []
+        for idx, (filename, block_id) in enumerate(zip(unique_kinect_filenames, block_ids)):
+            filename_block_tuples.append((filename, block_id, idx + 1))
 
-                # create the standard filename
-                filename_output = date + "_" + neuron_id + f"_semicontrolled_block-order{global_block_id:02}" + "_stimuli.csv"
-                filename_output_abs = os.path.join(output_dirname, filename_output)
-                filtered_group.to_csv(filename_output_abs, index=False)
+        # Write to CSV
+        with open(filename_output_abs, 'w', newline='') as csvfile:
+            csvwriter = csv.writer(csvfile)
+            csvwriter.writerow(['kinect_filenames', 'block_id', 'block_order'])
+            csvwriter.writerows(filename_block_tuples)
+
+    if save_results:
+        p = database_path_output.replace("\\", "/")
+        print(f"Results saved in:\n{p}")

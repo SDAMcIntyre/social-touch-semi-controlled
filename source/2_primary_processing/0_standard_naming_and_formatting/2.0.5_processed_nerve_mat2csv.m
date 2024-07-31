@@ -1,13 +1,14 @@
 
 
-% Specify the folder where the .mat files are located
-database_path = ['E:\OneDrive - Linköpings universitet\_Teams\touch comm MNG Kinect\'...
-                 'basil_tmp\data\semi-controlled'];
-input_dir = 'processed\nerve\0_matlab_files_corrected-date';
-input_dir_abs = fullfile(database_path, input_dir);
 
-output_dir = 'processed\nerve\1_csv_files';
-output_dir_abs = fullfile(database_path, output_dir);
+save_results = false;
+
+
+% Specify the folder where the .mat files are located
+database_path = ['F:\OneDrive - Linköpings universitet\_Teams\Social touch Kinect MNG\'...
+                 'data\semi-controlled'];
+input_dir_abs = fullfile(database_path, '2_processed\nerve\0_matlab_files_corrected-date');
+output_dir_abs = fullfile(database_path, '2_processed\nerve\1_csv_files');
 if ~exist(output_dir_abs, 'dir')
     mkdir(output_dir_abs);
     disp(['Folder "', output_dir_abs, '" created successfully.']);
@@ -101,8 +102,10 @@ for k = 1:length(matFiles)
       % Construct the CSV file name
       csvFileName = fullfile(current_folder_abs, [name '_' blockid_str '_table.csv']);
       
-      % Save the table to a CSV file
-      writetable(tableData, csvFileName);
+      if save_results
+          % Save the table to a CSV file
+          writetable(tableData, csvFileName);
+      end
     end
 end
 

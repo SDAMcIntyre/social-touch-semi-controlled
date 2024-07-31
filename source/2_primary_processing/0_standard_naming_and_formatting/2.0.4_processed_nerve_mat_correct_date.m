@@ -3,13 +3,10 @@
 
 
 % Specify the folder where the .mat files are located
-database_path = ['E:\OneDrive - Linköpings universitet\_Teams\touch comm MNG Kinect\'...
-                 'basil_tmp\data\semi-controlled'];
-input_dir = 'processed\nerve\0_matlab_files';
-input_dir_abs = fullfile(database_path, input_dir);
-
-output_dir = 'processed\nerve\0_matlab_files_corrected-date';
-output_dir_abs = fullfile(database_path, output_dir);
+database_path = ['F:\OneDrive - Linköpings universitet\_Teams\Social touch Kinect MNG\'...
+                 'data\semi-controlled'];
+input_dir_abs = fullfile(database_path, 'processed\nerve\0_matlab_files');
+output_dir_abs = fullfile(database_path, 'processed\nerve\0_matlab_files_corrected-date');
 if ~exist(output_dir_abs, 'dir')
     mkdir(output_dir_abs);
     disp(['Folder "', output_dir_abs, '" created successfully.']);

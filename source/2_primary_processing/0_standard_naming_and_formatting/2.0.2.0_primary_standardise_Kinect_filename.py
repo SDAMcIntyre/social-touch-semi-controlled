@@ -3,8 +3,8 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 import re
-
 import os
+import shutil
 import sys
 import warnings
 
@@ -13,25 +13,22 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 import libraries.misc.path_tools as path_tools  # noqa: E402
 
 
-def find_mkv_files(input_path, sessions):
-    if not isinstance(sessions, list):
-        sessions = [sessions]
+def find_mkv_files(input_path):
+    mkv_files = []
+    mkv_files_abs = []
 
-    stim_files_session = []
-    stim_files = []
-    stim_files_abs = []
+    # Walk through the directory recursively
+    for root, _, files in os.walk(input_path):
+        for file in files:
+            if file.endswith('.mkv'):
+                if not file.startswith('.'):
+                    mkv_files.append(file)
+                    mkv_files_abs.append(os.path.join(root, file))
 
-    for session in sessions:
-        dir_path = os.path.join(input_path, session)
-        # Walk through the directory recursively
-        for root, _, files in os.walk(dir_path):
-            for file in files:
-                if file.endswith('.mkv'):
-                    stim_files.append(file)
-                    stim_files_abs.append(os.path.join(root, file))
-                    stim_files_session.append(session)
+    mkv_files_abs = np.array(mkv_files_abs)
+    mkv_files = np.array(mkv_files)
 
-    return stim_files_abs, stim_files, stim_files_session
+    return mkv_files_abs, mkv_files
 
 
 # extract the stimulus characteristics from log files
@@ -41,18 +38,25 @@ def find_mkv_files(input_path, sessions):
 if __name__ == "__main__":
     force_processing = False  # If user wants to force data processing even if results already exist
     show = False  # If user wants to monitor what's happening
+
     save_results = True
 
     print("Step 0: Extract the selected sessions.")
     # get database directory
-    database_path = path_tools.get_database_path()
+    database_path = os.path.join(path_tools.get_database_path(), "semi-controlled", "1_primary")
+
     # get input base directory
-    database_path_input = os.path.join(database_path, "semi-controlled", "primary", "kinect", "0_raw")
+    external_HDD = "G:"
+    database_path_input = os.path.join(external_HDD, "social_touch_MNG_kinect", "semi-controlled")
+    # get metadata dataframe
+    metadata_path = os.path.join(database_path, "logs", "1_kinect-name_to_block-order")
+
     # get output base directory
-    database_path_output = os.path.join(database_path, "semi-controlled", "primary", "kinect", "1_standard_name")
+    database_path_output = os.path.join(database_path, "kinect", "1_block-order")
     if not os.path.exists(database_path_output):
         os.makedirs(database_path_output)
         print(f"Directory '{database_path_output}' created.")
+
     # Session names
     sessions_ST13 = ['2022-06-14_ST13-01',
                      '2022-06-14_ST13-02',
@@ -83,66 +87,60 @@ if __name__ == "__main__":
     sessions = sessions + sessions_ST18
     print(sessions)
 
+    # load all mkv filenames in the input directory
+    mkv_files_abs, mkv_files = find_mkv_files(database_path_input)
+
     # List to store the mapping of old and new filenames
     filename_mapping = []
-
     # it is important to split by MNG files / neuron recordings to get the correct block order.
-    for neuron_sessions in sessions:
-        stim_files_abs, stim_files, stim_files_session = find_mkv_files(database_path_input, neuron_sessions)
+    for neuron_session in sessions:
+        # output directory
+        output_dirname = os.path.join(database_path_output, neuron_session)
+        if not os.path.exists(output_dirname):
+            os.makedirs(output_dirname)
 
-        # ensure that the extracted files are in the time order (to set the correct block order)
-        # Step 1: Extract and convert strings to datetime objects
-        date_start_idx = len("NoIR_")
-        date_end_idx = date_start_idx + len("YYYY-MM-DD_HH-MM-SS")
-        date_objects = [datetime.strptime(date_str[date_start_idx:date_end_idx], "%Y-%m-%d_%H-%M-%S") for date_str in stim_files]
-        # Step 2: Create a list of indices and sort them based on date objects
-        sorted_indices = sorted(range(len(date_objects)), key=lambda k: date_objects[k])
-        # Step 3: Use sorted indices to reorder original list
-        stim_files_abs = [stim_files_abs[i] for i in sorted_indices]
-        stim_files = [stim_files[i] for i in sorted_indices]
-        stim_files_session = [stim_files_session[i] for i in sorted_indices]
+        # load the kinect filename - to - block-order csv file of the session
+        filename_to_blockorder_path_abs = os.path.join(metadata_path, neuron_session + "_kinect-name_to_block-id.csv")
+        df_blockorder = pd.read_csv(filename_to_blockorder_path_abs)
 
-        print(np.transpose(stim_files))
-        print(sorted_indices)
-        print("---\n")
+        # create current neuron id
+        session_split = neuron_session.split("_")
+        neuron_id_split = session_split[1].split("-")
+        neuron_id = neuron_id_split[0] + f"_{int(neuron_id_split[1])}"
 
-        global_block_id = 0
-        for filename_input_abs, filename_input, session in zip(stim_files_abs, stim_files, stim_files_session):
-            # output directory
-            output_dirname = os.path.join(database_path_output, session)
-            if not os.path.exists(output_dirname):
-                os.makedirs(output_dirname)
+        # List to store indices where the substring "neuron_id" is found
+        neuron_id_idx = [index for index, string in enumerate(mkv_files) if neuron_id in string]
+
+        for filename_input_abs, filename_input in zip(mkv_files_abs[neuron_id_idx], mkv_files[neuron_id_idx]):
             # Prepare output filename to match standard
-            fname = filename_input.replace("NoIR_", "").replace(".mkv", "")
+            fname = filename_input.replace("NoIR_", "").replace("noIR_", "")
             substrings = fname.split("_")
             date = substrings[0]
-            neuron_id = substrings[3] + "-0" + substrings[4]
+            neuron_id = f"{substrings[3]}-{int(substrings[4]):02d}"
 
-            # extract the block id for the current set of stimuli
-            global_block_id += 1
-            global_block_id_str = str(global_block_id)
-            if global_block_id < 10:
-                global_block_id_str = "0" + global_block_id_str
+            matched_row = df_blockorder[df_blockorder["kinect_filenames"] == fname]
+            if not matched_row.empty:
+                block_order = matched_row["block_order"].values[0]
+            else:
+                print(f"No match found for '{fname}'")
 
             # create the standard filename
-            filename_output = date + "_" + neuron_id + "_semicontrolled_block-order" + global_block_id_str + "_kinect.mkv"
+            filename_output = date + "_" + neuron_id + "_semicontrolled_block-order" + f"{block_order:02d}" + "_kinect.mkv"
             filename_output_abs = os.path.join(output_dirname, filename_output)
-
-            #filename_input_abs = os.path.join(output_dirname, filename_input)
             print(output_dirname)
             print("old name:")
             print(filename_input)
             print("new name:")
             print(filename_output)
 
-            if save_results:
-                try:
-                    os.rename(filename_input_abs, filename_output_abs)
-                except:
-                    pass
-
             # Append the mapping to the list
             filename_mapping.append((filename_input, filename_output))
+
+            if save_results:
+                if not force_processing and os.path.exists(filename_output_abs):
+                    continue
+                print(f"copying file with standard name into the output directory...")
+                shutil.copy2(filename_input_abs, filename_output_abs)
 
     filename_mapping_csvfilename = os.path.join(database_path_output, 'standard_filename_mapping.csv')
     # Write the mapping to a CSV file
@@ -151,4 +149,6 @@ if __name__ == "__main__":
         writer.writerow(['Old Filename', 'New Filename'])
         writer.writerows(filename_mapping)
 
-
+    if save_results:
+        p = database_path_output.replace("\\", "/")
+        print(f"Results saved in:\n{p}")
