@@ -2,12 +2,11 @@ import warnings
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy.interpolate import interp1d
-from sklearn.decomposition import PCA
+from sklearn.decomposition import PCA  # from pyppca import ppca  # pip install git+https://github.com/el-hult/pyppca
 
 from .metadata import Metadata  # noqa: E402
 from libraries.materials.stimulusinfo import StimulusInfo  # noqa: E402
 from libraries.misc.interpolate_nan_values import interpolate_nan_values  # noqa: E402
-from pyppca import ppca  # pip install git+https://github.com/el-hult/pyppca
 
 
 class ContactData:
@@ -257,6 +256,10 @@ class ContactData:
         # compress the signal into 1D (as the expected motion is supposed to be 1D anyway)
         # is there is nan, use a github provided PCA to ignore nan
 
+        if np.all(np.isnan(self.pos)):
+            self.pos_1D = np.nan(len(self.pos[0]))
+            return
+
         pos3D = self.pos.transpose()
 
         if np.isnan(pos3D).any():
@@ -266,9 +269,17 @@ class ContactData:
             pos3D_centered = pos3D - np.matlib.repmat(M, nsamples, 1)
             # interpolate the nan values
             pos3D = interpolate_nan_values(pos3D_centered)
-        # get the first PCA
-        pca = PCA(n_components=1)
-        self.pos_1D = np.squeeze(pca.fit_transform(pos3D))
+            np.sum(abs(pos3D))
+
+        # if there is some value
+        if np.any(pos3D != 0):
+            # get the first PCA
+            pca = PCA(n_components=1)
+            self.pos_1D = np.squeeze(pca.fit_transform(pos3D))
+        else:
+            # fill up the vector to avoid any warnings from PCA.fit_transform
+            self.pos_1D = np.zeros(len(self.pos[0]))
+
 
     @property
     def pos_1D(self):
