@@ -35,20 +35,30 @@ def find_groups_of_ones(arr):
 
 
 if __name__ == "__main__":
+    # parameters
     force_processing = True  # If user wants to force data processing even if results already exist
     show = False  # If user wants to monitor what's happening
-    save_results = True
 
-    # parameters
-    soft_split = True  # soft_split will find the middle point between the blocks to separate them, else chunk by TTL
+    # choose the method to split trials:
+    #  - soft: will find the middle point between the blocks to separate them, else chunk by TTL
+    #  - hard: ?
+    #  - with_following_rest_time: will include the signal when it is OFF too as the gesture can continue
+    #                              after the TTL goes off (internal "lag" of the expert signing)
+    split_type = "with_following_rest_time"  # soft, hard, TTL_beginning
+
+    save_results = True
 
     print("Step 0: Extract the videos embedded in the selected sessions.")
     # get database directory
-    db_path = os.path.join(path_tools.get_database_path(), "semi-controlled")
+    db_path = os.path.join(path_tools.get_database_path(), "semi-controlled", "3_merged", "2_kinect_and_nerve")
+
     # get input base directory
-    db_path_input = os.path.join(db_path, "3_merged", "2_kinect_and_nerve", "0_block-order")
+    db_path_input = os.path.join(db_path, "0_block-order")
+    #db_path_input = os.path.join(db_path, "1_block-order_corrected-delay")
     # get output base directory
-    db_path_output = os.path.join(db_path, "3_merged", "2_kinect_and_nerve", "1_by-trials")
+    db_path_output = os.path.join(db_path, "2_by-trials")
+    #db_path_output = os.path.join(db_path, "2_by-trials_corrected-delay")
+
     if not os.path.exists(db_path_output):
         os.makedirs(db_path_output)
         print(f"Directory '{db_path_output}' created.")
@@ -96,25 +106,20 @@ if __name__ == "__main__":
         for file_abs, file in zip(files_abs, files):
             print(f"current file: {file}")
             match = re.search(r'block-order(\d+)', file)
+            block_order_str = match.group(0)
+            output_dir_abs = os.path.join(output_session_abs, block_order_str)
             if not match:
                 print("Substring 'block-orderXX' not found in the string.")
                 continue
-
-            block_order_str = match.group(0)
-            output_dir_abs = os.path.join(output_session_abs, block_order_str)
-            if not os.path.exists(output_dir_abs):
-                os.makedirs(output_dir_abs)
-                print(f"Directory '{output_dir_abs}' created.")
 
             # load current data
             data = pd.read_csv(file_abs)
             # use Nerve_TTL as only the good nerve signal have been kept
             on_signal_idx = find_groups_of_ones(data["Nerve_TTL"].values)
 
-            # extract the block id value and index
+            # extract the identifier indexes of the TTL (1, 2, 3, or 4)
             block_id_blinking_dur_sec = .100
             block_id_blinking_nsample = block_id_blinking_dur_sec * 1000
-
             on_signal_lengths = [len(sublist) for sublist in on_signal_idx]
             is_block_id = [length < block_id_blinking_nsample for length in on_signal_lengths]
             blocks_id_idx = [index for index, value in enumerate(is_block_id) if value]
@@ -125,28 +130,41 @@ if __name__ == "__main__":
             # remove the identifier blocks to keep only the trial blocks.
             trials_idx = [trial_indexes for idx, trial_indexes in enumerate(on_signal_idx) if idx not in blocks_id_idx]
 
-            # modify the trials idx if soft_split is decided
+            # modify the trials idx in function of split_type
             # find middle point between trials as split locations
-            if soft_split:
-                trials_idx_initial = trials_idx
-                ntrials = len(trials_idx_initial)
-                middles = []
-                avg_rest_time = []
-                for x in range(0, ntrials-1):
-                    last = trials_idx_initial[x][-1]
-                    first = trials_idx_initial[x+1][1]
-                    rest_time = (first-last)
-                    avg_rest_time.append(rest_time)
-                    middle = int(last+rest_time/2)
-                    middles.append(middle)
-                # add starting point of the first trial block based on avg extension
-                middles.insert(0, int(trials_idx_initial[0][0]-np.mean(avg_rest_time)/2))
-                # add end point of the last trial block
-                middles.append(int(trials_idx_initial[-1][-1]+np.mean(avg_rest_time)/2))
-                # redefine trials_idx
-                trials_idx = []
-                for m_idx in range(0, len(middles)-1):
-                    trials_idx.append(np.arange(middles[m_idx], middles[m_idx+1]))
+            match split_type:
+                case "with_following_rest_time":
+                    trials_idx_new = []
+                    for idx in np.arange(len(trials_idx)-1):
+                        start_idx = trials_idx[idx][0]
+                        end_idx = trials_idx[idx+1][0]
+                        trials_idx_new.append(start_idx + np.arange(end_idx-start_idx))
+                    trials_idx = trials_idx_new
+
+                case "soft":
+                    trials_idx_initial = trials_idx
+                    ntrials = len(trials_idx_initial)
+                    middles = []
+                    avg_rest_time = []
+                    for x in range(0, ntrials-1):
+                        last = trials_idx_initial[x][-1]
+                        first = trials_idx_initial[x+1][1]
+                        rest_time = (first-last)
+                        avg_rest_time.append(rest_time)
+                        middle = int(last+rest_time/2)
+                        middles.append(middle)
+                    # add starting point of the first trial block based on avg extension
+                    middles.insert(0, int(trials_idx_initial[0][0]-np.mean(avg_rest_time)/2))
+                    # add end point of the last trial block
+                    middles.append(int(trials_idx_initial[-1][-1]+np.mean(avg_rest_time)/2))
+                    # redefine trials_idx
+                    trials_idx = []
+                    for m_idx in range(0, len(middles)-1):
+                        trials_idx.append(np.arange(middles[m_idx], middles[m_idx+1]))
+
+                case "hard", _:
+                    pass
+
 
             # split by trials
             data_trials = []
@@ -180,6 +198,10 @@ if __name__ == "__main__":
 
                 # save data on the hard drive ?
                 if save_results:
+                    if not os.path.exists(output_dir_abs):
+                        os.makedirs(output_dir_abs)
+                        print(f"Directory '{output_dir_abs}' created.")
+
                     # https://answers.microsoft.com/en-us/msoffice/forum/all/excel-file-open-the-file-name-is-too-long-rename/ef736fec-0bd4-42a9-806d-5b22dbfdda81#:~:text=To%20resolve%20this%20issue%2C%20you,structure%2C%20is%20still%20too%20long.
                     #  Excel indicates that the total path length,
                     #  including the filename and its directory structure,
