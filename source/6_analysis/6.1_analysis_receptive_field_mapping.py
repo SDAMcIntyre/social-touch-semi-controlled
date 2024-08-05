@@ -30,7 +30,7 @@ if __name__ == "__main__":
     # ----------------------
     force_processing = True  # If user wants to force data processing even if results already exist
     show = True  # If user wants to monitor what's happening
-    save_results = True
+    save_results = False
     # ----------------------
     # ----------------------
     # ----------------------
@@ -74,11 +74,11 @@ if __name__ == "__main__":
                      '2022-06-22_ST18-02',
                      '2022-06-22_ST18-04']
     sessions = []
-    sessions = sessions + sessions_ST13
-    sessions = sessions + sessions_ST14
+    #sessions = sessions + sessions_ST13
+    #sessions = sessions + sessions_ST14
     sessions = sessions + sessions_ST15
-    sessions = sessions + sessions_ST16
-    sessions = sessions + sessions_ST18
+    #sessions = sessions + sessions_ST16
+    #sessions = sessions + sessions_ST18
     print(sessions)
 
     # it is important to split by MNG files / neuron recordings to create the correct subfolders.
@@ -94,10 +94,10 @@ if __name__ == "__main__":
             continue
 
         curr_dir = os.path.join(db_path_input, session)
-        files_abs, files = path_tools.find_files_in_directory(curr_dir, ending='.csv')
+        data_filenames_abs, data_filenames = path_tools.find_files_in_directory(curr_dir, ending='.csv')
 
         scd_current_neuron: list[Any] = []
-        for data_filename_abs, data_filename in zip(files_abs, files):
+        for data_filename_abs, data_filename in zip(data_filenames_abs, data_filenames):
             print(f"current file: {data_filename}")
 
             # 1. extract endpoints data
@@ -135,6 +135,7 @@ if __name__ == "__main__":
             scd.set_variables(dropna=False)
             # 4.2 consider only stroking motion
             if scd.stim.type == "tap":
+                print(f"current trial is of type ''tap'', ignore...")
                 continue
             # 4.3 split into single touches
             splitter = SemiControlledDataSplitter()
@@ -158,23 +159,24 @@ if __name__ == "__main__":
         spikes = np.array(spikes)
         XYZ = np.array(XYZ)
         XYZ = XYZ.T  # reverse to have [XYZ, time] format
-        # 2.1 Initialize PCA to reduce to 2 components
+
+        #  2.1 preprocess a bit the signal
+        XYZ_mm = XYZ / 10
+
+        # 2.2 Initialize PCA to reduce to 2 components
         pca = PCA(n_components=2)
-        XY = pca.fit_transform(XYZ.T)
+        XY = pca.fit_transform(XYZ_mm.T)
         XY = XY.T  # reverse to have [XY, time] format
 
         # 3. extract contact position when spikes occur
         XY_spikes = XY[:, spikes.astype(bool)]
 
-        #  4. preprocess a bit the signal
-        XY_spikes_mm = XY_spikes / 10
-
-        # 5. Create a 2D histogram
-        x = XY_spikes_mm[0, :]
-        y = XY_spikes_mm[1, :]
+        # 4. Create a 2D histogram
+        x = XY_spikes[0, :]
+        y = XY_spikes[1, :]
         # Define the size of the grid
-        x_bins = np.linspace(min(x) - 0.5, max(x) + 1.5, 256)
-        y_bins = np.linspace(min(y) - 0.5, max(y) + 1.5, 256)
+        x_bins = np.linspace(min(XY[0, :]) - 0.5, max(XY[0, :]) + 1.5, 256)
+        y_bins = np.linspace(min(XY[1, :]) - 0.5, max(XY[1, :]) + 1.5, 256)
         # Create a 2D histogram
         heatmap, xedges, yedges = np.histogram2d(x, y, bins=[x_bins, y_bins])
         # smooth a bit the heatmap
