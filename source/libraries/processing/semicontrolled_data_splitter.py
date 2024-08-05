@@ -18,9 +18,15 @@ from ..misc.time_cost_function import time_it
 
 class SemiControlledDataSplitter:
 
-    def __init__(self):
-        self.data_filename = ""
-        self.unit_name2type_filename = ""
+    def __init__(self, viz: Optional[SemiControlledDataVisualizer] = None,
+                 show=False, show_single_touches=False, manual_check=False,
+                 save_visualiser=False, save_visualiser_fname=None):
+        self.viz = viz
+        self.show = show
+        self.show_single_touches = show_single_touches
+        self.manual_check = manual_check
+        self.save_visualiser = save_visualiser
+        self.save_visualiser_fname = save_visualiser_fname
 
     # add the kinect data into the dataframe
     def merge_data(self, df_list, data_led_list, verbose=False):
@@ -36,7 +42,8 @@ class SemiControlledDataSplitter:
             for idx, df in enumerate(df_list):
                 dataframe_time = df["t"].values
                 if verbose:
-                    print(f"SemiControlledDataSplitter> CSVFILE: Number of sample of the current block = {len(dataframe_time)}")
+                    t = f"SemiControlledDataSplitter> CSVFILE: Number of sample of the current block = {len(dataframe_time)}"
+                    print(t)
 
                 # resample the kinect data obj to the dataframe
                 kinect_led_curr = data_led_list[idx]
@@ -75,9 +82,7 @@ class SemiControlledDataSplitter:
 
 
     @time_it
-    def split_by_touch_event(self, scd_list, correction=True,
-                             show=False, show_single_touches=False, manual_check=False,
-                             save_visualiser=False, save_visualiser_fname=None, viz: Optional[SemiControlledDataVisualizer] = None):
+    def split_by_touch_event(self, scd_list, method="method_3", correction=True):
         """split_by_single
            split the current semicontrolled data into single touch event
            A period, or touch event, is determined differently based on the type (Tap or Stroke)
@@ -85,11 +90,16 @@ class SemiControlledDataSplitter:
         if not isinstance(scd_list, list):
             scd_list = [scd_list]
 
-        if show:
-            if viz is None:
-                viz = SemiControlledDataVisualizer()
-        else:
-            viz = None
+        # choose the method to split trials:
+        #  - method_1: Stroking trials are split with position, Taping using only IFF
+        #  - method_2: Stroking trials are split with position, Taping using only depth
+        #  - method_3: Stroking trials are split with position, Taping using only depth and IFF
+        if method == "method_1":
+            tap_method = "iff"
+        elif method == "method_2":
+            tap_method = "depth"
+        elif method == "method_3":
+            tap_method = "iff, depth"
 
         scd_list_out = []
         endpoints_list_out = []
@@ -97,9 +107,9 @@ class SemiControlledDataSplitter:
         for scd in scd_list:
             match scd.stim.type:
                 case "stroke":
-                    scd_list, endpoints_list = self.get_single_strokes(scd, correction=correction, viz=viz, show_single_touches=show_single_touches, manual_check=manual_check)
+                    scd_list, endpoints_list = self.get_single_strokes(scd, correction=correction)
                 case "tap":
-                    scd_list, endpoints_list = self.get_single_taps(scd, correction=correction, viz=viz, show_single_touches=show_single_touches, manual_check=manual_check)
+                    scd_list, endpoints_list = self.get_single_taps(scd, correction=correction, method=tap_method)
                 case _:
                     scd_list = []
                     endpoints_list = []
@@ -115,13 +125,12 @@ class SemiControlledDataSplitter:
                 scd_list_out = [scd_list_out, scd_list]
                 endpoints_list_out = [endpoints_list_out, endpoints_list]
 
-            if show and save_visualiser:
-                viz.save(save_visualiser_fname)
+            if self.show and self.save_visualiser and self.viz is not None:
+                self.viz.save(self.save_visualiser_fname)
 
         return scd_list_out, endpoints_list_out
 
-    def get_single_strokes(self, scd, correction=True, viz: Optional[SemiControlledDataVisualizer] = None,
-                           show_single_touches=False, manual_check=False):
+    def get_single_strokes(self, scd, correction=True):
         # to display the entire trial on the figure
         scd_untouched = copy.deepcopy(scd)
 
@@ -178,7 +187,7 @@ class SemiControlledDataSplitter:
         if correction:
             duration_expected_ms = scd_untouched.contact.data_Fs * scd_untouched.stim.get_single_contact_duration_expected()
             hp_duration_ms = .4 * duration_expected_ms
-            scd_period_list, endpoints_list = self.correct(scd_period_list, endpoints_list, hp_duration_ms=hp_duration_ms, show=show_single_touches)
+            scd_period_list, endpoints_list = self.correct(scd_period_list, endpoints_list, hp_duration_ms=hp_duration_ms)
             print(f"{len(scd_period_list)} single touches found.")
 
         if len(scd_period_list) == 0:
@@ -186,11 +195,13 @@ class SemiControlledDataSplitter:
             warnings.warn("Number of single touch detected = 0.")
             return [], []
 
-        if viz is not None:
-            viz.update(scd_untouched)
-            viz.add_vertical_lines(scd_untouched.md.time[pos_peaks])
+        if self.show:
+            if self.viz is None:
+                self.viz = SemiControlledDataVisualizer()
+            self.viz.update(scd_untouched)
+            self.viz.add_vertical_lines(scd_untouched.md.time[pos_peaks])
 
-            if manual_check:
+            if self.manual_check:
                 fig, ax = plt.subplots(1, 1)
                 plt.plot(pos_1D_smooth, label='Signal')
                 plt.plot(pos_peaks, pos_1D_smooth[pos_peaks], 'r.', label='Peaks')
@@ -200,8 +211,7 @@ class SemiControlledDataSplitter:
 
         return scd_period_list, endpoints_list
 
-    def get_single_taps(self, scd, correction=True, viz: Optional[SemiControlledDataVisualizer] = None,
-                           show_single_touches=False, manual_check=False):
+    def get_single_taps(self, scd, correction=True, method="iff, depth"):
         '''chunk_period_tap:
             Dividing the trial into period of contact for
             tapping gestures is done by taking advantage
@@ -211,20 +221,31 @@ class SemiControlledDataSplitter:
         scd_untouched = copy.deepcopy(scd)
 
         # finding start of the trial via TTL
-        start_trial_idx = np.argmax(scd.contact.TTL != 0)
+        start_trial_idx = np.argmax(scd.neural.TTL != 0)
         # ignore data before the TTL is ON to avoid processing artifact
         scd.set_data_idx(range(start_trial_idx, scd.md.nsample))
 
-        # smooth the depth signal
-        depth_smooth = smooth_scd_signal(scd.contact.depth, scd, nframe=2, method="adjust_with_speed")
-        depth_smooth = normalize_signal(depth_smooth, dtype=np.ndarray)
+        sig = None
+        if "depth" in method:
+            # smooth the depth signal
+            depth_smooth = smooth_scd_signal(scd.contact.depth, scd, nframe=2, method="adjust_with_speed")
+            depth_smooth = normalize_signal(depth_smooth, dtype=np.ndarray)
+            if sig is None:
+                sig = depth_smooth
+            else:
+                sig += depth_smooth
 
-        # smooth the spike signal
-        iff_smooth = smooth_scd_signal(scd.neural.iff, scd, nframe=2, method="adjust_with_speed")
-        iff_smooth = normalize_signal(iff_smooth, dtype=np.ndarray)
+        if "iff" in method:
+            # smooth the spike signal
+            iff_smooth = smooth_scd_signal(scd.neural.iff, scd, nframe=2, method="adjust_with_speed")
+            iff_smooth = normalize_signal(iff_smooth, dtype=np.ndarray)
+            if sig is None:
+                sig = iff_smooth
+            else:
+                sig += iff_smooth
 
         # Assemble them for peaks detection
-        sig = normalize_signal(depth_smooth + iff_smooth, dtype=np.ndarray)
+        sig = normalize_signal(sig, dtype=np.ndarray)
         sig = smooth_scd_signal(sig, scd, nframe=2, method="adjust_with_speed")
         sig = normalize_signal(sig, dtype=np.ndarray)
 
@@ -270,18 +291,20 @@ class SemiControlledDataSplitter:
         if correction:
             duration_expected_ms = scd_untouched.contact.data_Fs * scd_untouched.stim.get_single_contact_duration_expected()
             hp_duration_ms = .4 * duration_expected_ms
-            scd_period_list, endpoints_list = self.correct(scd_period_list, endpoints_list, hp_duration_ms=hp_duration_ms, show=show_single_touches)
+            scd_period_list, endpoints_list = self.correct(scd_period_list, endpoints_list, hp_duration_ms=hp_duration_ms)
             print(f"{len(scd_period_list)} single touches found.")
 
         if len(scd_period_list) == 0:
-            warnings.warn("File <{}> couldn't be split.".format(scd.md.data_filename_short))
-            warnings.warn("Number of single touch detected = 0.")
+            w = f"\nFile <{scd.md.data_filename_short}> couldn't be split.\nNumber of single touch detected = 0."
+            warnings.warn(w)
             return [], []
 
-        if viz is not None:
-            viz.update(scd_untouched)
-            viz.add_vertical_lines(scd_untouched.md.time[periods_idx])
-            if manual_check:
+        if self.show:
+            if self.viz is None:
+                self.viz = SemiControlledDataVisualizer()
+            self.viz.update(scd_untouched)
+            self.viz.add_vertical_lines(scd_untouched.md.time[periods_idx])
+            if self.manual_check:
                 fig, ax = plt.subplots(1, 1)
                 ax.plot(sig, label='Signal')
                 ax.plot(peaks, sig[peaks], 'g.', label='Peaks')
@@ -292,7 +315,7 @@ class SemiControlledDataSplitter:
 
         return scd_period_list, endpoints_list
 
-    def correct(self, scd_list: list[SemiControlledData], endpoints_list: list[tuple], hp_duration_ms=50, force=False, show=False):
+    def correct(self, scd_list: list[SemiControlledData], endpoints_list: list[tuple], hp_duration_ms=50, force=False):
         '''correct
             merge very small chunk that have been created erroneously
             highpass_duration_val = milliseconds
@@ -345,7 +368,7 @@ class SemiControlledDataSplitter:
                         del scd_list[_next], endpoints_list[_next]
             else:
                 idx += 1
-        if show:
+        if self.show_single_touches:
             visualiser = SemiControlledDataVisualizer()
             for scd in scd_list:
                 visualiser.update(scd)
