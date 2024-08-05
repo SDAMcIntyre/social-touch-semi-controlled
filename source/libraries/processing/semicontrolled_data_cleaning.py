@@ -102,9 +102,14 @@ def smooth_scd_signal(sig, scd, nframe=5, method="blind", normalise=True):
         case "blind", _:
             pass
 
-    if window_size > len(sig):
-        warnings.warn("window_size is longer than sig, shorten it to the signal's length...")
-        window_size = len(sig)
+    # ensure the output is an array
+    sig_smooth = smooth_signal(sig, window_size, normalise=normalise)
+
+    return sig_smooth
+
+
+def smooth_signal(sig, window_size=5, normalise=True):
+    orig_settings = np.seterr(all='raise')
 
     # Create a function to handle NaN values
     def nan_convolve(signal, weights):
@@ -113,25 +118,37 @@ def smooth_scd_signal(sig, scd, nframe=5, method="blind", normalise=True):
         smoothed = np.full_like(signal, np.nan)
         for i in range(len(signal)):
             window = sig_padded[i:i + len(weights)]
-            smoothed[i] = np.nanmean(window * weights)
+            smoothed_local = window * weights
+
+            if np.all(np.isnan(smoothed_local)):
+                smoothed[i] = np.nan
+            else:
+                smoothed[i] = np.nanmean(window * weights)
         return smoothed
 
-    try:
-        weights = np.repeat(1.0, window_size) / window_size
-    except:
-        pass
-    if np.isnan(sig).any():
-        sig_smooth = nan_convolve(sig, weights)
-    else:
-        sig_smooth = np.convolve(sig, weights, 'same')
+    if window_size > len(sig):
+        warnings.warn("window_size is longer than sig, shorten it to the signal's length...")
+        window_size = len(sig)
 
-    if len(sig_smooth) != len(sig):
+    weights = np.repeat(1.0, window_size) / window_size
+
+    if np.isnan(sig).any():
+        sig_output = nan_convolve(sig, weights)
+    else:
+        sig_output = np.convolve(sig, weights, 'same')
+
+    if len(sig_output) != len(sig):
         warnings.warn("sig_smooth is not the size of the original signal")
 
-    # ensure the output is an array
-    sig_smooth = np.array(sig_smooth)
+    if normalise:
+        sig_output = normalize_signal(sig_output)
 
-    return sig_smooth
+    # ensure the output is an array
+    sig_output = np.array(sig_output)
+
+    np.seterr(**orig_settings)  # restore original
+
+    return sig_output
 
 
 def normalize_signal(signal, dtype=list):
