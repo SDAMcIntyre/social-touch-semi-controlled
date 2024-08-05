@@ -99,8 +99,16 @@ if __name__ == "__main__":
     # ----------------------
     # User control variables
     # ----------------------
-    force_processing = False  # If user wants to force data processing even if results already exist
+    force_processing = True  # If user wants to force data processing even if results already exist
     show = True  # If user wants to monitor what's happening
+
+    # choose the method used to split single touches:
+    #  - method_1: Stroking trials are split with position, Taping using only IFF
+    #  - method_2: Stroking trials are split with position, Taping using only depth
+    #  - method_3: Stroking trials are split with position, Taping using only depth and IFF
+    split_method = "method_1"
+
+    # ----------------------
     save_results = True
     # ----------------------
     # ----------------------
@@ -110,12 +118,16 @@ if __name__ == "__main__":
     # get database directory
     db_path = os.path.join(path_tools.get_database_path(), "semi-controlled")
     # get input data directory
-    db_path_input = os.path.join(db_path, "3_merged", "2_kinect_and_nerve", "1_by-trials")
+    db_path_input = os.path.join(db_path, "3_merged", "2_kinect_and_nerve", "2_by-trials")
     # get metadata paths
-    md_stimuli_path = os.path.join(db_path, "1_primary", "logs", "stimuli_by_blocks")
+    md_stimuli_path = os.path.join(db_path, "1_primary", "logs", "2_stimuli_by_blocks")
     md_neuron_filename_abs = os.path.join(db_path, "1_primary", "nerve", "semicontrol_unit-name_to_unit-type.csv")
 
     # get output directories
+    db_path_output = os.path.join(db_path, "3_merged", "2_kinect_and_nerve", "3_by-single-touches")
+    if not os.path.exists(db_path_output):
+        os.makedirs(db_path_output)
+        print(f"Directory '{db_path_output}' created.")
 
     # Session names
     sessions_ST13 = ['2022-06-14_ST13-01',
@@ -149,12 +161,12 @@ if __name__ == "__main__":
     # it is important to split by MNG files / neuron recordings to create the correct subfolders.
     for session in sessions:
         curr_dir = os.path.join(db_path_input, session)
-        files_abs, files = path_tools.find_files_in_directory(curr_dir, ending='.csv')
+        files_abs, files = path_tools.find_files_in_directory(curr_dir, ending=r'_trial\d{2}\.csv')
 
         for data_filename_abs, data_filename in zip(files_abs, files):
             print(f"current file: {data_filename}")
             # single touch endpoint results will be saved close to the .csv file.
-            filename_output_abs = data_filename_abs.replace(".csv", "_single-touch-endpoints_correct.txt")
+            filename_output_abs = data_filename_abs.replace(".csv", f"_single-touch-endpoints_{split_method}_correct.txt")
             # ensure window character path limitation of 260 is ignored
             filename_output_abs = path_tools.winapi_path(filename_output_abs)
             if not force_processing and os.path.exists(filename_output_abs):
@@ -162,21 +174,24 @@ if __name__ == "__main__":
                 continue
 
             # 1. extract endpoints data
-            endpoints_filename_abs = data_filename_abs.replace(".csv", "_single-touch-endpoints.txt")
-            if not os.path.exists(endpoints_filename_abs):
-                print(f'The file {endpoints_filename_abs} doesn''t exist.', Warning)
+            endpoints_filename_abs = data_filename_abs.replace(".csv", f"_single-touch-endpoints_{split_method}.txt")
+            # ensure window character path limitation of 260 is ignored
+            endpoints_filename_abs = path_tools.winapi_path(endpoints_filename_abs)
+            if os.path.exists(endpoints_filename_abs):
+                # Initialize an empty list to store tuples
+                loaded_endpoints = []
+                # Open file and read lines
+                with open(endpoints_filename_abs, 'r') as f:
+                    for line in f:
+                        # Remove newline character and split by commas
+                        parts = line.strip().split(',')
+                        # Convert parts to integers or floats as needed
+                        endpoint = tuple(map(int, parts))  # Assuming integers; use float() if floats are expected
+                        # Append the tuple to the list
+                        loaded_endpoints.append(endpoint)
+            else:
+                print(f'The file {endpoints_filename_abs} does not exist.', Warning)
                 continue
-            # Initialize an empty list to store tuples
-            loaded_endpoints = []
-            # Open file and read lines
-            with open(endpoints_filename_abs, 'r') as f:
-                for line in f:
-                    # Remove newline character and split by commas
-                    parts = line.strip().split(',')
-                    # Convert parts to integers or floats as needed
-                    endpoint = tuple(map(int, parts))  # Assuming integers; use float() if floats are expected
-                    # Append the tuple to the list
-                    loaded_endpoints.append(endpoint)
 
             # 2. extract metadata related to the current stimulus set and check if exists
             md_stimuli_filename = re.sub(r'_trial\d{2}\.csv', '_stimuli.csv', data_filename)
