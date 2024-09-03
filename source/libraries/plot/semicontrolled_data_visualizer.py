@@ -14,12 +14,12 @@ from libraries.materials.semicontrolled_data import SemiControlledData  # noqa: 
 
 
 class SemiControlledDataVisualizer:
-    def __init__(self, scd=None, auto_positioning=False):
+    def __init__(self, scd=None, *, title="", auto_positioning=False):
         # create the figures
-        self.fig2D_TTL = DataVisualizer2D(4, "TTLs", auto_positioning=auto_positioning)
-        self.fig2D_global = DataVisualizer2D(5, "Neuron, Depth, and Area", auto_positioning=auto_positioning)
+        self.fig2D_TTL = DataVisualizer2D(4, f"{title}: TTLs", auto_positioning=auto_positioning)
+        self.fig2D_global = DataVisualizer2D(5, f"{title}: Neuron, Depth, and Area", auto_positioning=auto_positioning)
         
-        self.figpos = DataVisualizer3D("Position", auto_positioning=auto_positioning)
+        self.figpos = DataVisualizer3D(f"{title}: Position", auto_positioning=auto_positioning)
 
         self.window_positioning()
 
@@ -126,7 +126,8 @@ class SemiControlledDataVisualizer:
         self.fig2D_TTL.update(1, time, scd.contact.TTL, 'TTL contact')
         self.fig2D_TTL.update(2, time, scd.neural.TTL, 'both')
         self.fig2D_TTL.update(2, time, scd.contact.TTL, 'both', linestyle="--", reset=False)
-        self.fig2D_TTL.update(3, time, scd.neural.TTL-scd.contact.TTL, 'diff')
+        d = [n - c for n, c in zip(scd.neural.TTL, scd.contact.TTL)]
+        self.fig2D_TTL.update(3, time, d, 'diff')
 
         self.fig2D_global.update(0, time, scd.contact.pos_1D, 'Position (Principal Component)', showxlabel=False)
         self.fig2D_global.update(1, time, scd.contact.depth, 'Depth', showxlabel=False)
@@ -178,6 +179,13 @@ class DataVisualizer2D:
     def update(self, ax_idx, time: list[float], data: list[float], data_name, linestyle="-", reset=True, showxlabel=True):
         if reset:
             self.axs[ax_idx].clear()
+
+        if isinstance(data, list):
+            data = np.array(data)
+            time = np.array(time)
+
+        if data.size == 0:
+            return
 
         # Remove NaNs
         valid = ~(np.isnan(data))
