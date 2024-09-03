@@ -17,6 +17,67 @@ from libraries.plot.semicontrolled_data_visualizer import SemiControlledDataVisu
 import libraries.processing.semicontrolled_data_cleaning as scd_cleaning  # noqa: E402
 
 
+def get_correlation(sig1, sig2, *, downsampling=0.1, show=False):
+    if downsampling < 0 or downsampling > 1:
+        warnings.warn("downsampling has to be a float between 0 and 1.")
+        return
+
+    # just in case, remove temporarily any nan value for correlation
+    # for some reason, np.nan_to_num doesn't work.
+    with pd.option_context('future.no_silent_downcasting', True):
+        sig1 = pd.Series(sig1).fillna(0).values
+        sig2 = pd.Series(sig2).fillna(0).values
+
+    # normalise signals
+    sig1 = scd_cleaning.normalize_signal(sig1, dtype=np.ndarray)
+    sig2 = scd_cleaning.normalize_signal(sig2, dtype=np.ndarray)
+
+    # signals can be downsampled for a faster correlation
+    sig1_corr = sig1[np.linspace(0, len(sig1) - 1, int(downsampling * len(sig1)), dtype=int)]
+    sig2_corr = sig2[np.linspace(0, len(sig2) - 1, int(downsampling * len(sig2)), dtype=int)]
+
+    # remove the mean for a better estimation of the correlation
+    #sig1_corr = sig1_corr - np.mean(sig1_corr)
+    #sig2_corr = sig2_corr - np.mean(sig2_corr)
+
+    # lag estimation
+    correlation = signal.correlate(sig1_corr, sig2_corr, mode="full")
+    lags = signal.correlation_lags(sig1_corr.size, sig2_corr.size, mode="full")
+    lag = int(lags[np.argmax(correlation)] / downsampling)
+
+    if show:
+        if len(sig1_corr) > len(sig2_corr):
+            x = np.linspace(0, len(sig1_corr) - 1, len(sig1_corr))
+            y1 = sig1_corr
+            y2 = np.pad(sig2_corr, (0, len(sig1_corr) - len(sig2_corr)), 'constant')
+        else:
+            x = np.linspace(0, len(sig2_corr) - 1, len(sig2_corr))
+            y1 = np.pad(sig1_corr, (0, len(sig2_corr) - len(sig1_corr)), 'constant')
+            y2 = sig2_corr
+
+        # Create a figure with two subplots
+        fig1, (ax1, ax2) = plt.subplots(2, 1, sharex=True, figsize=(10, 6))
+
+        # Plot the first signal on the first subplot
+        ax1.plot(x, y1, label='Contact signal')
+        ax1.set_title('Contact signal')
+        ax1.set_ylabel('Amplitude')
+        ax1.legend()
+
+        # Plot the second signal on the second subplot
+        ax2.plot(x, y2, label='Nerve signal', color='orange')
+        ax2.set_title(f"Nerve signal")
+        ax2.set_xlabel('Time')
+        ax2.set_ylabel('Amplitude')
+        ax2.legend()
+
+        # Set the main title using the file names
+        # Adjust the layout
+        plt.tight_layout()
+
+    return lag
+
+
 def find_groups_of_ones(arr):
     groups = []
     in_group = False
@@ -42,7 +103,7 @@ def find_groups_of_ones(arr):
 if __name__ == "__main__":
     # parameters
     force_processing = True  # If user wants to force data processing even if results already exist
-    show = False  # If user wants to monitor what's happening
+    show = True  # If user wants to monitor what's happening
 
     # result saving parameters
     save_results = True
@@ -52,9 +113,9 @@ if __name__ == "__main__":
     # get database directory
     db_path = os.path.join(path_tools.get_database_path(), "semi-controlled")
     # get input base directory
-    db_path_input = os.path.join(db_path, "3_merged", "2_kinect_and_nerve", "0_block-order")
+    db_path_input = os.path.join(db_path, "3_merged", "1_kinect_and_nerve", "0_block-order")
     # get output base directory
-    db_path_output = os.path.join(db_path, "3_merged", "2_kinect_and_nerve", "1_block-order_corrected-delay")
+    db_path_output = os.path.join(db_path, "3_merged", "1_kinect_and_nerve", "0_block-order_corrected-desync")
     if not os.path.exists(db_path_output):
         os.makedirs(db_path_output)
         print(f"Directory '{db_path_output}' created.")
@@ -125,27 +186,8 @@ if __name__ == "__main__":
             neuron_iff = scd_cleaning.smooth_signal(neuron_iff, window_size=window_size)
             contact_depth = scd_cleaning.smooth_signal(contact_depth, window_size=window_size)
 
-            # normalise signals
-            neuron_iff = scd_cleaning.normalize_signal(neuron_iff, dtype=np.ndarray)
-            contact_depth = scd_cleaning.normalize_signal(contact_depth, dtype=np.ndarray)
-
-            # if necessary, down sample for a faster correlation
-            downsampling = 1
-            nsample_corr = int(downsampling*len(contact_depth))
-            indexes = np.linspace(0, len(contact_depth)-1, nsample_corr, dtype=int)
-            neuron_iff_corr = neuron_iff[indexes]
-            contact_depth_corr = contact_depth[indexes]
-
-            # remove the mean for a better estimation of the correlation
-            neuron_iff_corr = neuron_iff_corr - np.mean(neuron_iff_corr)
-            contact_depth_corr = contact_depth_corr - np.mean(contact_depth_corr)
-
             # lag estimation
-            correlation = signal.correlate(contact_depth_corr, neuron_iff_corr, mode="full")
-            lags = signal.correlation_lags(contact_depth_corr.size, neuron_iff_corr.size, mode="full")
-            lag = int(lags[np.argmax(correlation)] / downsampling)
-            del correlation, lags
-
+            lag = get_correlation(contact_depth, neuron_iff, downsampling=0.1, show=show)
             print(f"lag/TTL_kinect length (ratio): {lag} / {len(contact_depth)} ({abs(lag)/len(contact_depth):.3f})")
 
             if abs(lag)/len(contact_depth) > .30:
@@ -183,33 +225,6 @@ if __name__ == "__main__":
             ratio_list.append(abs(lag) / len(contact_depth))
             file_list.append(file_list)
             comment_list.append(comment)
-
-            # show data?
-            if show:
-                #viz = SemiControlledDataVisualizer(scd)
-                # Create a figure and subplots
-                fig, (ax1, ax2, ax3, ax4) = plt.subplots(4, 1, sharex=True, figsize=(10, 8))
-                s1 = scd.contact.depth
-                s2 = scd.neural.iff
-                s3 = scd.contact.depth
-                s4 = iff_shifted
-                # Plot data
-                ax1.plot(s1, 'b', label='RAW (depth)')
-                ax2.plot(s2, 'g', label='RAW (iff)')
-                ax3.plot(s3, 'b', label='RAW (depth)')
-                ax4.plot(s4, 'g', label='shifted (iff)')
-                # Show legend
-                ax1.legend()
-                ax2.legend()
-                ax3.legend()
-                ax4.legend()
-                main_title = f'Lag: {lag} samples'
-                fig.suptitle(main_title, fontsize=16)
-                # Adjust layout
-                plt.tight_layout()
-
-                # Show plot
-                plt.show()
 
             # save data on the hard drive ?
             if save_results:
