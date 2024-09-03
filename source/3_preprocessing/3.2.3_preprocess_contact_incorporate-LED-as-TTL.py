@@ -20,15 +20,14 @@ if __name__ == "__main__":
 
     print("Step 0: Extract the videos embedded in the selected sessions.")
     # get database directory
-    db_path = path_tools.get_database_path()
+    db_path = os.path.join(path_tools.get_database_path(), "semi-controlled", "2_processed", "kinect")
 
     # get input base directory
-    db_path_input = os.path.join(db_path, "semi-controlled", "2_processed")
-    db_path_input_contact = os.path.join(db_path_input, "kinect", "contact", "1_block-order")
-    db_path_input_led = os.path.join(db_path_input, "kinect", "led")
+    db_path_input_contact = os.path.join(db_path, "contact", "1_block-order")
+    db_path_input_led = os.path.join(db_path, "led", "0_block-order")
 
     # get output base directory
-    db_path_output = os.path.join(db_path, "semi-controlled", "3_merged", "1_kinect_contact_and_kinect_led", "1_block-order")
+    db_path_output = os.path.join(db_path, "contact_and_led", "0_block-order")
     if not os.path.exists(db_path_output):
         os.makedirs(db_path_output)
         print(f"Directory '{db_path_output}' created.")
@@ -50,6 +49,7 @@ if __name__ == "__main__":
                      '2022-06-17_ST16-03',
                      '2022-06-17_ST16-04',
                      '2022-06-17_ST16-05']
+    sessions_ST16 = ['2022-06-17_ST16-02']
 
     sessions_ST18 = ['2022-06-22_ST18-01',
                      '2022-06-22_ST18-02',
