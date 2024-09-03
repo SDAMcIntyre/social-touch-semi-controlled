@@ -138,7 +138,7 @@ class SemiControlledDataSplitter:
         start_trial_idx = np.argmax(scd.contact.TTL != 0)
         scd.set_data_idx(range(start_trial_idx, scd.md.nsample))
 
-        # ignore data before the initial and after releasing contact (transition non-contact - to - contact)
+        # ignore data before the initial and after releasing contact (transitions non-contact / contact)
         depth_smooth = smooth_scd_signal(scd.contact.depth, scd, nframe=2, method="adjust_with_speed")
         depth_smooth = normalize_signal(depth_smooth, dtype=np.ndarray)
         contact_on_off = (depth_smooth > 0).astype(int)
