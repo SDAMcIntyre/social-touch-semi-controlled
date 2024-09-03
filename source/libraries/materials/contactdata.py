@@ -269,7 +269,6 @@ class ContactData:
             pos3D_centered = pos3D - np.matlib.repmat(M, nsamples, 1)
             # interpolate the nan values
             pos3D = interpolate_nan_values(pos3D_centered)
-            np.sum(abs(pos3D))
 
         # if there is some value
         if np.any(pos3D != 0):
