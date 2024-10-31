@@ -85,9 +85,9 @@ if __name__ == "__main__":
     db_path = os.path.join(path_tools.get_database_path(), "semi-controlled")
     # get input base directory
     db_path_input_nerve = os.path.join(db_path, "2_processed", "nerve", "3_cond-velocity-adj")
-    db_path_input_kinect = os.path.join(db_path, "3_merged", "1_kinect_contact_and_kinect_led", "1_block-order")
+    db_path_input_kinect = os.path.join(db_path, "2_processed", "kinect", "contact_and_led", "0_block-order")
     # get output base directory
-    db_path_output = os.path.join(db_path, "3_merged", "2_kinect_and_nerve", "0_block-order")
+    db_path_output = os.path.join(db_path, "3_merged", "1_kinect_and_nerve", "0_block-order_kinectMP4")
     if not os.path.exists(db_path_output):
         os.makedirs(db_path_output)
         print(f"Directory '{db_path_output}' created.")
