@@ -2,6 +2,10 @@ import numpy as np
 from scipy.signal import find_peaks, gaussian
 import warnings
 
+import os
+import sys
+sys.path.append(os.path.join(os.path.dirname(__file__)))
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 from ..materials.semicontrolled_data import SemiControlledData  # noqa: E402
 from ..materials.neuraldata import NeuralData  # noqa: E402
 from ..plot.semicontrolled_data_visualizer import SemiControlledDataVisualizer  # noqa: E402
@@ -109,6 +113,9 @@ def smooth_scd_signal(sig, scd, nframe=5, method="blind", normalise=True):
 
 
 def smooth_signal(sig, window_size=5, normalise=True):
+    if not len(sig):
+        return sig
+    
     orig_settings = np.seterr(all='raise')
 
     # Create a function to handle NaN values
@@ -152,6 +159,11 @@ def smooth_signal(sig, window_size=5, normalise=True):
 
 
 def normalize_signal(signal, dtype=list):
+    if not len(signal):
+        if dtype == np.ndarray:
+            return np.array(signal)
+        else:
+            return signal
     min_val = np.nanmin(signal)
     max_val = np.nanmax(signal)
     normalized_signal = [(x - min_val) / (max_val - min_val) for x in signal]
