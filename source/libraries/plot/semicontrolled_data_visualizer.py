@@ -126,8 +126,11 @@ class SemiControlledDataVisualizer:
         self.fig2D_TTL.update(1, time, scd.contact.TTL, 'TTL contact')
         self.fig2D_TTL.update(2, time, scd.neural.TTL, 'both')
         self.fig2D_TTL.update(2, time, scd.contact.TTL, 'both', linestyle="--", reset=False)
-        d = [n - c for n, c in zip(scd.neural.TTL, scd.contact.TTL)]
-        self.fig2D_TTL.update(3, time, d, 'diff')
+        try:
+            d = [n - c for n, c in zip(scd.neural.TTL, scd.contact.TTL)]
+            self.fig2D_TTL.update(3, time, d, 'diff')
+        except:
+            pass
 
         self.fig2D_global.update(0, time, scd.contact.pos_1D, 'Position (Principal Component)', showxlabel=False)
         self.fig2D_global.update(1, time, scd.contact.depth, 'Depth', showxlabel=False)
@@ -180,11 +183,14 @@ class DataVisualizer2D:
         if reset:
             self.axs[ax_idx].clear()
 
-        if isinstance(data, list):
+        if not(isinstance(data, np.ndarray)):
             data = np.array(data)
             time = np.array(time)
-
-        if data.size == 0:
+        
+        try:
+            if data.size <= 1:
+                return
+        except:  # means it is not even a list/array
             return
 
         # Remove NaNs
