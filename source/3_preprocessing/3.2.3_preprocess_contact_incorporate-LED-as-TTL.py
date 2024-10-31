@@ -13,10 +13,10 @@ import libraries.misc.path_tools as path_tools  # noqa: E402
 
 if __name__ == "__main__":
     force_processing = True  # If user wants to force data processing even if results already exist
-    show = False  # If user wants to monitor what's happening
-
     save_results = True
     generate_report = True
+
+    show = False  # If user wants to monitor what's happening
 
     print("Step 0: Extract the videos embedded in the selected sessions.")
     # get database directory
@@ -49,7 +49,6 @@ if __name__ == "__main__":
                      '2022-06-17_ST16-03',
                      '2022-06-17_ST16-04',
                      '2022-06-17_ST16-05']
-    sessions_ST16 = ['2022-06-17_ST16-02']
 
     sessions_ST18 = ['2022-06-22_ST18-01',
                      '2022-06-22_ST18-02',
@@ -60,6 +59,7 @@ if __name__ == "__main__":
     sessions = sessions + sessions_ST15
     sessions = sessions + sessions_ST16
     sessions = sessions + sessions_ST18
+
     print(sessions)
 
     diff_ms_all = []
