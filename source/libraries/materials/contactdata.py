@@ -1,6 +1,7 @@
 import warnings
 import matplotlib.pyplot as plt
 import numpy as np
+import numpy.matlib
 from scipy.interpolate import interp1d
 from sklearn.decomposition import PCA  # from pyppca import ppca  # pip install git+https://github.com/el-hult/pyppca
 
@@ -14,8 +15,8 @@ class ContactData:
         self._time: list[float] = []
         self.nsample: int = 0
 
-        self._TTL: list[float] = []
-        self._green_levels: list[float] = []
+        self._TTL: list = []  # float or nans
+        self._green_levels: list = []  # float or nans
 
         self._contact_flag: list[float] = []  # ON/OFF
 
@@ -119,9 +120,10 @@ class ContactData:
         cd = ContactData()
 
         cd.time = self.time[idx]
-        cd.TTL = self.TTL[idx]
         # since 2024/07/09, dataset doesn't contain green levels anymore
+        # Using shan's csv file means loosing the TTL information
         try:
+            cd.TTL = self.TTL[idx]
             cd.green_levels = self.green_levels[idx]
         except:
             pass
@@ -143,8 +145,8 @@ class ContactData:
     def set_data_idx(self, idx):
         self.time = self.time[idx]
 
-        self.TTL = self.TTL[idx]
         try:
+            self.TTL = self.TTL[idx]  
             self.green_levels = self.green_levels[idx]
         except:
             pass

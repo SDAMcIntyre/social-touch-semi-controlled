@@ -67,11 +67,12 @@ class SemiControlledData:
     def get_area(self):
         return self.contact.get_area()
 
-    def set_variables(self, df=None, dropna=False):
+    def set_variables(self, df=None, dropna=False, ignorestimulus=False):
         if df is None:
             df = self.load_dataframe(dropna=dropna)
         self.load_metadata(df)
-        self.load_stimulus()
+        if not(ignorestimulus):
+            self.load_stimulus()
         self.load_contact(df)
         self.load_neural(df)
 
@@ -103,33 +104,38 @@ class SemiControlledData:
         self.contact.time = df.t.values
 
         # Kinect LED time series
-        self.contact.TTL = df["LED on"].values
+        if 'LED on' in df.columns: 
+            self.contact.TTL = df["LED on"].values
 
         # contact data
         self.contact.contact_flag = df.Contact_Flag.values
-        self.contact.area = df.Contact_Area.values
+        if 'Contact_Area' in df.columns: 
+            self.contact.area = df["Contact_Area"].values
+        elif 'Contact_area' in df.columns:
+            self.contact.area = df["Contact_area"].values
+        else:
+            pass
         self.contact.depth = df.Depth.values
         # some dataset doesn't possess the position anymore
-        try:
-            # if the hand is used, take the hand tracker
-            if "hand" in self.stim.size:
-                px = df.Position_x.values
-                py = df.Position_y.values
-                pz = df.Position_z.values
-            else:
-                px = df.Position_index_x.values
-                py = df.Position_index_y.values
-                pz = df.Position_index_z.values
+        if "hand" in self.stim.size and 'Position_x' in df.columns:  # if the hand is used, take the hand tracker
+            px = df.Position_x.values
+            py = df.Position_y.values
+            pz = df.Position_z.values
             self.contact.pos = np.array([px, py, pz])
-        except:
+        elif 'Position_index_x' in df.columns:
+            px = df.Position_index_x.values
+            py = df.Position_index_y.values
+            pz = df.Position_index_z.values
+            self.contact.pos = np.array([px, py, pz])
+        else:
             pass
         # some dataset doesn't possess the velocity anymore
-        try:
+        if 'velLongRaw' in df.columns:
             vx = df.velLongRaw.values
             vy = df.velLatRaw.values
             vz = df.velVertRaw.values
             self.contact.vel = np.array([vx, vy, vz])
-        except:
+        else:
             pass
 
     def load_neural(self, df):
@@ -137,7 +143,10 @@ class SemiControlledData:
         # neural data
         self.neural.spike = df.Nerve_spike.values
         self.neural.iff = df.Nerve_freq.values
-        self.neural.TTL = df.Nerve_TTL.values
+        try:
+            self.neural.TTL = df["Nerve_TTL"].values
+        except KeyError:
+            self.neural.TTL = np.nan
 
     def get_data_idx(self, idx, hardcopy=False):
         if hardcopy:

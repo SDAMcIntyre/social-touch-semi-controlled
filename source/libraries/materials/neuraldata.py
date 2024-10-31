@@ -58,7 +58,12 @@ class NeuralData:
         neural.time = self.time[idx]
         neural.spike = self.spike[idx]
         neural.iff = self.iff[idx]
-        neural.TTL = self.TTL[idx]
+        
+        # Using shan's csv file means loosing the TTL information
+        try:
+            neural.TTL = self.TTL[idx]
+        except:
+            pass
 
         neural.unit_id = self.unit_id
         neural.unit_type = self.unit_type
@@ -72,7 +77,11 @@ class NeuralData:
         self.time = self.time[idx]
         self.spike = self.spike[idx]
         self.iff = self.iff[idx]
-        self.TTL = self.TTL[idx]
+        # Using shan's csv file means loosing the TTL information
+        try:
+            self.TTL = self.TTL[idx]
+        except:
+            pass
 
     def append(self, neural_bis):
         self.time = np.concatenate((self.time, neural_bis.time))
