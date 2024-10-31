@@ -48,7 +48,7 @@ if __name__ == "__main__":
 
     force_processing = True  # If user wants to force data processing even if results already exist
     show_video_by_frames = False  # If user wants to monitor what's happening
-    show_results = True  # If user wants to monitor what's happening
+    show_results = False  # If user wants to monitor what's happening
 
     save_results = True
 
@@ -84,8 +84,6 @@ if __name__ == "__main__":
                      '2022-06-17_ST16-03',
                      '2022-06-17_ST16-04',
                      '2022-06-17_ST16-05']
-
-    sessions_ST16 = ['2022-06-17_ST16-02']
 
     sessions_ST18 = ['2022-06-22_ST18-01',
                      '2022-06-22_ST18-02',

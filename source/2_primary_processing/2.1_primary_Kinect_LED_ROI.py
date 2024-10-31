@@ -15,7 +15,7 @@ from libraries.misc.waitforbuttonpress_popup import WaitForButtonPressPopup
 if __name__ == "__main__":
     use_mp4 = True
 
-    force_processing = True  # If user wants to force data processing even if results already exist
+    force_processing = False  # If user wants to force data processing even if results already exist
     load_led_location = False  # If user wants to load already defined LED location if it already exists
     show = False  # If user wants to monitor what's happening
 
@@ -51,7 +51,6 @@ if __name__ == "__main__":
     sessions_ST15 = ['2022-06-16_ST15-01',
                      '2022-06-16_ST15-02']
 
-
     sessions_ST16 = ['2022-06-17_ST16-02',
                      '2022-06-17_ST16-03',
                      '2022-06-17_ST16-04',
@@ -67,9 +66,6 @@ if __name__ == "__main__":
     sessions = sessions + sessions_ST15
     sessions = sessions + sessions_ST16
     sessions = sessions + sessions_ST18
-
-
-    sessions = ['2022-06-22_ST18-01']
 
     print("Selected sessions:")
     print(np.transpose(sessions))
