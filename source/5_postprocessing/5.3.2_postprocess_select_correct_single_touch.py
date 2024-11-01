@@ -117,14 +117,14 @@ if __name__ == "__main__":
     print("Step 0: Extract the videos embedded in the selected sessions.")
     # get database directory
     db_path = os.path.join(path_tools.get_database_path(), "semi-controlled")
-    # get input data directory
-    db_path_input = os.path.join(db_path, "3_merged", "2_kinect_and_nerve", "2_by-trials")
     # get metadata paths
     md_stimuli_path = os.path.join(db_path, "1_primary", "logs", "2_stimuli_by_blocks")
     md_neuron_filename_abs = os.path.join(db_path, "1_primary", "nerve", "semicontrol_unit-name_to_unit-type.csv")
 
+    # get input data directories
+    db_path_input = os.path.join(db_path, "3_merged", "1_kinect_and_nerve", "2_by-trials")
     # get output directories
-    db_path_output = os.path.join(db_path, "3_merged", "2_kinect_and_nerve", "3_by-single-touches")
+    db_path_output = os.path.join(db_path, "3_merged", "1_kinect_and_nerve", "3_by-single-touches")
     if not os.path.exists(db_path_output):
         os.makedirs(db_path_output)
         print(f"Directory '{db_path_output}' created.")
