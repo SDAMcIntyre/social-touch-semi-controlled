@@ -2,13 +2,15 @@ import matplotlib.pyplot as plt
 import numpy as np
 import os
 import pandas as pd
+from pathlib import Path
 import re
 import shutil
 import sys
 import warnings
 
 # homemade libraries
-sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+# current_dir = Path(__file__).resolve()
+sys.path.append(str(Path(__file__).resolve().parent.parent))
 import libraries.misc.path_tools as path_tools  # noqa: E402
 
 
@@ -22,7 +24,7 @@ def find_groups_of_ones(arr):
             # Start of a new group
             in_group = True
             start_index = i
-        elif value == 0 and in_group:
+        elif value == 0 and in_group:  
             # End of the current group
             in_group = False
             groups.append(list(range(start_index, i)))  # range is right boundary exclusive
@@ -46,11 +48,11 @@ if __name__ == "__main__":
     #                              after the TTL goes off (internal "lag" of the expert signing)
     split_type = "with_following_rest_time"  # soft, hard, TTL_beginning
 
-    save_results = True
+    save_results = False
 
     print("Step 0: Extract the videos embedded in the selected sessions.")
     # get database directory
-    db_path = os.path.join(path_tools.get_database_path(), "semi-controlled", "3_merged", "2_kinect_and_nerve")
+    db_path = os.path.join(path_tools.get_database_path(), "semi-controlled", "3_merged", "1_kinect_and_nerve")
 
     # get input base directory
     db_path_input = os.path.join(db_path, "0_block-order")

@@ -19,6 +19,7 @@ import libraries.misc.path_tools as path_tools  # noqa: E402
 from libraries.misc.waitforbuttonpress_popup import WaitForButtonPressPopup
 import libraries.plot.semicontrolled_data_visualizer_unitcontact as scdata_visualizer_neur  # noqa: E402
 
+
 if __name__ == "__main__":
     # ----------------------
     # User control variables
@@ -28,12 +29,12 @@ if __name__ == "__main__":
     # choose the method to split single touches:
     #  - method_1: Stroking trials are split with position, Taping using only IFF
     #  - method_2: Stroking trials are split with position, Taping using only depth
-    #  - method_3: Stroking trials are split with position, Taping using only depth and IFF
+    #  - method_3: Stroking trials are split with position, Taping using depth and IFF
     split_method = "method_2"
 
     show = False  # If user wants to monitor what's happening
     show_single_touches = False  # If user wants to visualise single touches, one by one
-    manual_check = False  # If user wants to take the time to check the trial and how it has been split
+    manual_check = True  # If user wants to take the time to check the trial and how it has been split
 
     save_figures = True
     save_results = True
@@ -44,8 +45,6 @@ if __name__ == "__main__":
     print("Step 0: Extract the videos embedded in the selected sessions.")
     # get database directory
     db_path = os.path.join(path_tools.get_database_path(), "semi-controlled")
-    # get input data directory
-    db_path_input = os.path.join(db_path, "3_merged", "2_kinect_and_nerve", "2_by-trials")
     # get metadata paths
     md_stimuli_path = os.path.join(db_path, "1_primary", "logs", "2_stimuli_by_blocks")
     md_neuron_filename_abs = os.path.join(db_path, "1_primary", "nerve", "semicontrol_unit-name_to_unit-type.csv")
@@ -54,7 +53,10 @@ if __name__ == "__main__":
         s = f'The file {md_neuron_filename_abs} doesn''t  exist.'
         warnings.warn(s, Warning)
 
+    # get input data directory
+    db_path_input = os.path.join(db_path, "3_merged", "1_kinect_and_nerve", "1_by-trials")
     # get output directories
+    db_path_output = os.path.join(db_path, "3_merged", "1_kinect_and_nerve", "1_by-trials_single-touches-index")
     output_figure_path = os.path.join(path_tools.get_result_path(), "semi-controlled", "kinect_and_nerve",
                                       "0_by-trials", "trials_overview")
     if not os.path.exists(output_figure_path):
@@ -106,7 +108,8 @@ if __name__ == "__main__":
             # Output filenames
             output_img_filename = os.path.join(output_figure_path, data_filename.replace(".csv", ".png"))
             # endpoint results will be saved close to the .csv file.
-            filename_output_abs = data_filename_abs.replace(".csv", f"_single-touch-endpoints_{split_method}.txt")
+            filename_output = data_filename.replace(".csv", f"_single-touch-endpoints_{split_method}.txt")
+            filename_output_abs = os.path.join(db_path_output, session, filename_output)
             if not force_processing and os.path.exists(filename_output_abs):
                 s = f'The file {filename_output_abs} exists.'
                 print(s, Warning)
