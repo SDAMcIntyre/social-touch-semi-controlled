@@ -42,13 +42,6 @@ if __name__ == "__main__":
     force_processing = True  # If user wants to force data processing even if results already exist
     show = False  # If user wants to monitor what's happening
 
-    # choose the method to split trials:
-    #  - soft: will find the middle point between the blocks to separate them, else chunk by TTL
-    #  - hard: ?
-    #  - with_following_rest_time: will include the signal when it is OFF too as the gesture can continue
-    #                              after the TTL goes off (internal "lag" of the expert signing)
-    split_type = "with_following_rest_time"  # soft, hard, TTL_beginning
-
     save_results = True
 
     print("Step 0: Extract the videos embedded in the selected sessions.")
@@ -56,7 +49,7 @@ if __name__ == "__main__":
     db_path = os.path.join(path_tools.get_database_path(), "semi-controlled", "3_merged", "1_kinect_and_nerve_shandata")
 
     # get input base directory
-    db_path_input = os.path.join(db_path, "0_by-units_renamed_trial-corrected")
+    db_path_input = os.path.join(db_path, "0_by-units_renamed_trial-corrected_block-corrected")
     # get output base directory
     db_path_output = os.path.join(db_path, "1_by-trials")
 
@@ -108,19 +101,21 @@ if __name__ == "__main__":
 
         # load current data
         data_unit = pd.read_csv(file_abs)
-        for block_id in pd.unique(data_unit["block_id"]):
-            block_order_str = f"block-order{str(block_id).zfill(2)}"
+        for block_order in pd.unique(data_unit["block_order"]):
+            if np.isnan(block_order):
+                continue
+            block_order_str = f"block-order{round(block_order):02}"
             output_dir_abs = os.path.join(output_session_abs, block_order_str)
-            data_block = data_unit[data_unit['block_id'] == block_id]
+            data_block = data_unit[data_unit['block_order'] == block_order]
 
             for trial_id in pd.unique(data_block["trial_id"]):
                 if math.isnan(trial_id):
                     continue
-                print(f"[{file}] block_id = {block_id}, trial_id = {trial_id}")
+                print(f"[{file}] block_order = {block_order}, trial_id = {trial_id}")
 
                 data_trial = data_block[data_block['trial_id'] == trial_id]
 
-                output_filename = file.replace(".csv", f"_block-order{round(block_id):02}_trial{round(trial_id):02}.csv")
+                output_filename = file.replace(".csv", f"_block-order{round(block_order):02}_trial{round(trial_id):02}.csv")
                 output_filename_abs = os.path.join(output_dir_abs, output_filename)
                 if not force_processing:
                     try:
