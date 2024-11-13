@@ -160,8 +160,13 @@ def apply_shift(sessions, db_path_input, db_path_output, shiftv_filename, save_r
         data = pd.read_csv(file_abs)
         shift = get_shift(session, shiftv_filename)
 
-        # Apply the shift to the "trial_id" column
+        # Apply the shift to the columns related to the trial information (block id comprised)
         data['trial_id'] = data['trial_id'].shift(shift)
+        data['block_id'] = data['block_id'].shift(shift)
+        data['stimulus'] = data['stimulus'].shift(shift)
+        data['vel'] = data['vel'].shift(shift)
+        data['finger'] = data['finger'].shift(shift)
+        data['force'] = data['force'].shift(shift)
 
         # save data on the hard drive ?
         if save_results:
