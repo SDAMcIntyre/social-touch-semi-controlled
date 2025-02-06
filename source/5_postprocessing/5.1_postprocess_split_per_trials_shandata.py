@@ -42,7 +42,7 @@ if __name__ == "__main__":
     force_processing = True  # If user wants to force data processing even if results already exist
     show = False  # If user wants to monitor what's happening
 
-    save_results = True
+    save_results = False
 
     print("Step 0: Extract the videos embedded in the selected sessions.")
     # get database directory

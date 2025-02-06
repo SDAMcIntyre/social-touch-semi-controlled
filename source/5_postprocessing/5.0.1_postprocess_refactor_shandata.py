@@ -1,7 +1,12 @@
+import os
+# os.environ["MPLBACKEND"] = "Agg"  # Use a non-interactive backend
+
+import matplotlib
+matplotlib.use('TkAgg')  # or 'Qt5Agg'
+
 import math
 import matplotlib.pyplot as plt
 import numpy as np
-import os
 import pandas as pd
 from pathlib import Path
 import re
@@ -18,19 +23,25 @@ import libraries.misc.path_tools as path_tools  # noqa: E402
 if __name__ == "__main__":
     # parameters
     force_processing = True  # If user wants to force data processing even if results already exist
-    show = False  # If user wants to monitor what's happening
-    save_results = True
+    show = True  # If user wants to monitor what's happening
+    save_results = False
+
+    use_latest_dataset = False
 
     print("Step 0: Extract the videos embedded in the selected sessions.")
-    # get database directory
-    db_path = os.path.join(path_tools.get_database_path(), "semi-controlled", "3_merged", "1_kinect_and_nerve_shandata")
+    if use_latest_dataset:
+        # get database directory
+        db_path = os.path.join(path_tools.get_database_path(), "semi-controlled", "3_merged", "1_kinect_and_nerve_shandata")
+        # get input base directory
+        db_path_input = os.path.join(db_path, "0_by-units")
+    else:
+        db_path = os.path.join(path_tools.get_database_path(), "semi-controlled", "3_merged", "archive", "contact_and_neural")
+        db_path_input = os.path.join(db_path, "new_axes_3Dposition")  # manual_axes, manual_axes_3Dposition_RF, new_axes, new_axes_3Dposition
 
-    # get input base directory
-    db_path_input = os.path.join(db_path, "0_by-units")
     # get output base directory
     db_path_output = os.path.join(db_path, "0_by-units_renamed")
 
-    if not os.path.exists(db_path_output):
+    if save_results and not os.path.exists(db_path_output):
         os.makedirs(db_path_output)
         print(f"Directory '{db_path_output}' created.")
 
@@ -56,10 +67,10 @@ if __name__ == "__main__":
                      '2022-06-22_ST18-02',
                      '2022-06-22_ST18-04']
     sessions = []
-    sessions = sessions + sessions_ST13
-    sessions = sessions + sessions_ST14
-    sessions = sessions + sessions_ST15
-    sessions = sessions + sessions_ST16
+    #sessions = sessions + sessions_ST13
+    #sessions = sessions + sessions_ST14
+    #sessions = sessions + sessions_ST15
+    #sessions = sessions + sessions_ST16
     sessions = sessions + sessions_ST18
     
     for session in sessions:
@@ -70,17 +81,27 @@ if __name__ == "__main__":
             continue
         file = file[0]
         file_abs = os.path.join(db_path_input, file)
-        print(f"current file: {file}")
         
         # load current data
         data = pd.read_csv(file_abs)
         
         # modify column names to standard
         data = data.rename(columns={'spike': 'Nerve_spike', 
-                                              'IFF': 'Nerve_freq', 
-                                              'depth': 'Depth', 
-                                              'area': 'Contact_area'})
+                                    'IFF': 'Nerve_freq', 
+                                    'depth': 'Depth', 
+                                    'area': 'Contact_area'})
 
+        print(f"--------------------------------")
+        print(f"current file: {file}")
+        print(f'{session}: data has {len(data)} samples.')
+
+        if show:
+            plt.plot(data["velAbsRaw"], label='velAbsRaw')
+            plt.plot(data["Contact_Flag"], label='Contact_Flag Data')
+            plt.legend()
+            plt.title(session)
+            plt.show(block=True)
+        
         # save data on the hard drive ?
         if save_results:
             output_filename = f"{session}_semicontrolled.csv"

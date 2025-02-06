@@ -90,12 +90,12 @@ def define_shift(sessions, db_path_input, save_results=False, shiftv_filename=''
         # Load current data
         data = pd.read_csv(file_abs)
 
-        # Calculate offset, ensuring it’s an integer and within bounds
-        offset = random.randint(1, int(len(data) - 0.60 * len(data)))
-        # Select the range from the offset up to offset + 50% of the data length
-        d = data.loc[offset : offset + round(0.5 * len(data))]
+        # randomise the start of the signal (why?)
+        signal_start = 0  #int(random.uniform(0, 0.4) * len(data))
+        d = data.loc[signal_start:]
         d = d.reset_index(drop=True)
 
+        # normalise the signals
         vec1 = d["Depth"] / np.nanmax(d["Depth"])
         vec2 = d["Nerve_freq"] / np.nanmax(d["Nerve_freq"])
         vec_target = d["trial_id"] / np.nanmax(d["trial_id"])
@@ -110,7 +110,7 @@ def define_shift(sessions, db_path_input, save_results=False, shiftv_filename=''
         ax1.legend()
         ax1.set_title('Depth and Shifted Target (trial_id)')
 
-        l2, = ax2.plot(vec2, 'g-', label='Reference Nerve_freq')
+        l2, = ax2.plot(vec2, 'g-', label='Reference Nerve_freq') # TODO:, sharex=ax1)
         l2_shifted, = ax2.plot(np.roll(vec_target, 0), 'r--', label='Shifted Target Vector')
         ax2.legend()
         ax2.set_title('Nerve_freq and Shifted Target (trial_id)')
@@ -188,8 +188,8 @@ if __name__ == "__main__":
     force_processing = True  # If user wants to force data processing even if results already exist
     show = False  # If user wants to monitor what's happening
     
-    shift_processing = "apply"  # <define> or <apply> shift
-    save_results = True
+    shift_processing = "define"  # <define> or <apply> shift
+    save_results = False
 
     print("Step 0: Extract the videos embedded in the selected sessions.")
     # get database directory

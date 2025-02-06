@@ -19,11 +19,17 @@ import libraries.misc.path_tools as path_tools  # noqa: E402
 
 
 if __name__ == "__main__":
+    '''
+
+        Transform the block_id (that resets after every trial)
+        to block_order (that creates a unique ID for each block of a neuron)
+        
+    '''
     # parameters
     force_processing = True  # If user wants to force data processing even if results already exist
     show = False  # If user wants to monitor what's happening
     
-    save_results = True
+    save_results = False
 
     print("Step 0: Extract the videos embedded in the selected sessions.")
 
@@ -32,7 +38,7 @@ if __name__ == "__main__":
 
     # get metadata file to get block-id to block-order
     metadata_filename =  os.path.join(path_tools.get_metadata_path(), "semicontrolled_data-collection_quality-check.xlsx")
-    data = pd.read_excel(metadata_filename)
+    metadata = pd.read_excel(metadata_filename)
 
     # get input base directory
     db_path_input = os.path.join(db_path, "0_by-units_renamed_trial-corrected")
@@ -72,18 +78,21 @@ if __name__ == "__main__":
     sessions = sessions + sessions_ST18
     
     for session in sessions:
+        unit_id = session.split("_")[1]
+        data_session = metadata[metadata["Unit"] == unit_id]
+
         file = [f.name for f in Path(db_path_input).iterdir() if session in f.name]
-        if len(file) != 1:
+        if len(file) > 1:
             warnings.warn(f"Issue detected: not exactly 1 csv file found for {session}.")
             continue
         file = file[0]
         file_abs = os.path.join(db_path_input, file)
-        print(f"current file: {file}")
+        print(f"current file: {file} and unit number: {unit_id}")
         
         # load current data
         data_unit = pd.read_csv(file_abs)
-
-        data_session = data[data["Unit"] == session.split("_")[1]]
+        
+        # transform the block_id (that has reset after every trial) to block_order (that creates a unique ID for each block of a neuron)
         df_transition = pd.DataFrame({
             'block_id': data_session["Block_id"],
             'block_order': data_session["Block order"]
