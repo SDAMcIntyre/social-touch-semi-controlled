@@ -105,14 +105,13 @@ class SemiControlledDataSplitter:
         endpoints_list_out = []
         # second split the trial per stimulus/repeat/period/nb. time the POI is stimulated
         for scd in scd_list:
-            match scd.stim.type:
-                case "stroke":
-                    scd_list, endpoints_list = self.get_single_strokes(scd, correction=correction)
-                case "tap":
-                    scd_list, endpoints_list = self.get_single_taps(scd, correction=correction, method=tap_method)
-                case _:
-                    scd_list = []
-                    endpoints_list = []
+            if scd.stim.type == "stroke":
+                scd_list, endpoints_list = self.get_single_strokes(scd, correction=correction)
+            elif scd.stim.type == "tap":
+                scd_list, endpoints_list = self.get_single_taps(scd, correction=correction, method=tap_method)
+            else:
+                scd_list = []
+                endpoints_list = []
 
             if len(scd_list) == 0 or len(endpoints_list) == 0:
                 continue

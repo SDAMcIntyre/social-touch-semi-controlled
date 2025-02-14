@@ -120,19 +120,18 @@ class SemiControlledCorrectLag:
 
         # contact neural signal
         contact_sig = []
-        match self.scd.stim.type:
-            case 'stroke':
-                contact_sig = self.convert_position_to_velocity()
-                contact_sig = smooth_scd_signal(contact_sig, self.scd, method="adjust_with_speed")
-                contact_sig = detrend(contact_sig)
-                contact_sig = gaussian_envelope(contact_sig)
-                contact_sig = abs(contact_sig)
-                contact_sig = normalize_signal(contact_sig)
+        if self.scd.stim.type == 'stroke':
+            contact_sig = self.convert_position_to_velocity()
+            contact_sig = smooth_scd_signal(contact_sig, self.scd, method="adjust_with_speed")
+            contact_sig = detrend(contact_sig)
+            contact_sig = gaussian_envelope(contact_sig)
+            contact_sig = abs(contact_sig)
+            contact_sig = normalize_signal(contact_sig)
 
-            case "tap":
-                contact_sig = self.convert_contact_flag()
-                contact_sig = smooth_scd_signal(contact_sig, self.scd)
-                contact_sig = normalize_signal(contact_sig)
+        elif self.scd.stim.type == "tap":
+            contact_sig = self.convert_contact_flag()
+            contact_sig = smooth_scd_signal(contact_sig, self.scd)
+            contact_sig = normalize_signal(contact_sig)
 
         correlation, lags = self.compute_cross_correlation(neural_sig, contact_sig)
         best_lag = self.find_best_lag(correlation, lags, min_lag, max_lag)

@@ -105,11 +105,10 @@ class SemiControlledDataVisualizer:
 
 
     def set_lim(self, fig_choice, limits):
-        match fig_choice:
-            case "Depth and Area":
-                self.fig2D_global.set_lim(limits)
-            case "Position":
-                self.figpos.set_lim(limits)
+        if fig_choice == "Depth and Area":
+            self.fig2D_global.set_lim(limits)
+        elif fig_choice == "Position":
+            self.figpos.set_lim(limits)
 
     def update(self, scd: SemiControlledData, title=None):
         time = scd.md.time

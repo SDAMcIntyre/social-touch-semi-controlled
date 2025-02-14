@@ -55,11 +55,10 @@ def find_files_in_directory(dir_path, ending=r'.csv$'):
 
 def get_onedrive_path_abs():
     # path to onedrive root folder
-    match socket.gethostname():
-        case "basil":
-            onedrive_path_abs = os.path.join('F:\\', 'OneDrive - Linköpings universitet', '_Teams')
-        case _:
-            onedrive_path_abs = os.path.join('C:\\Users\\basdu83', 'OneDrive - Linköpings universitet', '_Teams')
+    if socket.gethostname == "basil":
+        onedrive_path_abs = os.path.join('F:\\', 'OneDrive - Linköpings universitet', '_Teams')
+    else:
+        onedrive_path_abs = os.path.join('C:\\Users\\basdu83', 'OneDrive - Linköpings universitet', '_Teams')
     return onedrive_path_abs
 
 
@@ -68,11 +67,10 @@ def get_team_path_abs(cloud_location="Teams"):
     onedrive_path_abs = get_onedrive_path_abs()
 
     # path to database root folder
-    match cloud_location:
-        case "Teams":
-            team_path = "Social touch Kinect MNG"
-        case "Sarah repository":  # Sarah's shared folder
-            team_path = os.path.join('touch comm MNG Kinect', 'basil_tmp')
+    if cloud_location == "Teams":
+        team_path = "Social touch Kinect MNG"
+    elif cloud_location == "Sarah repository":  # Sarah's shared folder
+        team_path = os.path.join('touch comm MNG Kinect', 'basil_tmp')
 
     return os.path.join(onedrive_path_abs, team_path)
 
@@ -116,13 +114,12 @@ def get_path_abs_base(mid_dir):
 
 
 def select_files_processed_data(input_dir, mode="manual"):
-    match mode:
-        case "automatic":
-            selected_files = glob.glob(os.path.join(input_dir, '*ST*-unit*-semicontrol.csv'))
-        case "manual":
-            selected_files = select_files_manual(input_dir)
-        case _:
-            selected_files = ""
+    if mode == "automatic":
+        selected_files = glob.glob(os.path.join(input_dir, '*ST*-unit*-semicontrol.csv'))
+    elif mode == "manual":
+        selected_files = select_files_manual(input_dir)
+    else:
+        selected_files = ""
     return selected_files
 
 

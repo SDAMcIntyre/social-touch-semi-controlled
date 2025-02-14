@@ -183,11 +183,10 @@ class SemiControlledData:
     def get_contact_mask(self):
         m = None
         vel_ratio = self.stim.curr_max_vel_ratio()
-        match self.stim.type:
-            case "tap":
-                m = self.contact.get_contact_mask(vel_ratio, mode="soft")
-            case "stroke":
-                m = self.contact.get_contact_mask(vel_ratio, mode="hard")
+        if self.stim.type == "tap":
+            m = self.contact.get_contact_mask(vel_ratio, mode="soft")
+        elif self.stim.type == "stroke":
+            m = self.contact.get_contact_mask(vel_ratio, mode="hard")
         return m
 
     def get_duration_ratio(self):

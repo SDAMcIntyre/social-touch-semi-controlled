@@ -17,15 +17,14 @@ class StimulusInfo:
 
     def get_data(self, attr=""):
         data = []
-        match attr:
-            case "type":
-                data = self._type
-            case "vel":
-                data = self._vel
-            case "size":
-                data = self._size
-            case "force":
-                data = self._force
+        if attr == "type":
+            data = self._type
+        elif attr == "vel":
+            data = self._vel
+        elif attr == "size":
+            data = self._size
+        elif attr == "force":
+            data = self._force
         return data
 
     def get_data(self):
@@ -80,11 +79,10 @@ class StimulusInfo:
     @type.setter
     def type(self, value):
         self._type = value
-        match self.type:
-            case "tap":
-                self.MIN_PERIOD = 4
-            case "stroke":
-                self.MIN_PERIOD = 2
+        if self.type == "tap":
+            self.MIN_PERIOD = 4
+        elif self.type == "stroke":
+            self.MIN_PERIOD = 2
 
     @property
     def vel(self):

@@ -90,11 +90,9 @@ class ContactData:
             # get instantaneous velocity between two points
             velocity[idx] = displacement / dt
 
-        match unit:
-            case "cm/sec":
-                velocity = velocity / 10
-            case _:
-                pass
+        if unit == "cm/sec":
+            velocity = velocity / 10
+        
         return velocity
 
     def get_depth(self):
