@@ -3,6 +3,7 @@ from matplotlib.widgets import Button
 import numpy as np
 import os
 import pandas as pd
+from pathlib import Path
 from PIL import Image
 import re
 from scipy.interpolate import griddata
@@ -15,7 +16,8 @@ import time
 
 
 # homemade libraries
-sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+sys.path.append(str(Path(__file__).resolve().parent))
+sys.path.append(str(Path(__file__).resolve().parent.parent))
 from libraries.materials.semicontrolled_data import SemiControlledData  # noqa: E402
 from libraries.processing.semicontrolled_data_manager import SemiControlledDataManager  # noqa: E402
 from libraries.processing.semicontrolled_data_splitter import SemiControlledDataSplitter  # noqa: E402
