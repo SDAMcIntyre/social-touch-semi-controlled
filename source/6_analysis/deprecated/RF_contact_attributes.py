@@ -264,10 +264,10 @@ def Receptive_field_track(video_dir,ArmPLY_dir,CorrectedJointsColor_dir,
     depth_prev = depth_mean
     for i_hand in range(v_no_thumb.shape[0]):
       hand_arm_vector = v_no_thumb[i_hand]-arm_pcd.points
-      hand_arm_min_idx = np.argmin(np.sum(np.abs(hand_arm_vector)**2,axis=-1))
-      if np.dot(hand_arm_vector[hand_arm_min_idx],arm_pcd.normals[hand_arm_min_idx]) <= 0:
+      hand_arm_min_idx = np.argmin(np.sum(np.abs(hand_arm_vector)**2, axis=-1))
+      if np.dot(hand_arm_vector[hand_arm_min_idx], arm_pcd.normals[hand_arm_min_idx]) <= 0:
         arm_point_color = arm_pcd.colors[hand_arm_min_idx]
-        if arm_point_color[0] > 0.9 and arm_point_color[1] > 0.9 and arm_point_color[2] > 0.9: # for hnad mesh with missing parts
+        if arm_point_color[0] > 0.9 and arm_point_color[1] > 0.9 and arm_point_color[2] > 0.9:  # for hand mesh with missing parts
           continue 
         hand_inside.append(v_no_thumb[i_hand])
         arm_intersect.append(arm_pcd.points[hand_arm_min_idx])
