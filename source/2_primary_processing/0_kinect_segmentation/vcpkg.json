@@ -1,0 +1,19 @@
+{
+  "dependencies": [
+    "azure-kinect-sensor-sdk",
+    "boost",
+    "fmt",
+    "libjpeg-turbo",
+    "nlohmann-json",
+    "opencv4",
+    {
+      "name": "pcl",
+      "features": [
+        "visualization",
+        "vtk"
+      ]
+    },
+    "vtk",
+    "boost-locale"
+  ]
+}
