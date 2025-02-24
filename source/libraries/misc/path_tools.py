@@ -55,7 +55,7 @@ def find_files_in_directory(dir_path, ending=r'.csv$'):
 
 def get_onedrive_path_abs():
     # path to onedrive root folder
-    if socket.gethostname == "basil":
+    if socket.gethostname() == "basil":
         onedrive_path_abs = os.path.join('F:\\', 'OneDrive - Linköpings universitet', '_Teams')
     else:
         onedrive_path_abs = os.path.join('C:\\Users\\basdu83', 'OneDrive - Linköpings universitet', '_Teams')
