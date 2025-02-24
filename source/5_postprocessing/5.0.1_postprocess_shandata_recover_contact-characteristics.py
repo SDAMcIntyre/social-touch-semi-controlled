@@ -108,16 +108,52 @@ def find_best_offset(matrix1, matrix2, offset_bounds=(-120, 120), num_offsets=No
     
     return best_offset, max_correlation
 
+def zeropad_dataframe(contact_data_sept, contact_data_jan):
+    rows_jan = contact_data_jan.shape[0]
+    rows_sept = contact_data_sept.shape[0]
+
+    if rows_jan < rows_sept:
+        rows_to_add = rows_sept - rows_jan
+        empty_rows = pd.DataFrame(index=range(rows_to_add), columns=contact_data_jan.columns)
+        contact_data_jan = pd.concat([contact_data_jan, empty_rows], ignore_index=True)
+    elif rows_sept < rows_jan:
+        rows_to_add = rows_jan - rows_sept
+        empty_rows = pd.DataFrame(index=range(rows_to_add), columns=contact_data_sept.columns)
+        contact_data_sept = pd.concat([contact_data_sept, empty_rows], ignore_index=True)
+
+    contact_data_sept = contact_data_sept.reset_index(drop=True)
+    contact_data_jan = contact_data_jan.reset_index(drop=True)
+    return contact_data_sept, contact_data_jan
+
+def plot_steps(session, block_id, chunk_sept, chunk_jan, corrected_contact_data_jan, colnames_contact):
+    title_str = f'{session} - Block ID {block_id}: offset = {best_offset} samples'
+    plot_with_synced_zoom(df1=chunk_sept, df2=chunk_jan, df3=corrected_contact_data_jan, 
+                          labels=["contact_data_sept", "contact_data_jan", "corrected_contact_data_jan"],
+                          colnames=colnames_contact, title_str=title_str)
+
+def get_ifsimilar_unique_block_ids(data_sept, data_jan):
+    unique_block_ids_sept = data_sept['block_id'].unique()
+    unique_block_ids_jan = data_jan['block_id'].unique()
+    if not set(unique_block_ids_sept) == set(unique_block_ids_jan):
+        warnings.warn("The unique block IDs in September and January datasets are not similar!")
+        return None
+    return unique_block_ids_sept
+
 
 
 if __name__ == "__main__":
-    # parameters
+    # parameters behavior
+    scan_type = "half" # half, full, diff
+
+    # parameters visualisation
     verbose = True
-    show = True  # If user wants to monitor what's happening
+    show = False  # If user wants to monitor what's happening
     show_steps = False
 
-    force_processing = False  # If user wants to force data processing even if results already exist
+    # parameters saving and processes
+    force_processing = True  # If user wants to force data processing even if results already exist
     save_results = True
+
 
     print("Step 0: Extract the data embedded in the selected sessions.")
     # get database directory and input base directory
@@ -132,6 +168,9 @@ if __name__ == "__main__":
     if save_results and not os.path.exists(db_path_output):
         os.makedirs(db_path_output)
         print(f"Directory '{db_path_output}' created.")
+
+    # output variables
+    traceability_data = []
 
     # Session names
     sessions_ST13 = ['2022-06-14_ST13-01',
@@ -163,7 +202,7 @@ if __name__ == "__main__":
     
     # column names for raw contact characteristics
     colnames_contact = ["areaRaw", "depthRaw", "velAbsRaw", "velLatRaw", "velLongRaw", "velVertRaw"]
-    colnames_contact_xcorr = ["velAbsRaw", "areaRaw", "depthRaw"]
+    colnames_contact_xcorr = ["areaRaw"] # ["velAbsRaw", "areaRaw", "depthRaw"]
     colnames_contact_processed = ["area", "areaSmooth", "area1D", "area2D",
                                   "depth", "depthSmooth", "depth1D", "depth2D", 
                                   "velAbs", "velAbsSmooth", "velAbs1D", "velAbs2D",
@@ -172,8 +211,8 @@ if __name__ == "__main__":
                                   "velVert", "velVertSmooth", "velVert1D", "velVert2D"]
 
     for session in sessions:
-        session_shan = re.sub(r'_(ST\d+)-0*(\d+)', r'-\1-unit\2', session)
-        file = [f.name for f in Path(db_path_input).iterdir() if session_shan in f.name]
+        session_shanStyle = re.sub(r'_(ST\d+)-0*(\d+)', r'-\1-unit\2', session)
+        file = [f.name for f in Path(db_path_input).iterdir() if session_shanStyle in f.name]
         if len(file) != 1:
             warnings.warn(f"Issue detected: not exactly 1 csv file found for {session}.")
             continue
@@ -185,89 +224,81 @@ if __name__ == "__main__":
         output_filename_abs = os.path.join(db_path_output, output_filename)
         if not force_processing and os.path.exists(output_filename_abs):
             continue
-    
-        # load current data
+
         data_sept = pd.read_csv(file_abs)
         data_jan = pd.read_csv(file_contact_abs)
         print(f'{session}: data has {len(data_sept)} samples. data_contact has {len(data_jan)}')
-        
-        # remove the processed contact characteristics columns
+
         data_sept = data_sept.drop(columns=colnames_contact_processed)
         data_jan = data_jan.drop(columns=colnames_contact_processed)
 
-        # Cut the dataframes into chunks for each block_id value
-        unique_block_ids_sept = data_sept['block_id'].unique()
-        unique_block_ids_jan = data_jan['block_id'].unique()
-            
-        # Check if they are similar
-        if not set(unique_block_ids_sept) == set(unique_block_ids_jan):
-            warnings.warn("The unique block IDs in September and January datasets are not similar!")
-
-        # Initialize data_result with the same columns as data_sept but no content
+        unique_block_ids = get_ifsimilar_unique_block_ids(data_sept, data_jan)
+        
         data_result = pd.DataFrame(columns=data_sept.columns)
-
-        for block_id in unique_block_ids_sept:
-            chunk_sept = data_sept[data_sept['block_id'] == block_id]
-            chunk_jan = data_jan[data_jan['block_id'] == block_id]
-            
+        for block_id in unique_block_ids:
+            chunk_sept = data_sept[data_sept['block_id'] == block_id].reset_index(drop=True)
+            chunk_jan  = data_jan[data_jan['block_id'] == block_id].reset_index(drop=True)
             if chunk_sept.empty or chunk_jan.empty:
                 continue
 
-            # Calculate the range offset of the signals correlation
-            index_sept = chunk_sept.index[-1]
-            index_jan = chunk_jan.index[-1]
-            offset_block = np.abs(index_sept - index_jan)
+            chunk_sept, chunk_jan = zeropad_dataframe(chunk_sept, chunk_jan)
+            chunk_sept_selected = chunk_sept[colnames_contact_xcorr]
+            chunk_jan_selected = chunk_jan[colnames_contact_xcorr]
+
+            nrows_jan = len(chunk_jan_selected)
+            if scan_type == "full":
+                offset_block = nrows_jan  
+            elif scan_type == "half": 
+                offset_block = np.round(nrows_jan/2)
+            elif scan_type == "diff":
+                offset_block = np.abs(len(chunk_sept_selected) - nrows_jan)
+
             offset_bounds = [-offset_block, offset_block]
             num_offsets = np.floor(1.00 * (offset_bounds[1] - offset_bounds[0]))
 
-            # Generate equal matrices
-            contact_data_sept = chunk_sept[colnames_contact]
-            contact_data_jan = chunk_jan[colnames_contact]
-            rows_jan = contact_data_jan.shape[0]
-            rows_sept = contact_data_sept.shape[0]
-
-            if rows_jan < rows_sept:
-                rows_to_add = rows_sept - rows_jan
-                empty_rows = pd.DataFrame(index=range(rows_to_add), columns=contact_data_jan.columns)
-                contact_data_jan = pd.concat([contact_data_jan, empty_rows], ignore_index=True)
-            elif rows_sept < rows_jan:
-                rows_to_add = rows_jan - rows_sept
-                empty_rows = pd.DataFrame(index=range(rows_to_add), columns=contact_data_sept.columns)
-                contact_data_sept = pd.concat([contact_data_sept, empty_rows], ignore_index=True)
-
-            contact_data_sept = contact_data_sept.reset_index(drop=True)
-            contact_data_jan = contact_data_jan.reset_index(drop=True)
-
-            # Compare the same column name of each dataset and correlate them to get the delay
-            best_offset, max_correlation = find_best_offset(contact_data_sept[colnames_contact_xcorr], 
-                                                            contact_data_jan[colnames_contact_xcorr], 
-                                                            offset_bounds=offset_bounds, 
-                                                            num_offsets=num_offsets,
+            best_offset, max_correlation = find_best_offset(chunk_sept_selected, chunk_jan_selected, 
+                                                            offset_bounds=offset_bounds, num_offsets=num_offsets, 
                                                             verbose=verbose)
             print(f"Block ID {block_id}: The best offset is {best_offset} with a correlation of {max_correlation}.")
-
-            corrected_contact_data_jan = contact_data_jan.shift(periods=best_offset)
-
+            corrected_contact_data_jan = chunk_jan[colnames_contact].shift(periods=best_offset)
             if show_steps:
-                title_str = f'{session} - Block ID {block_id}: offset = {best_offset} samples'
-                plot_with_synced_zoom(df1=contact_data_sept, df2=contact_data_jan, df3=corrected_contact_data_jan, 
-                    labels = ["contact_data_sept", "contact_data_jan", "corrected_contact_data_jan"],
-                    colnames=colnames_contact, 
-                    title_str=title_str)
+                plot_steps(session, block_id, chunk_sept, chunk_jan, corrected_contact_data_jan, colnames_contact)
+             
+            # (1/2) Discard rows where chunk_sept has NaN values and Align
+            sept_cleaned = chunk_sept[colnames_contact].reset_index(drop=True).dropna()
+            jan_cleaned = corrected_contact_data_jan.reset_index(drop=True).loc[sept_cleaned.index]
+            # (2/2) Discard rows with NaN values and align
+            corrected_contact_data_wjan_cleaned = jan_cleaned.dropna()
+            sept_cleaned = sept_cleaned.loc[jan_cleaned.index]
+            correlation_matrix = sept_cleaned.corrwith(jan_cleaned)
 
-            chunk_sept = chunk_sept.reset_index(drop=True)
-            # replace the september contact carac by the shifted january contact carac
+            # add the data to the output data
+            chunk_sept.rename(columns={col: col + '_september' for col in colnames_contact}, inplace=True)
             chunk_sept[colnames_contact] = corrected_contact_data_jan[colnames_contact]
+            data_result = pd.concat([data_result, chunk_sept], ignore_index=True)
+    
+            # Print each variable
+            print(f"Session: {session}")
+            print(f"Block ID: {block_id}")
+            print(f"Best Offset: {best_offset}")
+            print(f"Max Correlation: {max_correlation}")
+            print(f"Correlation Matrix: {correlation_matrix}")
+            print(f"Mean Correlation Matrix: {np.mean(correlation_matrix)}")
+            print(f"n. samples (chunk_sept): {len(chunk_sept)}")
+            print(f"Offset Bounds[0]: {offset_bounds[0]}")
+            print(f"Offset Bounds[1]: {offset_bounds[1]}")
+            # Append traceability data
             
-            if data_result.empty:
-                data_result = chunk_sept
-            else:
-                data_result = pd.concat([data_result, chunk_sept], ignore_index=True)
-
+            # Create the flat list
+            row = [session, block_id, best_offset, max_correlation, colnames_contact_xcorr]
+            row.extend(correlation_matrix.to_list())
+            row.extend([len(chunk_sept), offset_bounds[0], offset_bounds[1]])
+            traceability_data.append(row)
+            
         if show:
             plt.plot(data_sept["spike"] - data_result["spike"])#, marker='x', linestyle='None')
             plt.suptitle("spikes difference between raw september and result (should be 0 everywhere)")
-#            plt.show(block=True)
+            # plt.show(block=True)
 
             plot_with_synced_zoom(df1=data_sept, df2=None, df3=data_result,
                 labels = ["data_sept no correction", "", "data result, corrected"],
@@ -276,7 +307,6 @@ if __name__ == "__main__":
 
         # save data on the hard drive ?
         if save_results:
-
             # Check if the folder exists
             if not os.path.exists(db_path_output):
                 # Create the folder if it does not exist
@@ -286,25 +316,22 @@ if __name__ == "__main__":
             # including the filename and its directory structure,
             # exceeds the Windows maximum limit of 260 characters.
             data_result.to_csv(output_filename_abs, index=False)
+    
+
+    # save data on the hard drive ?
+    if save_results:
+        # Create a DataFrame from the traceability data
+        column_names = ['Session', 'Block ID', 'Best Offset', 'Max Correlation', 'Data used for xcorr']
+        column_names.extend(colnames_contact)
+        column_names.extend(['number of samples', 'xcorr offset Bounds Min', 'xcorr offset Bounds Max'])
+        traceability_df = pd.DataFrame(traceability_data, columns=column_names)
+
+        # Save the traceability DataFrame to a CSV file
+        traceability_file_path = os.path.join(db_path_output, 'traceability.csv')
+        traceability_df.to_csv(traceability_file_path, index=False)
+
 
         print("done.")
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
