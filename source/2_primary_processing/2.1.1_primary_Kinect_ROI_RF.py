@@ -44,11 +44,10 @@ def find_mkv_files(input_path, sessions):
 
 
 if __name__ == "__main__":
+    show = True  # If user wants to monitor what's happening
+
     force_processing = True  # If user wants to force data processing even if results already exist
-
-    show = False  # If user wants to monitor what's happening
-
-    save_results = False
+    save_results = True
 
     print("Step 0: Extract the videos embedded in the selected sessions.")
     # get database directory
@@ -57,7 +56,7 @@ if __name__ == "__main__":
     db_path_input = os.path.join(db_path, "1_block-order")
     # get output base directory
     db_path_output = os.path.join(db_path, "2_arm_roi")
-    if not os.path.exists(db_path_output):
+    if save_results and not os.path.exists(db_path_output):
         os.makedirs(db_path_output)
         print(f"Directory '{db_path_output}' created.")
     # Session names
@@ -127,7 +126,8 @@ if __name__ == "__main__":
                 if frame_number is not None:
                     arm_roi.set_reference_frame(frame_number)
                     arm_roi.select_target_location()
-                    arm_roi.save_result(verbose=True)
+                    if save_results and (force_processing or not(os.path.exists(output_filename_abs))):
+                        arm_roi.save_result(verbose=True)
                     break  # Exit the inner loop immediately, go to next neuron
 
     if save_results:
