@@ -121,11 +121,10 @@ class KinectLEDBlinking:
         self.time = np.linspace(0, 1 / self.fps * (self.nframes - 1), self.nframes)
 
     def process_led_on(self, method="bimodal", threshold=0.25):
-        match method:
-            case "bimodal":
-                self.process_led_on_bimodal()
-            case "threshold":
-                self.process_led_on_threshold(threshold=threshold)
+        if method == "bimodal":
+            self.process_led_on_bimodal()
+        elif method == "threshold":
+            self.process_led_on_threshold(threshold=threshold)
 
     def process_led_on_bimodal(self):
         x = self.green_levels

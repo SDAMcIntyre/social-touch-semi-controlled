@@ -1,11 +1,29 @@
-numpy
-pandas
-seaborn
-scipy
-sklearn
-matplotlib
-pip install pyglet
-pip install pyppca
-pip install opencv-python
-pip install openpyxl
-
+capture==0.1
+chardet==5.2.0
+ffmpeg==1.4
+keras==3.9.0
+keyboard==0.13.5
+matplotlib==3.1.3
+modules==1.0.0
+numpy==1.16.4
+open3d==0.9.0.0
+opencv_python==4.11.0.86
+packaging==24.2
+pandas==0.25.3
+Pillow==11.1.0
+pingouin==0.5.5
+pmdarima==2.0.4
+psychopy==2024.2.5
+pygame==1.9.6
+pyglet==2.1.3
+pynput==1.8.1
+pyserial==3.5
+scikit_learn==1.6.1
+scipy==1.5.4
+seaborn==0.9.0
+statsmodels==0.14.4
+sympy==1.4
+tensorflow==1.15.0
+transforms3d==0.4.2
+varname==0.14.0
+win32gui==221.6

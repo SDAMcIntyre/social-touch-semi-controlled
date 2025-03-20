@@ -134,39 +134,37 @@ if __name__ == "__main__":
 
             # modify the trials idx in function of split_type
             # find middle point between trials as split locations
-            match split_type:
-                case "with_following_rest_time":
-                    trials_idx_new = []
-                    for idx in np.arange(len(trials_idx)-1):
-                        start_idx = trials_idx[idx][0]
-                        end_idx = trials_idx[idx+1][0]
-                        trials_idx_new.append(start_idx + np.arange(end_idx-start_idx))
-                    trials_idx = trials_idx_new
+            if split_type == "with_following_rest_time":
+                trials_idx_new = []
+                for idx in np.arange(len(trials_idx)-1):
+                    start_idx = trials_idx[idx][0]
+                    end_idx = trials_idx[idx+1][0]
+                    trials_idx_new.append(start_idx + np.arange(end_idx-start_idx))
+                trials_idx = trials_idx_new
 
-                case "soft":
-                    trials_idx_initial = trials_idx
-                    ntrials = len(trials_idx_initial)
-                    middles = []
-                    avg_rest_time = []
-                    for x in range(0, ntrials-1):
-                        last = trials_idx_initial[x][-1]
-                        first = trials_idx_initial[x+1][1]
-                        rest_time = (first-last)
-                        avg_rest_time.append(rest_time)
-                        middle = int(last+rest_time/2)
-                        middles.append(middle)
-                    # add starting point of the first trial block based on avg extension
-                    middles.insert(0, int(trials_idx_initial[0][0]-np.mean(avg_rest_time)/2))
-                    # add end point of the last trial block
-                    middles.append(int(trials_idx_initial[-1][-1]+np.mean(avg_rest_time)/2))
-                    # redefine trials_idx
-                    trials_idx = []
-                    for m_idx in range(0, len(middles)-1):
-                        trials_idx.append(np.arange(middles[m_idx], middles[m_idx+1]))
-
-                case "hard", _:
-                    pass
-
+            elif split_type ==  "soft":
+                trials_idx_initial = trials_idx
+                ntrials = len(trials_idx_initial)
+                middles = []
+                avg_rest_time = []
+                for x in range(0, ntrials-1):
+                    last = trials_idx_initial[x][-1]
+                    first = trials_idx_initial[x+1][1]
+                    rest_time = (first-last)
+                    avg_rest_time.append(rest_time)
+                    middle = int(last+rest_time/2)
+                    middles.append(middle)
+                # add starting point of the first trial block based on avg extension
+                middles.insert(0, int(trials_idx_initial[0][0]-np.mean(avg_rest_time)/2))
+                # add end point of the last trial block
+                middles.append(int(trials_idx_initial[-1][-1]+np.mean(avg_rest_time)/2))
+                # redefine trials_idx
+                trials_idx = []
+                for m_idx in range(0, len(middles)-1):
+                    trials_idx.append(np.arange(middles[m_idx], middles[m_idx+1]))
+            elif split_type == "hard":
+                pass
+            
 
             # split by trials
             data_trials = []
