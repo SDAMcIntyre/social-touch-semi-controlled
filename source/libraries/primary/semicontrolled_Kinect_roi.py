@@ -70,7 +70,7 @@ class KinectRegionOfInterest:
         # Convert fourcc to a string (i.e. "mpeg4")
         self.fourcc_str = "".join([chr((fourcc >> 8 * i) & 0xFF) for i in range(4)])
 
-    def select_good_frame(self):
+    def select_good_frame(self, frame_range='first-half'):
         if self.cap is None:
             raise Exception("Error: Video not initialized. Please call initialise() first.")
 
@@ -118,7 +118,17 @@ class KinectRegionOfInterest:
 
         # Display 19 frames linearly spread over the entire video
         total_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        frame_indices = np.linspace(0, total_frames / 2 - 1, 19, dtype=int)
+        if frame_range == 'first-half':
+            frame_indices = np.linspace(0, total_frames / 2 - 1, 19, dtype=int)
+        if frame_range == 'second-half':
+            frame_indices = np.linspace(total_frames / 2 , total_frames - 1, 19, dtype=int)
+        elif frame_range == 'full':
+            frame_indices = np.linspace(0, total_frames - 1, 19, dtype=int)
+        elif frame_range == 'random':
+            frame_indices = np.sort(np.random.randint(0, total_frames-1, 19))
+
+        else:
+            frame_indices = np.linspace(0, total_frames / 2 - 1, 19, dtype=int)
 
         miniatures = []
         for i, frame_idx in enumerate(frame_indices):
