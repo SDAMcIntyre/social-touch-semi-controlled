@@ -7,7 +7,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import warnings
 
-from .semicontrolled_Kinect_led_roi import KinectLEDRegionOfInterest
+from .KinectLEDRegionOfInterest import KinectLEDRegionOfInterest
 from ..misc.time_cost_function import time_it
 from ..misc.waitforbuttonpress_popup import WaitForButtonPressPopup
 from ..processing.semicontrolled_data_cleaning import normalize_signal
