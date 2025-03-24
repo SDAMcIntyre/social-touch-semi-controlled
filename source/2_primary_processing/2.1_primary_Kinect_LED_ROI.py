@@ -6,8 +6,8 @@ import sys
 
 # homemade libraries
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-from libraries.primary.semicontrolled_Kinect_led_roi import KinectLEDRegionOfInterest  # noqa: E402
-from libraries.primary.semicontrolled_Kinect_led_roi_mp4 import KinectLEDRegionOfInterestMP4  # noqa: E402
+from source.libraries.primary.KinectLEDRegionOfInterest import KinectLEDRegionOfInterest  # noqa: E402
+from source.libraries.primary.KinectLEDRegionOfInterestMP4 import KinectLEDRegionOfInterestMP4  # noqa: E402
 import libraries.misc.path_tools as path_tools  # noqa: E402
 from libraries.misc.waitforbuttonpress_popup import WaitForButtonPressPopup
 

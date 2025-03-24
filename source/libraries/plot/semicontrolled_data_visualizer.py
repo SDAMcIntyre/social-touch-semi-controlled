@@ -9,7 +9,9 @@ import seaborn as sns
 import tkinter as tk
 from tkinter import ttk
 import os
+import sys
 
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 from libraries.materials.semicontrolled_data import SemiControlledData  # noqa: E402
 
 

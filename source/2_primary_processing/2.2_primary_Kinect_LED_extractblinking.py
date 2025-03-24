@@ -5,9 +5,9 @@ import os
 import sys
 
 # homemade libraries
-sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-from libraries.primary.semicontrolled_Kinect_led_blinking import KinectLEDBlinking  # noqa: E402
-from libraries.primary.semicontrolled_Kinect_led_blinking_mp4 import KinectLEDBlinkingMP4  # noqa: E402
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
+from source.libraries.primary.KinectLEDBlinking import KinectLEDBlinking  # noqa: E402
+from source.libraries.primary.KinectLEDBlinkingMP4 import KinectLEDBlinkingMP4  # noqa: E402
 import libraries.misc.path_tools as path_tools  # noqa: E402
 from libraries.misc.waitforbuttonpress_popup import WaitForButtonPressPopup
 
@@ -44,13 +44,14 @@ def find_metadata_files(input_path, sessions):
 
 
 if __name__ == "__main__":
-    use_mp4 = True
 
     force_processing = True  # If user wants to force data processing even if results already exist
+    save_results = True
+
     show_video_by_frames = False  # If user wants to monitor what's happening
     show_results = False  # If user wants to monitor what's happening
 
-    save_results = True
+    use_mp4 = True
 
     print("Step 0: Extract the videos embedded in the selected sessions.")
     # get database directory

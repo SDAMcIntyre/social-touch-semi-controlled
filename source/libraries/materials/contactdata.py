@@ -6,8 +6,8 @@ from scipy.interpolate import interp1d
 from sklearn.decomposition import PCA  # from pyppca import ppca  # pip install git+https://github.com/el-hult/pyppca
 
 from .metadata import Metadata  # noqa: E402
-from libraries.materials.stimulusinfo import StimulusInfo  # noqa: E402
-from libraries.misc.interpolate_nan_values import interpolate_nan_values  # noqa: E402
+from materials.stimulusinfo import StimulusInfo  # noqa: E402
+from misc.interpolate_nan_values import interpolate_nan_values  # noqa: E402
 
 
 class ContactData:

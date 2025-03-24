@@ -6,7 +6,7 @@ import sys
 
 # homemade libraries
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-from libraries.primary.semicontrolled_Kinect_roi import KinectRegionOfInterest  # noqa: E402
+from source.libraries.primary.KinectRegionOfInterest import KinectRegionOfInterest  # noqa: E402
 import libraries.misc.path_tools as path_tools  # noqa: E402
 from libraries.misc.waitforbuttonpress_popup import WaitForButtonPressPopup
 
