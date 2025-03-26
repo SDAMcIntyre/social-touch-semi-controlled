@@ -15,7 +15,7 @@ from ..processing.semicontrolled_data_cleaning import normalize_signal
 
 
 class KinectLEDBlinking:
-    def __init__(self, video_path, result_dir_path, result_file_name):
+    def __init__(self, video_path, result_dir_path=None, result_file_name=None):
         self.video_path = video_path
         self.result_dir_path = result_dir_path
         self.result_file_name = result_file_name
@@ -248,19 +248,19 @@ class KinectLEDBlinking:
     def save_results(self):
         if not os.path.exists(self.result_dir_path):
             os.makedirs(self.result_dir_path)
-        self.save_result_csv(self.result_dir_path, self.result_file_name + ".csv")
-        self.save_result_metadata(self.result_dir_path, self.result_file_name + "_metadata.txt")
+        filename_abs = os.path.join(self.result_dir_path, self.result_file_name + ".csv")
+        self.save_result_csv(filename_abs)
+        filename_abs = os.path.join(self.result_dir_path, self.result_file_name + "_metadata.txt")
+        self.save_result_metadata(filename_abs)
 
-    def save_result_csv(self, file_path, file_name):
-        full_path = os.path.join(file_path, file_name)
-        with open(full_path, mode='w', newline='') as file:
+    def save_result_csv(self, file_path_abs):
+        with open(file_path_abs, mode='w', newline='') as file:
             writer = csv.writer(file)
             writer.writerow(["time (second)", "green level", "LED on"])
             for t_value, green_value, led_value in zip(self.time, self.green_levels, self.led_on):
                 writer.writerow([t_value, green_value, led_value])
 
-    def save_result_metadata(self, file_path, file_name):
-        full_path = os.path.join(file_path, file_name)
+    def save_result_metadata(self, file_path_abs):
         metadata = {
             "video_path": self.video_path,
             "lower_green": self.lower_green.tolist(),
@@ -269,5 +269,5 @@ class KinectLEDBlinking:
             "fps": self.fps,
             "nframes": self.nframes
         }
-        with open(full_path, 'w') as f:
+        with open(file_path_abs, 'w') as f:
             json.dump(metadata, f, indent=4)

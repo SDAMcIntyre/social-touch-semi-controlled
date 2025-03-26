@@ -44,30 +44,32 @@ def find_metadata_files(input_path, sessions):
 
 
 if __name__ == "__main__":
+    OS_linux = True
 
-    force_processing = True  # If user wants to force data processing even if results already exist
+    force_processing = False  # If user wants to force data processing even if results already exist
     save_results = True
+
+    video_extension = '_LED_roi.mp4'
+    show = False  # If user wants to monitor what's happening
 
     show_video_by_frames = False  # If user wants to monitor what's happening
     show_results = False  # If user wants to monitor what's happening
 
-    use_mp4 = True
-
     print("Step 0: Extract the videos embedded in the selected sessions.")
     # get database directory
-    db_path = os.path.join(path_tools.get_database_path(), "semi-controlled")
-    # get input base directory
-    if use_mp4:
-        db_path_input = os.path.join(db_path, "1_primary", "kinect", "2_roi_led_mp4")
-        extension = '.mp4'
+    db_path_linux = os.path.expanduser('~/Documents/datasets/semi-controlled')
+    if OS_linux:
+        db_path = db_path_linux
     else:
-        db_path_input = os.path.join(db_path, "1_primary", "kinect", "2_roi_led")
-        extension = '.mkv'
-    # get output base directory
-    db_path_output = os.path.join(db_path, "2_processed", "kinect", "led", "0_block-order")
+        db_path = os.path.join(path_tools.get_database_path(), "semi-controlled")
+    # get input base directory
+    db_path_input = os.path.join(db_path, "2_processed", "kinect")
+    # set output base directory
+    db_path_output = os.path.join(db_path, "2_processed", "kinect")
     if not os.path.exists(db_path_output):
         os.makedirs(db_path_output)
         print(f"Directory '{db_path_output}' created.")
+    
     # Session names
     sessions_ST13 = ['2022-06-14_ST13-01',
                      '2022-06-14_ST13-02',
@@ -98,47 +100,41 @@ if __name__ == "__main__":
     sessions = sessions + sessions_ST18
 
     for session in sessions:
-        md_files_abs, md_files, _ = find_metadata_files(db_path_input, session)
+        # files_abs, files, _ = find_metadata_files(db_path_input, session)
+        curr_dir = os.path.join(db_path_input, session)
+        files_abs, files = path_tools.find_files_in_directory(curr_dir, ending=video_extension)
 
         # Process LED blinking
-        for idx, (md_filename_abs, md_filename) in enumerate(zip(md_files_abs, md_files)):
-            print(f"File '{md_filename}'")
+        for idx, (file_abs, file) in enumerate(zip(files_abs, files)):
+            print("--- --- --- --- ---")
+            print(f"Current file is: '{file}'")
 
-            # output directory
-            output_dirname = os.path.join(db_path_output, session)
-            if not os.path.exists(output_dirname):
-                os.makedirs(output_dirname)
+            # Results filename and location
+            output_dirname = os.path.dirname(file_abs).replace(db_path_input, db_path_output)
+            output_filename_csv = file.replace(video_extension, "_LED.csv")
+            output_filename_md = file.replace(video_extension, "_metadata.txt")
+            output_filename_csv_abs = os.path.join(output_dirname, output_filename_csv)
+            output_filename_md_abs = os.path.join(output_dirname, output_filename_md)
 
-            # create video filename from metadata filename
-            video_filename_abs = md_filename_abs.replace("_metadata.txt", ".mp4")
-
-            # create output filename from metadata filename
-            output_filename = md_filename.replace("_kinect_LED_roi_metadata.txt", "_LED")
-
-            # create Kinect processing manager
-            if "mp4" in extension:
-                led_blink = KinectLEDBlinkingMP4(video_filename_abs, output_dirname, output_filename)
-            else:
-                led_blink = KinectLEDBlinking(video_filename_abs, output_dirname, output_filename)
-
-            if led_blink.is_already_processed() and not force_processing:
+            if not force_processing and os.path.exists(output_filename_csv_abs):
+                print(f"File '{file}' already exists and the processing is not forced. Move to next file...")
                 continue
-
-            # Check if the video exists
-            if not os.path.exists(video_filename_abs):
-                print(f"The video_path does not point on an existing file. Creating a phantom result file...")
-                led_blink.create_phantom_result_file(md_filename_abs)
-            else:
-                # if the video hasn't been processed yet or redo the processing (load results = False)
-                led_blink.load_video()
-
-                led_blink.monitor_green_levels(show=show_video_by_frames)
-                led_blink.process_led_on(threshold=.20)
-                # correct for any occlusion
-                led_blink.define_occlusion(threshold=40, show=show_video_by_frames)
+            
+            # create Kinect processing manager
+            led_blink = KinectLEDBlinkingMP4(file_abs)
+        
+            # if the video hasn't been processed yet or redo the processing (load results = False)
+            led_blink.load_video()
+            led_blink.monitor_green_levels(show=show_video_by_frames)
+            led_blink.process_led_on(threshold=.20)
+            # correct for any occlusion
+            led_blink.define_occlusion(threshold=40, show=show_video_by_frames)
 
             if save_results:
-                led_blink.save_results()
+                if not os.path.exists(output_dirname):
+                    os.makedirs(output_dirname)
+                led_blink.save_result_csv(output_filename_csv_abs)
+                led_blink.save_result_metadata(output_filename_md_abs)
 
             if show_results:
                 plt.plot(led_blink.time, led_blink.led_on)

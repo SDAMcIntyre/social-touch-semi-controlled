@@ -14,13 +14,10 @@ from ..processing.semicontrolled_data_cleaning import normalize_signal
 
 
 class KinectLEDRegionOfInterest:
-    def __init__(self, video_path, output_dirname, output_filename):
+    def __init__(self, video_path=None, output_dirname=None, output_filename=None):
         self.video_path = video_path
         self.result_dir_path = output_dirname
         self.result_filename = output_filename
-
-        self.drawing = False
-        self.confirmation_result = None
 
         self.cap = None
         self.frame_width = None
@@ -43,21 +40,31 @@ class KinectLEDRegionOfInterest:
         metadata_file = os.path.join(self.result_dir_path, self.result_filename + "_metadata.txt")
         return os.path.isfile(metadata_file)
 
-    def load_led_location(self):
-        metadata_file = os.path.join(self.result_dir_path, self.result_filename + "_metadata.txt")
+    def load_metadata(self, metadata_path_abs=None):
+        if metadata_path_abs is None:
+           metadata_path_abs = os.path.join(self.result_dir_path, self.result_filename + "_metadata.txt")
+        else:
+            self.result_dir_path = os.path.dirname(metadata_path_abs)
+            self.result_filename = os.path.basename(metadata_path_abs).replace("_metadata.txt", "")
+
         # Read the content of the file
-        with open(metadata_file, 'r', encoding='utf-8') as file:
+        with open(metadata_path_abs, 'r', encoding='utf-8') as file:
             data = file.read()
 
         # Parse the JSON content
         json_data = json.loads(data)
 
         # Extract the required values
+        self.video_path = json_data["video_path"]
         self.reference_frame_idx = json_data['reference_frame_idx']
         self.square_center = json_data['square_center']
         self.square_size = json_data['square_size']
         # if the file exists, then the LED is in frame.
-        self.led_in_frame = True
+        if 0 <= self.reference_frame_idx:
+            self.led_in_frame = True
+        else:
+            self.led_in_frame = False
+        
 
     def initialise_video(self):
         self.cap = cv2.VideoCapture(self.video_path)
@@ -71,130 +78,125 @@ class KinectLEDRegionOfInterest:
         # Convert fourcc to a string (i.e. "mpeg4")
         self.fourcc_str = "".join([chr((fourcc >> 8 * i) & 0xFF) for i in range(4)])
 
-    def select_good_frame(self):
-        if self.cap is None:
-            raise Exception("Error: Video not initialized. Please call initialise() first.")
 
-        def display_frame(frame, window_name="Frame"):
-            cv2.imshow(window_name, frame)
-            cv2.waitKey(1)
-
-        # Display the first frame
-        self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-        ret, first_frame = self.cap.read()
-        if not ret:
-            raise Exception("Error: Could not read the first frame.")
-
-        display_frame(first_frame, "First Frame")
-
-        # Confirmation window for user input
+    def __show_confirmation_blocking_window(self, question_str="Use this frame?"):
         confirmation_result = None
-        confirmation_window = np.zeros((200, 500, 3), dtype=np.uint8)
-        cv2.putText(confirmation_window, "Use this frame?", (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-        cv2.rectangle(confirmation_window, (50, 100), (150, 150), (0, 255, 0), -1)
-        cv2.putText(confirmation_window, "Yes", (70, 135), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 0), 2)
-        cv2.rectangle(confirmation_window, (250, 100), (350, 150), (0, 0, 255), -1)
-        cv2.putText(confirmation_window, "No", (270, 135), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 0), 2)
-        cv2.imshow('Confirmation', confirmation_window)
-
         # Callback function for confirmation window
         def confirm_frame(event, x, y, flags, param):
             nonlocal confirmation_result
             if event == cv2.EVENT_LBUTTONUP:
-                if 50 < x < 150 and 100 < y < 150:
+                if 50 < x < 350 and 100 < y < 150:
                     confirmation_result = True
-                    cv2.destroyAllWindows()
-                elif 250 < x < 350 and 100 < y < 150:
+                elif 450 < x < 750 and 100 < y < 150:
                     confirmation_result = False
-                    cv2.destroyAllWindows()
+        # window parameters
 
-        cv2.setMouseCallback('Confirmation', confirm_frame)
+        confirmation_window = np.zeros((200, 800, 3), dtype=np.uint8)
+        cv2.putText(confirmation_window, question_str, (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+        cv2.rectangle(confirmation_window, (50, 100), (350, 150), (0, 255, 0), -1)
+        cv2.putText(confirmation_window, "Yes <ENTER>", (100, 135), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 0), 2)
+        cv2.rectangle(confirmation_window, (450, 100), (750, 150), (0, 0, 255), -1)
+        cv2.putText(confirmation_window, "No <ESC>", (520, 135), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 0), 2)
+        # Confirmation window for user input
+        window_name_confirmation = 'Confirmation'
+        cv2.namedWindow(window_name_confirmation)
+        cv2.setMouseCallback(window_name_confirmation, confirm_frame)
+        cv2.imshow(window_name_confirmation, confirmation_window)
 
         while confirmation_result is None:
-            cv2.waitKey(1)
+            key = cv2.waitKey(1)
+            if key == 13:  # ENTER key
+                confirmation_result = True
+            elif key == 27:  # ESC key
+                confirmation_result = False
+        cv2.destroyWindow(window_name_confirmation)
 
-        if confirmation_result:
-            self.led_in_frame = True
-            return 0  # The first frame was chosen
+        return confirmation_result
 
+
+    def _confirm_frame_selection(self, frame_id):
+        # Set the frame position
+        self.cap.set(cv2.CAP_PROP_POS_FRAMES, frame_id)
+        ret, frame = self.cap.read()
+        if not ret:
+            raise Exception(f"Error: Could not read the frame at position {frame_id}.")
+
+        window_name_frame = f"Frame {frame_id}"
+        cv2.imshow(window_name_frame, frame)
+        confirmation_result = self.__show_confirmation_blocking_window()
+        cv2.destroyWindow(window_name_frame)
+
+        return confirmation_result
+
+
+    def _choose_frame_from_montage(self):
+        selected_frame_idx = None
+        frame_is_selected = False
+        def select_miniature(event, x, y, flags, param):
+            nonlocal selected_frame_idx, frame_is_selected
+            if event == cv2.EVENT_LBUTTONUP:
+                frame_number = (y // miniature_height) * 5 + (x // miniature_width)
+                if frame_number < len(miniatures):
+                    selected_frame_idx = miniatures[frame_number][0]
+                    frame_is_selected = True
+                elif frame_number == 19:  # None area selected
+                    selected_frame_idx = None
+                    frame_is_selected = True
+        
         # Display 19 frames linearly spread over the entire video
-        total_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        frame_indices = np.linspace(0, total_frames / 2 - 1, 19, dtype=int)
+        nframe = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        frame_indices = np.linspace(0, nframe / 2 - 1, 19, dtype=int)
 
+        # Create 19 thumbnails
+        miniature_height = 90 * 4
+        miniature_width = 160 * 4
         miniatures = []
         for i, frame_idx in enumerate(frame_indices):
             self.cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
             ret, frame = self.cap.read()
             if not ret:
                 continue
-            thumbnail = cv2.resize(frame, (160 * 4, 90 * 4))  # Create thumbnail
+            thumbnail = cv2.resize(frame, (miniature_width, miniature_height))  # Create thumbnail
             miniatures.append((frame_idx, thumbnail))
+        
+        # create 1 thumbnails "None" for user to select if led is not visible
+        none_area = np.zeros((miniature_height, miniature_width, 3), dtype=np.uint8)
+        cv2.putText(none_area, "None of them", (50, 45), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
 
         # Create a montage of thumbnails
-        miniature_height = 90 * 4
-        miniature_width = 160 * 4
         montage = np.zeros((miniature_height * 4, miniature_width * 5, 3), dtype=np.uint8)
-
         for i, (_, thumbnail) in enumerate(miniatures):
             row = i // 5
             col = i % 5
             montage[row * miniature_height:(row + 1) * miniature_height,
-            col * miniature_width:(col + 1) * miniature_width] = thumbnail
-
-        # Add "None" area for user to select
-        none_area = np.zeros((miniature_height, miniature_width, 3), dtype=np.uint8)
-        cv2.putText(none_area, "None of them", (50, 45), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+                    col * miniature_width:(col + 1) * miniature_width] = thumbnail
         montage[3 * miniature_height:(4) * miniature_height, 4 * miniature_width:(5) * miniature_width] = none_area
 
         # Display the montage and handle user selection
-        cv2.namedWindow('Select Frame', cv2.WND_PROP_FULLSCREEN)
-        cv2.setWindowProperty('Select Frame', cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
-        cv2.imshow('Select Frame', montage)
+        window_name_montage = 'Select Frame'
+        cv2.namedWindow(window_name_montage, cv2.WND_PROP_FULLSCREEN)
+        cv2.setWindowProperty(window_name_montage, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+        cv2.setMouseCallback(window_name_montage, select_miniature)
+        cv2.imshow(window_name_montage, montage)
 
-        selected_frame_idx = None
-
-        def select_miniature(event, x, y, flags, param):
-            nonlocal selected_frame_idx
-            if event == cv2.EVENT_LBUTTONUP:
-                frame_number = (y // miniature_height) * 5 + (x // miniature_width)
-                if frame_number < len(miniatures):
-                    selected_frame_idx = miniatures[frame_number][0]
-                    cv2.destroyAllWindows()
-                elif frame_number == 19:  # None area selected
-                    selected_frame_idx = -1
-                    cv2.destroyAllWindows()
-
-        cv2.setMouseCallback('Select Frame', select_miniature)
-
-        while selected_frame_idx is None:
+        while not frame_is_selected:
             cv2.waitKey(1)
+        cv2.destroyWindow(window_name_montage)
 
-        # if the selected frame is the "None" box, it means the LED is not in the video
-        if selected_frame_idx == -1:
-            self.led_in_frame = False
-            return None
+        return selected_frame_idx
 
-        # Final confirmation for selected frame
-        self.cap.set(cv2.CAP_PROP_POS_FRAMES, selected_frame_idx)
-        ret, selected_frame = self.cap.read()
-        if not ret:
-            return False
 
-        display_frame(selected_frame, "Selected Frame")
-
-        confirmation_result = None
-        cv2.imshow('Confirmation', confirmation_window)
-        cv2.setMouseCallback('Confirmation', confirm_frame)
-
-        while confirmation_result is None:
-            cv2.waitKey(1)
-
-        if confirmation_result:
-            self.led_in_frame = True
-            return selected_frame_idx
-        else:
-            self.led_in_frame = False
-            return None
+    def get_frame_id_with_led(self):
+        if self.cap is None:
+            raise Exception("Error: Video not initialized. Please call initialise() first.")
+        frame_id = 0
+        while not self._confirm_frame_selection(frame_id):
+            frame_id = self._choose_frame_from_montage()
+            if frame_id is None:  # LED is not visible on any of the frames
+                self.led_in_frame = False
+                return None
+        self.led_in_frame = True
+        return frame_id  
 
     def set_reference_frame(self, frame_idx):
         self.reference_frame_idx = frame_idx
@@ -202,83 +204,86 @@ class KinectLEDRegionOfInterest:
         ret, self.reference_frame = self.cap.read()
         if not ret:
             raise Exception("Error: Could not read the reference frame.")
+        
+    
+    def _set_square(self, window_name='First Frame', destroy=True):
+        square_is_done = False
+        drawing = False
+        origin = None
+        side_length = None
 
-    def draw_square(self, event, x, y, flags, param):
-        if event == cv2.EVENT_LBUTTONDOWN:
-            self.drawing = True
-            self.square_center = (x, y)
-            self.square_size = 0
-        elif event == cv2.EVENT_MOUSEMOVE and self.drawing:
-            self.square_size = int(max(abs(x - self.square_center[0]), abs(y - self.square_center[1])) * 2)
-        elif event == cv2.EVENT_LBUTTONUP:
-            self.drawing = False
-            self.square_size = int(max(abs(x - self.square_center[0]), abs(y - self.square_center[1])) * 2)
+        def draw_square(event, x, y, flags, param):
+            nonlocal window_name, square_is_done, drawing, origin, side_length
+            if event == cv2.EVENT_LBUTTONDOWN:
+                drawing = True
+                origin = (x, y)
+            
+            if drawing:
+                if event == cv2.EVENT_MOUSEMOVE:
+                    width = int(abs(x - origin[0]))
+                    height = int(abs(y - origin[1]))
+                    side_length = max(width, height)
+                    top_left = (origin[0] - side_length // 2, origin[1] - side_length // 2)
+                    bottom_right = (origin[0] + side_length // 2, origin[1] + side_length // 2)
+                    frame_copy = self.reference_frame.copy()
+                    cv2.rectangle(frame_copy, top_left, bottom_right, (0, 255, 0), 2)
+                    cv2.imshow(window_name, frame_copy)
 
-    # Method to select LED location with a square
-    def select_led_location(self, square_center=None, square_size=None):
-        if square_center is not None and square_size is not None:
-            self.square_center = square_center
-            self.square_size = square_size
-            return [self.square_center, self.square_size]
+                elif event == cv2.EVENT_LBUTTONUP:
+                    drawing = False
+                    square_is_done = True
 
+        # Generate window to draw rectangle (to become square)
+        cv2.namedWindow(window_name, cv2.WINDOW_AUTOSIZE)
+        cv2.setMouseCallback(window_name, draw_square)
+        cv2.imshow(window_name, self.reference_frame)
+
+        while not square_is_done:
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord('q'):
+                break
+        
+        if destroy:
+            cv2.destroyWindow(window_name)
+        
+        return origin, side_length
+
+
+    # Method to select LED location with a square  
+    def draw_led_location(self):
         if self.reference_frame is None:
             raise Exception("Error: First frame not available. Please initialize the video first.")
 
-        while True:
-            cv2.namedWindow('First Frame', cv2.WINDOW_AUTOSIZE)
-            cv2.setMouseCallback('First Frame', self.draw_square)
+        destroy_in_function = False
+        window_name = 'First Frame'
 
-            while True:
-                frame_copy = self.reference_frame.copy()
-                if self.square_center and self.square_size:
-                    top_left = (
-                    self.square_center[0] - self.square_size // 2, self.square_center[1] - self.square_size // 2)
-                    bottom_right = (
-                    self.square_center[0] + self.square_size // 2, self.square_center[1] + self.square_size // 2)
-                    cv2.rectangle(frame_copy, top_left, bottom_right, (0, 255, 0), 2)
-                cv2.imshow('First Frame', frame_copy)
+        origin = None
+        side_length = None
+        is_valid_square = False
+        while not is_valid_square:
+            origin, side_length = self._set_square(window_name=window_name, destroy=destroy_in_function)
+            is_valid_square = self.__show_confirmation_blocking_window(question_str="Is square valid?")
+        
+        if not destroy_in_function:
+            cv2.destroyWindow(window_name)
 
-                key = cv2.waitKey(1) & 0xFF
-                if key == ord('q') or (not self.drawing and self.square_center and self.square_size):
-                    break
+        self.square_center = origin
+        self.square_size = side_length
 
-            cv2.destroyAllWindows()
+        return self.square_center, self.square_size
 
-            if not self.square_center or not self.square_size:
-                raise Exception("Error: No square was drawn.")
 
-            # Display confirmation window
-            self.confirmation_result = None
-            confirmation_window = np.zeros((200, 500, 3), dtype=np.uint8)
-            cv2.putText(confirmation_window, "Is the square set correctly?", (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 1,
-                        (255, 255, 255), 2)
-            cv2.rectangle(confirmation_window, (50, 100), (150, 150), (0, 255, 0), -1)
-            cv2.putText(confirmation_window, "Yes", (70, 135), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 0), 2)
-            cv2.rectangle(confirmation_window, (250, 100), (350, 150), (0, 0, 255), -1)
-            cv2.putText(confirmation_window, "No", (270, 135), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 0), 2)
-            cv2.imshow('Confirmation', confirmation_window)
+    # Method to select LED location with a square  
+    def set_led_location(self, square_center, square_size):
+        if self.reference_frame is None:
+            raise Exception("Error: First frame not available. Please initialize the video first.")
+        if square_center is None or square_size is None:
+            raise Exception("Error: square_center or square_size is None.")
+        
+        self.square_center = square_center
+        self.square_size = square_size
+        return self.square_center, self.square_size
 
-            def confirm_square(event, x, y, flags, param):
-                if event == cv2.EVENT_LBUTTONUP:
-                    if 50 < x < 150 and 100 < y < 150:
-                        self.confirmation_result = True
-                        cv2.destroyAllWindows()
-                    elif 250 < x < 350 and 100 < y < 150:
-                        self.confirmation_result = False
-                        cv2.destroyAllWindows()
-
-            cv2.setMouseCallback('Confirmation', confirm_square)
-
-            while self.confirmation_result is None:
-                cv2.waitKey(1)
-
-            if self.confirmation_result:
-                break
-            else:
-                self.square_center = None
-                self.square_size = None
-
-        return [self.square_center, self.square_size]
 
     @time_it
     def extract_metadata_video(self):
@@ -401,19 +406,20 @@ class KinectLEDRegionOfInterest:
     def save_results(self, verbose=False):
         if not os.path.exists(self.result_dir_path):
             os.makedirs(self.result_dir_path)
-        self.save_roi_as_video(self.result_dir_path, self.result_filename + ".mp4")
-        self.save_result_metadata(self.result_dir_path, self.result_filename + "_metadata.txt")
+        filename_abspath = os.path.join(self.result_dir_path, self.result_filename + ".mp4")
+        self.save_roi_as_video(filename_abspath)
+        filename_abspath = os.path.join(self.result_dir_path, self.result_filename + "_metadata.txt")
+        self.save_result_metadata(filename_abspath)
         if verbose:
             print(f"Results saved as {self.result_dir_path}{self.result_filename}*.")
     
-    def save_roi_as_video(self, output_path, filename, show=False):
+    def save_roi_as_video(self, filename_abspath, show=False):
         if self.roi is None:
             if not self.led_in_frame:
                 return
             else:
                 raise Exception("Error: roi not extracted.")
 
-        filename_abspath = os.path.join(output_path, filename)
 
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
         size = (self.roi.shape[2], self.roi.shape[1])
@@ -428,11 +434,10 @@ class KinectLEDRegionOfInterest:
         out.release()
         cv2.destroyAllWindows()
 
-    def save_result_metadata(self, output_path, filename):
+    def save_result_metadata(self, filename_abspath):
         if self.reference_frame_idx is None:
             self.reference_frame_idx = -1
 
-        filename_abspath = os.path.join(output_path, filename)
         metadata = {
             "video_path": self.video_path,
             "reference_frame_idx": int(self.reference_frame_idx),
