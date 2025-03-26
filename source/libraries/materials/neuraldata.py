@@ -1,4 +1,4 @@
-import chardet
+# import chardet
 import numpy as np
 import os
 import pandas as pd

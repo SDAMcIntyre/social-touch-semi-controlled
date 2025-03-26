@@ -6,6 +6,7 @@ import numpy as np
 from PIL import Image
 import pyglet
 import seaborn as sns
+from typing import List
 import tkinter as tk
 from tkinter import ttk
 import os
@@ -180,7 +181,7 @@ class DataVisualizer2D:
     def set_lim(self, limits):
         self.limits = limits
 
-    def update(self, ax_idx, time: list[float], data: list[float], data_name, linestyle="-", reset=True, showxlabel=True):
+    def update(self, ax_idx, time: List[float], data: List[float], data_name, linestyle="-", reset=True, showxlabel=True):
         if reset:
             self.axs[ax_idx].clear()
 
@@ -238,7 +239,7 @@ class DataVisualizer3D:
     def set_lim(self, limits):
         self.limits = limits
 
-    def update(self, time, data: list[float], info_str=None, colorsMap='viridis_r', withLine=True):
+    def update(self, time, data: List[float], info_str=None, colorsMap='viridis_r', withLine=True):
         if self.fig.texts:
             for text in self.fig.texts:
                 text.remove()
