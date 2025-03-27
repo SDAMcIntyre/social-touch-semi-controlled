@@ -112,7 +112,7 @@ if __name__ == "__main__":
             # Results filename and location
             output_dirname = os.path.dirname(file_abs).replace(db_path_input, db_path_output)
             output_filename_csv = file.replace(video_extension, "_LED.csv")
-            output_filename_md = file.replace(video_extension, "_metadata.txt")
+            output_filename_md = file.replace(video_extension, "_LED_metadata.txt")
             output_filename_csv_abs = os.path.join(output_dirname, output_filename_csv)
             output_filename_md_abs = os.path.join(output_dirname, output_filename_md)
 
