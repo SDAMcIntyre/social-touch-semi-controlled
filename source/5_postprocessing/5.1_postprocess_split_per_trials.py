@@ -39,6 +39,8 @@ def find_groups_of_ones(arr):
 if __name__ == "__main__":
     # parameters
     force_processing = True  # If user wants to force data processing even if results already exist
+    save_results = True
+
     show = False  # If user wants to monitor what's happening
 
     # choose the method to split trials:
@@ -48,17 +50,15 @@ if __name__ == "__main__":
     #                              after the TTL goes off (internal "lag" of the expert signing)
     split_type = "with_following_rest_time"  # soft, hard, TTL_beginning
 
-    save_results = False
 
     print("Step 0: Extract the videos embedded in the selected sessions.")
     # get database directory
-    db_path = os.path.join(path_tools.get_database_path(), "semi-controlled", "3_merged", "1_kinect_and_nerve")
-
+    db_path = os.path.join(path_tools.get_database_path(), "semi-controlled", "3_merged")
     # get input base directory
-    db_path_input = os.path.join(db_path, "0_block-order")
+    db_path_input = os.path.join(db_path, "sorted_by_block")
     #db_path_input = os.path.join(db_path, "1_block-order_corrected-delay")
     # get output base directory
-    db_path_output = os.path.join(db_path, "2_by-trials")
+    db_path_output = os.path.join(db_path, "sorted_by_trial")
     #db_path_output = os.path.join(db_path, "2_by-trials_corrected-delay")
 
     if not os.path.exists(db_path_output):
@@ -98,7 +98,7 @@ if __name__ == "__main__":
     # it is important to split by MNG files / neuron recordings to create the correct subfolders.
     for session in sessions:
         curr_dir = os.path.join(db_path_input, session)
-        files_abs, files = path_tools.find_files_in_directory(curr_dir, ending='_kinect_and_nerve.csv')
+        files_abs, files = path_tools.find_files_in_directory(curr_dir, ending='.csv')
 
         output_session_abs = os.path.join(db_path_output, session)
         if not os.path.exists(output_session_abs):
@@ -106,6 +106,8 @@ if __name__ == "__main__":
             print(f"Directory '{output_session_abs}' created.")
 
         for file_abs, file in zip(files_abs, files):
+            if not bool(re.search(r'_block-order\d{2}\.csv$', file)):
+                continue
             print(f"current file: {file}")
             match = re.search(r'block-order(\d+)', file)
             block_order_str = match.group(0)
