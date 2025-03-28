@@ -73,21 +73,26 @@ def get_correlation(sig1, sig2, downsampling=0.1, show=False):
 
 
 if __name__ == "__main__":
-    force_processing = True  # If user wants to force data processing even if results already exist
-    show = False  # If user wants to monitor what's happening
-    scaling_nofilling = True
 
-    generate_report = True
+    force_processing = True  # If user wants to force data processing even if results already exist
     save_results = True
+    save_figure = True
+    generate_report = True
+
+    kinect_input_filename_ending = '_kinect.csv'
+    nerve_input_filename_ending = '_nerve.csv'
+    output_filename_ending = ".csv"
+    scaling_nofilling = True
+    show = False  # If user wants to monitor what's happening
 
     print("Step 0: Extract the videos embedded in the selected sessions.")
     # get database directory
     db_path = os.path.join(path_tools.get_database_path(), "semi-controlled")
     # get input base directory
+    db_path_input_kinect = os.path.join(db_path, "2_processed", "kinect")
     db_path_input_nerve = os.path.join(db_path, "2_processed", "nerve", "3_cond-velocity-adj")
-    db_path_input_kinect = os.path.join(db_path, "2_processed", "kinect", "contact_and_led", "0_block-order")
-    # get output base directory
-    db_path_output = os.path.join(db_path, "3_merged", "1_kinect_and_nerve", "0_block-order_kinectMP4")
+    # set output base directory
+    db_path_output = os.path.join(db_path, "3_merged", "sorted_by_block")
     if not os.path.exists(db_path_output):
         os.makedirs(db_path_output)
         print(f"Directory '{db_path_output}' created.")
@@ -120,7 +125,9 @@ if __name__ == "__main__":
     sessions = sessions + sessions_ST16
     sessions = sessions + sessions_ST18
     print(sessions)
-
+    
+    success_list = []
+    alignment_technique_list = []
     lag_list = []
     ratio_kinect_list = []
     ratio_nerve_list = []
@@ -132,34 +139,30 @@ if __name__ == "__main__":
         curr_kinect_dir = os.path.join(db_path_input_kinect, session)
         curr_nerve_dir = os.path.join(db_path_input_nerve, session)
 
-        files_contact_abs, files_contact = path_tools.find_files_in_directory(curr_kinect_dir, ending='_kinect.csv')
+        files_contact_abs, files_contact = path_tools.find_files_in_directory(curr_kinect_dir, ending=kinect_input_filename_ending)
 
         for file_contact_abs, file_contact in zip(files_contact_abs, files_contact):
             print(f"current file: {file_contact}")
             #if 2 != int(re.search("block-order\d{2}", file_contact).group().replace("block-order", "")): continue
             # check if led and nerve files exist for this contact file
-            file_nerve = file_contact.replace("kinect.csv", "nerve.csv")
+            input_dirname = os.path.dirname(file_contact_abs)
+            file_nerve = file_contact.replace(kinect_input_filename_ending, nerve_input_filename_ending)
             file_nerve_abs = os.path.join(curr_nerve_dir, file_nerve)
-            try:
-                with open(file_nerve_abs, 'r'):
-                    pass
-            except FileNotFoundError:
-                print("Matching nerve file does not exist.")
+            if not os.path.exists(file_nerve_abs):
+                print(f"File '{file_nerve_abs}'  file does not exist. Move to next file...")
                 continue
 
             # check if already exist, if not forced to process
-            output_filename = file_contact.replace("_kinect.csv", "_kinect_and_nerve.csv")
+            output_filename = file_contact.replace(kinect_input_filename_ending, output_filename_ending)
             output_dir_abs = os.path.join(db_path_output, session)
-            if not os.path.exists(output_dir_abs):
-                os.makedirs(output_dir_abs)
             output_filename_abs = os.path.join(output_dir_abs, output_filename)
-            if not force_processing:
-                try:
-                    with open(output_filename_abs, 'r'):
-                        print("Result file exists, jump to the next dataset.")
-                        continue
-                except FileNotFoundError:
-                    pass
+            if not force_processing and os.path.exists(output_filename_abs):
+                print(f"File '{file_contact}' already exists and the processing is not forced. Move to next file...")
+                continue
+            if save_results or save_figure:
+                if not os.path.exists(output_dir_abs):
+                    os.makedirs(output_dir_abs)
+                    print(f"Directory '{output_dir_abs}' created.")
 
             # load current data
             kinect = pd.read_csv(file_contact_abs)
@@ -167,7 +170,7 @@ if __name__ == "__main__":
 
             # 0. scale up kinect data to match nerve sampling rate
             nerve_Fs = 1/np.mean(np.diff(nerve.Sec_FromStart))
-            kinect_Fs = 1/np.mean(np.diff(kinect.t))
+            kinect_Fs = 1/np.mean(np.diff(kinect.time))
             estimated_scale = nerve_Fs / kinect_Fs
             nsample_scaled = int(estimated_scale * len(kinect))
             # create the scaled dataframe
@@ -196,7 +199,7 @@ if __name__ == "__main__":
                 warnings.warn(w)
                 comment = f"Lag ratio was too high ({abs(lag) / len(TTL_kinect):.3f}); Use Contact Depth and Neuron IFF instead."
                 with pd.option_context('future.no_silent_downcasting', True):
-                    k = kinect_scaled["Contact_Area"].ffill().values
+                    k = kinect_scaled["contact_area"].ffill().values
                 n = nerve["Freq"].values
                 lag = get_correlation(k, n, downsampling=0.1)
 
@@ -206,8 +209,15 @@ if __name__ == "__main__":
                     comment = f"Lag ratio was too high ({abs(lag) / len(TTL_kinect):.3f}); any shift has been ignored."
                     warnings.warn(w)
                     lag = 0
+                    success = False
+                    alignment_technique = 'none'
+                else:
+                    success = True
+                    alignment_technique = 'IFF and contact area'
             else:
+                alignment_technique = 'TTLs'
                 comment = "Nothing to report"
+                success = True
 
             # align signals by shifting nerve data
             if lag >= 0:
@@ -247,9 +257,11 @@ if __name__ == "__main__":
             df_output["Nerve_spike"] = nerve_shifted
             df_output["Nerve_freq"] = freq_shifted
             df_output["Nerve_TTL"] = TTL_Aut
-            df_output["t"] = nerve_t
+            df_output["time"] = nerve_t
 
             # keep the lag for traceability file
+            alignment_technique_list.append(alignment_technique)
+            success_list.append(success)
             lag_list.append(lag)
             ratio_kinect_list.append(abs(lag) / len(TTL_kinect))
             ratio_nerve_list.append(abs(lag) / len(TTL_nerve))
@@ -257,11 +269,11 @@ if __name__ == "__main__":
             file_nerve_list.append(file_nerve)
             comment_list.append(comment)
 
-            if show:
+            if show or save_figure:
                 # Create a figure with two subplots
                 fig, (ax1, ax2, ax3, ax4) = plt.subplots(4, 1, sharex=True, figsize=(10, 6))
 
-                x = df_output["t"].values
+                x = df_output["time"].values
                 sig1 = df_output["Nerve_TTL"].values
                 sig2 = df_output["LED on"].values
 
@@ -298,12 +310,18 @@ if __name__ == "__main__":
                 fig.suptitle(main_title, fontsize=16)
                 # Adjust the layout
                 plt.tight_layout()
-                # Show the plot and wait until the window is closed
-                plt.show()
+                
+                if save_figure:
+                    plt.savefig(output_filename_abs.replace(output_filename_ending, "TTLs_alignement.png"))
+                if show:
+                    plt.show(block=True)
                 plt.close('all')
 
             # save data on the hard drive ?
-            if save_results:
+            if save_results:    
+                if not os.path.exists(output_dir_abs):
+                    os.makedirs(output_dir_abs)
+                    print(f"Directory '{output_dir_abs}' created.")
                 df_output.to_csv(path_tools.winapi_path(output_filename_abs), index=False)
 
             print("done.")
@@ -312,22 +330,26 @@ if __name__ == "__main__":
         report_filename = os.path.join(db_path_output, "shift_lag_report.csv")
         report_data = []
 
-        for f_kinect, f_nerve, lag, r_kinect, r_neuron, comment in zip(file_kinect_list, file_nerve_list, lag_list,
-                                                                       ratio_kinect_list, ratio_nerve_list, comment_list):
+        for f_kinect, f_nerve, success, lag, r_kinect, r_neuron, alg_tech, comment in zip(file_kinect_list, file_nerve_list, success_list, lag_list,
+                                                                       ratio_kinect_list, ratio_nerve_list, alignment_technique_list, comment_list):
             report_data.append({"Kinect Filename": f_kinect,
                                 "Nerve Filename": f_nerve,
-                                "lag_sample": lag,
+                                "Success": success,
+                                "Lag (sample)": lag,
                                 "Ratio sample/kinect length": r_kinect,
                                 "Ratio sample/neuron length": r_neuron,
-                                "comments": comment})
+                                "Alignment Technique": alg_tech,
+                                "Comments": comment})
 
         with open(report_filename, mode='w', newline='') as file:
             writer = csv.DictWriter(file, fieldnames=["Kinect Filename",
                                                       "Nerve Filename",
-                                                      "lag_sample",
+                                                      "Success",
+                                                      "Lag (sample)",
                                                       "Ratio sample/kinect length",
                                                       "Ratio sample/neuron length",
-                                                      "comments"])
+                                                      "Alignment Technique",
+                                                      "Comments"])
             writer.writeheader()
             for row in report_data:
                 writer.writerow(row)
