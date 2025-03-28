@@ -164,7 +164,7 @@ if __name__ == "__main__":
     db_path_input = os.path.join(db_path, "0_0_by-units")
 
     # get output base directory
-    db_path_output = os.path.join(db_path, "0_1_by-units_correct-contact")
+    db_path_output = os.path.join(db_path, "0_1_by-units_jan-and-sept")
     if save_results and not os.path.exists(db_path_output):
         os.makedirs(db_path_output)
         print(f"Directory '{db_path_output}' created.")

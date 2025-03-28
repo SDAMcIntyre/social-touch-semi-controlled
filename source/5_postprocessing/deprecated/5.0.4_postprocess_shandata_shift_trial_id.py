@@ -188,7 +188,7 @@ if __name__ == "__main__":
     force_processing = True  # If user wants to force data processing even if results already exist
     show = False  # If user wants to monitor what's happening
     
-    shift_processing = "define"  # <define> or <apply> shift
+    shift_processing = "apply"  # <define> or <apply> shift
     save_results = False
 
     print("Step 0: Extract the videos embedded in the selected sessions.")
@@ -196,13 +196,13 @@ if __name__ == "__main__":
     db_path = os.path.join(path_tools.get_database_path(), "semi-controlled", "3_merged", "1_kinect_and_nerve_shandata")
 
     # get input base directory
-    db_path_input = os.path.join(db_path, "0_by-units_renamed")
+    db_path_input = os.path.join(db_path, "0_2_by-units_jan-and-sept_standard-cols")
     # get output base directory
-    db_path_output = os.path.join(db_path, "0_by-units_renamed_trial-corrected")
+    db_path_output = os.path.join(db_path, "0_3_by-units_jan-and-sept_standard-cols_corrected-trialid")
     # shift value output filename
     shiftv_filename =  os.path.join(db_path_output, "semi-controlled_trial-id_shift-values.txt")
 
-    if not os.path.exists(db_path_output):
+    if save_results and not os.path.exists(db_path_output):
         os.makedirs(db_path_output)
         print(f"Directory '{db_path_output}' created.")
 
