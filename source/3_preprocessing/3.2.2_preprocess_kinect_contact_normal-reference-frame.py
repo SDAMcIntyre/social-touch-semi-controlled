@@ -13,6 +13,8 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 import libraries.misc.path_tools as path_tools  # noqa: E402
 from libraries.plot.semicontrolled_data_visualizer import DataVisualizer3D  # noqa: E402
 
+
+
 if __name__ == "__main__":
     force_processing = True  # If user wants to force data processing even if results already exist
     show = False  # If user wants to monitor what's happening
@@ -20,64 +22,63 @@ if __name__ == "__main__":
     save_results = False
     generate_report = False
 
-    print("Step 0: Extract the videos embedded in the selected neurons.")
+    print("Step 0: Extract the videos embedded in the selected sessions.")
     # get database directory
-    db_path = os.path.join(path_tools.get_database_path(), "semi-controlled", "2_processed", "kinect", "contact")
+    db_path = os.path.join(path_tools.get_database_path(), "semi-controlled")
 
     # get input base directory
-    db_path_input = os.path.join(db_path, "1_block-order")
-
+    db_path_input = os.path.join(db_path, "2_processed", "kinect")
     # get output base directory
-    db_path_output = os.path.join(db_path, "1_block-order_no-outlier")
+    db_path_output = os.path.join(db_path, "2_processed", "kinect")
     if not os.path.exists(db_path_output):
         os.makedirs(db_path_output)
         print(f"Directory '{db_path_output}' created.")
 
-    # neuron names
-    neurons_ST13 = ['2022-06-14_ST13-01',
+    # session names
+    sessions_ST13 = ['2022-06-14_ST13-01',
                      '2022-06-14_ST13-02',
                      '2022-06-14_ST13-03']
 
-    neurons_ST14 = ['2022-06-15_ST14-01',
-                     '2022-06-15_ST14-02',
-                     '2022-06-15_ST14-03',
-                     '2022-06-15_ST14-04']
+    sessions_ST14 = ['2022-06-15_ST14-01',
+                    '2022-06-15_ST14-02',
+                    '2022-06-15_ST14-03',
+                    '2022-06-15_ST14-04']
 
-    neurons_ST15 = ['2022-06-16_ST15-01',
+    sessions_ST15 = ['2022-06-16_ST15-01',
                      '2022-06-16_ST15-02']
 
-    neurons_ST16 = ['2022-06-17_ST16-02',
+    sessions_ST16 = ['2022-06-17_ST16-02',
                      '2022-06-17_ST16-03',
                      '2022-06-17_ST16-04',
                      '2022-06-17_ST16-05']
 
-    neurons_ST18 = ['2022-06-22_ST18-01',
+    sessions_ST18 = ['2022-06-22_ST18-01',
                      '2022-06-22_ST18-02',
                      '2022-06-22_ST18-04']
-    neurons = []
-    neurons = neurons + neurons_ST13
-    neurons = neurons + neurons_ST14
-    neurons = neurons + neurons_ST15
-    neurons = neurons + neurons_ST16
-    neurons = neurons + neurons_ST18
-    print(neurons)
+    sessions = []
+    sessions = sessions + sessions_ST13
+    sessions = sessions + sessions_ST14
+    sessions = sessions + sessions_ST15
+    sessions = sessions + sessions_ST16
+    sessions = sessions + sessions_ST18
+    print(sessions)
 
     diff_ms_all = []
     names_contact = []
     names_led = []
-    # it is important to split by MNG files / neuron recordings to create the correct subfolders.
-    for neuron in neurons:
-        curr_contact_path_dir = os.path.join(db_path_input, neuron)
+    # it is important to split by MNG files / session recordings to create the correct subfolders.
+    for session in sessions:
+        curr_contact_path_dir = os.path.join(db_path_input, session)
 
-        files_contact_abs, files_contact = path_tools.find_files_in_directory(curr_contact_path_dir, ending='_contact.csv')
+        files_contact_abs, files_contact = path_tools.find_files_in_directory(curr_contact_path_dir, ending='somatosensory_data.csv')
 
-        # load all data of the current neuron into contacts
+        # load all data of the current session into contacts
         contacts = []
         for file_contact_abs, file_contact in zip(files_contact_abs, files_contact):
             print(f"current file: {file_contact}")
             contacts.append(pd.read_csv(file_contact_abs))
 
-        # load all data of the current neuron into contacts
+        # load all data of the current session into contacts
         file_id = None
         xyz = None
         xyz_index = None
@@ -116,7 +117,7 @@ if __name__ == "__main__":
         # concatenate the different locations for processing
         positions = [xyz, xyz_index, xyz_green, xyz_red, xyz_yellow]
 
-        viz = DataVisualizer3D(neuron)
+        viz = DataVisualizer3D(session)
         viz.update(np.arange(np.shape(xyz)[1]), xyz)
 
         continue
@@ -146,7 +147,7 @@ if __name__ == "__main__":
             print(f"current file: {file_contact}")
 
             output_filename = file_contact.replace(".csv", "_no-outlier.csv")
-            output_dir_abs = os.path.join(db_path_output, neuron)
+            output_dir_abs = os.path.join(db_path_output, session)
             output_filename_abs = os.path.join(output_dir_abs, output_filename)
             if not force_processing:
                 try:
