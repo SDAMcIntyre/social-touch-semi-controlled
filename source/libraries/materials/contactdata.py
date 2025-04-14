@@ -4,9 +4,12 @@ import numpy as np
 import numpy.matlib
 from scipy.interpolate import interp1d
 from sklearn.decomposition import PCA  # from pyppca import ppca  # pip install git+https://github.com/el-hult/pyppca
+import sys
+import os
 
+# homemade libraries
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 from .metadata import Metadata  # noqa: E402
-from materials.stimulusinfo import StimulusInfo  # noqa: E402
 from misc.interpolate_nan_values import interpolate_nan_values  # noqa: E402
 
 
@@ -25,6 +28,7 @@ class ContactData:
 
         self._pos: list[float] = []  # mm
 
+        self.pca_model = None           # Store the fitted PCA model if needed later
         self._pos_1D: list[float] = []  # mm
         self._vel: list[float] = []  # mm/sec
 
@@ -252,32 +256,154 @@ class ContactData:
         self._pos = value
         self.update_pos_1D()
 
-    def update_pos_1D(self):
-        # compress the signal into 1D (as the expected motion is supposed to be 1D anyway)
-        # is there is nan, use a github provided PCA to ignore nan
+    def update_pos_1D(self, pca_range=None):
+        """
+        Compresses the 3D position data (self.pos) into 1D using PCA.
 
+        Handles NaN values by centering, interpolating, and then applying PCA.
+        Allows specifying a sub-range of samples to fit the PCA model,
+        which is then applied to the entire dataset.
+
+        Args:
+            pca_range (tuple, optional): A tuple (start_index, end_index)
+                specifying the sample range (exclusive of end_index) to use
+                for fitting the PCA model. If None, the entire dataset is used
+                for fitting. Defaults to None.
+        """
         if np.all(np.isnan(self.pos)):
-            self.pos_1D = np.nan(len(self.pos[0]))
+            # Ensure output length matches number of samples
+            self.pos_1D = np.full(self.pos.shape[1], np.nan)
+            self.pca_model = None
+            print("Warning: Input position data is all NaN.")
             return
 
+        # Transpose to shape (nsamples, nfeatures) for PCA convention
         pos3D = self.pos.transpose()
+        nsamples, nfeatures = pos3D.shape
 
-        if np.isnan(pos3D).any():
-            nsamples, _ = np.shape(pos3D)
-            # detrend the axis
+        if nsamples == 0:
+             self.pos_1D = np.array([])
+             self.pca_model = None
+             print("Warning: Input position data has zero samples.")
+             return
+
+        # --- Determine data range for mean calculation ---
+        data_for_mean_calc = pos3D
+        if pca_range:
+            try:
+                start, end = pca_range
+                # Basic validation
+                if not (0 <= start < end <= nsamples):
+                    print(f"Warning: Invalid pca_range {pca_range} for nsamples={nsamples}. Using full range for mean calculation.")
+                else:
+                    data_for_mean_calc = pos3D[start:end, :]
+                    if data_for_mean_calc.size == 0:
+                         print(f"Warning: pca_range {pca_range} results in an empty slice. Using full range for mean calculation.")
+                         data_for_mean_calc = pos3D # Fallback
+            except (TypeError, ValueError) as e:
+                 print(f"Warning: Invalid pca_range format {pca_range}. Expected (start, end). Using full range for mean calculation. Error: {e}")
+                 pca_range = None # Reset pca_range if format is wrong
+
+
+        # --- Centering Step ---
+        # Calculate mean, ignoring NaNs, over the specified range (or full data)
+        M = np.nanmean(data_for_mean_calc, axis=0)
+
+        # Check if mean calculation failed (e.g., the slice was all NaNs)
+        if np.isnan(M).any():
+            print("Warning: Mean calculation over specified range resulted in NaN. Attempting mean over full data.")
             M = np.nanmean(pos3D, axis=0)
-            pos3D_centered = pos3D - np.matlib.repmat(M, nsamples, 1)
-            # interpolate the nan values
-            pos3D = interpolate_nan_values(pos3D_centered)
+            if np.isnan(M).any():
+                print("Error: Cannot compute a valid mean for centering (full data also results in NaN mean). Aborting PCA.")
+                self.pos_1D = np.full(nsamples, np.nan)
+                self.pca_model = None
+                return
 
-        # if there is some value
-        if np.any(pos3D != 0):
-            # get the first PCA
-            pca = PCA(n_components=1)
-            self.pos_1D = np.squeeze(pca.fit_transform(pos3D))
-        else:
-            # fill up the vector to avoid any warnings from PCA.fit_transform
-            self.pos_1D = np.zeros(len(self.pos[0]))
+        # Center the *entire* dataset using the calculated mean
+        # Using broadcasting which is generally preferred over np.matlib.repmat
+        pos3D_centered = pos3D - M
+
+        # --- Handle NaNs (Interpolation) ---
+        pos3D_processed = pos3D_centered # Start with centered data
+        if np.isnan(pos3D_centered).any():
+            print("Info: NaN values detected, attempting interpolation...")
+            try:
+                # IMPORTANT: Ensure interpolate_nan_values handles NaNs appropriately
+                # and returns an array of the same shape without NaNs.
+                pos3D_processed = interpolate_nan_values(pos3D_centered)
+
+                # Verify interpolation didn't fail catastrophically
+                if np.isnan(pos3D_processed).any():
+                     # If some NaNs remain (interpolation method might fail on edges/all-NaN columns),
+                     # PCA might still fail. Consider alternative handling or erroring.
+                     print("Warning: NaNs remain after interpolation. PCA might fail.")
+                     # Option: Fill remaining NaNs with 0 or column mean before PCA?
+                     # For now, we proceed, but PCA might raise an error.
+                     # Example: Fill remaining NaNs with 0
+                     # nan_mask = np.isnan(pos3D_processed)
+                     # pos3D_processed[nan_mask] = 0
+                     # print("Warning: Filling remaining NaNs with 0 before PCA.")
+
+            except Exception as e:
+                print(f"Error during NaN interpolation: {e}. Aborting PCA.")
+                self.pos_1D = np.full(nsamples, np.nan)
+                self.pca_model = None
+                return
+
+        # --- Check for Zero Variance Data after processing ---
+        # PCA requires variance. Check if the data to be used for fitting has variance.
+        fit_data_check = pos3D_processed
+        if pca_range:
+            # Use the validated range indices
+            try:
+                start, end = pca_range
+                if 0 <= start < end <= nsamples:
+                    fit_data_check = pos3D_processed[start:end, :]
+                else:
+                    # Range was invalid earlier, so fit_transform will use full data
+                    pass # Use full pos3D_processed for check
+            except: # Catch potential issues if pca_range became invalid
+                 pass # Use full pos3D_processed for check
+
+
+        # Check if data (or subset) is effectively constant/zero
+        if fit_data_check.size == 0 or np.allclose(np.nanstd(fit_data_check, axis=0), 0):
+            print("Warning: Data (or specified PCA range) has zero variance after processing. Setting pos_1D to zeros.")
+            self.pos_1D = np.zeros(nsamples)
+            self.pca_model = None # No meaningful PCA model
+            return
+
+        # --- Perform PCA ---
+        pca = PCA(n_components=1)
+        final_pos_1D = None
+
+        try:
+            if pca_range:
+                 # Use validated range again
+                start, end = pca_range # Assume validated above
+                if 0 <= start < end <= nsamples:
+                    fit_data = pos3D_processed[start:end, :]
+                    print(f"Fitting PCA on samples [{start}:{end}]...")
+                    pca.fit(fit_data)
+                    print("Transforming entire dataset...")
+                    final_pos_1D = np.squeeze(pca.transform(pos3D_processed))
+                else:
+                    # Should have been caught, but as a fallback:
+                    print("Warning: Invalid pca_range detected at PCA stage. Fitting and transforming on full data.")
+                    final_pos_1D = np.squeeze(pca.fit_transform(pos3D_processed))
+            else:
+                # No range specified, fit and transform on the whole processed data
+                print("Fitting PCA and transforming full dataset...")
+                final_pos_1D = np.squeeze(pca.fit_transform(pos3D_processed))
+
+            self.pos_1D = final_pos_1D
+            self.pca_model = pca # Store the fitted model
+
+        except ValueError as e:
+             # Catch potential errors from PCA (e.g., remaining NaNs if interpolation failed)
+             print(f"Error during PCA execution: {e}. Aborting PCA.")
+             self.pos_1D = np.full(nsamples, np.nan)
+             self.pca_model = None
 
 
     @property

@@ -85,7 +85,7 @@ class SemiControlledData:
 
     def load_metadata(self, df):
         # metadata
-        self.md.time = df.t.values
+        self.md.time = df.time.values
 
     def load_stimulus(self):
         if self.md.md_stim_filename == "":
@@ -101,31 +101,25 @@ class SemiControlledData:
         self.stim.force = current_row.force.values[0]
 
     def load_contact(self, df):
-        self.contact.time = df.t.values
+        self.contact.time = df["time"].values
 
         # Kinect LED time series
         if 'LED on' in df.columns: 
             self.contact.TTL = df["LED on"].values
-
         # contact data
-        self.contact.contact_flag = df.Contact_Flag.values
-        if 'Contact_Area' in df.columns: 
-            self.contact.area = df["Contact_Area"].values
-        elif 'Contact_area' in df.columns:
-            self.contact.area = df["Contact_area"].values
-        else:
-            pass
-        self.contact.depth = df.Depth.values
+        self.contact.contact_flag = df["contact_detected"].values
+        self.contact.area = df["contact_area"].values
+        self.contact.depth = df["contact_depth"].values
         # some dataset doesn't possess the position anymore
-        if "hand" in self.stim.size and 'Position_x' in df.columns:  # if the hand is used, take the hand tracker
-            px = df.Position_x.values
-            py = df.Position_y.values
-            pz = df.Position_z.values
+        if "hand" in self.stim.size and 'palm_position_x' in df.columns:  # if the hand is used, take the hand tracker
+            px = df["palm_position_x"].values
+            py = df["palm_position_y"].values
+            pz = df["palm_position_z"].values
             self.contact.pos = np.array([px, py, pz])
-        elif 'Position_index_x' in df.columns:
-            px = df.Position_index_x.values
-            py = df.Position_index_y.values
-            pz = df.Position_index_z.values
+        elif 'index_position_x' in df.columns:
+            px = df["index_position_x"].values
+            py = df["index_position_y"].values
+            pz = df["index_position_z"].values
             self.contact.pos = np.array([px, py, pz])
         else:
             pass
@@ -139,7 +133,7 @@ class SemiControlledData:
             pass
 
     def load_neural(self, df):
-        self.neural.time = df.t.values
+        self.neural.time = df.time.values
         # neural data
         self.neural.spike = df.Nerve_spike.values
         self.neural.iff = df.Nerve_freq.values
