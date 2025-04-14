@@ -25,6 +25,8 @@ if __name__ == "__main__":
     # User control variables
     # ----------------------
     force_processing = True  # If user wants to force data processing even if results already exist
+    save_figures = True
+    save_results = True
 
     # choose the method to split single touches:
     #  - method_1: Stroking trials are split with position, Taping using only IFF
@@ -37,8 +39,6 @@ if __name__ == "__main__":
     show_single_touches = False  # If user wants to visualise single touches, one by one
     manual_check = False  # If user wants to take the time to check the trial and how it has been split
 
-    save_figures = True
-    save_results = True
     # ----------------------
     # ----------------------
     # ----------------------

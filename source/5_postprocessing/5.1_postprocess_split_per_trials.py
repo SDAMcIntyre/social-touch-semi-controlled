@@ -1,15 +1,17 @@
-import matplotlib.pyplot as plt
-import numpy as np
+import glob
 import os
-import pandas as pd
-from pathlib import Path
 import re
 import shutil
 import sys
 import warnings
+from pathlib import Path
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
 
 # homemade libraries
-# current_dir = Path(__file__).resolve()
+# Add project root to sys.path to allow importing local libraries
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 import libraries.misc.path_tools as path_tools  # noqa: E402
 
@@ -36,13 +38,15 @@ def find_groups_of_ones(arr):
     return groups
 
 
-if __name__ == "__main__":
-    # parameters
+if __name__ == "__main__":    # parameters
     force_processing = True  # If user wants to force data processing even if results already exist
     save_results = True
-
+    # generate_report = True
+    
+    # result saving parameters
+    input_filename_pattern_r = r"semicontrolled_block-order(0[1-9]|1[0-8]).csv"
     show = False  # If user wants to monitor what's happening
-
+    
     # choose the method to split trials:
     #  - soft: will find the middle point between the blocks to separate them, else chunk by TTL
     #  - hard: ?
@@ -50,18 +54,14 @@ if __name__ == "__main__":
     #                              after the TTL goes off (internal "lag" of the expert signing)
     split_type = "with_following_rest_time"  # soft, hard, TTL_beginning
 
-
     print("Step 0: Extract the videos embedded in the selected sessions.")
     # get database directory
     db_path = os.path.join(path_tools.get_database_path(), "semi-controlled", "3_merged")
     # get input base directory
     db_path_input = os.path.join(db_path, "sorted_by_block")
-    #db_path_input = os.path.join(db_path, "1_block-order_corrected-delay")
     # get output base directory
     db_path_output = os.path.join(db_path, "sorted_by_trial")
-    #db_path_output = os.path.join(db_path, "2_by-trials_corrected-delay")
-
-    if not os.path.exists(db_path_output):
+    if save_results and not os.path.exists(db_path_output):
         os.makedirs(db_path_output)
         print(f"Directory '{db_path_output}' created.")
 
@@ -92,28 +92,25 @@ if __name__ == "__main__":
     sessions = sessions + sessions_ST15
     sessions = sessions + sessions_ST16
     sessions = sessions + sessions_ST18
+
     print(sessions)
 
     diff_ms_all = []
     # it is important to split by MNG files / neuron recordings to create the correct subfolders.
     for session in sessions:
         curr_dir = os.path.join(db_path_input, session)
-        files_abs, files = path_tools.find_files_in_directory(curr_dir, ending='.csv')
+        files_abs, files = path_tools.find_files_in_directory(curr_dir, ending=input_filename_pattern_r)
 
         output_session_abs = os.path.join(db_path_output, session)
-        if not os.path.exists(output_session_abs):
+        if save_results and not os.path.exists(output_session_abs):
             os.makedirs(output_session_abs)
             print(f"Directory '{output_session_abs}' created.")
 
         for file_abs, file in zip(files_abs, files):
-            if not bool(re.search(r'_block-order\d{2}\.csv$', file)):
-                continue
             print(f"current file: {file}")
-            match = re.search(r'block-order(\d+)', file)
-            block_order_str = match.group(0)
-            output_dir_abs = os.path.join(output_session_abs, block_order_str)
-            if not match:
-                print("Substring 'block-orderXX' not found in the string.")
+            output_dir_abs = os.path.dirname(file_abs).replace(db_path_input, db_path_output)
+            if not force_processing and glob.glob(os.path.join(output_dir_abs, "*.csv")):
+                print(f"output folder already contains csv file(s), most likely output data, and not force processing. Skipping...")
                 continue
 
             # load current data
@@ -180,15 +177,8 @@ if __name__ == "__main__":
                 warnings.warn("Issue detected: Number of trials is equal to zeros.")
 
             for (trial_id, data_trial) in enumerate(data_trials, 1):  # starts at id = 1
-                output_filename = file.replace("_kinect_and_nerve.csv", f"_trial{trial_id:02}.csv")
+                output_filename = file.replace(".csv", f"_trial{trial_id:02}.csv")
                 output_filename_abs = os.path.join(output_dir_abs, output_filename)
-                if not force_processing:
-                    try:
-                        with open(output_filename_abs, 'r'):
-                            print("Result file exists, jump to the next dataset.")
-                            continue
-                    except FileNotFoundError:
-                        pass
 
                 if show:
                     plt.figure(figsize=(10, 12))  # Increase height for two subplots
@@ -196,7 +186,28 @@ if __name__ == "__main__":
                     plt.plot(data_trial["LED on"].values, label='TTL_kinect_rescale', alpha=0.6, linestyle='--')
                     plt.legend()
                     plt.title('TTL_kinect_rescale')
-                    plt.show()
+
+                    # --- Attempt to maximize plot window ---
+                    try:
+                        fig_manager = plt.get_current_fig_manager()
+                        # Try the 'zoomed' state first (common for TkAgg on Windows)
+                        if hasattr(fig_manager, 'window') and hasattr(fig_manager.window, 'state'):
+                             fig_manager.window.state('zoomed')
+                             print("Attempted to maximize plot window using 'zoomed' state.")
+                        # Fallback checks for other backends
+                        elif hasattr(fig_manager, 'window') and hasattr(fig_manager.window, 'showMaximized'): # Qt
+                            fig_manager.window.showMaximized()
+                            print("Attempted to maximize plot window using 'showMaximized'.")
+                        elif hasattr(fig_manager, 'window') and hasattr(fig_manager.window, 'Maximize'): # Wx
+                            fig_manager.window.Maximize(True)
+                            print("Attempted to maximize plot window using 'Maximize'.")
+                        else:
+                            print("Note: Could not automatically maximize plot window for the current backend.")
+                    except Exception as e:
+                        print(f"Note: Error trying to maximize plot window: {e}")
+                    # --- End of maximization attempt ---
+
+                    plt.show(block=True)
 
                 # save data on the hard drive ?
                 if save_results:
@@ -211,28 +222,3 @@ if __name__ == "__main__":
                     data_trial.to_csv(output_filename_abs, index=False)
             
             print("done.")
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

@@ -124,8 +124,10 @@ class SemiControlledDataSplitter:
                 scd_list_out = [scd_list_out, scd_list]
                 endpoints_list_out = [endpoints_list_out, endpoints_list]
 
-            if self.show and self.save_visualiser and self.viz is not None:
+            if self.save_visualiser and self.viz is not None:
                 self.viz.save(self.save_visualiser_fname)
+                if not self.show:
+                    del self.viz
 
         return scd_list_out, endpoints_list_out
 
@@ -194,12 +196,13 @@ class SemiControlledDataSplitter:
             warnings.warn("Number of single touch detected = 0.")
             return [], []
 
-        if self.show:
+        if self.save_visualiser or self.show:
             if self.viz is None:
                 self.viz = SemiControlledDataVisualizer()
             self.viz.update(scd_untouched)
             self.viz.add_vertical_lines(scd_untouched.md.time[pos_peaks])
 
+        if self.show:
             if self.manual_check:
                 fig, ax = plt.subplots(1, 1)
                 plt.plot(pos_1D_smooth, label='Signal')
@@ -226,25 +229,33 @@ class SemiControlledDataSplitter:
 
         sig = None
         if "depth" in method:
-            # smooth the depth signal
-            depth_smooth = smooth_scd_signal(scd.contact.depth, scd, nframe=2, method="adjust_with_speed")
-            depth_smooth = normalize_signal(depth_smooth, dtype=np.ndarray)
-            if sig is None:
-                sig = depth_smooth
-            else:
-                sig += depth_smooth
+            if np.any(scd.contact.depth is not np.nan and 0 < scd.contact.depth):
+                # smooth the depth signal
+                depth_smooth = smooth_scd_signal(scd.contact.depth, scd, nframe=2, method="adjust_with_speed")
+                depth_smooth = normalize_signal(depth_smooth, dtype=np.ndarray)
+                # make sure that there is data
+                if sig is None:
+                    sig = depth_smooth
+                else:
+                    sig += depth_smooth
 
         if "iff" in method:
-            # smooth the spike signal
-            iff_smooth = smooth_scd_signal(scd.neural.iff, scd, nframe=2, method="adjust_with_speed")
-            iff_smooth = normalize_signal(iff_smooth, dtype=np.ndarray)
-            if sig is None:
-                sig = iff_smooth
-            else:
-                sig += iff_smooth
+            if np.any(scd.neural.iff is not np.nan and 0 < scd.neural.iff):
+                # smooth the spike signal
+                iff_smooth = smooth_scd_signal(scd.neural.iff, scd, nframe=2, method="adjust_with_speed")
+                iff_smooth = normalize_signal(iff_smooth, dtype=np.ndarray)
+                if sig is None:
+                    sig = iff_smooth
+                else:
+                    sig += iff_smooth
+                    
+        if sig is None:
+            w = f"\nFile <{scd.md.data_filename_short}> couldn't be split.\nNo input data different from nan or zero was found."
+            warnings.warn(w)
+            return [], []
 
         # Assemble them for peaks detection
-        sig = normalize_signal(sig, dtype=np.ndarray)
+            sig = normalize_signal(sig, dtype=np.ndarray)
         sig = smooth_scd_signal(sig, scd, nframe=2, method="adjust_with_speed")
         sig = normalize_signal(sig, dtype=np.ndarray)
 
@@ -298,11 +309,14 @@ class SemiControlledDataSplitter:
             warnings.warn(w)
             return [], []
 
-        if self.show:
+        
+        if self.save_visualiser or self.show:
             if self.viz is None:
                 self.viz = SemiControlledDataVisualizer()
             self.viz.update(scd_untouched)
             self.viz.add_vertical_lines(scd_untouched.md.time[periods_idx])
+
+        if self.show:
             if self.manual_check:
                 fig, ax = plt.subplots(1, 1)
                 ax.plot(sig, label='Signal')

@@ -12,104 +12,53 @@ import time
 # homemade libraries
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 from libraries.materials.semicontrolled_data import SemiControlledData  # noqa: E402
-from libraries.processing.semicontrolled_data_manager import SemiControlledDataManager  # noqa: E402
-from libraries.processing.semicontrolled_data_splitter import SemiControlledDataSplitter  # noqa: E402
-from libraries.plot.semicontrolled_data_visualizer import SemiControlledDataVisualizer  # noqa: E402
+from libraries.processing.semicontrolled_data_adjust_single_touch_chunks import AdjustChunksViewer  # noqa: E402
 import libraries.misc.path_tools as path_tools  # noqa: E402
-from libraries.misc.waitforbuttonpress_popup import WaitForButtonPressPopup
-import libraries.plot.semicontrolled_data_visualizer_unitcontact as scdata_visualizer_neur  # noqa: E402
 
 
-def select_signal_chunks(signals, split_indices):
-    """
-    Function to interactively select chunks from signals, handling NaN values.
+def adjust_start_indices(chunks):
+  """
+  Adjusts the start index of a tuple in a list of tuples by adding 1
+  if the start index is equal to the end index of the previous tuple.
 
-    Parameters:
-    - signals (list of np.ndarray): List of 1D signals. Signals may contain NaN values.
-    - split_indices (list of tuples): List of tuples specifying chunks.
-                                     Each tuple: (signal_index, start_index, end_index).
+  Args:
+    chunks: A list of tuples, where each tuple represents a start and end index.
+            Example: [(2384, 4381), (4382, 7486), (7486, 8659), (8660, 10939)]
 
-    Returns:
-    - list of tuples: Selected chunks in the format (signal_index, start_index, end_index).
-    """
-
-    # Function to remove NaNs and synchronize arrays
-    def remove_nans_and_sync(signal, associated_array):
-        valid = ~np.isnan(signal)
-        return signal[valid], associated_array[valid]
-
-    # Store selected chunks
-    selected_chunks = split_indices
-
-    # Plot the signals and chunks
-    fig, axes = plt.subplots(len(signals), 1, figsize=(15, 10))
-    for i, signal in enumerate(signals):
-        clean_signal, clean_time = remove_nans_and_sync(signal,
-                                                        np.arange(len(signal)))  # Remove NaNs and synchronize time
-        axes[i].plot(clean_time, clean_signal, label=f'Signal {i}')
-        axes[i].legend()
-
-    # Highlight chunks on the first signal only
-    chunk_areas = {}
-    for idx, (start, end) in enumerate(split_indices):
-        chunk_signal = signals[0][start:end]
-        chunk_time = np.arange(start, end)
-        _, clean_chunk_time = remove_nans_and_sync(chunk_signal, chunk_time)
-        if idx % 2 == 0:
-            color = 'red'
-        else:
-            color = 'green'
-        chunk = axes[0].axvspan(clean_chunk_time[0], clean_chunk_time[-1], color=color, alpha=0.8)
-        chunk_areas[chunk] = (start, end)
-
-    # Button event handling
-    def on_chunk_click(event):
-        if event.inaxes == axes[0]:  # Only respond to clicks in the first subplot
-            for chunk, (start, end) in chunk_areas.items():
-                if chunk.contains(event)[0]:
-                    if (start, end) in selected_chunks:
-                        selected_chunks.remove((start, end))
-                        chunk.set_alpha(0.5)
-                    else:
-                        selected_chunks.append((start, end))
-                        chunk.set_alpha(0.8)
-                    fig.canvas.draw()
-
-    fig.canvas.mpl_connect('button_press_event', on_chunk_click)
-
-    # OK button functionality
-    def on_ok_button_clicked(event):
-        plt.close()
-
-    # Add OK button
-    ok_ax = plt.axes([0.85, 0.01, 0.1, 0.05])
-    ok_button = Button(ok_ax, 'OK')
-    ok_button.on_clicked(on_ok_button_clicked)
-
-    manager = plt.get_current_fig_manager()
-    manager.full_screen_toggle()
-
-    plt.show(block=True)
-
-    # Return selected chunks after closing the plot
-    return selected_chunks
+  Returns:
+    A new list of tuples with adjusted start indices.
+  """
+  adjusted_chunks = []
+  previous_end = None
+  for start, end in chunks:
+    if previous_end is not None and start == previous_end:
+      adjusted_chunks.append((start + 1, end))
+    else:
+      adjusted_chunks.append((start, end))
+    previous_end = end
+  return adjusted_chunks
 
 
 if __name__ == "__main__":
     # ----------------------
     # User control variables
     # ----------------------
-    force_processing = True  # If user wants to force data processing even if results already exist
-    show = True  # If user wants to monitor what's happening
+    force_processing = False  # If user wants to force data processing even if results already exist
+    save_figures = True
+    save_results = True
 
-    # choose the method used to split single touches:
+    input_filename_pattern_r = r"semicontrolled_block-order(0[1-9]|1[0-8])_trial(0[1-9]|1[0-9]).csv"
+    # choose the method to split single touches:
     #  - method_1: Stroking trials are split with position, Taping using only IFF
     #  - method_2: Stroking trials are split with position, Taping using only depth
-    #  - method_3: Stroking trials are split with position, Taping using only depth and IFF
-    split_method = "method_1"
-
-    # ----------------------
-    save_results = True
+    #  - method_3: Stroking trials are split with position, Taping using depth and IFF
+    split_method = "method_2"
+    input_single_touch_filename_end = f"_single-touch-endpoints_{split_method}.txt"
+    output_single_touch_filename_end = f"_single-touch-endpoints_{split_method}_curated.txt"
+    
+    show = False  # If user wants to monitor what's happening
+    show_single_touches = False  # If user wants to visualise single touches, one by one
+    manual_check = True  # If user wants to take the time to check the trial and how it has been split
     # ----------------------
     # ----------------------
     # ----------------------
@@ -120,14 +69,20 @@ if __name__ == "__main__":
     # get metadata paths
     md_stimuli_path = os.path.join(db_path, "1_primary", "logs", "2_stimuli_by_blocks")
     md_neuron_filename_abs = os.path.join(db_path, "1_primary", "nerve", "semicontrol_unit-name_to_unit-type.csv")
+    # 2. check if neuron metadata file exists
+    if not os.path.exists(md_neuron_filename_abs):
+        s = f'The file {md_neuron_filename_abs} doesn''t  exist.'
+        warnings.warn(s, Warning)
 
-    # get input data directories
-    db_path_input = os.path.join(db_path, "3_merged", "1_kinect_and_nerve", "2_by-trials")
+    # get input data directory
+    db_path_input = os.path.join(db_path, "3_merged", "sorted_by_trial")
     # get output directories
-    db_path_output = os.path.join(db_path, "3_merged", "1_kinect_and_nerve", "3_by-single-touches")
-    if not os.path.exists(db_path_output):
+    db_path_output = os.path.join(db_path, "3_merged", "sorted_by_single-touches")
+    output_figure_path = os.path.join(db_path, "3_merged", "sorted_by_single-touches")
+    if save_results and not os.path.exists(db_path_output):
         os.makedirs(db_path_output)
-        print(f"Directory '{db_path_output}' created.")
+    if save_figures and not os.path.exists(output_figure_path):
+        os.makedirs(output_figure_path)
 
     # Session names
     sessions_ST13 = ['2022-06-14_ST13-01',
@@ -161,20 +116,20 @@ if __name__ == "__main__":
     # it is important to split by MNG files / neuron recordings to create the correct subfolders.
     for session in sessions:
         curr_dir = os.path.join(db_path_input, session)
-        files_abs, files = path_tools.find_files_in_directory(curr_dir, ending=r'_trial\d{2}\.csv')
+        files_abs, files = path_tools.find_files_in_directory(curr_dir, ending=input_filename_pattern_r)
 
         for data_filename_abs, data_filename in zip(files_abs, files):
             print(f"current file: {data_filename}")
             # single touch endpoint results will be saved close to the .csv file.
-            filename_output_abs = data_filename_abs.replace(".csv", f"_single-touch-endpoints_{split_method}_correct.txt")
+            filename_output_abs = data_filename_abs.replace(".csv", output_single_touch_filename_end)
             # ensure window character path limitation of 260 is ignored
             filename_output_abs = path_tools.winapi_path(filename_output_abs)
             if not force_processing and os.path.exists(filename_output_abs):
-                print(f'The file {filename_output_abs} exists.', Warning)
+                print(f'The file {filename_output_abs} exists. Skipping processing...', Warning)
                 continue
 
             # 1. extract endpoints data
-            endpoints_filename_abs = data_filename_abs.replace(".csv", f"_single-touch-endpoints_{split_method}.txt")
+            endpoints_filename_abs = data_filename_abs.replace(".csv", input_single_touch_filename_end)
             # ensure window character path limitation of 260 is ignored
             endpoints_filename_abs = path_tools.winapi_path(endpoints_filename_abs)
             if os.path.exists(endpoints_filename_abs):
@@ -192,6 +147,12 @@ if __name__ == "__main__":
             else:
                 print(f'The file {endpoints_filename_abs} does not exist.', Warning)
                 continue
+            # make sure that the endpoints have the correct format
+            loaded_endpoints_adjusted = adjust_start_indices(loaded_endpoints)
+            print("\nStart/End Chunks:", loaded_endpoints)
+            print("Adjusted Start/End Chunks:", loaded_endpoints_adjusted)
+            if not loaded_endpoints_adjusted:
+                loaded_endpoints_adjusted = [(0, len(scd.contact.pos_1D))]
 
             # 2. extract metadata related to the current stimulus set and check if exists
             md_stimuli_filename = re.sub(r'_trial\d{2}\.csv', '_stimuli.csv', data_filename)
@@ -209,24 +170,48 @@ if __name__ == "__main__":
             # 4.1 load the data
             scd = SemiControlledData(data_filename_abs, md_stimuli_filename_abs, md_neuron_filename_abs)  # resources
             scd.set_variables(dropna=False)
+            scd.contact.update_pos_1D(pca_range=(int((1/4)*scd.contact.nsample), int((3/4)*scd.contact.nsample)))
             # 4.2 create a list of signals to display:
-            signals = []
-            signals.append(scd.contact.pos_1D)
-            signals.append(scd.contact.depth)
-            signals.append(scd.contact.area)
-            signals.append(scd.neural.iff)
-            signals.append(scd.neural.spike)
-
+            signals_list = [];  
+            signals_list.append(scd.contact.pos_1D)
+            signals_list.append(scd.contact.depth)
+            signals_list.append(scd.contact.area)
+            signals_list.append(scd.neural.iff)
+            signals_list.append(scd.neural.spike)
+            
+            labels_list = []
+            labels_list.append("position_1D (3D contact PCA)")
+            labels_list.append("depth")
+            labels_list.append("contact area")
+            labels_list.append("iff")
+            labels_list.append("spike")
+            
+            # create title
+            info_str = ("Neuron Info: "
+                        f"ID: {scd.neural.unit_id}\t"
+                        f"Type: {scd.neural.unit_type}\n"
+                        "Stimulus Info: "
+                        f"Type: {scd.stim.type}\t"
+                        f"Force: {scd.stim.force}\t"
+                        f"Size: {scd.stim.size}\t"
+                        f"Velocity: {scd.stim.vel} cm/s")
+            title = data_filename + "\n" + info_str
             # 5. make a decision
-            selected = select_signal_chunks(signals, loaded_endpoints)
-            for tpl in selected:
+            viewer = AdjustChunksViewer(signals_list, loaded_endpoints_adjusted, labels_list=labels_list, title=title)
+
+            final_chunks = viewer.get_final_chunks()
+            selected_chunks = viewer.get_selected_chunks()
+            print("\nFinal (All) Chunks:", final_chunks)
+            print("Selected Chunks:", selected_chunks)
+
+            for tpl in selected_chunks:
                 print(tpl)
 
             # 5. save endpoints results
             if save_results:
                 # Open file for writing
                 with open(filename_output_abs, 'w') as f:
-                    for endpoint in selected:
+                    for endpoint in selected_chunks:
                         # Convert tuple to string format if needed
                         endpoint_str = ','.join(map(str, endpoint))
                         # Write each tuple on a new line

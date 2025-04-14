@@ -6,7 +6,7 @@ import numpy as np
 from PIL import Image
 import pyglet
 import seaborn as sns
-from typing import List
+from typing import List, Optional, Tuple
 import tkinter as tk
 from tkinter import ttk
 import os
@@ -22,7 +22,7 @@ class SemiControlledDataVisualizer:
         self.fig2D_TTL = DataVisualizer2D(4, f"{title}: TTLs", auto_positioning=auto_positioning)
         self.fig2D_global = DataVisualizer2D(5, f"{title}: Neuron, Depth, and Area", auto_positioning=auto_positioning)
         
-        self.figpos = DataVisualizer3D(f"{title}: Position", auto_positioning=auto_positioning)
+        self.figpos = DataVisualizer3D(f"{title}: Position")
 
         self.window_positioning()
 
@@ -30,7 +30,9 @@ class SemiControlledDataVisualizer:
             self.update(scd)
 
     def __del__(self):
-        del self.fig2D_TTL, self.fig2D_global, self.figpos
+        del self.fig2D_TTL
+        del self.fig2D_global
+        del self.figpos
 
     def window_positioning(self):
         # Function to get screen size
@@ -220,84 +222,315 @@ class DataVisualizer2D:
         pass
 
 
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
+from mpl_toolkits.mplot3d.art3d import Line3DCollection # <--- CORRECT
+
+# --- Imports potentially needed if running standalone or embedding ---
+# import tkinter as tk # If embedding in Tkinter
+# from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg # If embedding
+
 class DataVisualizer3D:
-    def __init__(self, title, auto_positioning=False):
-        self.title = title
-        self.fig = plt.figure(figsize=(8, 6))
+    """
+    A class for creating and updating 3D scatter/line plots from (3, N) data arrays.
+
+    Uses constrained_layout to help keep the plot centered during window resizing.
+    Allows optional blocking behaviour after each update.
+    """
+    def __init__(self, title: str = "3D Plot", dot_size: int = 20,
+                 block_on_update: bool = False, # Option to control blocking
+                 figsize: Tuple[int, int] = (10, 8)):
+        """
+        Initializes the 3D plotter.
+
+        Args:
+            title (str): The title of the plot.
+            dot_size (int): The size of the scatter plot markers.
+            block_on_update (bool): If True, plt.show(block=True) is called
+                                    at the end of each update(), pausing script
+                                    execution until the plot window is closed.
+                                    If False (default), uses non-blocking
+                                    plt.draw() and plt.pause() to update.
+            figsize (Tuple[int, int]): The figure size (width, height) in inches.
+        """
+        # --- Setup the figure ---
+
+        # Turn interactive mode on if not blocking, often needed for plt.pause
+        # Do this *before* creating the figure if possible
+        if not block_on_update:
+            plt.ion() # Turn interactive mode ON for non-blocking updates
+        else:
+            plt.ioff() # Ensure interactive mode is OFF for reliable blocking
+
+        # *** MODIFICATION: Enable constrained_layout ***
+        # This automatically adjusts plot elements to prevent overlap and
+        # helps maintain centering/layout during resizes.
+        self.fig = plt.figure(figsize=figsize, constrained_layout=True)
+        # self.fig = plt.figure(figsize=figsize) # Original line
+
         self.ax = self.fig.add_subplot(111, projection='3d')
-        plt.ion()
+        self.title = title
+        self.dot_size = dot_size
+        self.block_on_update: bool = block_on_update # Store the option
+        self.cbar = None # Initialize colorbar tracker
+        self.limits = None # Initialize limits
+        # Store scatter and line collection to potentially update data later (advanced)
+        self._scatter = None
+        self._line = None
 
-        self.fig.show()
-
-        self.limits = None
-        self.cbar = None
-        self.dot_size = 1
+        # --- Notes on Embedding (if applicable) ---
+        # The following lines seem intended for Tkinter embedding but are misplaced
+        # and incomplete in the original snippet (e.g., self.root not defined).
+        # If you intend to embed this in Tkinter, you would typically:
+        # 1. Create a Tkinter root window BEFORE this class or pass it in.
+        # 2. Create the FigureCanvasTkAgg *after* self.fig is created.
+        # 3. Pack/grid the canvas widget into the Tkinter window.
+        # 4. Bind the resize event (<Configure>) to the Tkinter window/frame
+        #    containing the canvas, and potentially call self.fig.canvas.draw_idle()
+        #    in the handler (though constrained_layout often makes this automatic).
+        #
+        # self.root = tk.Tk() # Example: Need a root window
+        # self.canvas = FigureCanvasTkAgg(self.fig, master=self.root) # Create canvas AFTER fig
+        # self.canvas.draw() # Initial draw
+        # self.canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True) # Place canvas
+        # self.root.bind("<Configure>", self.on_resize) # Bind resize
+        # --- End Notes on Embedding ---
 
     def __del__(self):
         plt.close(self.fig)
+        
+    # --- MODIFIED UPDATE METHOD SIGNATURE AND DATA HANDLING --- (No changes needed here for layout)
+    def update(self, time_arr: np.ndarray, data: np.ndarray, # Changed type hint for data
+               info_str: Optional[str] = None,
+               colorsMap: str = 'viridis_r', withLine: bool = True):
+        """
+        Updates the 3D plot with new data.
 
-    def set_lim(self, limits):
-        self.limits = limits
+        Args:
+            time_arr (np.ndarray): 1D array of time values corresponding to data points.
+            data (np.ndarray): Array of shape (3, N) containing X, Y, Z coordinates
+                               in rows 0, 1, 2 respectively.
+            info_str (Optional[str]): Optional text to display on the figure.
+            colorsMap (str): Colormap name for time gradient.
+            withLine (bool): Whether to draw lines connecting points in time order.
 
-    def update(self, time, data: List[float], info_str=None, colorsMap='viridis_r', withLine=True):
+        Depending on the 'block_on_update' setting during initialization,
+        this method will either block execution until the plot is closed
+        or update the plot non-blockingly.
+        """
+        # Clear previous elements carefully
         if self.fig.texts:
-            for text in self.fig.texts:
-                text.remove()
-        self.ax.clear()
+            # Filter out colorbar text which should not be removed
+            texts_to_remove = [t for t in self.fig.texts if not hasattr(t, '_colorbar')]
+            for text in texts_to_remove:
+                try:
+                    text.remove()
+                except Exception: # Handle cases where text might already be gone
+                    pass
+        self.ax.clear() # Clear axes content (scatter, line, etc.)
+        self.ax = self.fig.add_subplot(111, projection='3d')
 
-        x, y, z = data
+        # --- DATA VALIDATION AND UNPACKING (Unchanged) ---
+        if data is None or not isinstance(data, np.ndarray) or data.ndim != 2 or data.shape[0] != 3:
+            print(f"Warning: Invalid data provided. Expected a NumPy array of shape (3, N), but got shape {getattr(data, 'shape', 'N/A')}.")
+            self._draw_or_show()
+            return # Exit if data is bad
 
-        # Remove NaNs
-        valid = ~(np.isnan(x) | np.isnan(y) | np.isnan(z))
-        x = x[valid]
-        y = y[valid]
-        z = z[valid]
-        time = time[valid]  # ensure time array is also filtered
+        num_points = data.shape[1]
+        if num_points == 0: # Check if N=0 (no points)
+            print("Warning: Data array has shape (3, 0), no points to plot.")
+            self._draw_or_show()
+            return # Exit if no points
 
-        # Scatter plot with color gradient based on time
-        sc = self.ax.scatter(x, y, z, c=time, cmap=colorsMap, s=self.dot_size)
+        time_arr = np.asarray(time_arr)
+        if time_arr.ndim != 1 or time_arr.shape[0] != num_points:
+            print(f"Warning: time_arr length ({time_arr.shape[0]}) does not match number of data points ({num_points}).")
+            self._draw_or_show()
+            return
 
-        if withLine:
-            # Create line segments
+        x = data[0, :]
+        y = data[1, :]
+        z = data[2, :]
+        # --- END DATA HANDLING ---
+
+        time_arr = np.asarray(time_arr)
+
+        valid_mask = ~(np.isnan(x) | np.isnan(y) | np.isnan(z) | np.isnan(time_arr))
+        if not np.any(valid_mask):
+            print("Warning: No valid (non-NaN) data points found after filtering.")
+            self._draw_or_show()
+            return # Exit if no valid data
+
+        x = x[valid_mask]
+        y = y[valid_mask]
+        z = z[valid_mask]
+        time_arr = time_arr[valid_mask]
+
+        # --- Plotting Logic (Unchanged) ---
+        self._scatter = self.ax.scatter(x, y, z, c=time_arr, cmap=colorsMap, s=self.dot_size)
+        if len(x) >= 2: # Check length after filtering NaNs
+             # Highlight start and end points (optional, kept from original)
+             # Consider checking if x,y,z are non-empty before indexing
+            if len(x) > 0:
+                self.ax.scatter(x[0], y[0], z[0], c='lime', s=self.dot_size*1.5, label='Start', depthshade=False, edgecolors='black')
+                self.ax.scatter(x[-1], y[-1], z[-1], c='red', s=self.dot_size*1.5, label='End', depthshade=False, edgecolors='black')
+
+        min_time = np.min(time_arr) if time_arr.size > 0 else 0
+        max_time = np.max(time_arr) if time_arr.size > 0 else 1
+
+        if withLine and len(x) > 1:
             points = np.array([x, y, z]).T.reshape(-1, 1, 3)
             segments = np.concatenate([points[:-1], points[1:]], axis=1)
+            norm_min = min_time
+            norm_max = max_time if abs(max_time - min_time) > 1e-9 else min_time + 1e-6
+            norm = plt.Normalize(norm_min, norm_max)
+            self._line = Line3DCollection(segments, cmap=colorsMap, norm=norm)
+            self._line.set_array(time_arr[:-1])
+            self.ax.add_collection(self._line)
+        elif withLine and len(x) <= 1:
+            print("Info: Cannot draw line with less than 2 points.")
+            self._line = None
+        else:
+            self._line = None
 
-            # Normalize time for color mapping
-            norm = plt.Normalize(time.min(), time.max())
-            lc = Line3DCollection(segments, cmap=colorsMap, norm=norm)
-            lc.set_array(time)
-            self.ax.add_collection(lc)
+        # --- Add or update the color bar (Unchanged, but constrained_layout helps position it) ---
+        if abs(min_time - max_time) < 1e-9 and time_arr.size > 0 :
+             norm_for_cbar = plt.Normalize(min_time - 0.5, max_time + 0.5)
+             ticks_for_cbar = [min_time]
+             if self._scatter:
+                 self._scatter.set_norm(norm_for_cbar)
+        elif time_arr.size > 0:
+             norm_for_cbar = plt.Normalize(min_time, max_time)
+             ticks_for_cbar = np.linspace(min_time, max_time, num=6)
+        else: # Handle case with no valid data for colorbar
+             norm_for_cbar = plt.Normalize(0, 1)
+             ticks_for_cbar = [0, 1]
 
-        # Add a color bar
-        if self.cbar is None:
-            self.cbar = plt.colorbar(sc)
-            self.cbar.set_label('Time')
-            # Set the ticks location
-            tick_locations = np.linspace(np.min(time), np.max(time), num=6)  # Adjust the number of ticks
-            self.cbar.set_ticks(tick_locations)
 
-        # Set labels
-        # time / color
-        tick_str = [f'{tick:.1f}' for tick in np.linspace(np.min(time), np.max(time), num=6)]
-        self.cbar.set_ticklabels(tick_str)
-        # x y z
+        mappable = self._scatter # Use scatter for color mapping reference
+
+        if mappable is not None:
+             # --- Improved Colorbar Handling ---
+             # Remove existing colorbar before creating/updating if it exists
+             # This is safer when axes are cleared and limits/data might change drastically
+             if self.cbar is not None:
+                 try:
+                     self.cbar.remove()
+                 except Exception as e:
+                     print(f"Info: Could not remove previous colorbar: {e}")
+                 self.cbar = None
+
+             # Create a new colorbar
+             try:
+                 # Use the mappable's norm and cmap by default
+                 self.cbar = self.fig.colorbar(mappable, ax=self.ax, shrink=0.7, aspect=20) # Adjust shrink/aspect as needed
+                 self.cbar.set_label('Time')
+                 # Set ticks explicitly AFTER creation if needed (e.g., for single-value case)
+                 self.cbar.set_ticks(ticks_for_cbar)
+                 tick_str = [f'{tick:.1f}' for tick in ticks_for_cbar]
+                 self.cbar.set_ticklabels(tick_str)
+
+             except Exception as e:
+                 print(f"Warning: Could not create/update colorbar: {e}")
+                 self.cbar = None
+             # --- End Improved Colorbar Handling ---
+        elif self.cbar is not None: # Remove orphan colorbar if scatter failed
+             try:
+                self.cbar.remove()
+             except Exception as e:
+                print(f"Info: Could not remove orphan colorbar: {e}")
+             self.cbar = None
+        # --- End color bar ---
+
+        self.title = info_str
+
         self.ax.set_xlabel('X axis')
         self.ax.set_ylabel('Y axis')
         self.ax.set_zlabel('Z axis')
-        # title
         self.ax.set_title(self.title)
 
-        # Set limits if global limits have been
         if self.limits is not None:
             self.ax.set_xlim(self.limits[0][0], self.limits[0][1])
             self.ax.set_ylim(self.limits[1][0], self.limits[1][1])
             self.ax.set_zlim(self.limits[2][0], self.limits[2][1])
+        elif time_arr.size > 0:
+             # Autoscale only if limits aren't fixed AND there's data
+             # Constrained layout works better if axes limits are determined
+             # *before* drawing, so autoscale_view might not be strictly needed
+             # self.ax.autoscale_view(tight=False) # Can sometimes interfere with constrained_layout
+
+             # Instead of autoscale_view, ensure equal aspect ratio if desired
+             # This helps maintain the 'shape' of the data visually
+             # self.ax.set_aspect('equal', adjustable='box') # Uncomment if aspect ratio is important
+             pass # Let constrained_layout handle spacing with default limits
+
 
         if info_str is not None:
-            self.fig.text(0, 0.5, info_str, verticalalignment='center', fontsize=10)
+            self.fig.text(0.02, 0.02, info_str, verticalalignment='bottom', fontsize=10, transform=self.fig.transFigure)
 
-        self.fig.canvas.draw()
-        self.fig.canvas.flush_events()
+        self._draw_or_show()
+
+    def set_axis_limits(self, limits: List[List[float]]):
+        """Optional: Set fixed axis limits e.g., [[xmin, xmax], [ymin, ymax], [zmin, zmax]]"""
+        if len(limits) == 3 and all(len(lim) == 2 for lim in limits):
+            self.limits = limits
+            if hasattr(self, 'ax'):
+                self.ax.set_xlim(self.limits[0][0], self.limits[0][1])
+                self.ax.set_ylim(self.limits[1][0], self.limits[1][1])
+                self.ax.set_zlim(self.limits[2][0], self.limits[2][1])
+        else:
+            print("Warning: Invalid limits format. Expected [[xmin, xmax], [ymin, ymax], [zmin, zmax]]")
+            self.limits = None # Reset if format is wrong
+
+
+    # This method is likely needed if you bind to <Configure> in Tkinter
+    # def on_resize(self, event):
+    #     """Callback for window resize events (if embedded)."""
+    #     # Constrained_layout often handles this automatically.
+    #     # If not, uncommenting draw_idle might help.
+    #     # print("Window resized") # For debugging
+    #     # self.fig.canvas.draw_idle()
+    #     pass
+
+
+    def _draw_or_show(self):
+        """Internal helper to handle drawing/showing based on the block_on_update flag."""
+        if self.block_on_update:
+            print("Displaying blocking figure. Close the window to continue...")
+            # plt.ioff() # Already handled in init/close
+            try:
+                plt.show(block=True)
+            except Exception as e:
+                # Catch errors if the figure was closed externally, etc.
+                print(f"Info: plt.show() interaction ended or failed: {e}")
+        else:
+            # Non-blocking update
+            # plt.ion() # Already handled in init
+            try:
+                # draw_idle is preferred for GUI event loops
+                self.fig.canvas.draw_idle()
+                # Pause allows the GUI backend to process events and render the update
+                plt.pause(0.01) # Adjust pause duration if needed
+            except Exception as e:
+                # This commonly happens if the user closes the window interactively
+                print(f"Info: Could not draw/pause figure (may have been closed): {e}")
+
+    def close(self):
+        """Closes the plot figure."""
+        if hasattr(self, 'fig') and self.fig:
+             # Check if the figure's canvas manager exists (i.e., window is open)
+            if self.fig.canvas.manager is not None:
+                plt.close(self.fig)
+                print("Plot figure closed.")
+            # Reset figure attribute to prevent trying to close again
+            self.fig = None
+        # Turn interactive mode off if it was on
+        if plt.isinteractive():
+             plt.ioff()
+
+
+
+
 
 
 def display_scd_one_by_one(scd_list):
