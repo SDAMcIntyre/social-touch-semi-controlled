@@ -201,10 +201,9 @@ if __name__ == "__main__":
                     print("----------------- df_output was None (why?) -------------------")
                     continue
 
-                if save_results and not os.path.exists(output_path_abs):
-                    os.makedirs(output_path_abs)
-                    print(f"Directory '{output_path_abs}' created.")
-                    
                 if save_results:
+                    if not os.path.exists(output_path_abs):
+                        os.makedirs(output_path_abs)
+                        print(f"Directory '{output_path_abs}' created.")
                     df_output.to_csv(output_filename_abs, index=False)
                 
