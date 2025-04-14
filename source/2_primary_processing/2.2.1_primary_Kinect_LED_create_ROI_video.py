@@ -13,9 +13,12 @@ import libraries.misc.path_tools as path_tools  # noqa: E402
 
 
 if __name__ == "__main__":
-    OS_linux = True
+    if os.path.sep == '/':  # Running on a Unix-like system
+        OS_linux = True
+    elif os.path.sep == '\\':  # Running on Windows
+        OS_linux = False
 
-    force_processing = False  # If user wants to force data processing even if results already exist
+    force_processing = True  # If user wants to force data processing even if results already exist
     save_results = True
 
     video_extension = '.mp4'
@@ -65,6 +68,11 @@ if __name__ == "__main__":
     sessions = sessions + sessions_ST15
     sessions = sessions + sessions_ST16
     sessions = sessions + sessions_ST18
+    
+    sessions = ['2022-06-15_ST14-02', 
+                #'2022-06-15_ST14-01', 
+                '2022-06-15_ST14-03',
+                '2022-06-15_ST14-04']
 
     print("Selected sessions:")
     print(np.transpose(sessions))
@@ -95,6 +103,12 @@ if __name__ == "__main__":
             if not led_roi.led_in_frame:
                 continue
             
+            if led_roi.video_path.startswith('/') and not OS_linux:
+                dataset_location = led_roi.video_path.split('1_primary/')[1].replace("/", "\\")
+                dirname_current_onedrive_location = os.path.join(db_path_input.split('2_processed')[0], '1_primary')
+                current_video_path = os.path.join(dirname_current_onedrive_location, dataset_location)
+                led_roi.video_path = current_video_path
+
             led_roi.initialise_video()
             led_roi.set_reference_frame(led_roi.reference_frame_idx)
             led_roi.extract_roi()

@@ -134,8 +134,18 @@ class KinectLEDBlinking:
         # create GMM model object
         gmm = mixture.GaussianMixture(n_components=2, max_iter=1000, random_state=10, covariance_type='full')
 
+        try:
+            mean = gmm.fit(x).means_
+            print("GMM fitting successful with regularization.")
+            # Note: The results might not be very meaningful if all data is identical.
+            print("Means:", gmm.means_)
+            print("Covariances:", gmm.covariances_)
+        except Exception as e:
+            print(f"GMM fitting failed even with regularization: {e}. This means there is very little variance between the two components. Process with standard thresholding instead.")
+            self.process_led_on_threshold()
+            return
+
         # find useful parameters
-        mean = gmm.fit(x).means_
         gauss_idx_predicted = gmm.fit(x).predict(x)
 
         # if the first gaussian is the low green intensity gaussian,

@@ -5,9 +5,9 @@ import os
 import sys
 
 # homemade libraries
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
-from source.libraries.primary.KinectLEDBlinking import KinectLEDBlinking  # noqa: E402
-from source.libraries.primary.KinectLEDBlinkingMP4 import KinectLEDBlinkingMP4  # noqa: E402
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+from libraries.primary.KinectLEDBlinking import KinectLEDBlinking  # noqa: E402
+from libraries.primary.KinectLEDBlinkingMP4 import KinectLEDBlinkingMP4  # noqa: E402
 import libraries.misc.path_tools as path_tools  # noqa: E402
 from libraries.misc.waitforbuttonpress_popup import WaitForButtonPressPopup
 
@@ -44,16 +44,19 @@ def find_metadata_files(input_path, sessions):
 
 
 if __name__ == "__main__":
-    OS_linux = True
+    if os.path.sep == '/':  # Running on a Unix-like system
+        OS_linux = True
+    elif os.path.sep == '\\':  # Running on Windows
+        OS_linux = False
 
-    force_processing = False  # If user wants to force data processing even if results already exist
+    force_processing = True  # If user wants to force data processing even if results already exist
     save_results = True
+    save_figures = True
+
+    show = False  # If user wants to monitor what's happening
+    show_video_by_frames = False  # If user wants to monitor what's happening
 
     video_extension = '_LED_roi.mp4'
-    show = False  # If user wants to monitor what's happening
-
-    show_video_by_frames = False  # If user wants to monitor what's happening
-    show_results = False  # If user wants to monitor what's happening
 
     print("Step 0: Extract the videos embedded in the selected sessions.")
     # get database directory
@@ -108,7 +111,8 @@ if __name__ == "__main__":
         for idx, (file_abs, file) in enumerate(zip(files_abs, files)):
             print("--- --- --- --- ---")
             print(f"Current file is: '{file}'")
-
+            if not "ST16-05_semicontrolled_block-order05" in file: continue
+                
             # Results filename and location
             output_dirname = os.path.dirname(file_abs).replace(db_path_input, db_path_output)
             output_filename_csv = file.replace(video_extension, "_LED.csv")
@@ -126,7 +130,7 @@ if __name__ == "__main__":
             # if the video hasn't been processed yet or redo the processing (load results = False)
             led_blink.load_video()
             led_blink.monitor_green_levels(show=show_video_by_frames)
-            led_blink.process_led_on(threshold=.20)
+            led_blink.process_led_on()
             # correct for any occlusion
             led_blink.define_occlusion(threshold=40, show=show_video_by_frames)
 
@@ -136,7 +140,7 @@ if __name__ == "__main__":
                 led_blink.save_result_csv(output_filename_csv_abs)
                 led_blink.save_result_metadata(output_filename_md_abs)
 
-            if show_results:
+            if show:
                 plt.plot(led_blink.time, led_blink.led_on)
                 plt.ion()
                 plt.show()
