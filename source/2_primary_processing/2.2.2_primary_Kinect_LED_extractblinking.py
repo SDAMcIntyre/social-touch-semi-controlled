@@ -111,8 +111,35 @@ if __name__ == "__main__":
         for idx, (file_abs, file) in enumerate(zip(files_abs, files)):
             print("--- --- --- --- ---")
             print(f"Current file is: '{file}'")
-            if not "ST16-05_semicontrolled_block-order05" in file: continue
-                
+            substrings_to_check = ["ST14-02_semicontrolled_block-order01",
+                                   "ST14-02_semicontrolled_block-order02",
+
+                                   "ST15-02_semicontrolled_block-order01",
+
+                                   "ST16-02_semicontrolled_block-order09",
+                                   "ST16-02_semicontrolled_block-order1",
+
+                                   "ST16-03_semicontrolled_block-order05",
+                                   "ST16-03_semicontrolled_block-order06",
+                                   "ST16-03_semicontrolled_block-order07",
+
+                                   "ST16-04_semicontrolled_block-order01",
+                                   "ST16-04_semicontrolled_block-order02",
+
+                                   "ST16-05_semicontrolled_block-order",
+
+                                   "ST18-01_semicontrolled_block-order16",
+                                   "ST18-01_semicontrolled_block-order17"]
+            
+            substrings_to_check = ["ST16-02_semicontrolled_block-order02"]
+            
+            found = False
+            for sub in substrings_to_check:
+                if sub in file:
+                    found = True
+                    break  # No need to check other substrings if one is found
+            if not found: continue
+            
             # Results filename and location
             output_dirname = os.path.dirname(file_abs).replace(db_path_input, db_path_output)
             output_filename_csv = file.replace(video_extension, "_LED.csv")
@@ -129,10 +156,13 @@ if __name__ == "__main__":
         
             # if the video hasn't been processed yet or redo the processing (load results = False)
             led_blink.load_video()
-            led_blink.monitor_green_levels(show=show_video_by_frames)
+            # Find pixels that are most likely to be the LED in the video
+            led_blink.find_bimodal_green_pixels()
+            # Run the monitoring (results are stored in processor.bimodal_green_levels)
+            bimodal_levels = led_blink.monitor_bimodal_pixels_green()
             led_blink.process_led_on()
             # correct for any occlusion
-            led_blink.define_occlusion(threshold=40, show=show_video_by_frames)
+            #led_blink.define_occlusion(threshold=40, show=show_video_by_frames)
 
             if save_results:
                 if not os.path.exists(output_dirname):
@@ -141,7 +171,8 @@ if __name__ == "__main__":
                 led_blink.save_result_metadata(output_filename_md_abs)
 
             if show:
-                plt.plot(led_blink.time, led_blink.led_on)
+                plt.plot(led_blink.time, led_blink.green_levels)
+                plt.plot(led_blink.time, led_blink.led_on*255)
                 plt.ion()
                 plt.show()
                 WaitForButtonPressPopup()

@@ -111,7 +111,6 @@ if __name__ == "__main__":
 
     force_processing = True  # If user wants to force data processing even if results already exist
     save_results = True
-    generate_report = False
 
     input_filename_ending = '_kinect_LED.csv'
     # usually, blinking is 100ms maximum, which is equivalent to 4 frames at 30 Hz (Kinect Fs).

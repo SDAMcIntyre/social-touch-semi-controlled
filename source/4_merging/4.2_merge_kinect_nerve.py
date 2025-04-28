@@ -124,7 +124,7 @@ if __name__ == "__main__":
     if not os.path.exists(db_path_output):
         os.makedirs(db_path_output)
         print(f"Directory '{db_path_output}' created.")
-
+    
     # Session names
     sessions_ST13 = ['2022-06-14_ST13-01',
                      '2022-06-14_ST13-02',

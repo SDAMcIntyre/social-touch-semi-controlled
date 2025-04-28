@@ -7,7 +7,7 @@ from .KinectLEDBlinking import KinectLEDBlinking
 class KinectLEDBlinkingMP4(KinectLEDBlinking):
     def load_video(self):
         # Clean area of interest variable
-        self.roi = []
+        self.roi_frames = []
 
         capture = cv2.VideoCapture(self.video_path)
         capture.set(cv2.CAP_PROP_POS_FRAMES, 0)
@@ -44,10 +44,10 @@ class KinectLEDBlinkingMP4(KinectLEDBlinking):
                 # Convert frame from BGR (default in OpenCV) to RGB
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-            self.roi.append(frame_rgb)
+            self.roi_frames.append(frame_rgb)
             nframes += 1
 
         capture.release()
 
-        self.roi = np.array(self.roi)
-        self.nframes = self.roi.shape[0]
+        self.roi_frames = np.array(self.roi_frames)
+        self.nframes = self.roi_frames.shape[0]

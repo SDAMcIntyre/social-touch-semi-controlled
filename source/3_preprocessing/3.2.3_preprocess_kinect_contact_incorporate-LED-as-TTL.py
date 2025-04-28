@@ -74,7 +74,8 @@ if __name__ == "__main__":
     sessions_ST14 = ['2022-06-15_ST14-01',
                      '2022-06-15_ST14-02',
                      '2022-06-15_ST14-03',
-                     '2022-06-15_ST14-04']
+                     '2022-06-15_ST14-04'
+                     ]
 
     sessions_ST15 = ['2022-06-16_ST15-01',
                      '2022-06-16_ST15-02']
@@ -86,7 +87,8 @@ if __name__ == "__main__":
 
     sessions_ST18 = ['2022-06-22_ST18-01',
                      '2022-06-22_ST18-02',
-                     '2022-06-22_ST18-04']
+                     '2022-06-22_ST18-04'
+                     ]
     sessions = []
     sessions = sessions + sessions_ST13
     sessions = sessions + sessions_ST14

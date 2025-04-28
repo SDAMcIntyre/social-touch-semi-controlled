@@ -6,6 +6,7 @@ import pandas as pd
 import re
 import shutil
 from scipy import signal
+import tkinter as tk
 import sys
 import warnings
 
@@ -15,108 +16,31 @@ import libraries.misc.path_tools as path_tools  # noqa: E402
 from libraries.materials.semicontrolled_data import SemiControlledData  # noqa: E402
 from libraries.plot.semicontrolled_data_visualizer import SemiControlledDataVisualizer  # noqa: E402
 import libraries.processing.semicontrolled_data_cleaning as scd_cleaning  # noqa: E402
+from libraries.processing.semicontrolled_data_correct_lag_manual import TimeSeriesLagGUI
 
-
-def get_correlation(sig1, sig2, *, downsampling=0.1, show=False):
-    if downsampling < 0 or downsampling > 1:
-        warnings.warn("downsampling has to be a float between 0 and 1.")
-        return
-
-    # just in case, remove temporarily any nan value for correlation
-    # for some reason, np.nan_to_num doesn't work.
-    with pd.option_context('future.no_silent_downcasting', True):
-        sig1 = pd.Series(sig1).fillna(0).values
-        sig2 = pd.Series(sig2).fillna(0).values
-
-    # normalise signals
-    sig1 = scd_cleaning.normalize_signal(sig1, dtype=np.ndarray)
-    sig2 = scd_cleaning.normalize_signal(sig2, dtype=np.ndarray)
-
-    # signals can be downsampled for a faster correlation
-    sig1_corr = sig1[np.linspace(0, len(sig1) - 1, int(downsampling * len(sig1)), dtype=int)]
-    sig2_corr = sig2[np.linspace(0, len(sig2) - 1, int(downsampling * len(sig2)), dtype=int)]
-
-    # remove the mean for a better estimation of the correlation
-    #sig1_corr = sig1_corr - np.mean(sig1_corr)
-    #sig2_corr = sig2_corr - np.mean(sig2_corr)
-
-    # lag estimation
-    correlation = signal.correlate(sig1_corr, sig2_corr, mode="full")
-    lags = signal.correlation_lags(sig1_corr.size, sig2_corr.size, mode="full")
-    lag = int(lags[np.argmax(correlation)] / downsampling)
-
-    if show:
-        if len(sig1_corr) > len(sig2_corr):
-            x = np.linspace(0, len(sig1_corr) - 1, len(sig1_corr))
-            y1 = sig1_corr
-            y2 = np.pad(sig2_corr, (0, len(sig1_corr) - len(sig2_corr)), 'constant')
-        else:
-            x = np.linspace(0, len(sig2_corr) - 1, len(sig2_corr))
-            y1 = np.pad(sig1_corr, (0, len(sig2_corr) - len(sig1_corr)), 'constant')
-            y2 = sig2_corr
-
-        # Create a figure with two subplots
-        fig1, (ax1, ax2) = plt.subplots(2, 1, sharex=True, figsize=(10, 6))
-
-        # Plot the first signal on the first subplot
-        ax1.plot(x, y1, label='Contact signal')
-        ax1.set_title('Contact signal')
-        ax1.set_ylabel('Amplitude')
-        ax1.legend()
-
-        # Plot the second signal on the second subplot
-        ax2.plot(x, y2, label='Nerve signal', color='orange')
-        ax2.set_title(f"Nerve signal")
-        ax2.set_xlabel('Time')
-        ax2.set_ylabel('Amplitude')
-        ax2.legend()
-
-        # Set the main title using the file names
-        # Adjust the layout
-        plt.tight_layout()
-
-    return lag
-
-
-def find_groups_of_ones(arr):
-    groups = []
-    in_group = False
-    start_index = 0
-
-    for i, value in enumerate(arr):
-        if value == 1 and not in_group:
-            # Start of a new group
-            in_group = True
-            start_index = i
-        elif value == 0 and in_group:
-            # End of the current group
-            in_group = False
-            groups.append(list(range(start_index, i)))  # range is right boundary exclusive
-
-    # If the array ends with a group of 1s
-    if in_group:
-        groups.append(list(range(start_index, len(arr))))
-
-    return groups
 
 
 if __name__ == "__main__":
     # parameters
     force_processing = True  # If user wants to force data processing even if results already exist
-    show = True  # If user wants to monitor what's happening
+    save_results = True
 
     # result saving parameters
-    save_results = True
     generate_report = True
+
+    show = True  # If user wants to monitor what's happening
+
+    input_ending = '.csv'
+    output_ending = '_manual-resync.csv'
 
     print("Step 0: Extract the videos embedded in the selected sessions.")
     # get database directory
     db_path = os.path.join(path_tools.get_database_path(), "semi-controlled")
     # get input base directory
-    db_path_input = os.path.join(db_path, "3_merged", "1_kinect_and_nerve", "0_block-order")
+    db_path_input = os.path.join(db_path, "3_merged", "sorted_by_block")
     # get output base directory
-    db_path_output = os.path.join(db_path, "3_merged", "1_kinect_and_nerve", "0_block-order_corrected-desync")
-    if not os.path.exists(db_path_output):
+    db_path_output = os.path.join(db_path, "3_merged", "sorted_by_block")
+    if save_results and not os.path.exists(db_path_output):
         os.makedirs(db_path_output)
         print(f"Directory '{db_path_output}' created.")
 
@@ -156,28 +80,30 @@ if __name__ == "__main__":
     # it is important to split by MNG files / neuron recordings to create the correct subfolders.
     for session in sessions:
         curr_dir = os.path.join(db_path_input, session)
-        files_abs, files = path_tools.find_files_in_directory(curr_dir, ending='_kinect_and_nerve.csv')
-
-        output_session_abs = os.path.join(db_path_output, session)
-        if not os.path.exists(output_session_abs):
-            os.makedirs(output_session_abs)
-            print(f"Directory '{output_session_abs}' created.")
+        files_abs, files = path_tools.find_files_in_directory(curr_dir, ending=input_ending)
 
         for file_abs, file in zip(files_abs, files):
             print(f"---------------")
             print(f"current dataset: {file}")
             print(f"current dataset: {file_abs}")
-
-            output_filename_abs = os.path.join(output_session_abs, file)
+            
+            output_dir_abs = os.path.join(db_path_output, session)
+            output_filename = file.replace(input_ending, output_ending)
+            output_filename_abs = os.path.join(output_dir_abs, output_filename)
+            if not force_processing and os.path.exists(output_filename_abs):
+                continue
 
             # load data
             scd = SemiControlledData(file_abs, load_instant=True)
+            scd.contact.update_pos_1D(pca_range=(int((1/4)*scd.contact.nsample), int((3/4)*scd.contact.nsample)))
 
             # interpolate the contact nan values to match neural Fs and contact Fs
             scd.contact.interpolate_missing_values(method="linear")
 
             neuron_iff = scd.neural.iff
             contact_depth = scd.contact.depth
+            contact_hand_pos = scd.contact.pos_1D
+            contact_hand_pos[100<np.abs(contact_hand_pos)] = 0
 
             # smooth signals
             data_Fs = 1 / np.nanmean(np.diff(scd.neural.time))
@@ -185,19 +111,30 @@ if __name__ == "__main__":
             window_size = int(window_sec*data_Fs)
             neuron_iff = scd_cleaning.smooth_signal(neuron_iff, window_size=window_size)
             contact_depth = scd_cleaning.smooth_signal(contact_depth, window_size=window_size)
+            
 
-            # lag estimation
-            lag = get_correlation(contact_depth, neuron_iff, downsampling=0.1, show=show)
-            print(f"lag/TTL_kinect length (ratio): {lag} / {len(contact_depth)} ({abs(lag)/len(contact_depth):.3f})")
-
-            if abs(lag)/len(contact_depth) > .30:
-                w = f"Most likely, there is a problem: lag/length signal over 30%\nReset the lag to zero."
-                warnings.warn(w)
-                comment = f"Lag ratio was too high ({abs(lag)/len(contact_depth):.3f}); any shift has been ignored."
-                lag = 0
+            # Create the main Tkinter window (it needs to exist for Toplevel)
+            root_app = tk.Tk()
+            root_app.withdraw() # Hide the main root window
+            # Launch the GUI
+            ref_signals = [contact_depth, contact_hand_pos]
+            ref_labels = ["contact Depth", "1D hand position"]
+            gui = TimeSeriesLagGUI(ref_signals, neuron_iff,
+                                ref_signal_labels=ref_labels,
+                                shift_signal_label="neuron IFF") # Optional: start with an initial lag guess
+            # --- Execution resumes here after the GUI window is closed ---
+            print("GUI closed.")
+            lag, lag_seconds = gui.get_lag()
+            if lag is not None:
+                print(f"The selected lag from the GUI is: {lag} samples")
             else:
-                comment = "Nothing to report"
-
+                print("GUI was closed without saving the lag.")
+            # Explicitly destroy the hidden root window when done
+            root_app.destroy()
+            print("Script finished.")
+            
+            if lag is None:
+                lag = 0
             # align signals by shifting nerve data
             if lag > 0:
                 zeros = np.zeros(lag)
@@ -214,7 +151,7 @@ if __name__ == "__main__":
                 # Do nothing
                 spike_shifted = scd.neural.spike
                 iff_shifted = scd.neural.iff
-
+            
             # create the shifted dataset
             df_output = pd.read_csv(file_abs)
             df_output['Nerve_spike'] = spike_shifted
@@ -224,17 +161,12 @@ if __name__ == "__main__":
             lag_list.append(lag)
             ratio_list.append(abs(lag) / len(contact_depth))
             file_list.append(file_list)
-            comment_list.append(comment)
 
             # save data on the hard drive ?
             if save_results:
-                if not force_processing:
-                    try:
-                        with open(output_filename_abs, 'r'):
-                            print("Result file exists, jump to the next dataset.")
-                            continue
-                    except FileNotFoundError:
-                        pass
+                if not os.path.exists(output_dir_abs):
+                    os.makedirs(output_dir_abs)
+                    print(f"Directory '{output_dir_abs}' created.")
                 df_output.to_csv(output_filename_abs, index=False)
 
     if generate_report:
@@ -250,4 +182,3 @@ if __name__ == "__main__":
                 writer.writerow(row)
 
     print("done.")
-
