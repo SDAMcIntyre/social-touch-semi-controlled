@@ -1,5 +1,5 @@
 import numpy as np
-
+import re
 
 class StimulusInfo:
     def __init__(self, md_stim_filename):
@@ -68,8 +68,11 @@ class StimulusInfo:
             duration_sec /= 2
         return duration_sec
 
-    def print(self):
-        s = "type: {}, vel: {}, size: {}, force: {}".format(self._type, self._vel, self._size, self._force)
+    def print(self, enriched_text=False):
+        if enriched_text:
+            s = rf"\textbf{{type}}: \color{{blue}}{{{self._type}}}, \textbf{{vel}}: \color{{green}}{{{self._vel}}}, \textbf{{size}}: \color{{red}}{{{self._size}}}, \textbf{{force}}: \color{{purple}}{{{self._force}}}"
+        else:
+            s = "type: {}, vel: {}, size: {}, force: {}".format(self._type, self._vel, self._size, self._force)
         return s
 
     @property
