@@ -256,7 +256,7 @@ class ContactData:
         self._pos = value
         self.update_pos_1D()
 
-    def update_pos_1D(self, pca_range=None):
+    def update_pos_1D(self, automatic_range=True, pca_range=None):
         """
         Compresses the 3D position data (self.pos) into 1D using PCA.
 
@@ -288,8 +288,20 @@ class ContactData:
              return
 
         # --- Determine data range for mean calculation ---
-        data_for_mean_calc = pos3D
-        if pca_range:
+        if automatic_range:
+            # compute PCA of 3D position using meaningful data
+            # only during stimulation -> reduce the range to when first and last contact occured
+            valid_values_mask = ~np.isnan(self.depth) & (self.depth != 0)
+            valid_indices = np.where(valid_values_mask)[0]
+            if valid_indices.size > 0:
+                start =valid_indices[0]
+                end = valid_indices[-1]
+                data_for_mean_calc = pos3D[start:end, :]
+            else:
+                print(f"Warning: Invalid pca_range format {pca_range}. Expected (start, end). Using full range for mean calculation.")
+                data_for_mean_calc = pos3D
+
+        elif pca_range:
             try:
                 start, end = pca_range
                 # Basic validation
@@ -303,8 +315,9 @@ class ContactData:
             except (TypeError, ValueError) as e:
                  print(f"Warning: Invalid pca_range format {pca_range}. Expected (start, end). Using full range for mean calculation. Error: {e}")
                  pca_range = None # Reset pca_range if format is wrong
-
-
+        else:
+            data_for_mean_calc = pos3D
+            
         # --- Centering Step ---
         # Calculate mean, ignoring NaNs, over the specified range (or full data)
         M = np.nanmean(data_for_mean_calc, axis=0)
