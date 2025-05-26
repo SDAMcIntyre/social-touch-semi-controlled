@@ -11,6 +11,7 @@ import tkinter as tk
 from tkinter import ttk
 import os
 import sys
+from pathlib import Path
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 from libraries.materials.semicontrolled_data import SemiControlledData  # noqa: E402
@@ -102,6 +103,7 @@ class SemiControlledDataVisualizer:
         combined_image.paste(fig2D_TTL, (width1, height2))
 
         # Save the combined image
+        os.makedirs(Path(output_filename_abs).parent, exist_ok=True)
         combined_image.save(output_filename_abs)
 
         os.remove("fispos_tmp.png")
