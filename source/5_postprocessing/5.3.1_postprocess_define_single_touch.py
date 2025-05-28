@@ -24,10 +24,12 @@ if __name__ == "__main__":
     # ----------------------
     # User control variables
     # ----------------------
-    force_processing = True  # If user wants to force data processing even if results already exist
-    save_figures = False
-    save_results = False
+    force_processing = False  # If user wants to force data processing even if results already exist
+    save_figures = True
+    save_results = True
 
+    adjust_with_manual_lag = False
+    manual_lag_filename = "manual_lag_processing_log.csv"
 
     input_filename_pattern_r = r"semicontrolled_block-order(0[1-9]|1[0-8])_trial(0[1-9]|1[0-9]).csv"
     # choose the method to split single touches:
@@ -39,8 +41,8 @@ if __name__ == "__main__":
 
     show = True  # If user wants to monitor what's happening
     show_single_touches = False  # If user wants to visualise single touches, one by one
-    manual_check = True  # If user wants to take the time to check the trial and how it has been split
-
+    manual_check = False  # If user wants to take the time to check the trial and how it has been split
+    show_final_summary = False
 
     # ----------------------
     # ----------------------
@@ -59,9 +61,16 @@ if __name__ == "__main__":
 
     # get input data directory
     db_path_input = os.path.join(db_path, "3_merged", "sorted_by_trial")
+    if adjust_with_manual_lag:
+        manual_lag_filename_abs = os.path.join(db_path_input, manual_lag_filename)
+        manual_lag = pd.read_csv(manual_lag_filename_abs)
+
     # get output directories
-    db_path_output = os.path.join(db_path, "3_merged", "sorted_by_trial")
-    output_figure_path = os.path.join(db_path, "3_merged", "sorted_by_trial")
+    common_output_folder_base = "vectors-index_single-touches"
+    if adjust_with_manual_lag:
+        common_output_folder_base = common_output_folder_base + "_adj-manual-lag"
+    db_path_output = os.path.join(db_path, "3_merged", common_output_folder_base)
+    output_figure_path = os.path.join(db_path, "3_merged", common_output_folder_base)
     if save_results and not os.path.exists(db_path_output):
         os.makedirs(db_path_output)
     if save_figures and not os.path.exists(output_figure_path):
@@ -90,12 +99,14 @@ if __name__ == "__main__":
                      '2022-06-22_ST18-04']
     sessions = []
     sessions = sessions + sessions_ST13
-    sessions = sessions + sessions_ST14
-    sessions = sessions + sessions_ST15
+    #sessions = sessions + sessions_ST14
+    #sessions = sessions + sessions_ST15
     sessions = sessions + sessions_ST16
     sessions = sessions + sessions_ST18
-    #sessions = ['2022-06-14_ST13-03']
     print(sessions)
+
+    use_specific_blocks = False
+    specific_blocks = ['block-order08', 'block-order09']
 
     if show:
         scd_list = []
@@ -108,7 +119,16 @@ if __name__ == "__main__":
         files_abs, files = path_tools.find_files_in_directory(curr_dir, ending=input_filename_pattern_r)
 
         for data_filename_abs, data_filename in zip(files_abs, files):
+            print(f"\n- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -")
             print(f"current file: {data_filename}")
+            if use_specific_blocks :
+                is_not_specific_block = True
+                for block in specific_blocks:
+                    if block in data_filename:
+                        is_not_specific_block = False
+                if is_not_specific_block:
+                    continue
+            
             # Output filenames
             output_dir_abs = os.path.dirname(data_filename_abs).replace(db_path_input, db_path_output)
             filename_output = data_filename.replace(".csv", output_filename_end)
@@ -129,9 +149,37 @@ if __name__ == "__main__":
                 continue
 
             # 2. create a SemiControlledData's list of TOUCH EVENT:
-            # 2.1 load the data
+            # 2.0 load the data
             scd = SemiControlledData(data_filename_abs, md_stimuli_filename_abs, md_neuron_filename_abs)  # resources
             scd.set_variables(dropna=False)
+            # 2.1 if manual lag adjustement is True, check if the current trial belongs to the list and adjust if needed:
+            if adjust_with_manual_lag and (data_filename in manual_lag["filename"].values):
+                    idx = np.where(manual_lag["filename"].values == data_filename)[0][0]
+                    manual_lag_row = manual_lag.iloc[idx]
+                    lag = manual_lag_row["lag_samples"]
+                    if lag is None:
+                        lag = 0
+                    # align signals by shifting nerve data
+                    if lag > 0:
+                        zeros = np.zeros(lag)
+                        # to the right
+                        spike_shifted = np.concatenate((zeros, scd.neural.spike[:-lag]))
+                        iff_shifted = np.concatenate((zeros, scd.neural.iff[:-lag]))
+                    elif lag < 0:
+                        lag_abs = abs(lag)
+                        zeros = np.zeros(lag_abs)
+                        # to the left
+                        spike_shifted = np.concatenate((scd.neural.spike[lag_abs:], zeros))
+                        iff_shifted = np.concatenate((scd.neural.iff[lag_abs:], zeros))
+                    else:
+                        # Do nothing
+                        spike_shifted = scd.neural.spike
+                        iff_shifted = scd.neural.iff
+                    
+                    # shifted dataset
+                    scd.neural.spike = spike_shifted
+                    scd.neural.iff = iff_shifted
+                
             # 2.2 split by touch event
             splitter = SemiControlledDataSplitter(viz=viz,
                                                   show=show,
@@ -157,12 +205,10 @@ if __name__ == "__main__":
                         # Write each tuple on a new line
                         f.write(endpoint_str + '\n')
 
-
-    if show:
+    if show_final_summary:
         flattened_scd_list = list(itertools.chain.from_iterable(scd_list))
         scd_visualiser = SemiControlledDataVisualizer()
         for scd in flattened_scd_list:
             scd_visualiser.update(scd)
             WaitForButtonPressPopup()
-
     print("done.")
