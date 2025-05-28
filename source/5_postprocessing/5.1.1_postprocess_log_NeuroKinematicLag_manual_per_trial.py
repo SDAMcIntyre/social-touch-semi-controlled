@@ -75,7 +75,7 @@ if __name__ == "__main__":
 
     # Session names
     sessions_ST13 = [#'2022-06-14_ST13-01',
-                     #'2022-06-14_ST13-02',
+                     '2022-06-14_ST13-02',
                      '2022-06-14_ST13-03']
 
     sessions_ST14 = ['2022-06-15_ST14-01',
@@ -100,7 +100,12 @@ if __name__ == "__main__":
     sessions = sessions + sessions_ST15
     sessions = sessions + sessions_ST16
     sessions = sessions + sessions_ST18
+    sessions = ['2022-06-14_ST13-02']
     print(f"Processing sessions: {sessions}")
+
+    use_specific_block = True
+    blocks = ['block-order01',
+              'block-order02']
 
     for session_name in sessions:
         curr_dir = os.path.join(db_path_input, session_name)
@@ -112,8 +117,9 @@ if __name__ == "__main__":
         for file_abs_path, file_short_name in zip(files_abs, files_short):
             print(f"---------------\nChecking dataset: {file_short_name} in session {session_name}")
             print(f"Full path: {file_abs_path}")
-            if not "block-order05" in file_short_name:
-                continue
+            if use_specific_block:
+                if not "block-order03" in file_short_name:
+                    continue
 
             # Check if already processed
             processed_already = False
