@@ -92,8 +92,12 @@ if __name__ == "__main__":    # parameters
     sessions = sessions + sessions_ST15
     sessions = sessions + sessions_ST16
     sessions = sessions + sessions_ST18
-
     print(sessions)
+
+    
+    sessions = ['2022-06-15_ST14-04']
+    use_specific_blocks = True
+    specific_blocks = ['block-order01']
 
     diff_ms_all = []
     # it is important to split by MNG files / neuron recordings to create the correct subfolders.
@@ -107,7 +111,16 @@ if __name__ == "__main__":    # parameters
             print(f"Directory '{output_session_abs}' created.")
 
         for file_abs, file in zip(files_abs, files):
+            print(f"\n- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -")
             print(f"current file: {file}")
+            if use_specific_blocks :
+                is_not_specific_block = True
+                for block in specific_blocks:
+                    if block in file:
+                        is_not_specific_block = False
+                if is_not_specific_block:
+                    continue
+
             output_dir_abs = os.path.dirname(file_abs).replace(db_path_input, db_path_output)
             if not force_processing and glob.glob(os.path.join(output_dir_abs, "*.csv")):
                 print(f"output folder already contains csv file(s), most likely output data, and not force processing. Skipping...")
@@ -135,9 +148,16 @@ if __name__ == "__main__":    # parameters
             # find middle point between trials as split locations
             if split_type == "with_following_rest_time":
                 trials_idx_new = []
-                for idx in np.arange(len(trials_idx)-1):
-                    start_idx = trials_idx[idx][0]
-                    end_idx = trials_idx[idx+1][0]
+                ntrials = len(trials_idx)
+                for trial_id in np.arange(ntrials):
+                    curr_trial_indexes = trials_idx[trial_id]
+                    start_idx = curr_trial_indexes[0]
+                    if trial_id+1 == ntrials:
+                        # get the last sample of the file as it is the last trial
+                        end_idx = len(data["Nerve_TTL"].values)
+                    else:
+                        next_trial_indexes = trials_idx[trial_id+1]
+                        end_idx = next_trial_indexes[0]
                     trials_idx_new.append(start_idx + np.arange(end_idx-start_idx))
                 trials_idx = trials_idx_new
 
