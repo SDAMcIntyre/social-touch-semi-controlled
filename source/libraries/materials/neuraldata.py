@@ -98,7 +98,7 @@ class NeuralData:
         self._time = value
         self.nsample = len(self._time)
         dt = np.diff(self._time)
-        if not len(dt) == 0:
+        if ~np.all(np.isnan(dt)):
             self.data_Fs = 1 / np.nanmean(dt)  # Hz
-            #print(np.nanmean(dt))
-            #print(self.data_Fs)
+        else:
+            print("neuraldata::data_FS COULD NOT BE ASSESSED, attribute time contains only NaN values.")

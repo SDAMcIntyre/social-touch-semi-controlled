@@ -197,7 +197,11 @@ class ContactData:
     def time(self, value):
         self._time = value
         self.nsample = len(self._time)
-        self.data_Fs = 1 / np.nanmean(np.diff(self._time))  # Hz
+        dt = np.diff(self._time)
+        if ~np.all(np.isnan(dt)):
+            self.data_Fs = 1 / np.nanmean(dt)  # Hz
+        else:
+            print("contactdata::data_FS COULD NOT BE ASSESSED, attribute time contains only NaN values.")
 
     @property
     def TTL(self):
