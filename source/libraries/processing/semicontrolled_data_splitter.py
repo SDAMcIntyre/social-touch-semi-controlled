@@ -206,6 +206,9 @@ class SemiControlledDataSplitter:
 
         if self.show:
             if self.manual_check:
+                scd_untouched.contact.update_pos_1D()
+                pos_1D_smooth = smooth_scd_signal(scd_untouched.contact.pos_1D, scd, nframe=5, method="blind")
+                pos_1D_smooth = normalize_signal(pos_1D_smooth, dtype=np.ndarray)
                 fig, ax = plt.subplots(1, 1)
                 plt.plot(pos_1D_smooth, label='Signal')
                 plt.plot(pos_peaks, pos_1D_smooth[pos_peaks], 'r.', label='Peaks')
