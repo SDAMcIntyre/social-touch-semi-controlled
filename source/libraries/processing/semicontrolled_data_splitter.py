@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from scipy import signal
 from typing import Optional
+from functools import singledispatchmethod, wraps
 import warnings
 
 from .semicontrolled_data_correct_lag import SemiControlledCorrectLag  # noqa: E402
@@ -81,57 +82,74 @@ class SemiControlledDataSplitter:
         return scd_list_out
 
 
+    @singledispatchmethod
+    def split_by_touch_event(self, scd_arg, **kwargs):
+        """
+        Base dispatcher for splitting.
+        Raises an error for unsupported types.
+        """
+        raise TypeError(f"Type {type(scd_arg).__name__} is not supported")
+
+    @split_by_touch_event.register(SemiControlledData)
     @time_it
-    def split_by_touch_event(self, scd_list, method="method_3", correction=True):
-        """split_by_single
-           split the current semicontrolled data into single touch event
-           A period, or touch event, is determined differently based on the type (Tap or Stroke)
-           """
-        if not isinstance(scd_list, list):
-            scd_list = [scd_list]
+    def _(self, scd: SemiControlledData, method: str = "method_3", correction: bool = True):
+        """
+        Processes a SINGLE SemiControlledData object.
+        
+        This method contains the core logic for splitting one touch event,
+        which was previously inside the for-loop.
+        """
+        print(f"\nProcessing single object: {scd}")
+        # Choose the method to split tap trials
+        tap_method_map = {
+            "method_1": "iff",
+            "method_2": "depth",
+            "method_3": "iff, depth"
+        }
+        tap_method = tap_method_map.get(method, "iff, depth")
 
-        # choose the method to split trials:
-        #  - method_1: Stroking trials are split with position, Taping using only IFF
-        #  - method_2: Stroking trials are split with position, Taping using only depth
-        #  - method_3: Stroking trials are split with position, Taping using only depth and IFF
-        if method == "method_1":
-            tap_method = "iff"
-        elif method == "method_2":
-            tap_method = "depth"
-        elif method == "method_3":
-            tap_method = "iff, depth"
+        scd.contact.update_pos_1D()
 
+        # Call the appropriate splitting function based on stimulus type
+        if scd.stim.type == "stroke":
+            scd_list, endpoints_list = self.get_single_strokes(scd, correction=correction)
+        elif scd.stim.type == "tap":
+            scd_list, endpoints_list = self.get_single_taps(scd, correction=correction, method=tap_method)
+        else:
+            scd_list, endpoints_list = [], []
+
+        if self.save_visualiser and self.viz is not None:
+            self.viz.save(self.save_visualiser_fname)
+            if not self.show:
+                del self.viz
+        
+        return scd_list, endpoints_list
+
+    @split_by_touch_event.register(list)
+    @time_it
+    def _(self, scd_list: list, method: str = "method_3", correction: bool = True):
+        """
+        Processes a LIST of SemiControlledData objects.
+        
+        This method iterates through the list and calls the single-item
+        version of this method for each object, aggregating the results.
+        """
+        print(f"Processing a list of {len(scd_list)} objects...")
         scd_list_out = []
         endpoints_list_out = []
-        # second split the trial per stimulus/repeat/period/nb. time the POI is stimulated
+
         for scd in scd_list:
-            scd.contact.update_pos_1D()
+            # Dispatch to the single-item version of the method
+            single_scd_list, single_endpoints_list = self.split_by_touch_event(
+                scd, method=method, correction=correction
+            )
 
-            if scd.stim.type == "stroke":
-                scd_list, endpoints_list = self.get_single_strokes(scd, correction=correction)
-            elif scd.stim.type == "tap":
-                scd_list, endpoints_list = self.get_single_taps(scd, correction=correction, method=tap_method)
-            else:
-                scd_list = []
-                endpoints_list = []
-
-            if len(scd_list) == 0 or len(endpoints_list) == 0:
-                continue
-
-            try:
-                scd_list_out.extend(scd_list)
-                endpoints_list_out.extend(endpoints_list)
-            except:
-                # then it is not a list but just one SemiControlledData
-                scd_list_out = [scd_list_out, scd_list]
-                endpoints_list_out = [endpoints_list_out, endpoints_list]
-
-            if self.save_visualiser and self.viz is not None:
-                self.viz.save(self.save_visualiser_fname)
-                if not self.show:
-                    del self.viz
+            if single_scd_list and single_endpoints_list:
+                scd_list_out.extend(single_scd_list)
+                endpoints_list_out.extend(single_endpoints_list)
 
         return scd_list_out, endpoints_list_out
+
 
     def get_single_strokes(self, scd, correction=True):
         # to display the entire trial on the figure
@@ -309,19 +327,18 @@ class SemiControlledDataSplitter:
             scd_period_list, endpoints_list = self.correct(scd_period_list, endpoints_list, hp_duration_ms=hp_duration_ms)
             print(f"{len(scd_period_list)} single touches found.")
 
-        if len(scd_period_list) == 0:
-            w = f"\nFile <{scd.md.data_filename_short}> couldn't be split.\nNumber of single touch detected = 0."
-            warnings.warn(w)
-            return [], []
-
-        
         if self.save_visualiser or self.show:
             if self.viz is None:
                 self.viz = SemiControlledDataVisualizer()
             self.viz.update(scd_untouched)
-            self.viz.add_vertical_lines(scd_untouched.md.time[periods_idx])
 
+        if len(scd_period_list) == 0:
+            w = f"\nFile <{scd.md.data_filename_short}> couldn't be split.\nNumber of single touch detected = 0."
+            warnings.warn(w)
+            return [], []
+        
         if self.show:
+            self.viz.add_vertical_lines(scd_untouched.md.time[periods_idx])
             if self.manual_check:
                 fig, ax = plt.subplots(1, 1)
                 ax.plot(sig, label='Signal')
@@ -330,6 +347,7 @@ class SemiControlledDataSplitter:
                 ax.set_title("Found peaks on smoothed signal")
                 WaitForButtonPressPopup()
                 plt.close(fig)
+                
 
         return scd_period_list, endpoints_list
 

@@ -131,6 +131,9 @@ class SemiControlledData:
             self.contact.vel = np.array([vx, vy, vz])
         else:
             pass
+        # some dataset doesn't possess the forearm contact XYZ 
+        if 'contact_arm_pointcloud' in df.columns:
+            self.contact.arm_pointcloud = df['contact_arm_pointcloud'].values
 
     def load_neural(self, df):
         self.neural.time = df.time.values

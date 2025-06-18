@@ -58,9 +58,9 @@ if __name__ == "__main__":    # parameters
     # get database directory
     db_path = os.path.join(path_tools.get_database_path(), "semi-controlled", "3_merged")
     # get input base directory
-    db_path_input = os.path.join(db_path, "sorted_by_block")
+    db_path_input = os.path.join(db_path, "4.2_sorted_by_block")
     # get output base directory
-    db_path_output = os.path.join(db_path, "sorted_by_trial")
+    db_path_output = os.path.join(db_path, "5.1.0_sorted_by_trial")
     if save_results and not os.path.exists(db_path_output):
         os.makedirs(db_path_output)
         print(f"Directory '{db_path_output}' created.")
@@ -92,11 +92,10 @@ if __name__ == "__main__":    # parameters
     sessions = sessions + sessions_ST15
     sessions = sessions + sessions_ST16
     sessions = sessions + sessions_ST18
+    sessions = ['2022-06-15_ST14-01']
     print(sessions)
 
-    
-    sessions = ['2022-06-15_ST14-04']
-    use_specific_blocks = True
+    use_specific_blocks = False
     specific_blocks = ['block-order01']
 
     diff_ms_all = []
@@ -141,7 +140,7 @@ if __name__ == "__main__":    # parameters
                 warnings.warn("Issue detected: Value of the block id is equal to zero.")
                 continue
 
-            # remove the identifier blocks to keep only the trial blocks.
+            # remove the identifier blocks to keep only the trial TTLs.
             trials_idx = [trial_indexes for idx, trial_indexes in enumerate(on_signal_idx) if idx not in blocks_id_idx]
 
             # modify the trials idx in function of split_type
@@ -154,7 +153,16 @@ if __name__ == "__main__":    # parameters
                     start_idx = curr_trial_indexes[0]
                     if trial_id+1 == ntrials:
                         # get the last sample of the file as it is the last trial
-                        end_idx = len(data["Nerve_TTL"].values)
+                        # Finds the index of the first non-NaN value from the end
+                        arr = data["Nerve_TTL"].values
+                        # Find indices of all non-NaN values
+                        non_nan_indices = np.where(~np.isnan(arr))[0]
+                        # Check if any non-NaN values were found
+                        if len(non_nan_indices) > 0:
+                            # Return the last index from the array of non-NaN indices
+                            end_idx = non_nan_indices[-1]
+                        else:
+                            end_idx = len(arr)
                     else:
                         next_trial_indexes = trials_idx[trial_id+1]
                         end_idx = next_trial_indexes[0]

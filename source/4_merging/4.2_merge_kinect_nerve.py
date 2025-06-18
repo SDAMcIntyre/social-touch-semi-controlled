@@ -120,7 +120,7 @@ if __name__ == "__main__":
     db_path_input_kinect = os.path.join(db_path, "2_processed", "kinect")
     db_path_input_nerve = os.path.join(db_path, "2_processed", "nerve", "3_cond-velocity-adj")
     # set output base directory
-    db_path_output = os.path.join(db_path, "3_merged", "sorted_by_block")
+    db_path_output = os.path.join(db_path, "3_merged", "4.2_sorted_by_block")
     if not os.path.exists(db_path_output):
         os.makedirs(db_path_output)
         print(f"Directory '{db_path_output}' created.")
@@ -154,6 +154,12 @@ if __name__ == "__main__":
     sessions = sessions + sessions_ST18
     print(sessions)
     
+    sessions = ['2022-06-15_ST14-01']
+
+    use_specific_blocks = False
+    specific_blocks = ['block-order01']
+
+
     success_list = []
     alignment_technique_list = []
     lag_list = []
@@ -171,7 +177,16 @@ if __name__ == "__main__":
         files_contact_abs, files_contact = path_tools.find_files_in_directory(curr_kinect_dir, ending=kinect_input_filename_ending)
 
         for file_contact_abs, file_contact in zip(files_contact_abs, files_contact):
+            print(f"\n- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -")
             print(f"current file: {file_contact}")
+            if use_specific_blocks :
+                is_not_specific_block = True
+                for block in specific_blocks:
+                    if block in file_contact:
+                        is_not_specific_block = False
+                if is_not_specific_block:
+                    continue
+            
             #f not ('block-order08' in file_contact_abs): continue
             #if 2 != int(re.search("block-order\d{2}", file_contact).group().replace("block-order", "")): continue
             # check if led and nerve files exist for this contact file
@@ -282,12 +297,20 @@ if __name__ == "__main__":
                 nerve_t = np.concatenate((nerve_t, nan_vector))
 
             # create output dataframe
-            kinect_scaled.rename(columns={'t': 't_Kinect'})
             df_output = kinect_scaled.copy()
+            # keep time from kinect and nerve, and defined a harmonized time vector
+            df_output = df_output.rename(columns={'time': 'time_kinect'})
+            df_output["time_nerve"] = nerve_t
+            df_output["time"] = np.linspace(0, len(TTL_Aut)/nerve_Fs, len(TTL_Aut))
+            # make the time columns first
+            first_cols = ['time', 'time_kinect', 'time_nerve']
+            other_cols = [col for col in df_output.columns if col not in first_cols]
+            new_order = first_cols + other_cols
+            df_output = df_output[new_order]
+            # integrate the (potentially) shifted nerve data
             df_output["Nerve_spike"] = nerve_shifted
             df_output["Nerve_freq"] = freq_shifted
             df_output["Nerve_TTL"] = TTL_Aut
-            df_output["time"] = nerve_t
 
             # keep the lag for traceability file
             alignment_technique_list.append(alignment_technique)

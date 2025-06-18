@@ -32,6 +32,8 @@ class ContactData:
         self._pos_1D: list[float] = []  # mm
         self._vel: list[float] = []  # mm/sec
 
+        self._arm_pointcloud = []   # Store the vector of XYZ pointcloud in function of time if hand and forearm interact
+
         self.data_Fs = None  # Hz
         self.KINECT_FS = 30  # Hz
 
@@ -260,6 +262,23 @@ class ContactData:
         self._pos = value
         self.update_pos_1D()
 
+    @property
+    def pos_1D(self):
+        return self._pos_1D
+
+    @pos_1D.setter
+    def pos_1D(self, value):
+        self._pos_1D = value
+
+    @property
+    def arm_pointcloud(self):
+        return self._arm_pointcloud
+
+    @arm_pointcloud.setter
+    def arm_pointcloud(self, value):
+        self._arm_pointcloud = value
+    
+
     def update_pos_1D(self, automatic_range=True, pca_range=None):
         """
         Compresses the 3D position data (self.pos) into 1D using PCA.
@@ -423,10 +442,4 @@ class ContactData:
              self.pca_model = None
 
 
-    @property
-    def pos_1D(self):
-        return self._pos_1D
-
-    @pos_1D.setter
-    def pos_1D(self, value):
-        self._pos_1D = value
+             

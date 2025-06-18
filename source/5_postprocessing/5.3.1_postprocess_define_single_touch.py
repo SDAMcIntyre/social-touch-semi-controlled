@@ -24,7 +24,7 @@ if __name__ == "__main__":
     # ----------------------
     # User control variables
     # ----------------------
-    force_processing = False  # If user wants to force data processing even if results already exist
+    force_processing = True  # If user wants to force data processing even if results already exist
     save_figures = True
     save_results = True
 
@@ -60,13 +60,13 @@ if __name__ == "__main__":
         warnings.warn(s, Warning)
 
     # get input data directory
-    db_path_input = os.path.join(db_path, "3_merged", "sorted_by_trial")
+    db_path_input = os.path.join(db_path, "3_merged", "5.1.0_sorted_by_trial")
     if adjust_with_manual_lag:
         manual_lag_filename_abs = os.path.join(db_path_input, manual_lag_filename)
         manual_lag = pd.read_csv(manual_lag_filename_abs)
 
     # get output directories
-    common_output_folder_base = "vectors-index_single-touches"
+    common_output_folder_base = "5.3.1_single-touches-index"
     if adjust_with_manual_lag:
         common_output_folder_base = common_output_folder_base + "_adj-manual-lag"
     db_path_output = os.path.join(db_path, "3_merged", common_output_folder_base)
@@ -99,14 +99,21 @@ if __name__ == "__main__":
                      '2022-06-22_ST18-04']
     sessions = []
     sessions = sessions + sessions_ST13
-    #sessions = sessions + sessions_ST14
-    #sessions = sessions + sessions_ST15
+    sessions = sessions + sessions_ST14
+    sessions = sessions + sessions_ST15
     sessions = sessions + sessions_ST16
     sessions = sessions + sessions_ST18
+    sessions = ['2022-06-15_ST14-01']
     print(sessions)
 
+    #sessions = ['2022-06-14_ST13-02']
+
     use_specific_blocks = False
-    specific_blocks = ['block-order08', 'block-order09']
+    specific_blocks = ['block-order03']
+    
+    use_specific_trials = False
+    specific_trials = ['trial08']
+    
 
     if show:
         scd_list = []
@@ -127,6 +134,14 @@ if __name__ == "__main__":
                     if block in data_filename:
                         is_not_specific_block = False
                 if is_not_specific_block:
+                    continue
+            
+            if use_specific_trials:
+                is_not_specific_trial = True
+                for trial in specific_trials:
+                    if trial in data_filename:
+                        is_not_specific_trial = False
+                if is_not_specific_trial:
                     continue
             
             # Output filenames
