@@ -3,11 +3,13 @@ import os
 
 from transforms3d.quaternions import quat2mat
 
-from config import *
-from kinematics import *
 try:
+  from config import *
+  from kinematics import *
   from utils import load_pkl
 except ImportError:
+  from .config import *
+  from .kinematics import *
   from .utils import load_pkl
 
 
