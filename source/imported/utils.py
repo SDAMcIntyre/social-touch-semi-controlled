@@ -3,7 +3,6 @@ import numpy as np
 import os
 import pickle
 
-
 def imresize(img, size):
   """
   Resize an image with cv2.INTER_LINEAR.
