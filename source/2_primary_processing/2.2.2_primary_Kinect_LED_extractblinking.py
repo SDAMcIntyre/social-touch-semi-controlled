@@ -95,12 +95,20 @@ if __name__ == "__main__":
                      '2022-06-22_ST18-02',
                      '2022-06-22_ST18-04']
 
-    sessions = []
-    sessions = sessions + sessions_ST13
-    sessions = sessions + sessions_ST14
-    sessions = sessions + sessions_ST15
-    sessions = sessions + sessions_ST16
-    sessions = sessions + sessions_ST18
+    use_specific_sessions = True
+    if not use_specific_sessions:
+        sessions = []
+        sessions = sessions + sessions_ST13
+        sessions = sessions + sessions_ST14
+        sessions = sessions + sessions_ST15
+        sessions = sessions + sessions_ST16
+        sessions = sessions + sessions_ST18
+    else:
+        sessions = ['2022-06-17_ST16-02']
+    
+    use_specific_blocks = True
+    specific_blocks = ['block-order16']
+
 
     for session in sessions:
         # files_abs, files, _ = find_metadata_files(db_path_input, session)
@@ -109,36 +117,15 @@ if __name__ == "__main__":
 
         # Process LED blinking
         for idx, (file_abs, file) in enumerate(zip(files_abs, files)):
+            if use_specific_blocks :
+                is_not_specific_block = True
+                for block in specific_blocks:
+                    if block in file:
+                        is_not_specific_block = False
+                if is_not_specific_block:
+                    continue
             print("--- --- --- --- ---")
             print(f"Current file is: '{file}'")
-            substrings_to_check = ["ST14-02_semicontrolled_block-order01",
-                                   "ST14-02_semicontrolled_block-order02",
-
-                                   "ST15-02_semicontrolled_block-order01",
-
-                                   "ST16-02_semicontrolled_block-order09",
-                                   "ST16-02_semicontrolled_block-order1",
-
-                                   "ST16-03_semicontrolled_block-order05",
-                                   "ST16-03_semicontrolled_block-order06",
-                                   "ST16-03_semicontrolled_block-order07",
-
-                                   "ST16-04_semicontrolled_block-order01",
-                                   "ST16-04_semicontrolled_block-order02",
-
-                                   "ST16-05_semicontrolled_block-order",
-
-                                   "ST18-01_semicontrolled_block-order16",
-                                   "ST18-01_semicontrolled_block-order17"]
-            
-            substrings_to_check = ["ST16-02_semicontrolled_block-order02"]
-            
-            found = False
-            for sub in substrings_to_check:
-                if sub in file:
-                    found = True
-                    break  # No need to check other substrings if one is found
-            if not found: continue
             
             # Results filename and location
             output_dirname = os.path.dirname(file_abs).replace(db_path_input, db_path_output)

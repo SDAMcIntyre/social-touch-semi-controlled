@@ -89,12 +89,20 @@ if __name__ == "__main__":
                      '2022-06-22_ST18-02',
                      '2022-06-22_ST18-04'
                      ]
-    sessions = []
-    sessions = sessions + sessions_ST13
-    sessions = sessions + sessions_ST14
-    sessions = sessions + sessions_ST15
-    sessions = sessions + sessions_ST16
-    sessions = sessions + sessions_ST18
+    
+    use_specific_sessions = True
+    if not use_specific_sessions:
+        sessions = []
+        sessions = sessions + sessions_ST13
+        sessions = sessions + sessions_ST14
+        sessions = sessions + sessions_ST15
+        sessions = sessions + sessions_ST16
+        sessions = sessions + sessions_ST18
+    else:
+        sessions = ['2022-06-17_ST16-02']
+    
+    use_specific_blocks = True
+    specific_blocks = ['block-order-16']
 
     print(sessions)
 
@@ -109,6 +117,13 @@ if __name__ == "__main__":
         files_contact_abs, files_contact = path_tools.find_files_in_directory(curr_contact_path_dir, ending=input_contact_filename_ending)
 
         for file_contact_abs, file_contact in zip(files_contact_abs, files_contact):
+            if use_specific_blocks:
+                is_not_specific_block = True
+                for block in specific_blocks:
+                    if block in file_contact_abs:
+                        is_not_specific_block = False
+                if is_not_specific_block:
+                    continue
             print(f"current file: {file_contact_abs}")
             # if not ('block-order-08' in file_contact_abs): continue
 

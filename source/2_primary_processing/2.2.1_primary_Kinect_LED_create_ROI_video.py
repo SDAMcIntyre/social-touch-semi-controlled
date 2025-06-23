@@ -62,17 +62,19 @@ if __name__ == "__main__":
                      '2022-06-22_ST18-02',
                      '2022-06-22_ST18-04']
 
-    sessions = []
-    sessions = sessions + sessions_ST13
-    sessions = sessions + sessions_ST14
-    sessions = sessions + sessions_ST15
-    sessions = sessions + sessions_ST16
-    sessions = sessions + sessions_ST18
+    use_specific_sessions = True
+    if not use_specific_sessions:
+        sessions = []
+        sessions = sessions + sessions_ST13
+        sessions = sessions + sessions_ST14
+        sessions = sessions + sessions_ST15
+        sessions = sessions + sessions_ST16
+        sessions = sessions + sessions_ST18
+    else:
+        sessions = ['2022-06-17_ST16-02']
     
-    sessions = ['2022-06-15_ST14-02', 
-                #'2022-06-15_ST14-01', 
-                '2022-06-15_ST14-03',
-                '2022-06-15_ST14-04']
+    use_specific_blocks = True
+    specific_blocks = ['block-order16']
 
     print("Selected sessions:")
     print(np.transpose(sessions))
@@ -85,6 +87,14 @@ if __name__ == "__main__":
         files_abs, files = path_tools.find_files_in_directory(curr_dir, ending=metadata_filename_end)
 
         for file_abs, file in zip(files_abs, files):
+            if use_specific_blocks :
+                is_not_specific_block = True
+                for block in specific_blocks:
+                    if block in file:
+                        is_not_specific_block = False
+                if is_not_specific_block:
+                    continue
+
             idx = idx + 1
             print("--- --- --- --- ---")
             print(f"Current file is: '{file}'")

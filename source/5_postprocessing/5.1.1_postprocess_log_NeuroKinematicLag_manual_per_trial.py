@@ -22,7 +22,7 @@ from libraries.processing.semicontrolled_data_correct_lag_manual import TimeSeri
 
 if __name__ == "__main__":
     # parameters
-    force_processing = False  # If user wants to force data processing even if results already exist in the log
+    force_processing = True  # If user wants to force data processing even if results already exist in the log
     save_results = True      # If True, lag results will be saved to the log CSV file
 
     show = True  # If user wants to monitor what's happening (affects print statements, not core logic here)
@@ -37,9 +37,9 @@ if __name__ == "__main__":
     # get Metadata base directory
     db_path_md = os.path.join(db_path, "1_primary", "logs", "2_stimuli_by_blocks")
     # Get input base directory
-    db_path_input = os.path.join(db_path, "3_merged", "sorted_by_trial")
+    db_path_input = os.path.join(db_path, "3_merged", "5.1.0_sorted_by_trial")
     # Get output base directory (for the log file)
-    db_path_output = os.path.join(db_path, "3_merged", "sorted_by_trial")
+    db_path_output = os.path.join(db_path, "3_merged", "5.1.1_sorted_by_trial")
 
     # Define log file path and headers
     log_file_name = "manual_lag_processing_log.csv"
@@ -74,7 +74,7 @@ if __name__ == "__main__":
 
 
     # Session names
-    sessions_ST13 = [#'2022-06-14_ST13-01',
+    sessions_ST13 = ['2022-06-14_ST13-01',
                      '2022-06-14_ST13-02',
                      '2022-06-14_ST13-03']
 
@@ -94,18 +94,23 @@ if __name__ == "__main__":
     sessions_ST18 = ['2022-06-22_ST18-01',
                      '2022-06-22_ST18-02',
                      '2022-06-22_ST18-04']
-    sessions = []
-    sessions = sessions + sessions_ST13
-    sessions = sessions + sessions_ST14
-    sessions = sessions + sessions_ST15
-    sessions = sessions + sessions_ST16
-    sessions = sessions + sessions_ST18
-    sessions = ['2022-06-14_ST13-02']
-    print(f"Processing sessions: {sessions}")
+    
+    use_specific_sessions = True
+    if not use_specific_sessions:
+        sessions = []
+        sessions = sessions + sessions_ST13
+        sessions = sessions + sessions_ST14
+        sessions = sessions + sessions_ST15
+        sessions = sessions + sessions_ST16
+        sessions = sessions + sessions_ST18
+    else:
+        sessions = ['2022-06-14_ST13-01']
 
-    use_specific_block = True
-    blocks = ['block-order01',
-              'block-order02']
+    use_specific_blocks = False
+    specific_blocks = ['block-order01',
+                       'block-order02']
+
+    print(f"Processing sessions: {sessions}")
 
     for session_name in sessions:
         curr_dir = os.path.join(db_path_input, session_name)
@@ -117,8 +122,12 @@ if __name__ == "__main__":
         for file_abs_path, file_short_name in zip(files_abs, files_short):
             print(f"---------------\nChecking dataset: {file_short_name} in session {session_name}")
             print(f"Full path: {file_abs_path}")
-            if use_specific_block:
-                if not "block-order03" in file_short_name:
+            if use_specific_blocks :
+                is_not_specific_block = True
+                for block in specific_blocks:
+                    if block in file_short_name:
+                        is_not_specific_block = False
+                if is_not_specific_block:
                     continue
 
             # Check if already processed

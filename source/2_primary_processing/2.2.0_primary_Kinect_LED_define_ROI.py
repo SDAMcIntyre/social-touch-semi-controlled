@@ -12,9 +12,7 @@ import libraries.misc.path_tools as path_tools  # noqa: E402
 
 
 if __name__ == "__main__":
-    OS_linux = True
-
-    force_processing = False  # If user wants to force data processing even if results already exist
+    force_processing = True  # If user wants to force data processing even if results already exist
     save_results = True
 
     show = False  # If user wants to monitor what's happening
@@ -23,6 +21,7 @@ if __name__ == "__main__":
 
     print("Step 0: Extract the videos embedded in the selected sessions.")
     # get database directory
+    OS_linux = sys.platform.startswith('linux')
     db_path_linux = os.path.expanduser('~/Documents/datasets/semi-controlled')
     if OS_linux:
         db_path = db_path_linux
@@ -58,17 +57,24 @@ if __name__ == "__main__":
                      '2022-06-22_ST18-02',
                      '2022-06-22_ST18-04']
 
-    sessions = []
-    sessions = sessions + sessions_ST13
-    sessions = sessions + sessions_ST14
-    sessions = sessions + sessions_ST15
-    sessions = sessions + sessions_ST16
-    sessions = sessions + sessions_ST18
+    use_specific_sessions = True
+    if not use_specific_sessions:
+        sessions = []
+        sessions = sessions + sessions_ST13
+        sessions = sessions + sessions_ST14
+        sessions = sessions + sessions_ST15
+        sessions = sessions + sessions_ST16
+        sessions = sessions + sessions_ST18
+    else:
+        sessions = ['2022-06-17_ST16-02']
+    
+    use_specific_blocks = True
+    specific_blocks = ['block-order16']
 
     print("Selected sessions:")
     print(np.transpose(sessions))
     print("--- --- --- --- ---")
-
+    
     print("Step 1: Determine manually the location of the LED.")
     # 1. Determine:
     #   a. If the file contains the LED (not out of frame)
@@ -81,6 +87,13 @@ if __name__ == "__main__":
         for file_abs, file in zip(files_abs, files):
             print("--- --- --- --- ---")
             print(f"Current file is: '{file}'")
+            if use_specific_blocks :
+                is_not_specific_block = True
+                for block in specific_blocks:
+                    if block in file:
+                        is_not_specific_block = False
+                if is_not_specific_block:
+                    continue
 
             # Results filename and location
             output_dirname = os.path.dirname(file_abs).replace(db_path_input, db_path_output)

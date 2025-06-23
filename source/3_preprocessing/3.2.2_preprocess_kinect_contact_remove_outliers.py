@@ -59,10 +59,10 @@ def calculate_acceleration_from_position(position_xyz, fs):
 
 if __name__ == "__main__":
     force_processing = True  # If user wants to force data processing even if results already exist
-    save_results = False
+    save_results = True
 
     target_filename = 'somatosensory_data.csv'
-    show = True  # If user wants to monitor what's happening
+    show = False  # If user wants to monitor what's happening
     generate_report = False
 
     print("Step 0: Extract the videos embedded in the selected sessions.")
@@ -101,12 +101,20 @@ if __name__ == "__main__":
     sessions_ST18 = ['2022-06-22_ST18-01',
                      '2022-06-22_ST18-02',
                      '2022-06-22_ST18-04']
-    sessions = []
-    sessions += sessions_ST13
-    sessions += sessions_ST14
-    sessions += sessions_ST15
-    sessions += sessions_ST16
-    sessions += sessions_ST18
+    use_specific_sessions = True
+    if not use_specific_sessions:
+        sessions = []
+        sessions = sessions + sessions_ST13
+        sessions = sessions + sessions_ST14
+        sessions = sessions + sessions_ST15
+        sessions = sessions + sessions_ST16
+        sessions = sessions + sessions_ST18
+    else:
+        sessions = ['2022-06-17_ST16-02']
+    
+    use_specific_blocks = True
+    specific_blocks = ['block-order-16']
+
     print(sessions)
 
     diff_ms_all = []
@@ -119,9 +127,17 @@ if __name__ == "__main__":
         # load all data of the current session into contacts
         contacts = []
         for file_contact_abs, file_contact in zip(files_contact_abs, files_contact):
+            if use_specific_blocks:
+                is_not_specific_block = True
+                for block in specific_blocks:
+                    if block in file_contact_abs:
+                        is_not_specific_block = False
+                if is_not_specific_block:
+                    continue
+            
             print(f"current file: {file_contact_abs}")
             #if not ('block-order-08' in file_contact_abs): continue
-               
+            
             output_filename = file_contact.replace(".csv", "_no-outlier.csv")
             output_dir_abs = os.path.dirname(file_contact_abs).replace(db_path_input_contact, db_path_output)
             output_filename_abs = os.path.join(output_dir_abs, output_filename)
@@ -155,7 +171,7 @@ if __name__ == "__main__":
             # 2/2 get rid of (0,0,0) positions as:
             #  - it doesn't make sense from a Kinect reference frame point of view
             #  - it is most likely an overwrite from previous pre-processing
-            eps = 1e-6
+            eps = 1e-6  
             zero_rows_mask = np.all(np.abs(xyz_palm) < eps, axis=0)
             xyz_palm[:, zero_rows_mask] = np.nan
             zero_rows_mask = np.all(np.abs(xyz_index) < eps, axis=0)

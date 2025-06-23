@@ -86,17 +86,21 @@ if __name__ == "__main__":    # parameters
     sessions_ST18 = ['2022-06-22_ST18-01',
                      '2022-06-22_ST18-02',
                      '2022-06-22_ST18-04']
-    sessions = []
-    sessions = sessions + sessions_ST13
-    sessions = sessions + sessions_ST14
-    sessions = sessions + sessions_ST15
-    sessions = sessions + sessions_ST16
-    sessions = sessions + sessions_ST18
-    sessions = ['2022-06-15_ST14-01']
+    
+    use_specific_sessions = True
+    if not use_specific_sessions:
+        sessions = []
+        sessions = sessions + sessions_ST13
+        sessions = sessions + sessions_ST14
+        sessions = sessions + sessions_ST15
+        sessions = sessions + sessions_ST16
+        sessions = sessions + sessions_ST18
+    else:
+        sessions = ['2022-06-17_ST16-02']
     print(sessions)
 
     use_specific_blocks = False
-    specific_blocks = ['block-order01']
+    specific_blocks = ['block-order16']
 
     diff_ms_all = []
     # it is important to split by MNG files / neuron recordings to create the correct subfolders.
