@@ -16,7 +16,7 @@ import sys
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', 'imported'))
 from imported.hand_mesh import HandMesh
-from imported.utils import *  # OneEuroFilter, imresize
+from imported.utils import imresize  # OneEuroFilter, imresize
 from imported.kinematics import mpii_to_mano
 from imported.wrappers import ModelPipeline
 import imported.config as config
@@ -162,9 +162,12 @@ def Contact_quantities_ConstantHandGesture(video_dir,ArmPLY_dir,CorrectedJointsC
 
   # model = ModelPipeline()
   v_handMesh = np.loadtxt(handMesh_Dir)
+  v_handMesh += np.abs(np.min(v_handMesh, axis=0))
   if left == False:
-    v_handMesh[:,1] = -v_handMesh[:,1]
-    v_handMesh[:,0] = -v_handMesh[:,0]
+    v_handMesh[:, 1] *= -1
+    v_handMesh[:, 2] *= -1
+    #v_handMesh[:,1] = -v_handMesh[:,1]
+    #v_handMesh[:,0] = -v_handMesh[:,0]
 
   ########## Contact quantities ############
   # output dataframe
@@ -202,6 +205,9 @@ def Contact_quantities_ConstantHandGesture(video_dir,ArmPLY_dir,CorrectedJointsC
     display = pygame.display.set_mode((500, 500))
     pygame.display.set_caption('Minimal Hand - input')
     clock = pygame.time.Clock()
+    # Introduce a paused state, initially False
+    paused = False
+    running = True
   ############ somatosensory result visualization ############
   if show_result:
     fig, ax = plt.subplots()
@@ -213,26 +219,38 @@ def Contact_quantities_ConstantHandGesture(video_dir,ArmPLY_dir,CorrectedJointsC
   palm_position_xyz_prev = 0
 
   while not end_of_video:
-    if first_frame:
-      time = 0
-      frame_idx = 0
-    else:
-      time += 1./30  # Azure Kinect Fs is 30 Hz
-      frame_idx += 1
-
+    for event in pygame.event.get():
+      if event.type == pygame.QUIT:
+          running = False
+      if event.type == pygame.KEYDOWN:
+          # Toggle pause mode when SPACE is pressed
+          if event.key == pygame.K_SPACE:
+              paused = not paused
+              if paused:
+                  print("--- Paused: You can now rotate the geometry manually. Press SPACE to resume. ---")
+              else:
+                  print("--- Resumed ---")
+    
     # I. load current frame
-    has_frame, frame = capture.read()
-    if not has_frame:
-        if capture.get(cv2.CAP_PROP_POS_FRAMES) >= capture.get(cv2.CAP_PROP_FRAME_COUNT):
-            print("End of video file reached.")
-            end_of_video = True
-            continue
-        else:
-            # Append the new row to the output DataFrame using loc
-            df.loc[len(df)] = create_mockup_dataframe_row(time, frame_idx, is_capture_failed=True)
-            print(f"frame {frame_idx}: capture read failed.")
-            has_frame = True
-            continue
+    if not paused:
+      if first_frame:
+        time = 0
+        frame_idx = 0
+      else:
+        time += 1./30  # Azure Kinect Fs is 30 Hz
+        frame_idx += 1
+      has_frame, frame = capture.read()
+      if not has_frame:
+          if capture.get(cv2.CAP_PROP_POS_FRAMES) >= capture.get(cv2.CAP_PROP_FRAME_COUNT):
+              print("End of video file reached.")
+              end_of_video = True
+              continue
+          else:
+              # Append the new row to the output DataFrame using loc
+              df.loc[len(df)] = create_mockup_dataframe_row(time, frame_idx, is_capture_failed=True)
+              print(f"frame {frame_idx}: capture read failed.")
+              has_frame = True
+              continue
     
     # seperate vedio for different position shift
     root_shift = root_shift0
@@ -269,8 +287,8 @@ def Contact_quantities_ConstantHandGesture(video_dir,ArmPLY_dir,CorrectedJointsC
     else:  
       v = v0 * 1000 + p_temp - palm_p*1000 + root_shift.T
     # v = mesh_smoother.process(v)
-    mesh.triangles = o3d.utility.Vector3iVector(hand_mesh.faces)
     mesh.vertices = o3d.utility.Vector3dVector(v)
+    mesh.triangles = o3d.utility.Vector3iVector(hand_mesh.faces)
     mesh.paint_uniform_color(config.HAND_COLOR)
     mesh.compute_triangle_normals()
     mesh.compute_vertex_normals()
@@ -342,7 +360,7 @@ def Contact_quantities_ConstantHandGesture(video_dir,ArmPLY_dir,CorrectedJointsC
       first_frame = False
 
     ########### visualization ############################
-    if show_result:
+    if show_result and False:
       # contact quantities visualization
       contact_quant_plot = {'cont_flag': [df_frame["contact_detected"]*50],
                             'cont_area': [df_frame["contact_area"]/100.],
@@ -387,6 +405,7 @@ def Contact_quantities_ConstantHandGesture(video_dir,ArmPLY_dir,CorrectedJointsC
       )
       pygame.display.update()
       clock.tick(30)
+
 
   print(frame_idx)
   capture.release()

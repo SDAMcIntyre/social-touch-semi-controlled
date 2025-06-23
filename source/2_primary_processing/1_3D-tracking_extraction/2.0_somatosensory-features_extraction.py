@@ -111,22 +111,27 @@ def extract_somatosensory_data_onethread(args):
 if __name__ == "__main__":
     use_multiprocessing = False
 
-    force_processing = False  # If user wants to force data processing even if results already exist
+    force_processing = True  # If user wants to force data processing even if results already exist
     save_results = True
     generate_report = True
 
-    show = False  # If user wants to monitor what's happening
+    show = True  # If user wants to monitor what's happening
 
     print("Step 0: Extract the videos embedded in the selected sessions.")
     # get database directory
-    db_path_linux = os.path.expanduser('~/Documents/datasets')
+    OS_linux = sys.platform.startswith('linux')
+    if OS_linux:
+        db_path = os.path.expanduser('~/Documents/datasets/semi-controlled')
+
+    else:
+        db_path = os.path.join(path_tools.get_database_path(), "semi-controlled")
 
     # get input base directory
-    db_path_input = os.path.join(db_path_linux, "semi-controlled", "1_primary", "kinect")
-    db_path_handmesh = os.path.join(db_path_linux, "semi-controlled", "handmesh_models")
+    db_path_input = os.path.join(db_path, "1_primary", "kinect")
+    db_path_handmesh = os.path.join(db_path, "handmesh_models")
 
     # get output base directory
-    db_path_output = os.path.join(db_path_linux, "semi-controlled", "2_processed", "kinect")
+    db_path_output = os.path.join(db_path, "2_processed", "kinect")
     if save_results and not os.path.exists(db_path_output):
         os.makedirs(db_path_output)
         print(f"Directory '{db_path_output}' created.")
@@ -152,12 +157,22 @@ if __name__ == "__main__":
     sessions_ST18 = ['2022-06-22_ST18-01',
                      '2022-06-22_ST18-02',
                      '2022-06-22_ST18-04']
-    sessions = []
-    sessions = sessions + sessions_ST13
-    sessions = sessions + sessions_ST14
-    sessions = sessions + sessions_ST15
-    sessions = sessions + sessions_ST16
-    sessions = sessions + sessions_ST18
+    
+
+    use_specific_sessions = True
+    if not use_specific_sessions:
+        sessions = []
+        sessions = sessions + sessions_ST13
+        sessions = sessions + sessions_ST14
+        sessions = sessions + sessions_ST15
+        sessions = sessions + sessions_ST16
+        sessions = sessions + sessions_ST18
+    else:
+        sessions = ['2022-06-14_ST13-01']
+    
+    use_specific_blocks = True
+    specific_blocks = ['block-order-01']
+
 
     print(sessions)
 
@@ -188,6 +203,14 @@ if __name__ == "__main__":
                 pool.map(extract_somatosensory_data_onethread, args_list)
         else:
             for config_file_abs, config_file in zip(config_files_abs, config_files):
+                if use_specific_blocks:
+                    is_not_specific_block = True
+                    for block in specific_blocks:
+                        if block in config_file_abs:
+                            is_not_specific_block = False
+                    if is_not_specific_block:
+                        continue
+
                 block_dir_abs = os.path.dirname(config_file_abs)
                 
                 output_path_abs = block_dir_abs.replace(db_path_input, db_path_output)
