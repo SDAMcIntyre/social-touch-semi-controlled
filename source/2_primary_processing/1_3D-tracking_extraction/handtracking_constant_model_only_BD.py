@@ -68,7 +68,25 @@ def create_row(time, frame_idx, contact_quantities, palm_position_xyz, index_pos
         }
 
 
+def flip_mesh(mesh_to_flip, axis_index):
+    """
+    Flips the mesh along a given axis and corrects the triangle winding order.
+    """
+    # 1. Flip the vertices
+    vertices = np.asarray(mesh_to_flip.vertices)
+    vertices[:, axis_index] *= -1
+    mesh_to_flip.vertices = o3d.utility.Vector3dVector(vertices)
 
+    # 2. Flip the triangle winding order to correct the normals
+    triangles = np.asarray(mesh_to_flip.triangles)
+    # Swaps the second and third vertex of each triangle (e.g., [0,1,2] -> [0,2,1])
+    triangles = triangles[:, [0, 2, 1]]
+    mesh_to_flip.triangles = o3d.utility.Vector3iVector(triangles)
+    
+    # 3. Re-compute normals which will now be correct
+    mesh_to_flip.compute_vertex_normals()
+
+    
 def Contact_quantities_ConstantHandGesture(video_dir,ArmPLY_dir,CorrectedJointsColor_dir,
   root_shift0,Other_Shifts,hand_rotate0,
   color_idx,ArmNParas,N_dir,left,handMesh_Dir, show=True, show_result=True):
@@ -83,27 +101,38 @@ def Contact_quantities_ConstantHandGesture(video_dir,ArmPLY_dir,CorrectedJointsC
   capture_nframe = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
 
   ############ output visualization ############
-  view_mat0 = axangle2mat([hand_rotate0[0],hand_rotate0[1],hand_rotate0[2]],hand_rotate0[3]) # align different coordinate systems
-  window_width = 1000
+  view_mat0 = axangle2mat([hand_rotate0[0], hand_rotate0[1], hand_rotate0[2]], hand_rotate0[3]) # align different coordinate systems
 
+  # 1/2 load hand mesh triangles 
   hand_mesh = HandMesh(config.HAND_MESH_MODEL_PATH)
-  mesh = o3d.geometry.TriangleMesh()
-  mesh.triangles = o3d.utility.Vector3iVector(hand_mesh.faces)
-  mesh.vertices = \
-    o3d.utility.Vector3dVector(np.matmul(view_mat0, hand_mesh.verts.T).T * 1000)
-  mesh.compute_vertex_normals()
-  hand_pcd = o3d.geometry.PointCloud() # hand PC from mesh vertices
-  marker_sphere = o3d.geometry.TriangleMesh.create_sphere(radius=5)
-  marker_sphere.paint_uniform_color([0, 0, 1])
+  t_mesh = hand_mesh.faces  # or .triangles?
+  # 2/2 load hand mesh vertices 
+  v_mesh_initial = np.loadtxt(handMesh_Dir)
+  v_mesh_initial = np.matmul(view_mat0, v_mesh_initial.T).T
+  v_mesh_initial *= 1000 
+  # v_mesh_initial += np.abs(np.min(v_mesh_initial, axis=0))
+  # v_mesh_initial[:,0] *= -1  # is it really necessary?
+  
+  if left == False:
+    # 1. Flip the vertices
+    v_mesh_initial[:, 0] *= -1
+    # 2. Flip the triangle winding order to correct the normals
+    triangles = np.asarray(t_mesh)
+    # Swaps the second and third vertex of each triangle (e.g., [0,1,2] -> [0,2,1])
+    t_mesh = triangles[:, [0, 2, 1]]
+  
+  # define vertices group for areas of interest
   thumb_idx = np.where(hand_mesh.verts[:,2] > 0.05)    # remove thumb for contact quantities
   index_idx = np.where((hand_mesh.verts[:,0] > 0.065) & (hand_mesh.verts[:,2] > 0.02))  # index finger tip for recalibration
-  #palm_vertex_idx = np.where((hand_mesh.verts[:,0]>-0.045)&(hand_mesh.verts[:,0]<-0.035)&
-  #           (hand_mesh.verts[:,2]>-0.01)&(hand_mesh.verts[:,2]<0.01)&(hand_mesh.verts[:,1]>0)) # palm green point
   # vertex of the hand mesh locating the palm and index (used for hand XYZ position estimation)
   palm_vertex_idx = np.where((-0.045 < hand_mesh.verts[:,0]) & (hand_mesh.verts[:,0] < -0.035)   # x value of vertices
                                       &( 0    < hand_mesh.verts[:,1])                                     # y value of vertices
                                       &(-0.01 < hand_mesh.verts[:,2]) & (hand_mesh.verts[:,2] < 0.01))    # z value of vertices
   index_vertex_idx = np.where((0.065 < hand_mesh.verts[:,0]) & (0.02 < hand_mesh.verts[:,2]))  # index finger tip
+
+  # store average initial position of the forefinger nail and the center of the palm
+  fingernail_p = np.mean(v_mesh[index_idx[0],:], axis=0)
+  palm_p = np.mean(v_mesh[palm_vertex_idx[0],:], axis=0)
   
   ######## arm point cloud ###############
   arm_pcd = o3d.io.read_point_cloud(ArmPLY_dir)
@@ -149,25 +178,14 @@ def Contact_quantities_ConstantHandGesture(video_dir,ArmPLY_dir,CorrectedJointsC
   #   corrected_joints_color[840:1040,i] = pd.Series(corrected_joints_color[840:1040,i]).interpolate().values
   frame_n = int(corrected_joints_color.shape[0])
   corrected_joints_color = np.vstack((np.zeros((2,9)),corrected_joints_color))  #3,9
-  if left ==True:
+  if left == True:
     corrected_joints_color[:,0] = -corrected_joints_color[:,0]
     corrected_joints_color[:,3] = -corrected_joints_color[:,3]
     corrected_joints_color[:,6] = -corrected_joints_color[:,6]
-  # corrected_joints = np.genfromtxt(CorrectedJoints_dir, delimiter=',')  
-  # corrected_joints = np.vstack((np.zeros((3,3)),corrected_joints))
   ## identify best hand marker based on the least NaN
   n_zeros = np.count_nonzero(np.isnan(corrected_joints_color), axis=0)
-  color_idx_ = int(np.argmin(n_zeros)/3)
-  if color_idx == -1: color_idx = color_idx_
-
-  # model = ModelPipeline()
-  v_handMesh = np.loadtxt(handMesh_Dir)
-  v_handMesh += np.abs(np.min(v_handMesh, axis=0))
-  if left == False:
-    v_handMesh[:, 1] *= -1
-    v_handMesh[:, 2] *= -1
-    #v_handMesh[:,1] = -v_handMesh[:,1]
-    #v_handMesh[:,0] = -v_handMesh[:,0]
+  if color_idx == -1: 
+    color_idx = int(np.argmin(n_zeros)/3)
 
   ########## Contact quantities ############
   # output dataframe
@@ -183,6 +201,17 @@ def Contact_quantities_ConstantHandGesture(video_dir,ArmPLY_dir,CorrectedJointsC
 
   ############ input and model visualization ############
   if show:
+    window_width = 1000
+    
+    mesh = o3d.geometry.TriangleMesh()
+    mesh.vertices = o3d.utility.Vector3dVector(v_mesh_initial)
+    mesh.triangles = o3d.utility.Vector3iVector(t_mesh)
+    mesh.paint_uniform_color(config.HAND_COLOR)
+    mesh.compute_vertex_normals()
+
+    marker_sphere = o3d.geometry.TriangleMesh.create_sphere(radius=5)
+    marker_sphere.paint_uniform_color([0, 0, 1])
+  
     viewer = o3d.visualization.Visualizer()
     viewer.create_window(
       width=window_width + 1, height=window_width + 1,
@@ -195,7 +224,7 @@ def Contact_quantities_ConstantHandGesture(video_dir,ArmPLY_dir,CorrectedJointsC
     viewer.add_geometry(line_set)
 
     view_control = viewer.get_view_control()
-    view_control.rotate(0,1000)
+    view_control.rotate(0, 1000)
     view_control.scale(.001)
 
     render_option = viewer.get_render_option()
@@ -205,9 +234,7 @@ def Contact_quantities_ConstantHandGesture(video_dir,ArmPLY_dir,CorrectedJointsC
     display = pygame.display.set_mode((500, 500))
     pygame.display.set_caption('Minimal Hand - input')
     clock = pygame.time.Clock()
-    # Introduce a paused state, initially False
-    paused = False
-    running = True
+  
   ############ somatosensory result visualization ############
   if show_result:
     fig, ax = plt.subplots()
@@ -219,41 +246,35 @@ def Contact_quantities_ConstantHandGesture(video_dir,ArmPLY_dir,CorrectedJointsC
   palm_position_xyz_prev = 0
 
   while not end_of_video:
-    for event in pygame.event.get():
-      if event.type == pygame.QUIT:
-          running = False
-      if event.type == pygame.KEYDOWN:
-          # Toggle pause mode when SPACE is pressed
-          if event.key == pygame.K_SPACE:
-              paused = not paused
-              if paused:
-                  print("--- Paused: You can now rotate the geometry manually. Press SPACE to resume. ---")
-              else:
-                  print("--- Resumed ---")
-    
     # I. load current frame
-    if not paused:
-      if first_frame:
-        time = 0
-        frame_idx = 0
-      else:
-        time += 1./30  # Azure Kinect Fs is 30 Hz
-        frame_idx += 1
-      has_frame, frame = capture.read()
-      if not has_frame:
-          if capture.get(cv2.CAP_PROP_POS_FRAMES) >= capture.get(cv2.CAP_PROP_FRAME_COUNT):
-              print("End of video file reached.")
-              end_of_video = True
-              continue
-          else:
-              # Append the new row to the output DataFrame using loc
-              df.loc[len(df)] = create_mockup_dataframe_row(time, frame_idx, is_capture_failed=True)
-              print(f"frame {frame_idx}: capture read failed.")
-              has_frame = True
-              continue
-    
-    # seperate vedio for different position shift
-    root_shift = root_shift0
+    if first_frame:
+      time = 0
+      frame_idx = 0
+    else:
+      time += 1./30  # Azure Kinect Fs is 30 Hz
+      frame_idx += 1
+    has_frame, frame = capture.read()
+    if not has_frame:
+        if capture.get(cv2.CAP_PROP_POS_FRAMES) >= capture.get(cv2.CAP_PROP_FRAME_COUNT):
+            print("End of video file reached.")
+            end_of_video = True
+            continue
+        else:
+            # Append the new row to the output DataFrame using loc
+            df.loc[len(df)] = create_mockup_dataframe_row(time, frame_idx, is_capture_failed=True)
+            print(f"frame {frame_idx}: capture read failed.")
+            has_frame = True
+            continue
+  
+    print(f'---------------------------------------')   
+    print(f'{os.path.basename(video_dir)}')
+    print(f'Frame: {str(frame_idx).zfill(len(str(capture_nframe)))}/{capture_nframe}')
+
+    # 0/2 position of the vertices, initial state:
+    v_mesh = v_mesh_initial
+
+    # 1/2 positioning using manual position shift:
+    root_shift = root_shift0.T
     for Shift_param in Other_Shifts:
       if Shift_param[0].size > 2:
         periods = np.split(Shift_param[0],Shift_param[0].size/2)
@@ -261,45 +282,28 @@ def Contact_quantities_ConstantHandGesture(video_dir,ArmPLY_dir,CorrectedJointsC
         periods =  np.array([Shift_param[0]])
       for period in periods:
         if frame_idx>=period[0] and frame_idx<=period[1]:
-          root_shift = Shift_param[1] 
-    print(f'---------------------------------------')   
-    print(f'{os.path.basename(video_dir)}')
-    print(f'Frame: {str(frame_idx).zfill(len(str(capture_nframe)))}/{capture_nframe}')
-    print(f'color_idx = {color_idx}, root_shift = {root_shift}')   
+          root_shift = Shift_param[1].T
+    print(f'root_shift = {root_shift}')   
+    v_mesh += root_shift
 
-    v = np.matmul(view_mat0, v_handMesh.T).T    
-    v[:,0] = -v[:,0]
-    red_p = corrected_joints_color[frame_idx,0:3]
-    green_p = corrected_joints_color[frame_idx,3:6]
-    yellow_p = corrected_joints_color[frame_idx,6:9]
-    # root_p = corrected_joints[frame_idx]  
-    fingernail_p = np.mean(v[index_idx[0],:],axis=0)
-    palm_p = np.mean(v[palm_vertex_idx[0],:],axis=0)
-    #### calibration using root & color 
-    v0 = v
-    # v = v0 * 1000 + root_p + root_shift.T ;p_temp = root_p
-    if color_idx==0: p_temp=red_p
-    if color_idx==1: p_temp=green_p
-    if color_idx==2: p_temp=yellow_p
-    if color_idx==3: 
-      p_temp=red_p
-      v = v0 * 1000 + p_temp - fingernail_p*1000 + root_shift.T  
-    else:  
-      v = v0 * 1000 + p_temp - palm_p*1000 + root_shift.T
-    # v = mesh_smoother.process(v)
-    mesh.vertices = o3d.utility.Vector3dVector(v)
-    mesh.triangles = o3d.utility.Vector3iVector(hand_mesh.faces)
-    mesh.paint_uniform_color(config.HAND_COLOR)
-    mesh.compute_triangle_normals()
-    mesh.compute_vertex_normals()
-    v_no_thumb = np.delete(v, thumb_idx[0], axis=0)
-    marker_sphere.translate(p_temp, relative=False)
+    # 2/2 positioning using color:
+    print(f'color_idx = {color_idx}')
+    if color_idx == 0:  # red
+      xyz_sticker = corrected_joints_color[frame_idx, 0:3] - palm_p
+    elif color_idx == 1:  # green
+      xyz_sticker = corrected_joints_color[frame_idx, 3:6] - palm_p
+    elif color_idx == 2:  # yellow
+      xyz_sticker = corrected_joints_color[frame_idx, 6:9] - palm_p
+    elif color_idx == 3:  # red
+      xyz_sticker = corrected_joints_color[frame_idx, 0:3] - fingernail_p
+    v_mesh += xyz_sticker
     
     # IV. Calculate contact quantites
     hand_inside = []
     arm_intersect = []
     hand_arm_dis = []
     arm_norm = []
+    v_no_thumb = np.delete(v_mesh, thumb_idx[0], axis=0)
     for i_hand in range(v_no_thumb.shape[0]):
       hand_arm_vector = v_no_thumb[i_hand]-arm_pcd.points
       hand_arm_min_idx = np.argmin(np.sum(np.abs(hand_arm_vector)**2,axis=-1))
@@ -388,6 +392,11 @@ def Contact_quantities_ConstantHandGesture(video_dir,ArmPLY_dir,CorrectedJointsC
       plt.clf()
 
     if show:
+      # update visuals
+      mesh.vertices = o3d.utility.Vector3dVector(v_mesh)
+      mesh.compute_vertex_normals()
+      marker_sphere.translate(xyz_sticker, relative=False)
+
       # for some version of open3d you may need `viewer.update_geometry(mesh)`
       viewer.update_geometry(mesh)
       viewer.poll_events()
