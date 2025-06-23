@@ -33,6 +33,7 @@ def load_pkl(path):
     path =  os.path.abspath(os.path.join(__file__, '..', path))
   with open(path, 'rb') as f:
     data = pickle.load(f)
+    # f = open(path, 'rb')
   return data
 
 

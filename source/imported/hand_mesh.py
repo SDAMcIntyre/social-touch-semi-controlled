@@ -5,7 +5,10 @@ from transforms3d.quaternions import quat2mat
 
 from config import *
 from kinematics import *
-from utils import *
+try:
+  from utils import load_pkl
+except ImportError:
+  from .utils import load_pkl
 
 
 class HandMesh():
@@ -24,7 +27,7 @@ class HandMesh():
     """
     if not os.path.exists(model_path):
       curr_dir = os.path.dirname(os.path.abspath(__file__))
-      model_path = os.path.join(curr_dir, model_path)
+      model_path = os.path.join(curr_dir, model_path.replace("./", ""))
     params = load_pkl(model_path)
 
 
