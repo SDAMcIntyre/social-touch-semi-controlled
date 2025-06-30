@@ -9,6 +9,8 @@ import numpy as np
 import os
 import sys
 import pandas as pd 
+import cv2
+import numpy as np
 
 import tkinter as tk
 from tkinter import ttk
@@ -22,8 +24,8 @@ from tkinter import Toplevel
 
 
 # homemade libraries
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
 from imported.hand_mesh import HandMesh
 from imported.utils import imresize  # OneEuroFilter, imresize
 from imported.kinematics import mpii_to_mano
@@ -31,8 +33,7 @@ from imported.kinematics import mpii_to_mano
 import imported.config as config
 
 import libraries.misc.path_tools as path_tools  # noqa: E402
-from libraries.primary.VideoFrameSelector import VideoFrameSelector
-from libraries.primary.HandMeshTransformer import HandMeshTransformer
+from libraries.primary.StickersVideoGenerator import StickersVideoGenerator
 
 
 def load_variables_from_json(json_file_path):
@@ -59,69 +60,73 @@ def load_variables_from_json(json_file_path):
     return files_path, parameters
 
 
+import cv2
+import numpy as np
 
-def select_frame(video_path):
+def video_to_rgb_frame_array(video_path: str) -> np.ndarray:
+    """
+    Reads a video file and returns a single NumPy array containing all frames
+    as 2D RGB images, while displaying the processing progress.
+
+    Args:
+        video_path: The full path to the video file.
+
+    Returns:
+        A NumPy array with a shape of (num_frames, height, width, 3),
+        where each element along the first axis is a single RGB frame.
+        Returns an empty array if the video cannot be opened or read.
+    """
+    # Open the video file with OpenCV
+    cap = cv2.VideoCapture(video_path)
+
+    # Check if the video file was opened successfully
+    if not cap.isOpened():
+        print(f"Error: Could not open video file at {video_path}")
+        # Return an empty NumPy array with a valid but empty shape
+        return np.array([])
+
+    # Get the total number of frames in the video
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     
-    # Create a dummy root window to use the file dialog
-    root = tk.Tk()
-    root.withdraw() # Hide the dummy window
+    # Handle case where video has no frames
+    if total_frames == 0:
+        print(f"Warning: Video at {video_path} has no frames or metadata is unreadable.")
+        cap.release()
+        return np.array([])
+        
+    processed_frames = 0
 
-    # Create the main application window as a Toplevel window
-    app_window = Toplevel(root)
-    app = VideoFrameSelector(app_window, video_path)
+    frames = []
+    while True:
+        # Read one frame from the video
+        ret, frame = cap.read()
+
+        # If 'ret' is False, it means there are no more frames to read,
+        # so we break the loop
+        if not ret:
+            break
+
+        # OpenCV reads frames in BGR format by default.
+        # Convert the frame from BGR to RGB.
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+        # Add the RGB frame to our list of frames
+        frames.append(rgb_frame)
+
+        # Increment the counter for processed frames
+        processed_frames += 1
+        # Calculate and display the progress percentage
+        progress = (processed_frames / total_frames) * 100
+        # Use \r to move the cursor to the beginning of the line, and end='' to prevent a new line
+        print(f"\rProcessing... {progress:.2f}% complete", end="")
+    # Print a newline character at the end to move to the next line after the loop
+    print()
+
+    # Release the video capture object to free up resources
+    cap.release()
     
-    # Start the Tkinter event loop. This will block until the window is closed.
-    app_window.mainloop()
-    
-    # After the loop ends, the main function continues
-    root.destroy()
-
-    # Print the selected frame number, if one was saved
-    if app.selected_frame_id is not None:
-        print("-" * 30)
-        print(f"Process finished. Selected Frame ID: {app.selected_frame_id}")
-        print("-" * 30)
-    else:
-        print("Process finished. No frame was saved.")
-
-    return app.selected_frame_id, app.selected_frame_image
-
-
-
-def print_model_info(handmesh, arm_pcd):
-
-    # Convert to NumPy arrays for efficient computation
-    hand_vertices = np.asarray(handmesh.vertices)
-    forearm_points = np.asarray(arm_pcd.points)
-
-    # --- Handmesh Information ---
-    print("--- Handmesh Information ---")
-
-    # Calculate min, max, and mean for the handmesh
-    hand_min_bounds = np.min(hand_vertices, axis=0)
-    hand_max_bounds = np.max(hand_vertices, axis=0)
-    hand_mean = np.mean(hand_vertices, axis=0)
-
-    # Print the span and mean for each axis of the handmesh
-    print(f"Handmesh X-axis span: [{hand_min_bounds[0]:.4f}, {hand_max_bounds[0]:.4f}] | Mean: {hand_mean[0]:.4f}")
-    print(f"Handmesh Y-axis span: [{hand_min_bounds[1]:.4f}, {hand_max_bounds[1]:.4f}] | Mean: {hand_mean[1]:.4f}")
-    print(f"Handmesh Z-axis span: [{hand_min_bounds[2]:.4f}, {hand_max_bounds[2]:.4f}] | Mean: {hand_mean[2]:.4f}")
-    print(f"Overall center of the handmesh: {hand_mean}\n")
-
-
-    # --- Forearm Information ---
-    print("--- Forearm Information ---")
-
-    # Calculate min, max, and mean for the forearm point cloud
-    forearm_min_bounds = np.min(forearm_points, axis=0)
-    forearm_max_bounds = np.max(forearm_points, axis=0)
-    forearm_mean = np.mean(forearm_points, axis=0)
-
-    # Print the span and mean for each axis of the forearm
-    print(f"Forearm X-axis span: [{forearm_min_bounds[0]:.4f}, {forearm_max_bounds[0]:.4f}] | Mean: {forearm_mean[0]:.4f}")
-    print(f"Forearm Y-axis span: [{forearm_min_bounds[1]:.4f}, {forearm_max_bounds[1]:.4f}] | Mean: {forearm_mean[1]:.4f}")
-    print(f"Forearm Z-axis span: [{forearm_min_bounds[2]:.4f}, {forearm_max_bounds[2]:.4f}] | Mean: {forearm_mean[2]:.4f}")
-    print(f"Overall center of the forearm: {forearm_mean}")
+    # Convert the list of frames into a single NumPy array and return it
+    return np.array(frames)
 
 
 
@@ -257,37 +262,10 @@ def show_stickers_path(stickers_pos):
 
 
 
-def define_handmesh_transformation(frame_idx, rgb_frame, 
-                                   files_path, parameters, 
-                                   curr_session_path, block_dir_abs, db_path_handmesh, 
-                                   save_file_path):
+def generate_video(files_path, curr_session_path, block_dir_abs, save_file_path):
+    video_fname_abs = os.path.join(block_dir_abs, files_path["video_fname"])
     
-    # --- 1/2 hand Mesh Creation ---
-    # -- load initial models
-    handmesh_path = files_path["handmesh_model_path"].replace("<handmesh_models_dir>", db_path_handmesh)
-    v_handMesh = np.loadtxt(handmesh_path)
-    v_handMesh *= 1000  # 
-    hand_mesh_model = HandMesh(config.HAND_MESH_MODEL_PATH)
-    t_handMesh = np.asarray(hand_mesh_model.faces)
-    # swap vertices and faces if right hand used for the experiment (as loaded model is a left hand)
-    if parameters["hand_used"]['left'] == False:
-        # 1. Flip the vertices
-        v_handMesh[:, 0] *= -1
-        # 2. Flip the triangle winding order to correct the normals
-        triangles = np.asarray(t_handMesh)
-        # Swaps the second and third vertex of each triangle (e.g., [0,1,2] -> [0,2,1])
-        t_handMesh = triangles[:, [0, 2, 1]]
-    
-    # -- position the hand mesh based on the selected sticker and its XYZ position in the determined frame
-    # 1/2 get the expected location of the sticker on the 3d model
-    palm_vertex_idx = np.where((-0.045 < hand_mesh_model.verts[:,0]) & (hand_mesh_model.verts[:,0] < -0.035)   # x value of vertices
-                                      &( 0    < hand_mesh_model.verts[:,1])                                     # y value of vertices
-                                      &(-0.01 < hand_mesh_model.verts[:,2]) & (hand_mesh_model.verts[:,2] < 0.01))    # z value of vertices
-    index_vertex_idx = np.where((0.065 < hand_mesh_model.verts[:,0]) & (0.02 < hand_mesh_model.verts[:,2]))  # index finger tip
-    # store average initial position of the forefinger nail and the center of the palm
-    fingernail_p = np.mean(v_handMesh[index_vertex_idx[0],:], axis=0)
-    palm_p = np.mean(v_handMesh[palm_vertex_idx[0],:], axis=0)
-    # 2/2 get the XYZ location of the sticker from the Kinect RGB+depth
+    # 1/2 get the XYZ location of the sticker from the Kinect RGB+depth
     sticker_fname_abs = os.path.join(block_dir_abs, files_path["sticker_fname"])
     corrected_joints_color = np.genfromtxt(sticker_fname_abs, delimiter=',')
     nsample = corrected_joints_color.shape[0]
@@ -296,100 +274,43 @@ def define_handmesh_transformation(frame_idx, rgb_frame,
     sticker_green_ps = interpolate_single_point(stickers_pos[:, 1, :], method='quadratic')
     sticker_yellow_ps = interpolate_single_point(stickers_pos[:, 2, :], method='quadratic')
 
-    sticker_red_p = sticker_red_ps[frame_idx, :]
-    sticker_green_p = sticker_green_ps[frame_idx, :]
-    sticker_yellow_p = sticker_yellow_ps[frame_idx, :]
-    #show_stickers_path(sticker_red_p[0:500, :])
+    stickers_pos = [sticker_red_ps, sticker_green_ps, sticker_yellow_ps]
+    # rearrange into (nsample, XYZ, points)
+    stickers_pos = np.asarray(stickers_pos).transpose(1, 2, 0)
 
-    if parameters["hand_stickers"]["color_idx"] == 0:  # red
-      xyz_sticker = sticker_red_p - palm_p
-    elif parameters["hand_stickers"]["color_idx"] == 1:  # green
-      xyz_sticker = sticker_green_p - palm_p
-    elif parameters["hand_stickers"]["color_idx"] == 2:  # yellow
-      xyz_sticker = sticker_yellow_p - palm_p
-    elif parameters["hand_stickers"]["color_idx"] == 3:  # red
-      xyz_sticker = sticker_red_p - fingernail_p
-    v_handMesh += xyz_sticker
-    
-    handmesh = o3d.geometry.TriangleMesh()
-    handmesh.vertices = o3d.utility.Vector3dVector(v_handMesh)
-    handmesh.triangles = o3d.utility.Vector3iVector(t_handMesh)
-    handmesh.paint_uniform_color(config.HAND_COLOR)
-    handmesh.compute_vertex_normals()
-
-    # Create objects for stickers
-    sticker_red_sphere = o3d.geometry.TriangleMesh.create_sphere(radius=5)
-    sticker_red_sphere.compute_vertex_normals()
-    sticker_red_sphere.paint_uniform_color([1.0, 0.0, 0.0])
-    sticker_red_sphere.translate(sticker_red_p)
-    sticker_green_sphere = o3d.geometry.TriangleMesh.create_sphere(radius=5)
-    sticker_green_sphere.compute_vertex_normals()
-    sticker_green_sphere.paint_uniform_color([0.0, 1.0, 0.0])
-    sticker_green_sphere.translate(sticker_green_p)
-    sticker_yellow_sphere = o3d.geometry.TriangleMesh.create_sphere(radius=5)
-    sticker_yellow_sphere.compute_vertex_normals()
-    sticker_yellow_sphere.paint_uniform_color([1.0, 1.0, 0.0])
-    sticker_yellow_sphere.translate(sticker_yellow_p)
-
-    list_of_meshes_to_transform = [handmesh, sticker_red_sphere, sticker_green_sphere, sticker_yellow_sphere]
-
-    # define the origin of rotation 
-    if parameters["hand_stickers"]["color_idx"] == 0 or \
-       parameters["hand_stickers"]["color_idx"] == 1 or \
-       parameters["hand_stickers"]["color_idx"] == 2:  # red, green, or yellow
-        rotation_point = np.mean(v_handMesh[palm_vertex_idx[0],:], axis=0)
-    else:
-        rotation_point = np.mean(v_handMesh[index_vertex_idx[0],:], axis=0)
-    rotation_point = np.mean(v_handMesh[index_vertex_idx[0],:], axis=0)
-    
     # --- 2/2 forearm point cloud Creation ---
     arm_ply_fname_abs = files_path["arm_ply_path"].replace("<session_dir>", curr_session_path) # if necessary, create the long-path-aware version for the Windows API: "\\\\?\\"+    
     arm_pcd = o3d.io.read_point_cloud(arm_ply_fname_abs)
     arm_pcd.estimate_normals()
     arm_pcd.orient_normals_to_align_with_direction(([0., 0., -1.]))
-    
-    print(f"red point: {sticker_red_p}")
-    print(f"green point: {sticker_green_p}")
-    print(f"yellow point: {sticker_yellow_p}")
-    print(f"rotation point: {rotation_point}")
-    print_model_info(handmesh, arm_pcd)
-
-    # --- Run the application ---
-    # Create the main Tkinter window.
-    root = tk.Tk()
-
-    # Create the plot and its window FIRST.
-    plot_window = tk.Toplevel(root)
-    plot_window.title("Image Display")
-
-    fig = Figure(figsize=(6, 4), dpi=100)
-    # Adjust subplot margins to make the image fit better
-    fig.subplots_adjust(left=0, right=1, top=1, bottom=0) 
-    ax = fig.add_subplot(111)
-    
-    canvas = FigureCanvasTkAgg(fig, master=plot_window)
-    canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=1)
-    # 2. Use ax.imshow() to display the 2D image data.
-    ax.imshow(rgb_frame)
-    # 3. Clean up the plot for image display.
-    ax.set_title("2D RGB Image")
-    ax.axis('off')  # Hide the x and y axis ticks and labels
-    # 4. Redraw the canvas to show the image.
-    canvas.draw()
 
     # Pass the mesh and the desired save path to the transformer
-    app = HandMeshTransformer(meshes=list_of_meshes_to_transform,
-                              reference_pcd=arm_pcd, 
-                              tk_root=root,
-                              rotation_point=rotation_point, 
-                              save_path=save_file_path)
-    app.run()
+    video_generator = StickersVideoGenerator(time_series_xyz=stickers_pos,
+                                             images=video_fname_abs,
+                                             reference_pcd=arm_pcd,
+                                             colors=["red", "green", "yellow"],
+                                             fps=30,
+                                             save_path=save_file_path)
+    
+    view_param_filename_abs = os.path.join(curr_session_path, "3d_view_param.json")
+    view_param_window_filename_abs = os.path.join(curr_session_path, "3d_view_param_window_dimensions.json")
+    if os.path.exists(view_param_filename_abs) and os.path.exists(view_param_window_filename_abs):
+        video_generator.view_params = o3d.io.read_pinhole_camera_parameters(view_param_filename_abs)
+        
+        with open(view_param_window_filename_abs, 'r') as f:
+            data = json.load(f)
+        w_width = data.get('width')
+        w_height = data.get('height')
+    else:
+        video_generator.adjust_view_parameters_interactively()
+        o3d.io.write_pinhole_camera_parameters(view_param_filename_abs, video_generator.view_params)
+        w_witdh = None
+        w_height = None
 
+    video_generator.create_video(width3d=w_width, height3d=w_height)
 
 
 if __name__ == "__main__":
-    use_multiprocessing = False
-
     force_processing = True  # If user wants to force data processing even if results already exist
     save_results = True
     generate_report = True
@@ -437,7 +358,7 @@ if __name__ == "__main__":
                      '2022-06-22_ST18-04']
     
 
-    use_specific_sessions = True
+    use_specific_sessions = False
     if not use_specific_sessions:
         sessions = []
         sessions = sessions + sessions_ST13
@@ -451,7 +372,7 @@ if __name__ == "__main__":
     use_specific_blocks = False
     specific_blocks = ['block-order-01']
 
-
+    
     print(sessions)
 
     diff_ms_all = []
@@ -475,28 +396,12 @@ if __name__ == "__main__":
             block_dir_abs = os.path.dirname(config_file_abs)
             print(f"----------- {block_dir_abs} -----------")
             output_path_abs = block_dir_abs.replace(db_path_input, db_path_output)
-            output_filename_abs = os.path.join(output_path_abs, "handmesh_transformations.json")
+            output_filename_abs = os.path.join(output_path_abs, "handstickers_tracking.mp4")
             if not force_processing and os.path.exists(output_filename_abs):
                 continue
             
             block_dir_abs = os.path.dirname(config_file_abs)
             files_path, parameters = load_variables_from_json(config_file_abs)
 
-            video_fname_abs = os.path.join(block_dir_abs, files_path["video_fname"])
-            frame_id, rgb_frame = select_frame(video_fname_abs)
-
-            define_handmesh_transformation(frame_id, rgb_frame, 
-                                           files_path, parameters, 
-                                           curr_session_path, block_dir_abs, db_path_handmesh,
-                                           output_filename_abs)
-
-            if df_output is None:
-                print("----------------- df_output was None (why?) -------------------")
-                continue
-
-            if save_results:
-                if not os.path.exists(output_path_abs):
-                    os.makedirs(output_path_abs)
-                    print(f"Directory '{output_path_abs}' created.")
-                df_output.to_csv(output_filename_abs, index=False)
-                
+            generate_video(files_path, curr_session_path, block_dir_abs,
+                           output_filename_abs)

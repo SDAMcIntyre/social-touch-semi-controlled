@@ -1,0 +1,159 @@
+absl-py==2.1.0
+appdirs==1.4.4
+asttokens==2.4.1
+astunparse==1.6.3
+attrs==24.2.0
+blinker==1.8.2
+Bottleneck @ file:///C:/b/abs_f05kqh7yvj/croot/bottleneck_1707864273291/work
+cachetools==5.2.0
+certifi==2022.6.15
+cffi==1.15.1
+chardet==5.2.0
+charset-normalizer==2.1.0
+chumpy==0.70
+click==8.1.7
+colorama==0.4.5
+comm==0.2.2
+config==0.5.1
+ConfigArgParse==1.7
+contourpy @ file:///C:/b/abs_853rfy8zse/croot/contourpy_1700583617587/work
+cycler==0.11.0
+dash==2.18.1
+dash-core-components==2.0.0
+dash-html-components==2.0.0
+dash-table==5.0.0
+decorator==4.4.2
+dukpy==0.2.3
+et-xmlfile==1.1.0
+exceptiongroup==1.2.2
+executing==2.1.0
+fastjsonschema==2.20.0
+Flask==3.0.3
+flatbuffers==24.3.25
+fonttools==4.34.4
+future==0.18.2
+gast==0.6.0
+gitdb==4.0.9
+google-api-core==2.8.2
+google-auth==2.9.1
+google-pasta==0.2.0
+googleapis-common-protos==1.56.4
+greenlet==1.1.2
+grpcio==1.67.0
+grpcio-status==1.47.0
+h5py==3.12.1
+idna==3.3
+imageio-ffmpeg==0.4.7
+importlib-resources @ file:///C:/b/abs_d0dmp77t95/croot/importlib_resources-suite_1704281892795/work
+importlib_metadata==8.5.0
+ipython==8.18.1
+ipywidgets==8.1.5
+itsdangerous==2.2.0
+jedi==0.19.1
+Jinja2==3.1.4
+joblib @ file:///C:/b/abs_4b02c83r3b/croot/joblib_1713976789617/work
+json-tricks==3.15.5
+jsonschema==4.23.0
+jsonschema-specifications==2024.10.1
+jupyter_core==5.7.2
+jupyterlab_widgets==3.0.13
+keras==3.6.0
+keyboard==0.13.5
+kiwisolver==1.4.4
+libclang==18.1.1
+Markdown==3.7
+markdown-it-py==3.0.0
+MarkupSafe==3.0.2
+matplotlib==3.9.4
+matplotlib-inline==0.1.7
+mdurl==0.1.1
+mkl-fft @ file:///C:/b/abs_19i1y8ykas/croot/mkl_fft_1695058226480/work
+mkl-random @ file:///C:/b/abs_edwkj1_o69/croot/mkl_random_1695059866750/work
+mkl-service==2.4.0
+ml-dtypes==0.4.1
+mpmath==1.3.0
+msgpack==1.0.4
+namex==0.0.8
+nbformat==5.10.4
+nest-asyncio==1.6.0
+numexpr @ file:///C:/b/abs_5fucrty5dc/croot/numexpr_1696515448831/work
+numpy==1.23.5
+open3d==0.19.0
+opencv-python==4.10.0.84
+opt_einsum==3.4.0
+optree==0.13.0
+packaging @ file:///C:/b/abs_cc1h2xfosn/croot/packaging_1710807447479/work
+pandas @ file:///C:/b/abs_3awk0iw2ab/croot/pandas_1709590545218/work/dist/pandas-2.2.1-cp39-cp39-win_amd64.whl#sha256=f678af1dc65824be67d5789cb9f76ffef40030e586438eef2c8664c33bbd4c6c
+parso==0.8.4
+patsy==0.5.3
+Pillow==9.2.0
+platformdirs==4.3.6
+plotly==5.24.1
+proglog==0.1.10
+prompt_toolkit==3.0.48
+proto-plus==1.20.6
+protobuf==5.28.3
+pure_eval==0.2.3
+pyasn1==0.4.8
+pyasn1-modules==0.2.8
+pycparser==2.21
+pygame==2.6.1
+pyglet==2.0.18
+Pygments==2.18.0
+pyparsing==3.0.9
+python-dateutil==2.8.2
+python-utils==3.9.0
+pytz==2022.1
+pywin32==308
+PyYAML==6.0
+pyzmq==23.2.0
+questplus==2019.4
+referencing==0.35.1
+requests==2.28.1
+requests-toolbelt==0.9.1
+retrying==1.3.4
+rich==13.9.3
+rpds-py==0.20.0
+rsa==4.9
+ruamel.yaml==0.16.3
+scikit-learn @ file:///C:/b/abs_eezai1guz5/croot/scikit-learn_1667587552067/work
+scipy==1.13.1
+seaborn @ file:///C:/b/abs_68ltdkoyoo/croot/seaborn_1673479199997/work
+six @ file:///tmp/build/80754af9/six_1644875935023/work
+sklearn-pandas @ file:///C:/b/abs_bfkulqeph1/croot/sklearn-pandas_1706222864983/work
+smmap==5.0.0
+sounddevice==0.4.4
+SoundFile==0.10.3.post1
+SpeechRecognition==3.8.1
+stack-data==0.6.3
+statsmodels @ file:///C:/b/abs_7bth810rna/croot/statsmodels_1689937298619/work
+sympy==1.13.3
+tables==3.7.0
+tenacity==9.0.0
+tensorboard==2.18.0
+tensorboard-data-server==0.7.2
+tensorflow==2.18.0
+tensorflow-io-gcs-filesystem==0.31.0
+tensorflow_intel==2.18.0
+termcolor==2.5.0
+threadpoolctl @ file:///Users/ktietz/demo/mc3/conda-bld/threadpoolctl_1629802263681/work
+tqdm==4.64.0
+traitlets==5.14.3
+transforms3d==0.4.2
+typing_extensions==4.12.2
+tzdata @ file:///croot/python-tzdata_1690578112552/work
+ujson==5.4.0
+unicodedata2 @ file:///C:/b/abs_b6apldlg7y/croot/unicodedata2_1713212998255/work
+urllib3==1.26.11
+utils==1.0.2
+wcwidth==0.2.13
+websocket-client==1.3.3
+Werkzeug==3.0.5
+widgetsnbextension==4.0.13
+wrapt==1.16.0
+wxPython==4.1.1
+xarray==2022.6.0
+xlrd==2.0.1
+zipp==3.20.2
+zope.event==4.5.0
+zope.interface==5.4.0
