@@ -6,7 +6,7 @@ import os
 import tkinter as tk
 from tkinter import filedialog
 
-from .config_manager import load_and_resolve_config
+from config_manager import load_and_resolve_config
 import utils.path_tools as path_tools
 
 def parse_path_from_template(path_str: str, template: str) -> dict:
