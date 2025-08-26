@@ -1,0 +1,20 @@
+name: pcl_env
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pip
+  - numpy
+  - scipy
+  - matplotlib
+  - vtk
+  - pcl            # optional; remove if it fails on your mac build
+  - pillow
+  - aiohttp
+  - pyqt
+  - pip:
+      - pyvista
+      - pyvistaqt
+      # remove: pywin32
+      # add other pure-Python packages you need, without platform-only ones
+      - -r requirements.txt
