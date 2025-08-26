@@ -1,0 +1,35 @@
+# File: _3_preprocessing/_1_sticker_tracking/__init__.py
+
+"""
+This file makes key sticker tracking functions available at the package level,
+simplifying imports elsewhere in the project.
+"""
+from .utils.ensure_tracking_is_valid import ensure_tracking_is_valid
+
+# automatic computation
+from .track_handstickers_roi import track_objects_in_video
+from .convert_sticker_roi_to_center import convert_sticker_roi_to_center
+
+from .unify_handstickers_rois_size import unify_objects_rois_size
+from .create_windowed_videos import create_windowed_videos
+from .generate_color_correlation_videos import generate_color_correlation_videos
+from .fit_ellipses_on_correlation_videos import fit_ellipses_on_correlation_videos
+from .adjust_ellipses_coord_to_frame import adjust_ellipses_coord_to_frame
+from .generate_ellipses_on_frame_video import generate_ellipses_on_frame_video
+from .ensure_alignement_stickers_and_depth_data import ensure_alignement_stickers_and_depth_data
+from .extract_stickers_xyz_positions import extract_stickers_xyz_positions
+
+
+# user review or tasks
+from .review_tracked_handstickers_roi import review_tracked_objects_in_video
+from .define_handstickers_colorspaces_from_roi import define_object_colorspaces_for_video
+from .define_handstickers_color_threshold import define_handstickers_color_threshold
+
+from .create_videos_handstickers_position_processes import save_video_handstickers_position_processes
+from .review_transformed_handstickers_roi_to_ellipses import (
+    review_tracked_handstickers_position,
+    save_tracked_handstickers_position_as_video)
+
+
+
+

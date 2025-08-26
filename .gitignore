@@ -139,3 +139,5 @@ source/2_primary_processing/0_kinect_segmentation/createRGBvideo/x64
 source/2_primary_processing/0_kinect_segmentation/createRGBvideo/createRGBvideo.vcxproj.filters
 source/2_primary_processing/0_kinect_segmentation/createRGBvideo/createRGBvideo.vcxproj.user
 source/2_primary_processing/0_kinect_segmentation/createRGBvideo/createRGBvideo.vcxproj
+/configs
+.vscode/launch.json

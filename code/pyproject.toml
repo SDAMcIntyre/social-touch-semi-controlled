@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "semi-controlled"
+version = "2.0.0"
+authors = [
+  { name="Basil Duvernoy", email="basil.duvernoy@liu.se" },
+]
+description = "A package for motion preprocessing and analysis."
+readme = "README.md"
+requires-python = ">=3.10"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering",
+]
+# Add your project's dependencies here
+dependencies = [
+    "numpy",
+    "pandas",
+    "scipy"
+]
+
+[project.urls]
+Homepage = "https://github.com/SDAMcIntyre/social-touch-semi-controlled"
+
+# --- Key Section for Package Discovery ---
+[tool.setuptools]
+# This line is crucial. It tells setuptools that the packages are not in the root,
+# but inside the 'src' directory.
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+# This tells setuptools to automatically find all packages under the specified directory.
+where = ["src"]

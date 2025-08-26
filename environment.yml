@@ -1,0 +1,6 @@
+name: pcl_env
+channels:
+  - defaults
+dependencies:
+  - python=3.10
+  - python-pcl

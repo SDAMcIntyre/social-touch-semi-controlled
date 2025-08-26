@@ -1,0 +1,41 @@
+# -----------------------------------------------------------------
+# Configuration for the Arm Segmentation Pipeline
+# -----------------------------------------------------------------
+
+# -- Visualization Settings --
+visualization:
+  show_intermediate_steps: true # Show point cloud after each filter
+  show_final_results: true      # Show final 2D images and 3D arm
+
+# -----------------------------------------------------------------
+# Parameters for Point Cloud Processing
+# -----------------------------------------------------------------
+segmentation_params:
+  
+  # -- Preprocessing Filters --
+  down_sampling:
+    enabled: false
+    leaf_size: 5.0  # In millimeters
+
+  box_filter:
+    enabled: true   # Almost always true, as it uses the ROI
+
+  color_skin_filter:
+    enabled: true
+    # HSV color space bounds. H is [0-360]. S and V are [0-1].
+    hsv_lower_bound: [0.0, 0.1, 0.2] 
+    hsv_upper_bound: [25.0, 1.0, 1.0]
+
+  # -- Region Growing Segmentation --
+  region_growing:
+    # K-Nearest Neighbors for normal estimation
+    k_search_normals: 50
+    # Number of neighbors to analyze for region growing
+    num_neighbours: 30
+    # Minimum and maximum size for a valid cluster (number of points)
+    min_cluster_size: 500
+    max_cluster_size: 1000000
+    # Max angle between normals to be considered in the same region (degrees)
+    smoothness_threshold: 9.0 
+    # Curvature threshold
+    curvature_threshold: 1.0
