@@ -1,8 +1,10 @@
 import os
 
-from preprocessing.forearm_analysis.normals_estimation.point_cloud_controller import PointCloudController
-from preprocessing.forearm_analysis.normals_estimation.point_cloud_visualizer import PointCloudVisualizer
-from preprocessing.forearm_analysis.normals_estimation.point_cloud_model import PointCloudModel
+from preprocessing.forearm_analysis import (
+    PointCloudController,
+    PointCloudModel,
+    PointCloudVisualizer
+)
 
 def define_normals(
         input_ply_path: str,
@@ -12,7 +14,11 @@ def define_normals(
     """
     Main function to set up and run the application.
     """
-    if os.path.exists(output_ply_path) and  os.path.exists(output_metadata_path):
+    if os.path.exists(input_ply_path): 
+        print(f"Input PLY couldn't be found: {input_ply_path}. Run automatic pipeline first.")
+        raise
+    
+    if os.path.exists(output_ply_path) and os.path.exists(output_metadata_path):
         print(f"Normals have already been estimated for file {input_ply_path}.")
         return output_ply_path, output_metadata_path
     

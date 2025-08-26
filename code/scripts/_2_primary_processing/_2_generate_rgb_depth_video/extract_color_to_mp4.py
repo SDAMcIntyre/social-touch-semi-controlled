@@ -1,3 +1,4 @@
+import subprocess
 import os
 import cv2
 import numpy as np
@@ -144,7 +145,31 @@ def plot_capture(capture: PyK4ACapture, fig: plt.Figure):
     plt.tight_layout(rect=[0, 0, 1, 0.96])
 
 
-    
+def open_kinect_file_safely(long_path, drive_letter = "Z:"):
+    """
+    Attempts to open a Kinect MKV file, applying a 'subst' workaround if the path is too long.
+    """
+    if len(long_path) > 240: # A safe threshold below 260
+        print("Long path detected. Applying 'subst' workaround...")
+        parent_dir = os.path.dirname(long_path)
+        file_name = os.path.basename(long_path)
+        
+        # Unmap the drive first in case it's left over from a previous run
+        subprocess.run(f"subst {drive_letter} /D", shell=True, capture_output=True)
+        # Map the parent directory to the virtual drive
+        subprocess.run(f'subst {drive_letter} "{parent_dir}"', shell=True, check=True)
+        
+        aliased_path = os.path.join(f"{drive_letter}\\", file_name)
+        return PyK4APlayback(aliased_path)
+    else:
+        return PyK4APlayback(long_path)
+
+# --- Usage ---
+# long_mkv_path = "F:\\your\\very\\long\\path\\video.mkv"
+# playback = open_kinect_file_safely(long_mkv_path)
+# playback.open()
+# ...
+
 def extract_color_to_mp4(
         mkv_path: str, 
         output_filepath: str,
@@ -167,9 +192,9 @@ def extract_color_to_mp4(
         return output_filepath
 
     try:
-        playback = PyK4APlayback(mkv_path)
+        playback = open_kinect_file_safely(str(mkv_path))
         playback.open()
-    except K4AException as e:
+    except K4AException as e:   
         raise K4AException(f"Failed to open MKV file. Error: {e}")
 
     duration_sec = playback.length / 1_000_000

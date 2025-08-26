@@ -3,13 +3,11 @@ import yaml
 from pathlib import Path
 import re
 import os
-import sys
+import tkinter as tk
+from tkinter import filedialog
 
-
-sys.path.append(str(Path(__file__).resolve().parents[2]))
-
-import library.misc.path_tools as path_tools
-from config_manager import load_and_resolve_config
+from .config_manager import load_and_resolve_config
+import utils.path_tools as path_tools
 
 def parse_path_from_template(path_str: str, template: str) -> dict:
     """Parses a relative path string using a template to extract named components."""
@@ -73,37 +71,85 @@ def generate_yaml_config(source_video_abs_path: Path, project_config: dict, proj
     print(f"✅ Generated config in code project's 'configs/': {output_yaml_filename}")
 
 
+def get_project_data_root():
+    """
+    Determines the project data root directory.
+
+    First, it tries to find the directory automatically. If that fails or the
+    directory doesn't exist, it opens a GUI dialog for the user to select it.
+
+    Returns:
+        Path: The path to the project_data_root directory.
+        None: If the user cancels the directory selection.
+    """
+    try:
+        # Attempt to find the path automatically as before
+        base_path = Path(path_tools.get_database_path())
+        project_data_root = base_path / "semi-controlled"
+        if project_data_root.is_dir():
+            print(f"✅ Project DATA root automatically identified at: {project_data_root.resolve()}")
+            return project_data_root
+    except FileNotFoundError:
+        # This case is hit if path_tools.get_database_path() fails. We'll pass
+        # and let the GUI handler take over.
+        pass
+
+    # If automatic detection fails or the directory doesn't exist, prompt the user
+    print("⚠️ Project DATA root not found automatically.")
+    print("Please select your 'semi-controlled' data folder using the dialog window.")
+
+    # Set up the Tkinter root window and hide it
+    root = tk.Tk()
+    root.withdraw()
+
+    # Open the directory selection dialog
+    selected_path = filedialog.askdirectory(
+        title="Please Select the Project Data Folder"
+    )
+
+    if not selected_path:  # Handles the case where the user closes the dialog
+        print("❌ No folder selected. Exiting program.")
+        return None
+
+    project_data_root = Path(selected_path)
+    print(f"👍 Project DATA root set by user to: {project_data_root.resolve()}")
+    return project_data_root
+
+
 def main():
     """Main function to find all videos and generate configuration for each."""
     project_code_root = Path(__file__).resolve().parents[3]
     print(f"Project CODE root identified at: {project_code_root}")
 
-    # 2. Determine Project DATA Root and Load Config
+    # 2. Determine Project DATA Root using the new helper function
+    project_data_root = get_project_data_root()
+    if not project_data_root:
+        return  # Exit if no folder was selected
+
+    # 3. Load Project Config from the determined data root
     try:
-        project_data_root = Path(path_tools.get_database_path()) / "semi-controlled"
         project_config_path = project_data_root / "project_config.yaml"
         project_config = load_and_resolve_config(project_config_path)
-        print(f"Project DATA root identified at: {project_data_root.resolve()}")
-    except FileNotFoundError as e:
-        print(f"❌ Error: {e}. Please ensure your data project structure is correct.")
+    except FileNotFoundError:
+        print(f"❌ Error: 'project_config.yaml' not found in the selected directory: {project_data_root.resolve()}")
         return
-    
-    # 3. Determine the Directory to Search (in the data project)
+
+    # 4. Determine the Directory to Search (in the data project)
     search_dir = project_data_root / project_config['path_roots']['raw_root_kinect']
     if not search_dir.is_dir():
         print(f"❌ Error: Search directory not found at '{search_dir.resolve()}'")
         return
 
-    # 4. Recursively Find and Process All Matching Videos
+    # 5. Recursively Find and Process All Matching Videos
     print(f"\nScanning for videos in: {search_dir.resolve()}...")
     videos_found = list(search_dir.rglob('*_kinect.mkv'))
-    
+
     if not videos_found:
         print("No videos found matching the pattern '*_kinect.mkv'.")
         return
-        
+
     print(f"Found {len(videos_found)} video(s) to process.\n")
-    
+
     success_count = 0
     fail_count = 0
 
@@ -119,6 +165,7 @@ def main():
     print(f"\n--- 🚀 Processing Complete ---")
     print(f"Successfully generated: {success_count} config(s)")
     print(f"Failed: {fail_count} config(s)")
+
 
 if __name__ == '__main__':
     main()
