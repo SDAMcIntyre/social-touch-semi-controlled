@@ -5,6 +5,7 @@ import socket
 import tkinter as tk
 from tkinter import filedialog
 from pathlib import Path
+import json
 
 
 def winapi_path(dos_path, encoding=None):
@@ -62,10 +63,25 @@ def get_project_data_root():
     directory doesn't exist, it opens a GUI dialog for the user to select it.
     The dialog window is forced to appear on top of all other windows.
 
+    The selected path is saved in a configuration file and used as the default
+    path for the next time the function is called.
+
     Returns:
         Path: The path to the project_data_root directory.
         None: If the user cancels the directory selection.
     """
+    config_file = "semi_controlled_project_data_config.json"
+   
+    # Load the saved path from the configuration file if it exists
+    default_path = None
+    if os.path.exists(config_file):
+        with open(config_file, "r") as f:
+            try:
+                config = json.load(f)
+                default_path = config.get("project_data_root")
+            except json.JSONDecodeError:
+                pass
+ 
     try:
         # Attempt to find the path automatically as before
         base_path = Path(get_database_path())
@@ -93,9 +109,10 @@ def get_project_data_root():
     # Hide the main Tkinter window
     root.withdraw()
 
-    # Open the directory selection dialog
+    # Open the directory selection dialog with the default path if available
     selected_path = filedialog.askdirectory(
-        title="Please Select the Project Data Folder"
+        title="Please Select the Project Data Folder",
+        initialdir=default_path if default_path else "/"
     )
 
     # --- MODIFICATION START ---
@@ -109,6 +126,11 @@ def get_project_data_root():
 
     project_data_root = Path(selected_path)
     print(f"👍 Project DATA root set by user to: {project_data_root.resolve()}")
+
+  # Save the selected path to the configuration file
+    with open(config_file, "w") as f:
+        json.dump({"project_data_root": str(project_data_root)}, f)
+
     return project_data_root
 
 
