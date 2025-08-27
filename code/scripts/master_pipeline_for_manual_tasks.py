@@ -209,7 +209,7 @@ if __name__ == "__main__":
     
     # It's good practice to define paths relative to the script location
     # or a well-defined root to avoid ambiguity.
-    project_root = Path(__file__).resolve().parent
+    project_root = Path(__file__).resolve().parent.parent.parent
     configs_dir = project_root / "configs"
     kinect_dir = "kinect_configs" # Subdirectory name
     configs_kinect_dir = configs_dir / kinect_dir
