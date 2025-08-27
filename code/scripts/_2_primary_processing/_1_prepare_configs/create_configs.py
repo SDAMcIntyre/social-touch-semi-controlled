@@ -161,7 +161,7 @@ def main():
         except (ValueError, FileNotFoundError) as e:
             print(f"❗️ Failed to process {video_path.name}: {e}")
             fail_count += 1
-
+    
     print(f"\n--- 🚀 Processing Complete ---")
     print(f"Successfully generated: {success_count} config(s)")
     print(f"Failed: {fail_count} config(s)")
