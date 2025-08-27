@@ -48,3 +48,4 @@ prefect==3.4.13
 # --- Miscellaneous ---
 pygame==2.6.1
 pyk4a==1.5.0; platform_system != "Darwin" # Python wrapper for Azure Kinect SDK
+pyyaml

@@ -34,7 +34,7 @@ Follow these steps to set up your local development environment.
 First, clone the project repository from GitHub to your local machine.
 
 ```bash
-git clone https://github.com/your-username/social-touch-semi-controlled.git
+git clone https://github.com/SDAMcIntyre/social-touch-semi-controlled.git
 cd social-touch-semi-controlled
 ```
 
@@ -64,6 +64,7 @@ python -m pip install --upgrade pip
 pip install -r requirements.txt
 
 # Install the project package in editable mode
+cd code
 pip install -e .
 ```
 
