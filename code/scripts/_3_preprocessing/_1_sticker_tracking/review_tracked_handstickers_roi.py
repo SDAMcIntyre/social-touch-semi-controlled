@@ -64,9 +64,9 @@ def annotate_rois_interactively(
         for object_name in object_names:
             title = f"Tracker for '{object_name}' on Frame {frame_id}"
             tracker_ui = FrameROISquare(frame, is_rgb=False, window_title=title)
-
+            
             # Get colors from the new helper function
-            colors = get_object_colors(obj)
+            colors = get_object_colors(object_name)
             if colors:
                 tracker_ui.set_color_live(colors['live'])
                 tracker_ui.set_color_final(colors['final'])

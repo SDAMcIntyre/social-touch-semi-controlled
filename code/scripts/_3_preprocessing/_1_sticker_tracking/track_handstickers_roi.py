@@ -38,8 +38,8 @@ def track_objects_in_video(
     annotation_data_iohandler = ROIAnnotationFileHandler.load(metadata_path)
     annotation_manager = ROIAnnotationManager(annotation_data_iohandler)
 
-    if annotation_manager.is_all_tracking_completed():
-        print(f"✅ Tracking has been assessed as completed for this recording.")
+    if annotation_manager.is_no_object_to_be_processed():
+        print(f"No object has been assigned to be processed: either ✅ Tracking is completed or user has to review.")
         return output_path
     
     print(f"--- Starting processing for: {os.path.basename(video_path)} ---")
@@ -66,12 +66,12 @@ def track_objects_in_video(
                 annotation_manager.set_roi(object_name, row['frame_id'], row['roi_x'], row['roi_y'], row['roi_width'], row['roi_height'])
             annotation_manager.update_status(object_name, ROIProcessingStatus.TO_BE_REVIEWED)
             annotation_file_modified = True
-
-    if annotation_file_modified:
-        ROIAnnotationFileHandler.save(metadata_path, annotation_manager.data)
     
     if ROITrackedFileHandler.is_roi_tracked_objects(results): 
         tracked_data_iohandler = ROITrackedFileHandler(output_path)
         tracked_data_iohandler.save_all_data(results)
 
+    if annotation_file_modified:
+        ROIAnnotationFileHandler.save(metadata_path, annotation_manager.data)
+        
     return output_path

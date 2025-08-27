@@ -7,6 +7,7 @@ from pyk4a import PyK4APlayback, K4AException, PyK4ACapture
 from pyk4a.config import ColorResolution
 import datetime
 import threading
+import contextlib
 
 # This maps the stable enum to the hardware's known dimensions (width, height).
 CUSTOM_RESOLUTION_MAP = {
@@ -145,11 +146,11 @@ def plot_capture(capture: PyK4ACapture, fig: plt.Figure):
     plt.tight_layout(rect=[0, 0, 1, 0.96])
 
 
-def open_kinect_file_safely(long_path, drive_letter = "Z:"):
+def open_kinect_file_safely(long_path, drive_letter = "Z:", force_subst=False):
     """
     Attempts to open a Kinect MKV file, applying a 'subst' workaround if the path is too long.
     """
-    if len(long_path) > 240: # A safe threshold below 260
+    if len(long_path) > 240 or force_subst: # A safe threshold below 260
         print("Long path detected. Applying 'subst' workaround...")
         parent_dir = os.path.dirname(long_path)
         file_name = os.path.basename(long_path)
@@ -164,11 +165,7 @@ def open_kinect_file_safely(long_path, drive_letter = "Z:"):
     else:
         return PyK4APlayback(long_path)
 
-# --- Usage ---
-# long_mkv_path = "F:\\your\\very\\long\\path\\video.mkv"
-# playback = open_kinect_file_safely(long_mkv_path)
-# playback.open()
-# ...
+
 
 def extract_color_to_mp4(
         mkv_path: str, 

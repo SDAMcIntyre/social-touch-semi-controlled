@@ -20,7 +20,7 @@ from preprocessing.stickers_analysis.roi import (
 
 def extract_stickers_xyz_positions(
         source_video: str,
-        center_csv_path: str,
+        input_csv_path: str,
         output_csv_path: str,
         metadata_path: str = None,      # NEW: Added metadata path argument
         monitor: bool = False,
@@ -29,13 +29,13 @@ def extract_stickers_xyz_positions(
     Extracts 3D sticker positions and optionally shows a standard, non-distorted monitor window.
     """
     if not os.path.exists(source_video): raise FileNotFoundError(f"Source video not found: {source_video}")
-    if not os.path.exists(center_csv_path): raise FileNotFoundError(f"Center CSV not found: {center_csv_path}")
+    if not os.path.exists(input_csv_path): raise FileNotFoundError(f"Center CSV not found: {input_csv_path}")
     print("Starting sticker 3D position extraction...")
 
     # 1. Define the configuration parameters for the job.
     config_data = {
         "source_video_path": source_video,
-        "center_csv_path": center_csv_path,
+        "input_csv_path": input_csv_path,
         "output_csv_path": output_csv_path,
         "metadata_path": metadata_path,
         "monitor": monitor,

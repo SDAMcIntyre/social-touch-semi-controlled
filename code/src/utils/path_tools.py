@@ -60,6 +60,7 @@ def get_project_data_root():
 
     First, it tries to find the directory automatically. If that fails or the
     directory doesn't exist, it opens a GUI dialog for the user to select it.
+    The dialog window is forced to appear on top of all other windows.
 
     Returns:
         Path: The path to the project_data_root directory.
@@ -73,7 +74,7 @@ def get_project_data_root():
             print(f"✅ Project DATA root automatically identified at: {project_data_root.resolve()}")
             return project_data_root
     except FileNotFoundError:
-        # This case is hit if path_tools.get_database_path() fails. We'll pass
+        # This case is hit if get_database_path() fails. We'll pass
         # and let the GUI handler take over.
         pass
 
@@ -81,14 +82,26 @@ def get_project_data_root():
     print("⚠️ Project DATA root not found automatically.")
     print("Please select your 'semi-controlled' data folder using the dialog window.")
 
-    # Set up the Tkinter root window and hide it
+    # Set up the Tkinter root window
     root = tk.Tk()
+    
+    # --- MODIFICATION START ---
+    # Force the window to the front
+    root.attributes('-topmost', True)
+    # --- MODIFICATION END ---
+    
+    # Hide the main Tkinter window
     root.withdraw()
 
     # Open the directory selection dialog
     selected_path = filedialog.askdirectory(
         title="Please Select the Project Data Folder"
     )
+
+    # --- MODIFICATION START ---
+    # Destroy the root window to free up resources
+    root.destroy()
+    # --- MODIFICATION END ---
 
     if not selected_path:  # Handles the case where the user closes the dialog
         print("❌ No folder selected. Exiting program.")
