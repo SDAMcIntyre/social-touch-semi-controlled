@@ -1,10 +1,8 @@
 import os
 import yaml
 from pathlib import Path
-from collections.abc import Mapping
-import json
 
-from prefect import task, flow
+from prefect import flow
 from pydantic import BaseModel, DirectoryPath, FilePath, Field
 
 from _2_primary_processing._2_generate_rgb_depth_video import (
@@ -20,7 +18,6 @@ from _3_preprocessing._1_sticker_tracking import (
     ensure_tracking_is_valid,
     convert_sticker_roi_to_center,
 
-    ensure_alignement_stickers_and_depth_data,
     extract_stickers_xyz_positions,
 
     unify_objects_rois_size,
@@ -59,7 +56,7 @@ import utils.path_tools as path_tools
 # ---------------------------------------
 # ---------------------
 # -----------
-PARALLEL_EXECUTION = False
+PARALLEL_EXECUTION = True
 # -----------
 # ---------------------
 # ---------------------------------------
@@ -213,12 +210,8 @@ def track_stickers(rgb_video_path: Path,
     ensure_tracking_is_valid(metadata_roi_path)
     # --------------------------------
 
-    bypass_ellipse_tracking = True
-    if bypass_ellipse_tracking:
-        center_csv_path = output_dir / (name_baseline + "_center_tracking.csv")
-        convert_sticker_roi_to_center(stickers_roi_csv_path, center_csv_path)
-
-    else:
+    ignore_ellipse_tracking = True
+    if not ignore_ellipse_tracking:
         roi_unified_csv_path = output_dir / (name_baseline + "_roi_unified.csv")
         unify_objects_rois_size(stickers_roi_csv_path, metadata_roi_path, roi_unified_csv_path)
 
@@ -259,26 +252,13 @@ def track_stickers(rgb_video_path: Path,
         ellipse_video_path = output_dir / (name_baseline + "ellipses_full_frame.mp4")
         create_ellipses_on_full_frame_videos(rgb_video_path, roi_unified_csv_path, fit_ellipses_path, ellipse_video_path)
 
-    # --- /!\ ---
-    # before using the depth data from mkv video, it is crucial to 
-    # ensure synchronisation of the color.mp4 data and source.mkv video (~depth data).
-    # To do that, we will use "mkv_analysis_report.csv" to realign frames
-    # between stickers data and depth data
-    if 0:
-        mkv_analysis_path = rgb_video_path.parent / "mkv_analysis_report.csv"
-        center_aligned_csv_path = output_dir / (name_baseline + "_center_tracking.csv")
-        ensure_alignement_stickers_and_depth_data(
-            center_csv_path,
-            mkv_analysis_path, 
-            center_aligned_csv_path)
-    # --- /!\ ---
-
     result_csv_path = output_dir / (name_baseline + "_xyz_tracked.csv")
     result_video_path = output_dir / (name_baseline + "_xyz_tracked.mp4")
     result_md_path = output_dir / (name_baseline + "_xyz_tracked_metadata.json")
     extract_stickers_xyz_positions(
         source_video, 
-        center_csv_path, 
+        stickers_roi_csv_path, 
+        
         result_csv_path,
         metadata_path=result_md_path,
         video_path=result_video_path,
@@ -371,7 +351,7 @@ def run_single_session_pipeline(inputs: SessionInputs, *, monitor_ui: bool = Fal
     # Stage 2&3: Stickers Tracking and 3D Reconstruction
     handstickers_dir = inputs.video_processed_output_dir / "handstickers"
     sticker_tracking = track_stickers(rgb_video_path, inputs.source_video, handstickers_dir, monitor_ui=monitor_ui)
-    return  {"status": "success", "result": None} 
+    return  {"status": "success", "result": None}
 
     hand_motion_glb_path = generate_3d_hand_motion(rgb_video_path, sticker_tracking, inputs.hand_models_dir, inputs.video_processed_output_dir)
     forearm_pointcloud = generate_forearm_pointcloud(inputs.source_video, inputs.video_processed_output_dir)
@@ -466,7 +446,7 @@ if __name__ == "__main__":
     kinect_dir = Path("kinect_configs")
 
     configs_kinect_dir = configs_dir / kinect_dir
-    project_data_root = Path(path_tools.get_database_path()) / "semi-controlled"
+    project_data_root = path_tools.get_project_data_root()
 
     if PARALLEL_EXECUTION:
         print("🚀 Launching batch processing in PARALLEL.")

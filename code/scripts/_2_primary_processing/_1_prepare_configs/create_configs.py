@@ -71,50 +71,6 @@ def generate_yaml_config(source_video_abs_path: Path, project_config: dict, proj
     print(f"✅ Generated config in code project's 'configs/': {output_yaml_filename}")
 
 
-def get_project_data_root():
-    """
-    Determines the project data root directory.
-
-    First, it tries to find the directory automatically. If that fails or the
-    directory doesn't exist, it opens a GUI dialog for the user to select it.
-
-    Returns:
-        Path: The path to the project_data_root directory.
-        None: If the user cancels the directory selection.
-    """
-    try:
-        # Attempt to find the path automatically as before
-        base_path = Path(path_tools.get_database_path())
-        project_data_root = base_path / "semi-controlled"
-        if project_data_root.is_dir():
-            print(f"✅ Project DATA root automatically identified at: {project_data_root.resolve()}")
-            return project_data_root
-    except FileNotFoundError:
-        # This case is hit if path_tools.get_database_path() fails. We'll pass
-        # and let the GUI handler take over.
-        pass
-
-    # If automatic detection fails or the directory doesn't exist, prompt the user
-    print("⚠️ Project DATA root not found automatically.")
-    print("Please select your 'semi-controlled' data folder using the dialog window.")
-
-    # Set up the Tkinter root window and hide it
-    root = tk.Tk()
-    root.withdraw()
-
-    # Open the directory selection dialog
-    selected_path = filedialog.askdirectory(
-        title="Please Select the Project Data Folder"
-    )
-
-    if not selected_path:  # Handles the case where the user closes the dialog
-        print("❌ No folder selected. Exiting program.")
-        return None
-
-    project_data_root = Path(selected_path)
-    print(f"👍 Project DATA root set by user to: {project_data_root.resolve()}")
-    return project_data_root
-
 
 def main():
     """Main function to find all videos and generate configuration for each."""
@@ -122,7 +78,7 @@ def main():
     print(f"Project CODE root identified at: {project_code_root}")
 
     # 2. Determine Project DATA Root using the new helper function
-    project_data_root = get_project_data_root()
+    project_data_root = path_tools.get_project_data_root()
     if not project_data_root:
         return  # Exit if no folder was selected
 

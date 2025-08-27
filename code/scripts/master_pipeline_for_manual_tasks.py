@@ -1,10 +1,9 @@
 import os
 import yaml
 from pathlib import Path
-from collections.abc import Mapping
 
-from prefect import task, flow
-from pydantic import BaseModel, DirectoryPath, FilePath, Field
+from prefect import  flow
+from pydantic import BaseModel, DirectoryPath, FilePath
 
 
 from _3_preprocessing._1_sticker_tracking import (
@@ -23,9 +22,7 @@ from _3_preprocessing._2_hand_tracking import select_hand_model_characteristics
 
 from _3_preprocessing._3_forearm_extraction import define_normals
 
-
 import utils.path_tools as path_tools
-
 
 # --- 1. Configuration Models (Unchanged) ---
 # This model define the validated structure for our YAML configuration files.
@@ -154,7 +151,8 @@ def run_single_session_pipeline(inputs: SessionInputs):
     # Stage 2: Tracking
     #led_tracking = track_led_blinking(rgb_video_path, inputs.stimulus_metadata, inputs.video_processed_output_dir)
     track_stickers(rgb_video_path, inputs.source_video, inputs.video_processed_output_dir)
-     
+    return 
+
     # Stage 4: 3D Reconstruction
     prepare_hand_tracking_session(rgb_video_path, inputs.hand_models_dir, inputs.video_processed_output_dir)
     prepare_forearm(inputs.video_processed_output_dir / "forearm_pointcloud.ply", inputs.video_processed_output_dir)
@@ -203,7 +201,8 @@ if __name__ == "__main__":
     kinect_dir = Path("kinect_configs")
 
     configs_kinect_dir = configs_dir / kinect_dir
-    project_data_root = Path(path_tools.get_database_path()) / "semi-controlled"
+    
+    project_data_root = path_tools.get_project_data_root()
 
     print("🚀 Launching batch processing...")
     batch_process_all_sessions(configs_kinect_dir=configs_kinect_dir, project_data_root=project_data_root)
