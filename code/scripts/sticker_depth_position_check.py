@@ -1,34 +1,44 @@
 import os
-import sys
+from typing import Union
 from pathlib import Path
-project_root = Path(__file__).resolve().parents[2]
-if str(project_root) not in sys.path:
-    sys.path.append(str(project_root))
+import numpy as np
+from PIL import Image
+import glob
 
-from _3_preprocessing._1_sticker_tracking import (
-    track_objects_in_video,
-    ensure_tracking_is_valid,
-    convert_sticker_roi_to_center,
-
-    extract_stickers_xyz_positions,
-
-    unify_objects_rois_size,
-    create_windowed_videos,
-    fit_ellipses_on_correlation_videos,
-    adjust_ellipses_coord_to_frame,
-    generate_ellipses_on_frame_video
+# Import the required function and dependencies
+from _3_preprocessing._1_sticker_tracking import extract_stickers_xyz_positions
+from preprocessing.stickers_analysis.roi import (
+    XYZMetadataModel,
+    XYZMetadataManager,
+    XYZVisualizationHandler,
+    XYZDataFileHandler,
+    XYZStickerOrchestrator
 )
 
 
-result_csv_path = output_dir / (name_baseline + "_xyz_tracked.csv")
-result_video_path = output_dir / (name_baseline + "_xyz_tracked.mp4")
-result_md_path = output_dir / (name_baseline + "_xyz_tracked_metadata.json")
+if __name__ == "__main__":
+    tiff_folder = Path("/path/to/your/tiff/frames")
+    stickers_roi_csv_path = Path("/path/to/handstickers_roi_tracking.csv")
+    result_csv_path = Path("/path/to/output/xyz_tracked.csv")
+    result_md_path = Path("/path/to/output/xyz_tracked_metadata.json")
+    result_video_path = Path("/path/to/output/xyz_tracked.mp4")
 
-extract_stickers_xyz_positions(
-    source_video, 
-    stickers_roi_csv_path, 
-    
-    result_csv_path,
-    metadata_path=result_md_path,
-    video_path=result_video_path,
-    monitor=True)
+    """
+    # For MKV input
+    extract_stickers_xyz_positions(
+        source='path/to/video.mkv',
+        input_csv_path='path/to/input.csv',
+        output_csv_path='path/to/output.csv',
+        input_type='mkv'
+    ) 
+    """
+    # For TIFF input
+    extract_stickers_xyz_positions(
+        source=tiff_folder,
+        input_csv_path=stickers_roi_csv_path,
+        output_csv_path=result_md_path,
+        metadata_path=result_md_path,
+        monitor=True,
+        video_path=result_video_path,
+        input_type='tiff'
+    )
