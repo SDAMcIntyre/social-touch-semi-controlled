@@ -9,12 +9,12 @@ from pyk4a import PyK4APlayback
 @dataclass
 class XYZMetadataConfig:
     """Holds all configuration for the XYZ extraction process."""
-    source_video: str
-    center_csv_path: str
+    source_video_path: str
+    input_csv_path: str
     output_csv_path: str
     metadata_path: Optional[str] = None
-    video_path: Optional[str] = None
     monitor: bool = False
+    video_path: Optional[str] = None
     display_dims: Tuple[int, int] = (1080, 1920)
 
 
@@ -24,11 +24,11 @@ class XYZMetadataModel:
     
     # --- Input and Configuration ---
     source_video_path: str
-    center_csv_path: str
+    input_csv_path: str
     output_csv_path: str
-    monitor: Any # Or a more specific type if available
-    video_path: Optional[str] = None
     metadata_path: Optional[str] = None
+    monitor: bool = False 
+    video_path: Optional[str] = None
     display_dims: Tuple[int, int] = (1080, 1920)
 
     # --- Timestamps and Status ---
@@ -83,7 +83,7 @@ class XYZMetadataModel:
             "error_message": self.error_message,
             "inputs": {
                 "source_video": os.path.abspath(self.source_video_path),
-                "center_csv_path": os.path.abspath(self.center_csv_path),
+                "input_csv_path": os.path.abspath(self.input_csv_path),
             },
             "outputs": {
                 "output_csv_path": os.path.abspath(self.output_csv_path),

@@ -96,20 +96,19 @@ class TrackerReviewOrchestrator:
         self.playback_speed = float(speed)
         self.view.update_speed_label(self.playback_speed)
 
-    def mark_current_frame(self, reasons: List[str]):
+    def mark_current_frame(self, objects_to_mark: List[str]):
         """
-        Adds or updates the current frame in the marked list with associated reasons.
-        The UI is responsible for collecting and passing the 'reasons'.
+        Adds or updates the current frame in the marked list with associated objects_to_mark.
 
         Args:
-            reasons (List[str]): A list of strings explaining why the frame is marked.
+            objects_to_mark (List[str]): A list of objects_to_mark.
         """
-        self.marked_for_labeling[self.current_frame_num] = reasons
+        self.marked_for_labeling[self.current_frame_num] = objects_to_mark
         self.status = TrackerReviewStatus.UNPERFECT
         
         # Pass the sorted list of frame numbers (keys) to the view.
         # This keeps the view's interface simple.
-        self.view.update_marked_list(sorted(self.marked_for_labeling.keys()))
+        self.view.update_marked_list(self.marked_for_labeling)
         self.view.update_finish_buttons(self.marked_for_labeling)
 
     # MODIFIED: The logic now works with the dictionary's keys.
@@ -121,7 +120,7 @@ class TrackerReviewOrchestrator:
             del self.marked_for_labeling[frame_to_delete]
         
         # Update the view with the new sorted list of marked frame numbers.
-        self.view.update_marked_list(sorted(self.marked_for_labeling.keys()))
+        self.view.update_marked_list(self.marked_for_labeling)
         self.view.update_finish_buttons(self.marked_for_labeling)
 
     def finish_as_valid(self):

@@ -56,6 +56,7 @@ class TrackerReviewGUI:
         self.current_frame_label = None
         self.valid_button = None
         self.proceed_button = None
+        self.rerun_button = None # --- NEW: Added reroll button attribute
         self.marked_listbox = None
         self.speed_slider = None
         self.speed_label = None
@@ -64,7 +65,7 @@ class TrackerReviewGUI:
         self.scale_var = None
         self.entry_var = None
         self.speed_var = None
-        # --- NEW: Dictionary to hold BooleanVar for each object checkbox ---
+        # --- Dictionary to hold BooleanVar for each object checkbox ---
         self.object_vars = {}
 
     def setup_ui(self):
@@ -97,6 +98,9 @@ class TrackerReviewGUI:
         style.configure("Delete.TButton", foreground="red")
         style.configure("Finish.TButton", foreground="blue")
         style.configure("Valid.TButton", foreground="green")
+        # --- NEW: Added style for the new button for consistency ---
+        style.configure("Rerun.TButton", foreground="#8e44ad")
+
 
         # --- UI Variables ---
         self.scale_var = tk.IntVar(value=0)
@@ -177,25 +181,19 @@ class TrackerReviewGUI:
         )
         self.speed_slider.pack(side=tk.LEFT, padx=5, expand=True, fill=tk.X)
         
-        # --- NEW: Object Checkboxes Frame ---
-        # This frame will hold the checkboxes for object names.
+        # --- Object Checkboxes Frame ---
         checkbox_frame = ttk.LabelFrame(action_controls_frame, text="Objects to Mark")
         checkbox_frame.pack(side=tk.LEFT, padx=10, fill=tk.Y)
         
-        # Populate checkboxes if object_names are available in the controller
         if hasattr(self.controller, 'object_names') and self.controller.object_names:
             for name in self.controller.object_names:
-                # Create a BooleanVar for each checkbox, default to True (checked)
                 var = tk.BooleanVar(value=True)
                 self.object_vars[name] = var
                 
-                # Create the checkbutton and link it to its variable
-                # MODIFIED: Added 'command' to update the valid button on click.
                 cb = ttk.Checkbutton(checkbox_frame, text=name, variable=var, 
                                      command=self._update_valid_button_state)
                 cb.pack(side=tk.TOP, anchor="w", padx=3, pady=2)
         
-        # --- MODIFIED: Mark button command now calls a new handler ---
         ttk.Button(action_controls_frame, text="✏️ Mark for Labeling", command=self._on_mark_button_click, style="Mark.TButton").pack(side=tk.LEFT, padx=5)
 
         # --- Finish Controls ---
@@ -207,6 +205,15 @@ class TrackerReviewGUI:
         
         self.valid_button = ttk.Button(finish_controls_frame, text="✅ Finish as Valid", command=self.controller.finish_as_valid, style="Valid.TButton")
         self.valid_button.pack(side=tk.LEFT, padx=5, pady=5)
+        
+        # --- NEW: Create and place the new 'Rerun' button ---
+        self.rerun_button = ttk.Button(
+            finish_controls_frame, 
+            text="🔄 Rerun Auto-Processing", 
+            command=self._on_rerun_button_click, 
+            style="Rerun.TButton"
+        )
+        self.rerun_button.pack(side=tk.LEFT, padx=5, pady=5)
 
         # --- Marked Frames List Pane ---
         list_pane.rowconfigure(1, weight=1)
@@ -234,19 +241,14 @@ class TrackerReviewGUI:
 
     def _bind_keys(self):
         """Binds keyboard shortcuts to controller methods."""
-        # Frame-by-frame navigation
         self.root.bind('<Left>', lambda e: self.controller.seek_to_frame(self.scale_var.get() - 1))
         self.root.bind('<Right>', lambda e: self.controller.seek_to_frame(self.scale_var.get() + 1))
-        # Step navigation
         self.root.bind('<Control-Left>', lambda e: self.controller.seek_to_frame(self.scale_var.get() - 10))
         self.root.bind('<Control-Right>', lambda e: self.controller.seek_to_frame(self.scale_var.get() + 10))
-        # Other shortcuts
         self.root.bind('<space>', lambda e: self.controller.toggle_play_pause())
         self.root.bind('<Delete>', lambda e: self._delete_from_listbox())
-        # --- MODIFIED: 'm' key now calls the new handler ---
         self.root.bind('m', lambda e: self._on_mark_button_click())
 
-    # --- NEW METHOD to control the valid button's state ---
     def _update_valid_button_state(self):
         """
         Updates the state of the 'Finish as Valid' button.
@@ -254,20 +256,15 @@ class TrackerReviewGUI:
         The button is enabled (NORMAL) only if the marked list is empty AND all 
         object checkboxes are checked. Otherwise, it is disabled.
         """
-        # This method might be called before the UI is fully built, so we add checks.
         if not hasattr(self, 'valid_button') or not self.valid_button:
             return
 
-        # Condition 1: Check if the marked list is empty.
         is_list_empty = self.marked_listbox.size() == 0
 
-        # Condition 2: Check if all checkboxes are ticked.
-        # Defaults to True if there are no checkboxes to evaluate.
         all_boxes_checked = True
         if hasattr(self, 'object_vars') and self.object_vars:
             all_boxes_checked = all(var.get() for var in self.object_vars.values())
 
-        # The button is enabled only if both conditions are met.
         if is_list_empty and all_boxes_checked:
             self.valid_button.config(state=tk.NORMAL)
         else:
@@ -275,21 +272,23 @@ class TrackerReviewGUI:
     
     # --- PRIVATE EVENT HANDLERS (Forwarding to Controller) ---
     
-    # --- NEW: Handler for the "Mark for Labeling" button click ---
+    # --- NEW: Handler for the 'Rerun' button click ---
+    def _on_rerun_button_click(self):
+        """
+        Handles the click event for the 'Rerun Auto-Processing' button.
+        This simply calls the controller's standard 'proceed' method, which
+        is expected to handle the application logic and close the GUI.
+        """
+        self.controller.finish_and_proceed()
+        
     def _on_mark_button_click(self):
         """
         Gathers selected objects from checkboxes and tells the controller to mark
         the current frame. Resets checkboxes to their default (checked) state.
         """
-        # Get a list of object names where the corresponding checkbox is checked
         selected_objects = [name for name, var in self.object_vars.items() if var.get()]
-        
-        # Call the controller's method, passing the list of selected objects
-        # Note: This assumes the controller's `mark_current_frame` method
-        # has been updated to accept a list of strings.
         self.controller.mark_current_frame(objects_to_mark=selected_objects)
 
-        # Reset all checkboxes to checked for the next marking action
         for var in self.object_vars.values():
             var.set(True)
 
@@ -301,16 +300,11 @@ class TrackerReviewGUI:
         selected_index = selection_indices[0]
         
         try:
-            # --- MODIFIED: Parse the new listbox entry format ---
-            # Example text: "Frame 123: object1, object2"
             listbox_text = self.marked_listbox.get(selected_index)
-            # Get the part before the colon: "Frame 123"
             frame_part = listbox_text.split(':')[0]
-            # Get the last word from that part, which is the number
             frame_num = int(frame_part.split()[-1])
             self.controller.seek_to_frame(frame_num)
         except (ValueError, IndexError):
-            # Ignore if parsing fails for any reason
             print(f"Error parsing listbox entry: {self.marked_listbox.get(selected_index)}")
             pass 
 
@@ -335,7 +329,6 @@ class TrackerReviewGUI:
         canvas_width = self.timeline_canvas.winfo_width()
         if canvas_width <= 1: return
 
-        # Get properties
         color = self.landmark_properties['color']
         thickness = self.landmark_properties['thickness']
         height = self.landmark_properties['height']
@@ -363,7 +356,6 @@ class TrackerReviewGUI:
         new_w, new_h = int(original_w * scale), int(original_h * scale)
         if new_w > 0 and new_h > 0:
             resized_frame = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
-            # Frame is assumed to be BGR from the model, convert to RGB for PIL/Tkinter
             cv2image = cv2.cvtColor(resized_frame, cv2.COLOR_BGR2RGB)
             img = Image.fromarray(cv2image)
             imgtk = ImageTk.PhotoImage(image=img)
@@ -387,28 +379,29 @@ class TrackerReviewGUI:
         """Updates the speed label text."""
         self.speed_label.config(text=f"Speed: {speed:.1f}x")
 
-    # --- MODIFIED: Updated to handle new data structure ---
-    def update_marked_list(self, marked_list: List[Tuple[int, List[str]]]):
+    def update_marked_list(self, marked_list: dict[int, List[str]]):
         """
         Refreshes the listbox with the current list of marked frames and their associated objects.
-        
-        Args:
-            marked_list: A list of tuples, where each tuple contains a
-                         frame number (int) and a list of marked object names (list[str]).
         """
+        # Deletes all items from the listbox to prepare for the update.
         self.marked_listbox.delete(0, tk.END)
-        for frame_num, objects in marked_list:
-            # Join the object names into a comma-separated string
+
+        # Iterates over each key-value pair (frame number and its list of objects) in the dictionary.
+        for frame_num, objects in marked_list.items():
             object_str = ", ".join(objects)
             self.marked_listbox.insert(tk.END, f"Frame {frame_num}: {object_str}")
-
-    # --- MODIFIED: This method now uses the new centralized logic ---
+            
+    # --- MODIFIED: This method now also controls the state of the new rerun button ---
     def update_finish_buttons(self, marked_list):
         """Enables/disables finish buttons based on the state of the marked list."""
         is_list_empty = not marked_list
         
-        # The 'Proceed' button state is simple: enabled if the list is NOT empty.
+        # The 'Proceed' button is enabled only if the list is NOT empty.
         self.proceed_button.config(state=tk.DISABLED if is_list_empty else tk.NORMAL)
+        
+        # --- NEW: The 'Rerun' button is enabled only if the list IS empty. ---
+        if self.rerun_button: # Check if button exists before configuring
+             self.rerun_button.config(state=tk.NORMAL if is_list_empty else tk.DISABLED)
     
         # For the 'Valid' button, delegate to its dedicated state update method,
         # which checks both the list and the checkboxes.
@@ -418,14 +411,12 @@ class TrackerReviewGUI:
 
     def start_mainloop(self):
         """Starts the Tkinter event loop."""
-        # Set the initial state of the buttons after the main window appears
         self.root.after(100, self.update_finish_buttons, [])
         self.root.mainloop()
 
     def quit(self):
         """Destroys the Tkinter window."""
         if self.root:
-            # Stop any pending 'after' jobs before destroying
             if self.controller and hasattr(self.controller, '_update_job') and self.controller._update_job:
                 self.root.after_cancel(self.controller._update_job)
             self.root.destroy()

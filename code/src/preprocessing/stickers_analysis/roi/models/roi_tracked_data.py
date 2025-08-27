@@ -11,14 +11,15 @@ class ROITrackedStatus(Enum):
     INITIAL_ROI = "Initial ROI"
     TRACKING = "Tracking"
 
-# Define the schema for our tracking data
-# This helps enforce consistency.
+# Define the schema for our tracking data.
+# We use pandas' nullable dtypes ('Int64') to gracefully handle missing data
+# in integer columns without causing crashes during type conversion.
 ROI_TRACKED_SCHEMA = {
-    'frame_id': int,
-    'roi_x': int,
-    'roi_y': int,
-    'roi_width': int,
-    'roi_height': int,
+    'frame_id': 'Int64',
+    'roi_x': 'Int64',
+    'roi_y': 'Int64',
+    'roi_width': 'Int64',
+    'roi_height': 'Int64',
     'status': str
 }
 

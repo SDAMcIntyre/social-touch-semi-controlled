@@ -34,9 +34,6 @@ class AnnotationData:
     """Top-level container for all annotation data."""
     objects_to_track: Dict[str, TrackedObject] = field(default_factory=dict)
 
-# ======================= Persistence Layer =======================
-
-
 
 # ======================= Business Logic Layer =======================
 
@@ -52,13 +49,12 @@ class ROIAnnotationManager:
     def add_object(self, obj_name: str, status: ROIProcessingStatus = ROIProcessingStatus.TO_BE_PROCESSED):
         if obj_name in self._data.objects_to_track:
             raise ValueError(f"Object '{obj_name}' already exists.")
-        self._data.objects_to_track[obj_name] = TrackedObject(status=status)
+        # Note: We store the string value for consistency
+        self._data.objects_to_track[obj_name] = TrackedObject(status=status.value)
         logger.info("Added new object: '%s'", obj_name)
 
     def set_roi(self, obj_name: str, frame_id: int, x: int, y: int, width: int, height: int):
-        """
-        💡 MODIFIED: Sets an ROI by taking individual components as arguments.
-        """
+        """Sets an ROI by taking individual components as arguments."""
         obj = self._data.objects_to_track.get(obj_name)
         if obj is None:
             raise KeyError(f"Object '{obj_name}' not found.")
@@ -77,9 +73,7 @@ class ROIAnnotationManager:
             obj.rois = pd.concat([obj.rois, new_row], ignore_index=True)
 
     def get_roi(self, obj_name: str, frame_id: int) -> Optional[Dict[str, int]]:
-        """
-        💡 MODIFIED: Retrieves ROI components and returns them in a dictionary.
-        """
+        """Retrieves ROI components and returns them in a dictionary."""
         obj = self.get_object(obj_name)
         if obj is None: return None
         
@@ -96,21 +90,19 @@ class ROIAnnotationManager:
     def get_object(self, obj_name: str) -> Optional[TrackedObject]:
         return self._data.objects_to_track.get(obj_name)
 
-    def update_status(self, obj_name: str, status: ROIProcessingStatus):
-        if obj_name not in self._data.objects_to_track:
-            raise KeyError(f"Object '{obj_name}' not found.")
-        self._data.objects_to_track[obj_name].status = status.value
-
     def update_status(self, obj_name: str, status: Union[ROIProcessingStatus, str]):
+        """
+        Updates the status of an object.
+        This method correctly handles both Enum members and their string representations.
+        """
         if obj_name not in self._data.objects_to_track:
             raise KeyError(f"Object '{obj_name}' not found.")
 
         try:
-            # 1. Normalize the input.
-            # This line elegantly handles both cases:
-            # - If 'status' is ROIProcessingStatus.COMPLETED, it returns that member.
-            # - If 'status' is "completed", it finds the corresponding member.
-            # - If 'status' is an invalid string like "done", it raises a ValueError.
+            # 1. Normalize the input to an Enum member.
+            #    This handles both cases:
+            #    - If 'status' is ROIProcessingStatus.COMPLETED, it returns that member.
+            #    - If 'status' is "completed", it finds the corresponding member.
             valid_status_member = ROIProcessingStatus(status)
 
             # 2. Assign the canonical string value.
@@ -131,7 +123,6 @@ class ROIAnnotationManager:
             raise KeyError(f"Object '{obj_name}' not found.")
 
     def remove_roi(self, obj_name: str, frame_id: int):
-        """This method's logic remains correct as it only depends on frame_id."""
         obj = self._data.objects_to_track.get(obj_name)
         if obj is None: raise KeyError(f"Object '{obj_name}' not found.")
         
@@ -144,17 +135,22 @@ class ROIAnnotationManager:
     def is_all_tracking_completed(self) -> bool:
         """
         Checks if all tracked objects have the status 'COMPLETED'.
-
-        This implementation uses the all() function for a more concise and
-        readable check. It returns True if the dictionary is empty.
-
-        Returns:
-            bool: True if all objects are completed, False otherwise.
         """
         if not self._data.objects_to_track:
-            return False
+            return False # Or True, depending on business logic for an empty set
             
         return all(
-            obj.status == ROIProcessingStatus.COMPLETED 
+            # ✅ CORRECTED: Compare the object's status string to the enum's value string.
+            obj.status == ROIProcessingStatus.COMPLETED.value 
+            for obj in self._data.objects_to_track.values()
+        )
+    
+    def is_no_object_to_be_processed(self) -> bool:
+        """
+        Checks if there are no tracked objects with the status 'TO_BE_PROCESSED'.
+        """
+        return not any(
+            # ✅ CORRECTED: Compare the object's status string to the enum's value string.
+            obj.status == ROIProcessingStatus.TO_BE_PROCESSED.value
             for obj in self._data.objects_to_track.values()
         )

@@ -171,7 +171,7 @@ class TrackingOrchestrator:
                     continue # Restart loop at the new index
 
             i += 1
-            
+    
     def _update_tracker_on_frame(self, tracker, frame_rgb, last_roi, expansion, vm):
         """Processes a single frame, returning the new ROI and status."""
         frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)

@@ -14,9 +14,9 @@ def define_normals(
     """
     Main function to set up and run the application.
     """
-    if os.path.exists(input_ply_path): 
+    if not os.path.exists(input_ply_path): 
         print(f"Input PLY couldn't be found: {input_ply_path}. Run automatic pipeline first.")
-        raise
+        return None
     
     if os.path.exists(output_ply_path) and os.path.exists(output_metadata_path):
         print(f"Normals have already been estimated for file {input_ply_path}.")

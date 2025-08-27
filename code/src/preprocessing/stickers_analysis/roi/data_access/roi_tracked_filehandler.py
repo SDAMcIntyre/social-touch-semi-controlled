@@ -43,7 +43,7 @@ class ROITrackedFileHandler:
             bool: True if the variable is of the correct structure, False otherwise.
         """
         # 1. Ensure the variable is a dictionary.
-        if not isinstance(variable, dict):
+        if not isinstance(variable, dict) or not variable:
             return False
 
         # 2. Check if all keys are strings and all values are pandas DataFrames.
@@ -98,6 +98,7 @@ class ROITrackedFileHandler:
         """
         if not all_objects_data:
             # If there's no data, ensure the file is empty.
+            return
             open(self.file_path, 'w').close()
             return
 

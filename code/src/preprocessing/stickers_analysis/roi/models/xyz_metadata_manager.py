@@ -17,7 +17,7 @@ class XYZMetadataManager:
         """
         self.metadata = XYZMetadataModel(
             source_video_path=config.source_video_path,
-            center_csv_path=config.center_csv_path,
+            input_csv_path=config.input_csv_path,
             output_csv_path=config.output_csv_path,
             video_path=config.video_path,
             metadata_path=config.metadata_path,
