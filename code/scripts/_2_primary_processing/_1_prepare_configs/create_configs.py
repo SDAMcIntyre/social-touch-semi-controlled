@@ -118,7 +118,7 @@ def get_project_data_root():
 
 def main():
     """Main function to find all videos and generate configuration for each."""
-    project_code_root = Path(__file__).resolve().parents[3]
+    project_code_root = Path(__file__).resolve().parents[4]
     print(f"Project CODE root identified at: {project_code_root}")
 
     # 2. Determine Project DATA Root using the new helper function
@@ -161,7 +161,7 @@ def main():
         except (ValueError, FileNotFoundError) as e:
             print(f"❗️ Failed to process {video_path.name}: {e}")
             fail_count += 1
-    
+
     print(f"\n--- 🚀 Processing Complete ---")
     print(f"Successfully generated: {success_count} config(s)")
     print(f"Failed: {fail_count} config(s)")
