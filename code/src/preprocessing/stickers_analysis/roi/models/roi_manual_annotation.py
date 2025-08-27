@@ -132,25 +132,48 @@ class ROIAnnotationManager:
         if len(obj.rois) == initial_len:
             raise KeyError(f"Frame ID '{frame_id}' not found for object '{obj_name}'.")
 
-    def is_all_tracking_completed(self) -> bool:
+    def are_all_objects_with_status(self, status: ROIProcessingStatus) -> bool:
         """
-        Checks if all tracked objects have the status 'COMPLETED'.
+        Checks if all tracked objects have a specific status.
+
+        Args:
+            status (ROIProcessingStatus): The status to check for.
+
+        Returns:
+            bool: True if all objects have the given status, False otherwise.
+                  Returns False for an empty collection of objects.
         """
-        if not self._data.objects_to_track:
-            return False # Or True, depending on business logic for an empty set
+        objects = self._data.objects_to_track.values()
+        if not objects:
+            # The all() function returns True for an empty iterable.
+            # We explicitly return False to indicate that not "all" objects
+            # are in this state, because there are no objects.
+            # This can be changed to True depending on business logic.
+            return False
             
-        return all(
-            # ✅ CORRECTED: Compare the object's status string to the enum's value string.
-            obj.status == ROIProcessingStatus.COMPLETED.value 
-            for obj in self._data.objects_to_track.values()
-        )
-    
-    def is_no_object_to_be_processed(self) -> bool:
+        return all(obj.status == status.value for obj in objects)
+
+    def is_any_object_with_status(self, status: ROIProcessingStatus) -> bool:
         """
-        Checks if there are no tracked objects with the status 'TO_BE_PROCESSED'.
+        Checks if at least one tracked object has a specific status.
+
+        Args:
+            status (ROIProcessingStatus): The status to check for.
+
+        Returns:
+            bool: True if any object has the given status, False otherwise.
         """
-        return not any(
-            # ✅ CORRECTED: Compare the object's status string to the enum's value string.
-            obj.status == ROIProcessingStatus.TO_BE_PROCESSED.value
-            for obj in self._data.objects_to_track.values()
-        )
+        return any(obj.status == status.value for obj in self._data.objects_to_track.values())
+
+    def are_no_objects_with_status(self, status: ROIProcessingStatus) -> bool:
+        """
+        Checks if no tracked objects have a specific status.
+
+        Args:
+            status (ROIProcessingStatus): The status to check for.
+
+        Returns:
+            bool: True if no objects have the given status, False otherwise.
+        """
+        # This is more efficient than iterating again. It reuses the 'any' check.
+        return not self.is_any_object_with_status(status)

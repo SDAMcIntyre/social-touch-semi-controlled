@@ -38,7 +38,7 @@ def track_objects_in_video(
     annotation_data_iohandler = ROIAnnotationFileHandler.load(metadata_path)
     annotation_manager = ROIAnnotationManager(annotation_data_iohandler)
 
-    if annotation_manager.is_no_object_to_be_processed():
+    if annotation_manager.are_no_objects_with_status(ROIProcessingStatus.TO_BE_PROCESSED):
         print(f"No object has been assigned to be processed: either ✅ Tracking is completed or user has to review.")
         return output_path
     
