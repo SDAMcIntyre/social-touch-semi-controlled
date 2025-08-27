@@ -257,7 +257,7 @@ def track_stickers(rgb_video_path: Path,
     result_md_path = output_dir / (name_baseline + "_xyz_tracked_metadata.json")
     extract_stickers_xyz_positions(
         source_video, 
-        stickers_roi_csv_path, 
+        stickers_roi_csv_path,
         
         result_csv_path,
         metadata_path=result_md_path,
