@@ -131,6 +131,10 @@ class ROIAnnotationManager:
         
         if len(obj.rois) == initial_len:
             raise KeyError(f"Frame ID '{frame_id}' not found for object '{obj_name}'.")
+        
+    def remove_roi_ifexists(self, obj_name: str, frame_id: int):
+        if self.get_roi(obj_name, frame_id) is not None:
+            self.remove_roi(obj_name, frame_id)
 
     def are_all_objects_with_status(self, status: ROIProcessingStatus) -> bool:
         """

@@ -121,12 +121,21 @@ def get_unique_frame_ids(annotation_data):
     
     return unique_ids_list
 
+
+def remove_frames_from_metadata(
+        annotation_manager: ROIAnnotationManager, 
+        frames_for_deleting: Dict[int, List[str]]
+):  
+    for frame_id, object_names in frames_for_deleting.items():
+        for object_name in object_names:
+            annotation_manager.remove_roi_ifexists(object_name, frame_id)
+
 def review_tracking(
         video_manager: VideoReviewManager, 
         annotation_manager: ROIAnnotationManager, 
         tracked_objs: ROITrackedObjects, 
         title: str
-) -> tuple[str, Dict[int, List[str]]]:
+) -> tuple[str, Dict[int, List[str]], Dict[int, List[str]]]:
     """
     Identifies frames that require manual review based on object tracking status.
 
@@ -149,13 +158,13 @@ def review_tracking(
     print("\nLaunching Tkinter Video Player...")
     view = TrackerReviewGUI(title=title, landmarks=annotated_frame_ids, windowState='maximized')
     controller = TrackerReviewOrchestrator(model=video_manager, view=view, tracking_history=tracked_objs)
-    final_status, marked_frames = controller.run()
+    final_status, frames_for_labeling, frames_for_deleting = controller.run()
 
     print("\n--- Results from player session ---")
     print(f"Final Status: {final_status}")
-    print(f"Frames marked for labeling: {marked_frames}")
+    print(f"Frames marked for labeling: {frames_for_labeling}")
     
-    return final_status, marked_frames
+    return final_status, frames_for_labeling, frames_for_deleting
 
 
 def review_tracked_objects_in_video(
@@ -178,7 +187,7 @@ def review_tracked_objects_in_video(
 
     video_manager = VideoReviewManager(video_path, tracking_history=tracked_data)
     
-    final_status, marked_frames = review_tracking(video_manager, annotation_manager, tracked_data, title=os.path.basename(video_path))
+    final_status, frames_for_labeling, frames_for_deleting = review_tracking(video_manager, annotation_manager, tracked_data, title=os.path.basename(video_path))
     
     if final_status == TrackerReviewStatus.UNDEFINED or final_status == TrackerReviewStatus.UNPERFECT:
         print("Review session ended without validation or marking new frames.")
@@ -188,8 +197,9 @@ def review_tracked_objects_in_video(
         annotation_manager.update_all_status(ROIProcessingStatus.COMPLETED)
 
     elif final_status == TrackerReviewStatus.PROCEED:
-        print(f"⚠️ User marked {len(marked_frames)} frames for re-annotation. Launching interactive tool.")
-        annotate_rois_interactively(video_manager, annotation_manager, marked_frames)
+        print(f"⚠️ User marked {len(frames_for_labeling)} frames for re-annotation. Launching interactive tool.")
+        remove_frames_from_metadata(annotation_manager, frames_for_deleting)
+        annotate_rois_interactively(video_manager, annotation_manager, frames_for_labeling)
         annotation_manager.update_all_status(ROIProcessingStatus.TO_BE_PROCESSED)
         print("\nRe-annotation complete. The process may need to be run again to verify the new tracking.")
     

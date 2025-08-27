@@ -1,13 +1,17 @@
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, Toplevel
 from PIL import Image, ImageTk
 import cv2
+from enum import Enum
 
 # Import TYPE_CHECKING to create a conditional block
-from typing import TYPE_CHECKING, List, Tuple
+from typing import TYPE_CHECKING, List, Dict
+
 # This block is only 'True' for type checkers, not at runtime
 if TYPE_CHECKING:
     from ..core.review_tracking_orchestrator import TrackerReviewOrchestrator
+
+from ..models.roi_review_shared_types import FrameAction, FrameMark
 
 
 class TrackerReviewGUI:
@@ -56,10 +60,14 @@ class TrackerReviewGUI:
         self.current_frame_label = None
         self.valid_button = None
         self.proceed_button = None
-        self.rerun_button = None # --- NEW: Added reroll button attribute
-        self.marked_listbox = None
+        self.rerun_button = None 
+        self.label_listbox = None
+        self.deleting_listbox = None
         self.speed_slider = None
         self.speed_label = None
+        # --- MODIFICATION: Added attributes for the mark buttons ---
+        self.mark_label_button = None
+        self.mark_delete_button = None
 
         # --- Tkinter variables ---
         self.scale_var = None
@@ -67,6 +75,8 @@ class TrackerReviewGUI:
         self.speed_var = None
         # --- Dictionary to hold BooleanVar for each object checkbox ---
         self.object_vars = {}
+        # --- NEW: Attribute to track the active listbox ---
+        self.active_listbox = None
 
     def setup_ui(self):
         """Creates and arranges all the Tkinter widgets."""
@@ -98,7 +108,6 @@ class TrackerReviewGUI:
         style.configure("Delete.TButton", foreground="red")
         style.configure("Finish.TButton", foreground="blue")
         style.configure("Valid.TButton", foreground="green")
-        # --- NEW: Added style for the new button for consistency ---
         style.configure("Rerun.TButton", foreground="#8e44ad")
 
 
@@ -194,7 +203,16 @@ class TrackerReviewGUI:
                                      command=self._update_valid_button_state)
                 cb.pack(side=tk.TOP, anchor="w", padx=3, pady=2)
         
-        ttk.Button(action_controls_frame, text="✏️ Mark for Labeling", command=self._on_mark_button_click, style="Mark.TButton").pack(side=tk.LEFT, padx=5)
+        # --- Create a frame to hold the marking buttons vertically ---
+        mark_buttons_frame = ttk.Frame(action_controls_frame)
+        mark_buttons_frame.pack(side=tk.LEFT, padx=5)
+
+        # --- MODIFICATION: Store buttons as instance attributes ---
+        self.mark_label_button = ttk.Button(mark_buttons_frame, text="✏️ Mark for Labeling", command=self._on_mark_labeling_button_click, style="Mark.TButton")
+        self.mark_label_button.pack(side=tk.TOP, fill=tk.X)
+        
+        self.mark_delete_button = ttk.Button(mark_buttons_frame, text="🗑️ Mark for Deletion", command=self._on_mark_deleting_button_click, style="Delete.TButton")
+        self.mark_delete_button.pack(side=tk.TOP, fill=tk.X, pady=(5,0))
 
         # --- Finish Controls ---
         finish_controls_frame = ttk.LabelFrame(controls_container, text="Finish")
@@ -206,7 +224,6 @@ class TrackerReviewGUI:
         self.valid_button = ttk.Button(finish_controls_frame, text="✅ Finish as Valid", command=self.controller.finish_as_valid, style="Valid.TButton")
         self.valid_button.pack(side=tk.LEFT, padx=5, pady=5)
         
-        # --- NEW: Create and place the new 'Rerun' button ---
         self.rerun_button = ttk.Button(
             finish_controls_frame, 
             text="🔄 Rerun Auto-Processing", 
@@ -217,20 +234,39 @@ class TrackerReviewGUI:
 
         # --- Marked Frames List Pane ---
         list_pane.rowconfigure(1, weight=1)
+        list_pane.rowconfigure(4, weight=1)
         list_pane.columnconfigure(0, weight=1)
         
-        ttk.Label(list_pane, text="Marked Frames", font=("", 10, "bold")).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0,5))
+        ttk.Label(list_pane, text="Frames Marked for Labeling", font=("", 10, "bold")).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0,5))
         
-        self.marked_listbox = tk.Listbox(list_pane, height=10)
-        self.marked_listbox.grid(row=1, column=0, columnspan=2, sticky="nsew")
-        self.marked_listbox.bind('<<ListboxSelect>>', self._on_listbox_select)
+        self.label_listbox = tk.Listbox(list_pane, height=10)
+        self.label_listbox.grid(row=1, column=0, columnspan=2, sticky="nsew")
+        self.label_listbox.bind('<<ListboxSelect>>', self._on_label_listbox_select)
+        # --- NEW: Bind FocusIn to track the active listbox ---
+        self.label_listbox.bind('<FocusIn>', self._set_active_listbox)
         
-        list_scrollbar = ttk.Scrollbar(list_pane, orient="vertical", command=self.marked_listbox.yview)
+        list_scrollbar = ttk.Scrollbar(list_pane, orient="vertical", command=self.label_listbox.yview)
         list_scrollbar.grid(row=1, column=2, sticky="ns")
-        self.marked_listbox['yscrollcommand'] = list_scrollbar.set
+        self.label_listbox['yscrollcommand'] = list_scrollbar.set
         
-        delete_button = ttk.Button(list_pane, text="Delete Selected", command=self._delete_from_listbox, style="Delete.TButton")
+        delete_button = ttk.Button(list_pane, text="Delete Selected", command=self._delete_from_label_listbox, style="Delete.TButton")
         delete_button.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(5,0))
+
+        # --- Add the list for frames marked for deletion ---
+        ttk.Label(list_pane, text="Frames Marked for Deletion", font=("", 10, "bold")).grid(row=3, column=0, columnspan=2, sticky="w", pady=(10,5))
+        
+        self.deleting_listbox = tk.Listbox(list_pane, height=10)
+        self.deleting_listbox.grid(row=4, column=0, columnspan=2, sticky="nsew")
+        self.deleting_listbox.bind('<<ListboxSelect>>', self._on_deleting_listbox_select)
+        # --- NEW: Bind FocusIn to track the active listbox ---
+        self.deleting_listbox.bind('<FocusIn>', self._set_active_listbox)
+        
+        deleting_list_scrollbar = ttk.Scrollbar(list_pane, orient="vertical", command=self.deleting_listbox.yview)
+        deleting_list_scrollbar.grid(row=4, column=2, sticky="ns")
+        self.deleting_listbox['yscrollcommand'] = deleting_list_scrollbar.set
+        
+        delete_deleting_button = ttk.Button(list_pane, text="Delete Selected", command=self._delete_from_deleting_listbox, style="Delete.TButton")
+        delete_deleting_button.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(5,0))
 
         # --- Bind Keys to Controller ---
         self._bind_keys()
@@ -246,8 +282,10 @@ class TrackerReviewGUI:
         self.root.bind('<Control-Left>', lambda e: self.controller.seek_to_frame(self.scale_var.get() - 10))
         self.root.bind('<Control-Right>', lambda e: self.controller.seek_to_frame(self.scale_var.get() + 10))
         self.root.bind('<space>', lambda e: self.controller.toggle_play_pause())
-        self.root.bind('<Delete>', lambda e: self._delete_from_listbox())
-        self.root.bind('m', lambda e: self._on_mark_button_click())
+        # --- MODIFIED: Bind Delete key to the new generic handler ---
+        self.root.bind('<Delete>', lambda e: self._delete_from_active_listbox())
+        self.root.bind('m', lambda e: self._on_mark_labeling_button_click())
+        self.root.bind('d', lambda e: self._on_mark_deleting_button_click())
 
     def _update_valid_button_state(self):
         """
@@ -259,7 +297,7 @@ class TrackerReviewGUI:
         if not hasattr(self, 'valid_button') or not self.valid_button:
             return
 
-        is_list_empty = self.marked_listbox.size() == 0
+        is_list_empty = self.label_listbox.size() == 0 and self.deleting_listbox.size() == 0
 
         all_boxes_checked = True
         if hasattr(self, 'object_vars') and self.object_vars:
@@ -270,9 +308,30 @@ class TrackerReviewGUI:
         else:
             self.valid_button.config(state=tk.DISABLED)
     
+    def _update_mark_buttons_state(self):
+        """
+        Disables the 'Mark' buttons if the current frame is already in one of
+        the marked lists.
+        """
+        if not self.mark_label_button or not self.mark_delete_button:
+            return
+
+        current_frame = self.scale_var.get()
+        
+        if self.controller.is_marked(current_frame) or not (current_frame in self.landmarks):
+            self.mark_delete_button.config(state=tk.DISABLED)
+        else:
+            self.mark_delete_button.config(state=tk.NORMAL)
+
+        if self.controller.is_marked(current_frame):
+            self.mark_label_button.config(state=tk.DISABLED)
+        else:
+            self.mark_label_button.config(state=tk.NORMAL)
+        
+
+
     # --- PRIVATE EVENT HANDLERS (Forwarding to Controller) ---
     
-    # --- NEW: Handler for the 'Rerun' button click ---
     def _on_rerun_button_click(self):
         """
         Handles the click event for the 'Rerun Auto-Processing' button.
@@ -281,39 +340,118 @@ class TrackerReviewGUI:
         """
         self.controller.finish_and_proceed()
         
-    def _on_mark_button_click(self):
+    def _on_mark_labeling_button_click(self):
         """
         Gathers selected objects from checkboxes and tells the controller to mark
-        the current frame. Resets checkboxes to their default (checked) state.
+        the current frame for labeling. Resets checkboxes to their default state.
         """
+        # --- MODIFICATION: Added a check to prevent action if disabled ---
+        if self.mark_label_button['state'] == tk.DISABLED:
+            self.pop_up_window(message="This frame is already marked.")
+            return
+
         selected_objects = [name for name, var in self.object_vars.items() if var.get()]
-        self.controller.mark_current_frame(objects_to_mark=selected_objects)
+        self.controller.mark_frame(FrameAction.LABEL, objects_to_mark=selected_objects)
 
         for var in self.object_vars.values():
             var.set(True)
 
-    def _on_listbox_select(self, event):
+    def _on_mark_deleting_button_click(self):
+        """
+        Tells the controller to mark the current frame for deletion.
+        """
+        # --- MODIFICATION: Added a check to prevent action if disabled ---
+        if self.mark_delete_button['state'] == tk.DISABLED:
+            self.pop_up_window(message="This frame is already marked.")
+            return
+            
+        selected_objects = [name for name, var in self.object_vars.items() if var.get()]
+        self.controller.mark_frame(FrameAction.DELETE, objects_to_mark=selected_objects)
+            
+        for var in self.object_vars.values():
+            var.set(True)
+
+    def _on_label_listbox_select(self, event):
         """When a listbox item is selected, tell the controller to seek."""
-        selection_indices = self.marked_listbox.curselection()
+        selection_indices = self.label_listbox.curselection()
         if not selection_indices: return
         
         selected_index = selection_indices[0]
         
         try:
-            listbox_text = self.marked_listbox.get(selected_index)
+            listbox_text = self.label_listbox.get(selected_index)
             frame_part = listbox_text.split(':')[0]
             frame_num = int(frame_part.split()[-1])
             self.controller.seek_to_frame(frame_num)
         except (ValueError, IndexError):
-            print(f"Error parsing listbox entry: {self.marked_listbox.get(selected_index)}")
+            print(f"Error parsing listbox entry: {self.label_listbox.get(selected_index)}")
             pass 
 
-    def _delete_from_listbox(self):
-        """Tells the controller to delete the selected item from the marked list."""
-        selection_indices = self.marked_listbox.curselection()
+    def _on_deleting_listbox_select(self, event):
+        """When a deleting listbox item is selected, tell the controller to seek."""
+        selection_indices = self.deleting_listbox.curselection()
         if not selection_indices: return
-        self.controller.delete_marked_frame(selection_indices[0])
+        
+        selected_index = selection_indices[0]
+        
+        try:
+            listbox_text = self.deleting_listbox.get(selected_index)
+            frame_part = listbox_text.split(':')[0]
+            frame_num = int(frame_part.split()[-1])
+            self.controller.seek_to_frame(frame_num)
+        except (ValueError, IndexError):
+            print(f"Error parsing deleting listbox entry: {self.deleting_listbox.get(selected_index)}")
+            pass
 
+    # --- NEW: Method to set the active listbox based on focus ---
+    def _set_active_listbox(self, event):
+        """Sets the currently focused listbox as the active one."""
+        self.active_listbox = event.widget
+    
+    # --- NEW: Generic delete method that acts on the focused listbox ---
+    def _delete_from_active_listbox(self):
+        """Deletes the selected item from whichever listbox currently has focus."""
+        if not self.active_listbox:
+            # If no listbox has been focused yet, do nothing.
+            return
+
+        if self.active_listbox == self.label_listbox:
+            self._delete_from_label_listbox()
+        elif self.active_listbox == self.deleting_listbox:
+            self._delete_from_deleting_listbox()
+
+    def _delete_from_label_listbox(self):
+        """Tells the controller to delete the selected item from the marked list."""
+        selection_indices = self.label_listbox.curselection()
+        if not selection_indices: return
+        
+        # This assumes the controller can map the index back to the correct item.
+        # See architectural critique for potential improvements.
+        selected_index = selection_indices[0]
+        try:
+            listbox_text = self.label_listbox.get(selected_index)
+            frame_part = listbox_text.split(':')[0]
+            frame_num = int(frame_part.split()[-1])
+            self.controller.remove_mark(frame_num)
+        except (ValueError, IndexError):
+            print(f"Error parsing listbox entry for deletion: {self.label_listbox.get(selected_index)}")
+
+    def _delete_from_deleting_listbox(self):
+        """Tells the controller to delete the selected item from the deleting list."""
+        selection_indices = self.deleting_listbox.curselection()
+        if not selection_indices: return
+        
+        # This assumes the controller can map the index back to the correct item.
+        # See architectural critique for potential improvements.
+        selected_index = selection_indices[0]
+        try:
+            listbox_text = self.deleting_listbox.get(selected_index)
+            frame_part = listbox_text.split(':')[0]
+            frame_num = int(frame_part.split()[-1])
+            self.controller.remove_mark(frame_num)
+        except (ValueError, IndexError):
+            print(f"Error parsing listbox entry for deletion: {self.deleting_listbox.get(selected_index)}")
+        
     def _on_canvas_resize(self, event):
         """Handles resizing of the timeline canvas, updating scale and landmarks."""
         canvas_width = event.width
@@ -340,6 +478,51 @@ class TrackerReviewGUI:
                 x_pos, 0, x_pos + thickness, height,
                 fill=color, outline=color, tags="landmark"
             )
+    
+    def pop_up_window(self, *, message: str, title: str = "Info"):
+        """
+        Generates a small modal pop-up box with a message.
+
+        Args:
+            message (str): The message to display in the pop-up.
+            title (str, optional): The title for the pop-up window. Defaults to "Info".
+        """
+        popup = Toplevel(self.root)
+        popup.title(title)
+        popup.transient(self.root)  # Keep popup on top of the main window
+        popup.grab_set()        # Make the popup modal
+        popup.resizable(False, False)
+
+        # Calculate position to center on parent window
+        self.root.update_idletasks()
+        parent_x = self.root.winfo_x()
+        parent_y = self.root.winfo_y()
+        parent_width = self.root.winfo_width()
+        parent_height = self.root.winfo_height()
+        
+        popup_width = 320
+        popup_height = 120
+        
+        center_x = parent_x + (parent_width - popup_width) // 2
+        center_y = parent_y + (parent_height - popup_height) // 2
+        
+        popup.geometry(f'{popup_width}x{popup_height}+{center_x}+{center_y}')
+        
+        # Create and pack widgets
+        popup_frame = ttk.Frame(popup, padding="15")
+        popup_frame.pack(expand=True, fill=tk.BOTH)
+        popup_frame.rowconfigure(0, weight=1)
+        popup_frame.columnconfigure(0, weight=1)
+
+        label = ttk.Label(popup_frame, text=message, wraplength=popup_width - 30, justify=tk.CENTER)
+        label.grid(row=0, column=0, sticky="nsew")
+
+        ok_button = ttk.Button(popup_frame, text="OK", command=popup.destroy)
+        ok_button.grid(row=1, column=0, pady=(10, 0))
+        ok_button.focus_set()
+
+        # Wait for the user to close the popup before continuing
+        self.root.wait_window(popup)
 
     # --- UI UPDATE METHODS (Called by the Controller) ---
 
@@ -366,6 +549,8 @@ class TrackerReviewGUI:
         """Updates the slider and entry box with the current frame number."""
         self.scale_var.set(frame_num)
         self.entry_var.set(str(frame_num))
+        # --- MODIFICATION: Update button state when timeline changes ---
+        self._update_mark_buttons_state()
 
     def update_frame_label(self, current_num, total_frames):
         """Updates the 'Frame X / Y' text label."""
@@ -379,32 +564,64 @@ class TrackerReviewGUI:
         """Updates the speed label text."""
         self.speed_label.config(text=f"Speed: {speed:.1f}x")
 
-    def update_marked_list(self, marked_list: dict[int, List[str]]):
+    def update_marked_list(self, marked_frames: Dict[int, FrameMark]):
+            """
+            Splits the main marked_frames dictionary into separate collections for
+            labeling and deletion, then calls the specific UI update methods for each
+            listbox.
+            
+            Args:
+                marked_frames (Dict[int, FrameMark]): A dictionary mapping frame numbers
+                    to FrameMark objects, containing the action and associated data.
+            """
+            # 1. Initialize empty collections to hold the separated data.
+            label_list_data = {}
+            deleting_list_data = {}
+
+            # 2. Iterate through the consolidated dictionary from the controller.
+            for frame_num, frame_mark in marked_frames.items():
+                # 3. Check the action type and populate the appropriate collection.
+                if frame_mark.action == FrameAction.LABEL:
+                    label_list_data[frame_num] = frame_mark.object_ids
+                elif frame_mark.action == FrameAction.DELETE:
+                    deleting_list_data[frame_num] = frame_mark.object_ids
+
+            # 4. Call the dedicated update methods with the newly created collections.
+            self.update_label_list(label_list_data)
+            self.update_deleting_list(deleting_list_data)
+            
+            # 5. Update the state of the finish buttons based on the new list state.
+            self.update_finish_buttons(marked_frames)
+    
+    def update_label_list(self, label_list: dict[int, List[str]]):
         """
         Refreshes the listbox with the current list of marked frames and their associated objects.
         """
-        # Deletes all items from the listbox to prepare for the update.
-        self.marked_listbox.delete(0, tk.END)
-
-        # Iterates over each key-value pair (frame number and its list of objects) in the dictionary.
-        for frame_num, objects in marked_list.items():
+        self.label_listbox.delete(0, tk.END)
+        for frame_num, objects in label_list.items():
             object_str = ", ".join(objects)
-            self.marked_listbox.insert(tk.END, f"Frame {frame_num}: {object_str}")
-            
-    # --- MODIFIED: This method now also controls the state of the new rerun button ---
-    def update_finish_buttons(self, marked_list):
+            self.label_listbox.insert(tk.END, f"Frame {frame_num}: {object_str}")
+        self._update_mark_buttons_state()
+
+    def update_deleting_list(self, deleting_list: dict[int, List[str]]):
+        """
+        Refreshes the listbox with the current list of frames marked for deletion.
+        """
+        self.deleting_listbox.delete(0, tk.END)
+        for frame_num, objects in deleting_list.items():
+            object_str = ", ".join(objects)
+            self.deleting_listbox.insert(tk.END, f"Frame {frame_num}: {object_str}")
+        self._update_mark_buttons_state()
+
+    def update_finish_buttons(self, label_list):
         """Enables/disables finish buttons based on the state of the marked list."""
-        is_list_empty = not marked_list
+        is_list_empty = not label_list
         
-        # The 'Proceed' button is enabled only if the list is NOT empty.
         self.proceed_button.config(state=tk.DISABLED if is_list_empty else tk.NORMAL)
         
-        # --- NEW: The 'Rerun' button is enabled only if the list IS empty. ---
-        if self.rerun_button: # Check if button exists before configuring
-             self.rerun_button.config(state=tk.NORMAL if is_list_empty else tk.DISABLED)
+        if self.rerun_button:
+            self.rerun_button.config(state=tk.NORMAL if is_list_empty else tk.DISABLED)
     
-        # For the 'Valid' button, delegate to its dedicated state update method,
-        # which checks both the list and the checkboxes.
         self._update_valid_button_state()
 
     # --- MAINLOOP CONTROL ---

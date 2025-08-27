@@ -1,12 +1,15 @@
-import time
 import cv2
-import pandas as pd
 from enum import Enum
+from dataclasses import dataclass
 from typing import Dict, List, Any
 
-from ..gui.review_tracking_gui import TrackerReviewGUI
+from ..gui.review_tracking_gui import (
+    TrackerReviewGUI,
+    FrameAction
+)
 from ..models.video_review_manager import VideoReviewManager
-
+from ..models.roi_tracked_data import ROITrackedObjects
+from ..models.roi_review_shared_types import FrameAction, FrameMark
 
 class TrackerReviewStatus(Enum):
     """Defines status constants for tracking and annotation."""
@@ -15,8 +18,7 @@ class TrackerReviewStatus(Enum):
     UNPERFECT = "unperfect"
     UNDEFINED = "undefined"
 
-ROITrackedObject = pd.DataFrame
-ROITrackedObjects = Dict[str, ROITrackedObject]
+# -----------------------------------------------------------
 
 class TrackerReviewOrchestrator:
     """
@@ -31,10 +33,10 @@ class TrackerReviewOrchestrator:
             model (VideoReviewManager): The data model for video access.
             view (TrackerReviewGUI): The UI view.
             tracking_history (ROITrackedObjects, optional): A dictionary where keys are object IDs (str)
-                                                             and values are pandas DataFrames containing
-                                                             the tracking history for that object.
-                                                             The DataFrame index should be the frame number.
-                                                             Defaults to None.
+                                                                 and values are pandas DataFrames containing
+                                                                 the tracking history for that object.
+                                                                 The DataFrame index should be the frame number.
+                                                                 Defaults to None.
         """
         self.model = model
         self.view = view
@@ -49,26 +51,38 @@ class TrackerReviewOrchestrator:
         self.playback_speed = 1.0
         self.base_delay_ms = 30
         
-        self.marked_for_labeling: Dict[int, List[str]] = {}
+        # --- REFACTORED: Use a single dictionary for all marked frames ---
+        self.marked_frames: Dict[int, FrameMark] = {}
         
         self.status = TrackerReviewStatus.UNDEFINED
         self._update_job = None
 
-    def run(self) -> tuple[str, Dict[int, List[str]]]:
+    def run(self) -> tuple[str, Dict[int, List[str]], Dict[int, List[str]]]:
         """
         Starts the application's main loop.
 
         Returns:
-            A tuple containing the final status (str) and a dictionary of
-            marked frames, where each key is a frame number and the value is a
-            list of associated string reasons.
+            A tuple containing the final status (str) and two dictionaries:
+            one for marked frames for labeling and one for marked frames for deletion.
+            NOTE: The internal architecture is refactored, but this public method's
+                  return signature is preserved for backward compatibility.
         """
         self.view.setup_ui()
         self.update_view_full()
         self.view.start_mainloop()
         
-        # MODIFIED: Return the dictionary, sorted by frame number for consistency.
-        return self.status, dict(sorted(self.marked_for_labeling.items()))
+        # --- REFACTORED: Deconstruct the unified dictionary for the caller ---
+        frames_for_labeling = {}
+        frames_for_deleting = {}
+        for frame_num, mark in self.marked_frames.items():
+            if mark.action == FrameAction.LABEL:
+                frames_for_labeling[frame_num] = mark.object_ids
+            elif mark.action == FrameAction.DELETE:
+                frames_for_deleting[frame_num] = mark.object_ids
+        
+        return (self.status, 
+                dict(sorted(frames_for_labeling.items())), 
+                dict(sorted(frames_for_deleting.items())))
 
     def toggle_play_pause(self):
         """Toggles the playback state."""
@@ -96,32 +110,67 @@ class TrackerReviewOrchestrator:
         self.playback_speed = float(speed)
         self.view.update_speed_label(self.playback_speed)
 
-    def mark_current_frame(self, objects_to_mark: List[str]):
+    def mark_frame(self, action: FrameAction, objects_to_mark: List[str]):
         """
-        Adds or updates the current frame in the marked list with associated objects_to_mark.
+        Marks the current frame for a specific action.
+
+        A frame can only have one action marked at a time. This method will
+        show a pop-up if the frame is already marked with a different action.
 
         Args:
-            objects_to_mark (List[str]): A list of objects_to_mark.
+            action (FrameAction): The action to mark the frame with (e.g., LABEL, DELETE).
+            objects_to_mark (List[str]): A list of object IDs to associate with the mark.
         """
-        self.marked_for_labeling[self.current_frame_num] = objects_to_mark
+        frame_num = self.current_frame_num
+
+        if frame_num in self.marked_frames:
+            existing_mark = self.marked_frames[frame_num]
+            # Allow re-marking with the same action (e.g., to update object_ids),
+            # but prevent marking with a different action.
+            if existing_mark.action != action:
+                self.view.pop_up_window(
+                    message=f"Frame {frame_num} is already marked for '{existing_mark.action.value}'.\n"
+                            "Please remove that mark first before adding a new one."
+                )
+                return
+
+        self.marked_frames[frame_num] = FrameMark(action=action, object_ids=objects_to_mark)
         self.status = TrackerReviewStatus.UNPERFECT
         
-        # Pass the sorted list of frame numbers (keys) to the view.
-        # This keeps the view's interface simple.
-        self.view.update_marked_list(self.marked_for_labeling)
-        self.view.update_finish_buttons(self.marked_for_labeling)
+        # --- Note: The View needs a corresponding unified update method ---
+        self.view.update_marked_list(self.marked_frames)
 
-    # MODIFIED: The logic now works with the dictionary's keys.
-    def delete_marked_frame(self, index_in_list: int):
-        """Deletes a frame from the marked list by its displayed listbox index."""
-        sorted_keys = sorted(self.marked_for_labeling.keys())
-        if 0 <= index_in_list < len(sorted_keys):
-            frame_to_delete = sorted_keys[index_in_list]
-            del self.marked_for_labeling[frame_to_delete]
+        self.view.update_finish_buttons(bool(self.marked_frames))
+
+    def remove_mark(self, frame_id_to_delete: int):
+        """
+        Removes a marked frame from the list by its UI index.
+
+        Args:
+            index_in_list (int): The index of the item in the displayed listbox,
+                                 which is assumed to be sorted by frame number.
+        """
+        # The list displayed in the UI should be built from the sorted keys
+        # of the marked_frames dictionary.
+        sorted_keys = sorted(self.marked_frames.keys())
+        if frame_id_to_delete in sorted_keys:
+            del self.marked_frames[frame_id_to_delete]
         
-        # Update the view with the new sorted list of marked frame numbers.
-        self.view.update_marked_list(self.marked_for_labeling)
-        self.view.update_finish_buttons(self.marked_for_labeling)
+        # --- Note: The View needs a corresponding unified update method ---
+        self.view.update_marked_list(self.marked_frames)
+        self.view.update_finish_buttons(bool(self.marked_frames))
+        
+    def is_marked(self, frame_id: int) -> bool:
+        """
+        Checks if a specific frame ID is in the list of marked frames.
+
+        Args:
+            frame_id (int): The frame number to check.
+
+        Returns:
+            bool: True if the frame is marked, False otherwise.
+        """
+        return frame_id in self.marked_frames
 
     def finish_as_valid(self):
         """Sets the final status to 'completed' and quits."""
