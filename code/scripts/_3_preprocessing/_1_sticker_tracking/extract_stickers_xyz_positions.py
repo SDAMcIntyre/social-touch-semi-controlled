@@ -10,6 +10,7 @@ from PIL import Image
 import glob
 import cv2
 import importlib
+from utils.package_utils import load_pyk4a
 
 from preprocessing.stickers_analysis.roi import (
     XYZMetadataModel,
@@ -18,15 +19,6 @@ from preprocessing.stickers_analysis.roi import (
     XYZDataFileHandler,
     XYZStickerOrchestrator
 )
-
-def load_pyk4a():
-    """Dynamically import pyk4a only when needed."""
-    try:
-        pyk4a = importlib.import_module('pyk4a')
-        PyK4APlayback = pyk4a.PyK4APlayback
-        return PyK4APlayback
-    except ImportError:
-        return None
 
 def extract_stickers_xyz_positions(
         source: Union[str, Path],

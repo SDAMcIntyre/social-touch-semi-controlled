@@ -1,16 +1,8 @@
 from typing import Any, Optional
 import importlib
+from utils.package_utils import load_pyk4a
 
 from .xyz_metadata_model import XYZMetadataModel, XYZMetadataConfig
-
-def load_pyk4a():
-    """Dynamically import pyk4a only when needed."""
-    try:
-        pyk4a = importlib.import_module('pyk4a')
-        PyK4APlayback = pyk4a.PyK4APlayback
-        return PyK4APlayback
-    except ImportError:
-        return None
 
 class XYZMetadataManager:
     """Orchestrates the creation and saving of processing metadata."""
