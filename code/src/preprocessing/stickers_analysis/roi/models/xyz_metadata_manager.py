@@ -1,14 +1,23 @@
 from typing import Any, Optional
-from pyk4a import PyK4APlayback
+import importlib
 
 from .xyz_metadata_model import XYZMetadataModel, XYZMetadataConfig
+
+def load_pyk4a():
+    """Dynamically import pyk4a only when needed."""
+    try:
+        pyk4a = importlib.import_module('pyk4a')
+        PyK4APlayback = pyk4a.PyK4APlayback
+        return PyK4APlayback
+    except ImportError:
+        return None
 
 class XYZMetadataManager:
     """Orchestrates the creation and saving of processing metadata."""
 
     def __init__(self, config: XYZMetadataConfig):
         """
-        Initializes the manager with a configuration and a repository.
+        Initializes the manager with a configuration.
 
         Args:
             config (XYZMetadataConfig): The configuration object containing paths and parameters.
@@ -16,16 +25,23 @@ class XYZMetadataManager:
                                                      Defaults to MetadataRepository.
         """
         self.metadata = XYZMetadataModel(
-            source_video_path=config.source_video_path,
+            source_path=config.source_path,  # Updated from source_video_path
             input_csv_path=config.input_csv_path,
             output_csv_path=config.output_csv_path,
             video_path=config.video_path,
             metadata_path=config.metadata_path,
-            monitor=config.monitor
+            monitor=config.monitor,
+            input_type=config.input_type  # Add input_type
         )
 
-    def add_mkv_metadata(self, playback: PyK4APlayback) -> int:
+    def add_mkv_metadata(self, playback: Any) -> int:
         """Delegates MKV metadata extraction to the model."""
+        if self.metadata.input_type == 'mkv':
+            PyK4APlayback = load_pyk4a()
+            if PyK4APlayback is None:
+                raise ImportError("pyk4a is required for MKV processing")
+            if not isinstance(playback, PyK4APlayback):
+                raise TypeError("Invalid playback object type")
         return self.metadata.populate_from_mkv(playback)
 
     def update_processing_details(self, key: str, value: Any):
