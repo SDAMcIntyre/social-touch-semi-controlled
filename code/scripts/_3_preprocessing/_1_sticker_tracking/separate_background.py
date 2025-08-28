@@ -192,46 +192,23 @@ def draw_centers(img_bgr: np.ndarray, centers: Dict[str, Tuple[float, float]]) -
 
 def visualize_orientation_check(frames_dir: str | Path, csv_path: str | Path, frame_index: int = 0) -> None:
     """
-    Show the selected frame with ROI centers overlaid on both the raw TIFF orientation
-    and its transposed version to decide whether a transpose is needed.
+    Show the selected frame with ROI centers overlaid on the TRANSPOSED TIFF
+    (i.e., width/height swapped) so that indexing matches (py, px) coordinates.
     """
     playback = TIFFPlayback(frames_dir)
     # Pick capture by index; assumes sorted order aligns with frame_id
     capture = playback.get_capture(frame_index if frame_index < len(playback) else 0)
     centers = load_roi_centers_for_frame(csv_path, frame_index)
 
-    raw_disp = point_cloud_to_display(capture.image)
-    raw_overlay = draw_centers(raw_disp, centers)
-
     transposed = np.transpose(capture.image, (1, 0, 2)) if capture.image.ndim == 3 else capture.image.T
     trans_disp = point_cloud_to_display(transposed)
     trans_overlay = draw_centers(trans_disp, centers)
 
-    # Add labels
-    cv2.putText(raw_overlay, f"Raw {raw_overlay.shape[1]}x{raw_overlay.shape[0]}", (10, 30),
-                cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2, cv2.LINE_AA)
+    # Add label for transposed view only
     cv2.putText(trans_overlay, f"Transposed {trans_overlay.shape[1]}x{trans_overlay.shape[0]}", (10, 30),
                 cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2, cv2.LINE_AA)
 
-    # Fit both overlays into equal-sized canvases for a clean side-by-side view
-    def fit_into_canvas(img: np.ndarray, box_w: int, box_h: int) -> np.ndarray:
-        h, w = img.shape[:2]
-        scale = min(box_w / w, box_h / h)
-        new_w = max(1, int(round(w * scale)))
-        new_h = max(1, int(round(h * scale)))
-        resized = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR)
-        canvas = np.zeros((box_h, box_w, 3), dtype=img.dtype)
-        y0 = (box_h - new_h) // 2
-        x0 = (box_w - new_w) // 2
-        canvas[y0:y0+new_h, x0:x0+new_w] = resized
-        return canvas
-
-    box_w, box_h = 960, 540
-    left = fit_into_canvas(raw_overlay, box_w, box_h)
-    right = fit_into_canvas(trans_overlay, box_w, box_h)
-    mosaic = np.hstack([left, right])
-
-    # Auto-resize mosaic to fit on screen (keep ~95% of screen size)
+    # Auto-resize image to fit on screen (keep ~95% of screen size)
     def get_screen_size() -> Tuple[Optional[int], Optional[int]]:
         try:
             import tkinter as tk  # standard library
@@ -244,18 +221,19 @@ def visualize_orientation_check(frames_dir: str | Path, csv_path: str | Path, fr
             return None, None
 
     scr_w, scr_h = get_screen_size()
+    display_img = trans_overlay
     if scr_w and scr_h:
         max_w = int(scr_w * 0.95)
         max_h = int(scr_h * 0.95)
-        if mosaic.shape[1] > max_w or mosaic.shape[0] > max_h:
-            scale = min(max_w / mosaic.shape[1], max_h / mosaic.shape[0])
-            new_w = max(1, int(round(mosaic.shape[1] * scale)))
-            new_h = max(1, int(round(mosaic.shape[0] * scale)))
-            mosaic = cv2.resize(mosaic, (new_w, new_h), interpolation=cv2.INTER_AREA)
+        if display_img.shape[1] > max_w or display_img.shape[0] > max_h:
+            scale = min(max_w / display_img.shape[1], max_h / display_img.shape[0])
+            new_w = max(1, int(round(display_img.shape[1] * scale)))
+            new_h = max(1, int(round(display_img.shape[0] * scale)))
+            display_img = cv2.resize(display_img, (new_w, new_h), interpolation=cv2.INTER_AREA)
 
     window = "TIFF Orientation Check"
     cv2.namedWindow(window, cv2.WINDOW_NORMAL)
-    cv2.imshow(window, mosaic)
+    cv2.imshow(window, display_img)
     print("Press any key (window focused) to close...")
     cv2.waitKey(0)
     cv2.destroyWindow(window)
