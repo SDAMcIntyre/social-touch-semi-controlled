@@ -19,7 +19,7 @@ tiff_folder = Path("~/Library/CloudStorage/OneDrive-Linköpingsuniversitet/TEAM
 stickers_roi_csv_path = Path("~/Library/CloudStorage/OneDrive-Linköpingsuniversitet/TEAMS/Documents - Social touch Kinect MNG/data/semi-controlled/2_processed/kinect/2022-06-15_ST14-01/block-order-01/handstickers/2022-06-15_ST14-01_semicontrolled_block-order01_kinect_handstickers_roi_tracking.csv")
 result_csv_path = Path("~/Library/CloudStorage/OneDrive-Linköpingsuniversitet/TEAMS/Documents - Social touch Kinect MNG/data/semi-controlled/2_processed/kinect/2022-06-15_ST14-01/block-order-01/handstickers/2022-06-15_ST14-01_semicontrolled_block-order01_kinect_xyz_tracked_new.csv")
 result_md_path = Path("~/Library/CloudStorage/OneDrive-Linköpingsuniversitet/TEAMS/Documents - Social touch Kinect MNG/data/semi-controlled/2_processed/kinect/2022-06-15_ST14-01/block-order-01/handstickers/2022-06-15_ST14-01_semicontrolled_block-order01_kinect_xyz_tracked_metadata_new.json")
-result_video_path = Path("~/Library/CloudStorage/OneDrive-Linköpingsuniversitet/TEAMS/Documents - Social touch Kinect MNG/data/semi-controlled/2_processed/kinect/2022-06-15_ST14-01/block-order-01/handstickers/2022-06-15_ST14-01_semicontrolled_block-order01_kinect_xyz_tracked.mp4")
+result_video_path = Path("~/Library/CloudStorage/OneDrive-Linköpingsuniversitet/TEAMS/Documents - Social touch Kinect MNG/data/semi-controlled/2_processed/kinect/2022-06-15_ST14-01/block-order-01/handstickers/2022-06-15_ST14-01_semicontrolled_block-order01_kinect_xyz_tracked_new.mp4")
 
 """
 # For MKV input
