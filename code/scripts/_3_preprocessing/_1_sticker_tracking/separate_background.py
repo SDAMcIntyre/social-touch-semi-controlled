@@ -11,6 +11,7 @@ stream frames like a playback.
 from __future__ import annotations
 
 import re
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -175,61 +176,133 @@ def point_cloud_to_display(img_pc: np.ndarray) -> np.ndarray:
     return color
 
 
+def transpose_point_cloud(img: np.ndarray) -> np.ndarray:
+    """
+    Transpose a point-cloud image by swapping width and height.
+
+    - For 3D arrays (H, W, C), returns (W, H, C).
+    - For 2D arrays  (H, W),   returns (W, H).
+
+    This is a pure array transpose: dtype/values are unchanged and
+    the result is typically a view (no copy) unless later operations
+    require a contiguous buffer.
+    """
+    if img.ndim == 3:
+        return np.transpose(img, (1, 0, 2))
+    if img.ndim == 2:
+        return img.T
+    raise ValueError("transpose_point_cloud expects a 2D or 3D numpy array")
+
+
+def _color_from_name(name: str) -> Tuple[int, int, int]:
+    n = name.lower()
+    mapping = {
+        'red': (0, 0, 255),
+        'green': (0, 255, 0),
+        'blue': (255, 0, 0),
+        'yellow': (0, 255, 255),
+        'cyan': (255, 255, 0),
+        'teal': (255, 255, 0),
+        'magenta': (255, 0, 255),
+        'purple': (255, 0, 255),
+        'pink': (255, 0, 255),
+        'orange': (0, 165, 255),
+        'white': (255, 255, 255),
+        'black': (0, 0, 0),
+        'grey': (128, 128, 128),
+        'gray': (128, 128, 128),
+        'brown': (19, 69, 139),
+    }
+    for key, bgr in mapping.items():
+        if key in n:
+            return bgr
+    return (0, 255, 255)
+
+
+def _draw_text_with_bg(img: np.ndarray, text: str, org: Tuple[int, int], color: Tuple[int, int, int], alpha: float = 0.6) -> None:
+    font, scale, thickness = cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1
+    (tw, th), base = cv2.getTextSize(text, font, scale, thickness)
+    x, y = org
+    pad = 4
+    x0, y0 = max(0, x - pad), max(0, y - th - pad)
+    x1, y1 = min(img.shape[1], x + tw + pad), min(img.shape[0], y + base + pad)
+    roi = img[y0:y1, x0:x1]
+    if roi.size:
+        overlay = roi.copy()
+        overlay[:] = (0, 0, 0)
+        cv2.addWeighted(overlay, alpha, roi, 1 - alpha, 0, dst=roi)
+    cv2.putText(img, text, (x, y), font, scale, color, thickness, cv2.LINE_AA)
+
+
 def draw_centers(img_bgr: np.ndarray, centers: Dict[str, Tuple[float, float]]) -> np.ndarray:
-    """Draw center points with labels on a copy of the image."""
+    """Draw center markers and color-matched labels with semi-opaque backgrounds.
+
+    Attempts to avoid overlapping labels by trying a set of offsets.
+    """
     out = img_bgr.copy()
     h, w = out.shape[:2]
-    for i, (name, (px, py)) in enumerate(centers.items()):
+    placed: List[Tuple[int, int, int, int]] = []
+    for name, (px, py) in centers.items():
         if np.isnan(px) or np.isnan(py):
             continue
         ix, iy = int(round(px)), int(round(py))
-        if 0 <= ix < w and 0 <= iy < h:
-            color = (0, 255, 255) if i % 3 == 0 else (0, 255, 0) if i % 3 == 1 else (255, 0, 0)
-            cv2.circle(out, (ix, iy), 6, color, 2, cv2.LINE_AA)
-            cv2.putText(out, name, (ix + 8, iy - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
+        if not (0 <= ix < w and 0 <= iy < h):
+            continue
+        color = _color_from_name(name)
+        cv2.circle(out, (ix, iy), 6, color, 2, cv2.LINE_AA)
+
+        # Place label with anti-overlap attempts
+        font, scale, thickness = cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1
+        (tw, th), base = cv2.getTextSize(name, font, scale, thickness)
+        candidates = [(8, -8), (8, 16), (-8, -8), (-8, 16), (8, 32), (-8, 32)]
+        chosen = None
+        for dx, dy in candidates:
+            x = min(max(0, ix + dx), max(0, w - tw - 1))
+            y = min(max(th + 1, iy + dy), max(th + 1, h - 1))
+            box = (x - 4, y - th - 4, x + tw + 4, y + base + 4)
+            if all(box[2] < bx0 or box[0] > bx1 or box[3] < by0 or box[1] > by1 for bx0, by0, bx1, by1 in placed):
+                chosen = (x, y, box)
+                break
+        if chosen is None:
+            x, y = ix + 8, iy - 8
+            box = (x - 4, y - th - 4, x + tw + 4, y + base + 4)
+        else:
+            x, y, box = chosen
+        placed.append(box)
+        _draw_text_with_bg(out, name, (x, y), color, alpha=0.6)
+
     return out
 
 
-def visualize_orientation_check(frames_dir: str | Path, csv_path: str | Path, frame_index: int = 0) -> None:
+def visualize_orientation_check(
+    frames_dir: str | Path,
+    csv_path: str | Path,
+    frame_index: int = 0,
+    transpose: bool = True,
+) -> None:
     """
-    Show the selected frame with ROI centers overlaid on the TRANSPOSED TIFF
-    (i.e., width/height swapped) so that indexing matches (py, px) coordinates.
+    Show the selected frame with ROI centers overlaid.
+
+    - If `transpose` is True (default), display the TRANSPOSED TIFF
+      so indexing matches (py, px) coordinates.
+    - If False, display the raw TIFF orientation.
     """
     playback = TIFFPlayback(frames_dir)
     # Pick capture by index; assumes sorted order aligns with frame_id
     capture = playback.get_capture(frame_index if frame_index < len(playback) else 0)
     centers = load_roi_centers_for_frame(csv_path, frame_index)
 
-    transposed = np.transpose(capture.image, (1, 0, 2)) if capture.image.ndim == 3 else capture.image.T
-    trans_disp = point_cloud_to_display(transposed)
-    trans_overlay = draw_centers(trans_disp, centers)
+    img = transpose_point_cloud(capture.image) if transpose else capture.image
+    disp = point_cloud_to_display(img)
+    overlay = draw_centers(disp, centers)
 
-    # Add label for transposed view only
-    cv2.putText(trans_overlay, f"Transposed {trans_overlay.shape[1]}x{trans_overlay.shape[0]}", (10, 30),
+    # Add label
+    label = ("Transposed" if transpose else "Raw") + f" {overlay.shape[1]}x{overlay.shape[0]}"
+    cv2.putText(overlay, label, (10, 30),
                 cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2, cv2.LINE_AA)
 
     # Auto-resize image to fit on screen (keep ~95% of screen size)
-    def get_screen_size() -> Tuple[Optional[int], Optional[int]]:
-        try:
-            import tkinter as tk  # standard library
-            root = tk.Tk()
-            root.withdraw()
-            w, h = root.winfo_screenwidth(), root.winfo_screenheight()
-            root.destroy()
-            return int(w), int(h)
-        except Exception:
-            return None, None
-
-    scr_w, scr_h = get_screen_size()
-    display_img = trans_overlay
-    if scr_w and scr_h:
-        max_w = int(scr_w * 0.95)
-        max_h = int(scr_h * 0.95)
-        if display_img.shape[1] > max_w or display_img.shape[0] > max_h:
-            scale = min(max_w / display_img.shape[1], max_h / display_img.shape[0])
-            new_w = max(1, int(round(display_img.shape[1] * scale)))
-            new_h = max(1, int(round(display_img.shape[0] * scale)))
-            display_img = cv2.resize(display_img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+    display_img = _fit_to_screen(overlay, margin=0.95)
 
     window = "TIFF Orientation Check"
     cv2.namedWindow(window, cv2.WINDOW_NORMAL)
@@ -239,17 +312,133 @@ def visualize_orientation_check(frames_dir: str | Path, csv_path: str | Path, fr
     cv2.destroyWindow(window)
 
 
+def _get_screen_size_safe() -> Tuple[Optional[int], Optional[int]]:
+    """Get main screen size without importing tkinter (prevents macOS Tk crashes).
+
+    macOS: use CoreGraphics via ctypes. Others: return None to skip resizing.
+    """
+    try:
+        if sys.platform == 'darwin':
+            from ctypes import cdll, Structure, c_double, c_uint32
+
+            class CGSize(Structure):
+                _fields_ = [("width", c_double), ("height", c_double)]
+
+            class CGPoint(Structure):
+                _fields_ = [("x", c_double), ("y", c_double)]
+
+            class CGRect(Structure):
+                _fields_ = [("origin", CGPoint), ("size", CGSize)]
+
+            cg = cdll.LoadLibrary("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")
+            cg.CGMainDisplayID.restype = c_uint32
+            cg.CGDisplayBounds.argtypes = [c_uint32]
+            cg.CGDisplayBounds.restype = CGRect
+            did = cg.CGMainDisplayID()
+            bounds = cg.CGDisplayBounds(did)
+            return int(bounds.size.width), int(bounds.size.height)
+    except Exception:
+        pass
+    return None, None
+
+
+def _fit_to_screen(img: np.ndarray, margin: float = 0.95) -> np.ndarray:
+    scr_w, scr_h = _get_screen_size_safe()
+    if not (scr_w and scr_h):
+        return img
+    max_w = int(scr_w * margin)
+    max_h = int(scr_h * margin)
+    if img.shape[1] <= max_w and img.shape[0] <= max_h:
+        return img
+    scale = min(max_w / img.shape[1], max_h / img.shape[0])
+    new_w = max(1, int(round(img.shape[1] * scale)))
+    new_h = max(1, int(round(img.shape[0] * scale)))
+    return cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+
+
+def visualize_tiff_sequence(
+    frames_dir: str | Path,
+    csv_path: str | Path,
+    start_index: int = 0,
+    transpose: bool = True,
+    play: bool = False,
+    fps: int = 15,
+) -> None:
+    """Interactive viewer to step frames and play back the sequence.
+
+    Controls: SPACE play/pause, n/→ next, b/← prev, +/- speed, q/ESC quit.
+    """
+    playback = TIFFPlayback(frames_dir)
+    idx = max(0, min(start_index, len(playback) - 1))
+    delay_ms = max(1, int(1000 / max(1, fps)))
+    window = "TIFF Sequence Viewer"
+    cv2.namedWindow(window, cv2.WINDOW_NORMAL)
+
+    while True:
+        capture = playback.get_capture(idx)
+        centers = load_roi_centers_for_frame(csv_path, idx)
+        img = transpose_point_cloud(capture.image) if transpose else capture.image
+        disp = point_cloud_to_display(img)
+        overlay = draw_centers(disp, centers)
+
+        # Info panel
+        info = [
+            f"Frame {idx+1}/{len(playback)}",
+            f"{'Transposed' if transpose else 'Raw'} {overlay.shape[1]}x{overlay.shape[0]}",
+            "SPACE play/pause  n/→ next  b/← prev  +/- speed  q quit",
+        ]
+        y = 28
+        for line in info:
+            _draw_text_with_bg(overlay, line, (10, y), (255, 255, 255), alpha=0.5)
+            y += 24
+
+        display_img = _fit_to_screen(overlay, margin=0.95)
+        cv2.imshow(window, display_img)
+
+        wait = delay_ms if play else 0
+        key = cv2.waitKey(wait) & 0xFF
+        if key in (27, ord('q')):
+            break
+        elif key == ord(' '):
+            play = not play
+        elif key in (ord('n'), 83):  # right arrow
+            idx = min(idx + 1, len(playback) - 1)
+        elif key in (ord('b'), 81):  # left arrow
+            idx = max(idx - 1, 0)
+        elif key in (ord('+'), ord('=')):
+            fps = min(120, fps + 1); delay_ms = max(1, int(1000 / fps))
+        elif key in (ord('-'), ord('_')):
+            fps = max(1, fps - 1); delay_ms = max(1, int(1000 / fps))
+
+        if play and key == 255:  # no key pressed
+            if idx + 1 < len(playback):
+                idx += 1
+            else:
+                play = False
+
+
 if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="TIFF utilities for Kinect point clouds")
     parser.add_argument("frames_dir", type=str, help="Path to folder with .tif/.tiff frames")
     parser.add_argument("--tracking-csv", type=str, default=None, help="ROI tracking CSV path for overlay")
-    parser.add_argument("--frame-index", type=int, default=0, help="Frame index to visualize")
+    parser.add_argument("--frame-index", type=int, default=0, help="Frame index to visualize/start from")
+    parser.add_argument("--no-transpose", action="store_true", help="Display raw TIFF without transposing")
+    parser.add_argument("--play", action="store_true", help="Start in playback mode")
+    parser.add_argument("--fps", type=int, default=15, help="Playback FPS when --play is enabled")
     args = parser.parse_args()
 
     if args.tracking_csv:
-        visualize_orientation_check(args.frames_dir, args.tracking_csv, args.frame_index)
+        # Use interactive sequence viewer by default
+        visualize_tiff_sequence(
+            args.frames_dir,
+            args.tracking_csv,
+            start_index=args.frame_index,
+            transpose=(not args.no_transpose),
+            play=args.play,
+            fps=args.fps,
+        )
     else:
         image, path = load_single_tiff_frame(args.frames_dir)
         h, w = image.shape[:2]
