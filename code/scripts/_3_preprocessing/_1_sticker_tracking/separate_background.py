@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import re
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -222,6 +223,9 @@ def point_cloud_to_display(img_pc: np.ndarray, z_range: Optional[Tuple[float, fl
         # Keep invalid pixels black
         z8[~mask] = 0
     color = cv2.applyColorMap(z8, cv2.COLORMAP_JET)
+    # Force invalid pixels to true black in the colored image
+    if mask.ndim == 2:
+        color[~mask] = (0, 0, 0)
     return color
 
 
@@ -362,6 +366,24 @@ def visualize_orientation_check(
     cv2.destroyWindow(window)
 
 
+def _normalize_depth_mode_name(mode_str: str) -> str:
+    s = (mode_str or "").strip()
+    if s.startswith("DepthMode."):
+        s = s.split(".", 1)[1]
+    return s.upper()
+
+
+def _depth_mode_to_zrange(mode_str: str) -> Optional[Tuple[float, float]]:
+    # Approximate working ranges from Azure Kinect documentation (in mm)
+    ranges = {
+        "NFOV_UNBINNED": (500.0, 3865.0),
+        "NFOV_2X2BINNED": (500.0, 5460.0),
+        "WFOV_UNBINNED": (250.0, 2945.0),
+        "WFOV_2X2BINNED": (250.0, 3865.0),
+    }
+    return ranges.get(_normalize_depth_mode_name(mode_str))
+
+
 def _get_screen_size_safe() -> Tuple[Optional[int], Optional[int]]:
     """Get main screen size without importing tkinter (prevents macOS Tk crashes).
 
@@ -414,7 +436,7 @@ def visualize_tiff_sequence(
     play: bool = False,
     fps: int = 30,
     cache_size: int = 24,
-    z_scan: int = -1,
+    depth_mode: str = "DepthMode.NFOV_UNBINNED",
 ) -> None:
     """Interactive viewer to step frames and play back the sequence.
 
@@ -423,47 +445,17 @@ def visualize_tiff_sequence(
     playback = TIFFPlayback(frames_dir)
     idx = max(0, min(start_index, len(playback) - 1))
     delay_ms = max(1, int(1000 / max(1, fps)))
+    frame_period = 1.0 / max(1, fps)
+    last_step_ts = time.time()
     window = "TIFF Sequence Viewer"
     cv2.namedWindow(window, cv2.WINDOW_NORMAL)
 
     # Preload tracking once
     centers_all = load_all_roi_centers(csv_path)
 
-    # Compute a global Z range across frames if requested
-    global_z_range: Optional[Tuple[float, float]] = None
-    if z_scan != 0:
-        total = len(playback) if z_scan < 0 else min(z_scan, len(playback))
-        zmin, zmax = np.inf, -np.inf
-        # If scanning a subset, sample evenly spaced indices
-        if z_scan < 0:
-            indices = range(0, len(playback))
-        else:
-            if total <= 1:
-                indices = [idx]
-            else:
-                indices = np.linspace(0, len(playback) - 1, num=total, dtype=int)
-        n_indices = len(indices)
-        print(f"Computing global Z range over {n_indices} frame(s)...")
-        count = 0
-        for i in indices:
-            try:
-                cap = playback.get_capture(i)
-                pc = transpose_point_cloud(cap.image) if transpose else cap.image
-                z = pc[..., 2] if pc.ndim == 3 and pc.shape[2] >= 3 else pc
-                mask = (z > 0).astype(np.uint8)
-                if mask.any():
-                    mn, mx, _, _ = cv2.minMaxLoc(z, mask=mask)
-                    zmin = min(zmin, float(mn))
-                    zmax = max(zmax, float(mx))
-            except Exception:
-                pass
-            count += 1
-            if count % 25 == 0:
-                print(f"  scanned {count}/{n_indices} ...", end='\r')
-        print()
-        if np.isfinite(zmin) and np.isfinite(zmax) and zmax > zmin:
-            global_z_range = (zmin, zmax)
-            print(f"Global Z range: min={zmin:.1f} mm, max={zmax:.1f} mm")
+    # Fixed Z range based on depth mode
+    fixed_z_range = _depth_mode_to_zrange(depth_mode)
+    mode_label = _normalize_depth_mode_name(depth_mode)
 
     # Simple LRU caches for decoded frames and colorized displays
     class LRU:
@@ -484,15 +476,17 @@ def visualize_tiff_sequence(
     img_cache = LRU(cache_size)
     disp_cache = LRU(cache_size)
 
-    # Add a progress slider
+    # Add UI controls: progress slider + play/pause toggle
     cv2.createTrackbar('Frame', window, idx, len(playback) - 1, lambda v: None)
+    cv2.createTrackbar('Play', window, 1 if play else 0, 1, lambda v: None)
 
     while True:
-        # Sync with slider
-        slider_pos = cv2.getTrackbarPos('Frame', window)
-        if slider_pos != idx:
-            idx = slider_pos
-            play = False
+        # Sync with slider only when paused; during playback we drive the slider
+        if not play:
+            slider_pos = cv2.getTrackbarPos('Frame', window)
+            if slider_pos != idx:
+                idx = slider_pos
+                last_step_ts = time.time()
 
         # Get base image (with/without transpose) from cache or disk
         key_img = (idx, transpose)
@@ -503,21 +497,39 @@ def visualize_tiff_sequence(
             img_cache.put(key_img, base)
             img = base
 
+        # Determine which Z range to use: fixed from depth mode, else per-frame
+        if fixed_z_range is not None:
+            active_z_range = fixed_z_range
+            disp_key_suffix = (round(active_z_range[0], 2), round(active_z_range[1], 2), 'F')
+        else:
+            z = img[..., 2] if img.ndim == 3 and img.shape[2] >= 3 else img
+            mask = (z > 0).astype(np.uint8)
+            if mask.any():
+                mn, mx, _, _ = cv2.minMaxLoc(z, mask=mask)
+                active_z_range = (float(mn), float(mx))
+            else:
+                active_z_range = (0.0, 1.0)
+            disp_key_suffix = ('P',)
+
         # Get colorized display from cache
-        key_disp = (idx, transpose, None if global_z_range is None else (round(global_z_range[0], 2), round(global_z_range[1], 2)))
+        key_disp = (idx, transpose, disp_key_suffix)
         disp = disp_cache.get(key_disp)
         if disp is None:
-            disp = point_cloud_to_display(img, z_range=global_z_range)
+            disp = point_cloud_to_display(img, z_range=active_z_range)
             disp_cache.put(key_disp, disp)
 
         centers = centers_all.get(idx, {})
         overlay = draw_centers(disp, centers)
 
-        # Info panel
+        # Info panel (with Z range readout and mode)
+        mode_str = f"fixed:{mode_label}" if fixed_z_range is not None else 'per-frame'
+        zr = active_z_range
         info = [
             f"Frame {idx+1}/{len(playback)}",
             f"{'Transposed' if transpose else 'Raw'} {overlay.shape[1]}x{overlay.shape[0]}",
+            f"Z: [{zr[0]:.0f}, {zr[1]:.0f}] mm  mode: {mode_str}",
             "SPACE play/pause  n/→ next  b/← prev  +/- speed  q quit",
+            "slider=Frame  Play(0/1)",
         ]
         y = 28
         for line in info:
@@ -530,26 +542,48 @@ def visualize_tiff_sequence(
         # Keep the slider in sync
         cv2.setTrackbarPos('Frame', window, idx)
 
-        wait = delay_ms if play else 30
-        key = cv2.waitKey(wait) & 0xFF
+        # Sync play state from trackbar
+        track_play = cv2.getTrackbarPos('Play', window) == 1
+        if track_play != play:
+            play = track_play
+            last_step_ts = time.time()
+
+        # Advance playback based on wall clock, not waitKey return value
+        now = time.time()
+        if play:
+            # Step forward by the number of elapsed frame periods
+            elapsed = now - last_step_ts
+            steps = int(elapsed / frame_period)
+            if steps > 0:
+                idx = min(idx + steps, len(playback) - 1)
+                last_step_ts += steps * frame_period
+                if idx >= len(playback) - 1:
+                    play = False
+                    cv2.setTrackbarPos('Play', window, 0)
+
+        key = cv2.waitKey(1) & 0xFF
         if key in (27, ord('q')):
             break
         elif key == ord(' '):
             play = not play
+            cv2.setTrackbarPos('Play', window, 1 if play else 0)
+            last_step_ts = time.time()
         elif key in (ord('n'), 83):  # right arrow
             idx = min(idx + 1, len(playback) - 1)
+            last_step_ts = time.time()
         elif key in (ord('b'), 81):  # left arrow
             idx = max(idx - 1, 0)
+            last_step_ts = time.time()
         elif key in (ord('+'), ord('=')):
-            fps = min(120, fps + 1); delay_ms = max(1, int(1000 / fps))
+            fps = min(120, fps + 1)
+            delay_ms = max(1, int(1000 / fps))
+            frame_period = 1.0 / max(1, fps)
         elif key in (ord('-'), ord('_')):
-            fps = max(1, fps - 1); delay_ms = max(1, int(1000 / fps))
+            fps = max(1, fps - 1)
+            delay_ms = max(1, int(1000 / fps))
+            frame_period = 1.0 / max(1, fps)
+        # no 'z' toggle; using fixed or per-frame based on --depth-mode
 
-        if play and key == 255:  # no key pressed
-            if idx + 1 < len(playback):
-                idx += 1
-            else:
-                play = False
 
 
 if __name__ == "__main__":
@@ -562,8 +596,9 @@ if __name__ == "__main__":
     parser.add_argument("--no-transpose", action="store_true", help="Display raw TIFF without transposing")
     parser.add_argument("--play", action="store_true", help="Start in playback mode")
     parser.add_argument("--fps", type=int, default=30, help="Playback FPS when --play is enabled (default: 30, Azure Kinect)" )
-    parser.add_argument("--cache-size", type=int, default=24, help="LRU cache size for frames/displays")
-    parser.add_argument("--z-scan", type=int, default=-1, help="Frames to scan to compute global Z range (-1 = all, 0 = per-frame)")
+    parser.add_argument("--cache-size", type=int, default=64, help="LRU cache size for frames/displays")
+    parser.add_argument("--depth-mode", type=str, default="DepthMode.NFOV_UNBINNED",
+                        help="Fixed depth range by Azure Kinect mode (e.g., DepthMode.NFOV_UNBINNED, WFOV_UNBINNED). If unknown, falls back to per-frame.")
     args = parser.parse_args()
 
     if args.tracking_csv:
@@ -576,7 +611,7 @@ if __name__ == "__main__":
             play=args.play,
             fps=args.fps,
             cache_size=max(1, args.cache_size),
-            z_scan=args.z_scan,
+            depth_mode=args.depth_mode,
         )
     else:
         image, path = load_single_tiff_frame(args.frames_dir)
