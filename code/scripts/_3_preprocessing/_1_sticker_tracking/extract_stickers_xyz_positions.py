@@ -10,7 +10,7 @@ from PIL import Image
 import glob
 import cv2
 import importlib
-from utils.package_utils import load_pyk4a
+from utils.load_pyk4a import load_pyk4a
 
 from preprocessing.stickers_analysis.roi import (
     XYZMetadataModel,

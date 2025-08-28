@@ -8,8 +8,8 @@ class XYZVisualizationHandler:
     """Encapsulates all visualization logic using OpenCV."""
 
     def __init__(self, config: XYZMetadataConfig):
-        self.is_enabled = config.monitor or config.source_video_path is not None
-        self.video_path = config.source_video_path
+        self.is_enabled = config.monitor or config.video_path is not None
+        self.video_path = config.video_path
         self.display_dims = config.display_dims
         self.writer: Optional[cv2.VideoWriter] = None
 

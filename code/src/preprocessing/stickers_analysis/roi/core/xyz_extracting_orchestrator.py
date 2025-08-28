@@ -2,7 +2,7 @@ import os
 from typing import Dict, Any, Optional
 from pathlib import Path
 
-from .....utils.package_utils import load_pyk4a
+from utils.load_pyk4a import load_pyk4a 
 
 # Import the new processor and other required modules
 from .xyz_extractor import BasePositionExtractor, MKVPositionExtractor, TIFFPositionExtractor
@@ -63,7 +63,7 @@ class XYZStickerOrchestrator:
             tracked_data_iohandler = ROITrackedFileHandler(self.config.input_csv_path)
             tracked_data = tracked_data_iohandler.load_all_data()
             sticker_names = list(tracked_data.keys())
-            self.metadata.update_processing_detail("stickers_found", sticker_names)
+            self.metadata.update_processing_details("stickers_found", sticker_names)
 
             # 2. Create appropriate extractor and process
             extractor = self._create_extractor(tracked_data)

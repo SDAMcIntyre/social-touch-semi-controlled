@@ -10,7 +10,7 @@ from PIL import Image
 
 # Local imports
 from ..models.roi_tracked_data import ROITrackedObjects
-from .....utils.package_utils import load_pyk4a  # Updated relative import path
+from utils.load_pyk4a import load_pyk4a  
 
 class BasePositionExtractor(ABC):
     """Abstract base class for position extraction."""
