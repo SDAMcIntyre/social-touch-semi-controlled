@@ -41,7 +41,10 @@ def processing_func(playback: PyK4APlayback,
             # --- Core processing logic (runs in both modes) ---
             if capture.transformed_depth_point_cloud is not None:
                 depth_point_cloud = capture.transformed_depth_point_cloud
-                point_cloud_for_tiff = depth_point_cloud.transpose(1, 0, 2)
+                # Transpose to (W, H, C) for export, then make it contiguous to avoid
+                # stride issues in some TIFF readers (e.g., OpenCV) that can yield
+                # half-black images.
+                point_cloud_for_tiff = np.ascontiguousarray(depth_point_cloud.transpose(1, 0, 2))
                 output_filename = f"{base_filename}_point_cloud-{frame_count:04d}.tiff"
                 output_filepath = os.path.join(output_dir, output_filename)
                 
