@@ -189,7 +189,7 @@ def load_all_roi_centers(csv_path: str | Path) -> Dict[int, Dict[str, Tuple[floa
     return centers_by_frame
 
 
-def point_cloud_to_display(img_pc: np.ndarray) -> np.ndarray:
+def point_cloud_to_display(img_pc: np.ndarray, z_range: Optional[Tuple[float, float]] = None) -> np.ndarray:
     """
     Convert a point-cloud TIFF (H,W,3 int16) to a displayable BGR image.
     Uses Z channel normalized to [0,255] and applies a colormap.
@@ -199,17 +199,28 @@ def point_cloud_to_display(img_pc: np.ndarray) -> np.ndarray:
     else:
         # Fallback for grayscale inputs
         z = img_pc
-    # Normalize using OpenCV for speed; ignore zeros via mask
-    try:
-        mask = (z > 0).astype(np.uint8)
-        min_val, max_val, _, _ = cv2.minMaxLoc(z, mask=mask)
-        z_min, z_max = float(min_val), float(max_val)
-    except Exception:
-        z_min, z_max = float(np.min(z)), float(np.max(z))
+    # Normalize ignoring zeros AND keep zeros black to reveal invalid areas.
+    # If a global z_range is provided, use it; otherwise compute per-frame.
+    mask = (z > 0)
+    if z_range is not None:
+        z_min, z_max = z_range
+    else:
+        if np.any(mask):
+            min_val, max_val, _, _ = cv2.minMaxLoc(z, mask=mask.astype(np.uint8))
+            z_min, z_max = float(min_val), float(max_val)
+        else:
+            z_min, z_max = float(z.min()), float(z.max())
+
     if not np.isfinite(z_min) or not np.isfinite(z_max) or z_max <= z_min:
         z8 = np.zeros_like(z, dtype=np.uint8)
     else:
-        z8 = cv2.convertScaleAbs(z, alpha=255.0 / (z_max - z_min), beta=-255.0 * z_min / (z_max - z_min))
+        scale = 255.0 / (z_max - z_min)
+        zf = (z.astype(np.float32) - z_min) * scale
+        # Clip negatives and cap at 255
+        zf = np.clip(zf, 0.0, 255.0)
+        z8 = zf.astype(np.uint8)
+        # Keep invalid pixels black
+        z8[~mask] = 0
     color = cv2.applyColorMap(z8, cv2.COLORMAP_JET)
     return color
 
@@ -317,6 +328,7 @@ def visualize_orientation_check(
     csv_path: str | Path,
     frame_index: int = 0,
     transpose: bool = True,
+    z_range: Optional[Tuple[float, float]] = None,
 ) -> None:
     """
     Show the selected frame with ROI centers overlaid.
@@ -331,7 +343,7 @@ def visualize_orientation_check(
     centers = load_roi_centers_for_frame(csv_path, frame_index)
 
     img = transpose_point_cloud(capture.image) if transpose else capture.image
-    disp = point_cloud_to_display(img)
+    disp = point_cloud_to_display(img, z_range=z_range)
     overlay = draw_centers(disp, centers)
 
     # Add label
@@ -402,6 +414,7 @@ def visualize_tiff_sequence(
     play: bool = False,
     fps: int = 30,
     cache_size: int = 24,
+    z_scan: int = -1,
 ) -> None:
     """Interactive viewer to step frames and play back the sequence.
 
@@ -415,6 +428,42 @@ def visualize_tiff_sequence(
 
     # Preload tracking once
     centers_all = load_all_roi_centers(csv_path)
+
+    # Compute a global Z range across frames if requested
+    global_z_range: Optional[Tuple[float, float]] = None
+    if z_scan != 0:
+        total = len(playback) if z_scan < 0 else min(z_scan, len(playback))
+        zmin, zmax = np.inf, -np.inf
+        # If scanning a subset, sample evenly spaced indices
+        if z_scan < 0:
+            indices = range(0, len(playback))
+        else:
+            if total <= 1:
+                indices = [idx]
+            else:
+                indices = np.linspace(0, len(playback) - 1, num=total, dtype=int)
+        n_indices = len(indices)
+        print(f"Computing global Z range over {n_indices} frame(s)...")
+        count = 0
+        for i in indices:
+            try:
+                cap = playback.get_capture(i)
+                pc = transpose_point_cloud(cap.image) if transpose else cap.image
+                z = pc[..., 2] if pc.ndim == 3 and pc.shape[2] >= 3 else pc
+                mask = (z > 0).astype(np.uint8)
+                if mask.any():
+                    mn, mx, _, _ = cv2.minMaxLoc(z, mask=mask)
+                    zmin = min(zmin, float(mn))
+                    zmax = max(zmax, float(mx))
+            except Exception:
+                pass
+            count += 1
+            if count % 25 == 0:
+                print(f"  scanned {count}/{n_indices} ...", end='\r')
+        print()
+        if np.isfinite(zmin) and np.isfinite(zmax) and zmax > zmin:
+            global_z_range = (zmin, zmax)
+            print(f"Global Z range: min={zmin:.1f} mm, max={zmax:.1f} mm")
 
     # Simple LRU caches for decoded frames and colorized displays
     class LRU:
@@ -455,10 +504,10 @@ def visualize_tiff_sequence(
             img = base
 
         # Get colorized display from cache
-        key_disp = (idx, transpose)
+        key_disp = (idx, transpose, None if global_z_range is None else (round(global_z_range[0], 2), round(global_z_range[1], 2)))
         disp = disp_cache.get(key_disp)
         if disp is None:
-            disp = point_cloud_to_display(img)
+            disp = point_cloud_to_display(img, z_range=global_z_range)
             disp_cache.put(key_disp, disp)
 
         centers = centers_all.get(idx, {})
@@ -514,6 +563,7 @@ if __name__ == "__main__":
     parser.add_argument("--play", action="store_true", help="Start in playback mode")
     parser.add_argument("--fps", type=int, default=30, help="Playback FPS when --play is enabled (default: 30, Azure Kinect)" )
     parser.add_argument("--cache-size", type=int, default=24, help="LRU cache size for frames/displays")
+    parser.add_argument("--z-scan", type=int, default=-1, help="Frames to scan to compute global Z range (-1 = all, 0 = per-frame)")
     args = parser.parse_args()
 
     if args.tracking_csv:
@@ -526,6 +576,7 @@ if __name__ == "__main__":
             play=args.play,
             fps=args.fps,
             cache_size=max(1, args.cache_size),
+            z_scan=args.z_scan,
         )
     else:
         image, path = load_single_tiff_frame(args.frames_dir)
