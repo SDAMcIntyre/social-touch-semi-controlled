@@ -1,12 +1,16 @@
+# Standard library imports
+from abc import ABC, abstractmethod
+from pathlib import Path
+from typing import List, Dict, Any, Tuple, Callable, Optional, Union
+
+# Third-party imports
 import numpy as np
 import pandas as pd
-from abc import ABC, abstractmethod
-from typing import List, Dict, Any, Tuple, Callable, Optional, Union
-from pathlib import Path
 from PIL import Image
 
+# Local imports
 from ..models.roi_tracked_data import ROITrackedObjects
-from utils.package_utils import load_pyk4a
+from .....utils.package_utils import load_pyk4a  # Updated relative import path
 
 class BasePositionExtractor(ABC):
     """Abstract base class for position extraction."""
@@ -53,13 +57,25 @@ class BasePositionExtractor(ABC):
 class MKVPositionExtractor(BasePositionExtractor):
     """Handles position extraction from MKV files."""
     
-    def __init__(self, playback: 'PyK4APlayback', tracked_data: ROITrackedObjects):
+    def __init__(self, playback: Any, tracked_data: ROITrackedObjects):
+        """
+        Initialize MKV position extractor.
+        
+        Args:
+            playback: PyK4APlayback object for reading MKV files
+            tracked_data: Object containing tracked ROI data
+        """
         super().__init__(tracked_data)
+        PyK4APlayback = load_pyk4a()
+        if PyK4APlayback is None:
+            raise ImportError("pyk4a is required for MKV processing")
+        if not isinstance(playback, PyK4APlayback):
+            raise TypeError(f"Expected PyK4APlayback object, got {type(playback)}")
         self.playback = playback
 
     def extract_positions(
         self,
-        on_frame_processed: Optional[Callable[[int, 'Capture', Dict], bool]] = None
+        on_frame_processed: Optional[Callable[[int, Any, Dict], bool]] = None
     ) -> Tuple[List[Dict[str, Any]], int]:
         results_data = []
         frame_index = 0
