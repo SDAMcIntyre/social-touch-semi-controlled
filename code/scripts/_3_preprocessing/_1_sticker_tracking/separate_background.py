@@ -213,27 +213,48 @@ def visualize_orientation_check(frames_dir: str | Path, csv_path: str | Path, fr
     cv2.putText(trans_overlay, f"Transposed {trans_overlay.shape[1]}x{trans_overlay.shape[0]}", (10, 30),
                 cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2, cv2.LINE_AA)
 
-    # Resize to manageable width if too large
-    def resize_to_width(img: np.ndarray, target_w: int = 960) -> np.ndarray:
+    # Fit both overlays into equal-sized canvases for a clean side-by-side view
+    def fit_into_canvas(img: np.ndarray, box_w: int, box_h: int) -> np.ndarray:
         h, w = img.shape[:2]
-        if w <= target_w:
-            return img
-        scale = target_w / w
-        return cv2.resize(img, (target_w, int(round(h * scale))), interpolation=cv2.INTER_AREA)
+        scale = min(box_w / w, box_h / h)
+        new_w = max(1, int(round(w * scale)))
+        new_h = max(1, int(round(h * scale)))
+        resized = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR)
+        canvas = np.zeros((box_h, box_w, 3), dtype=img.dtype)
+        y0 = (box_h - new_h) // 2
+        x0 = (box_w - new_w) // 2
+        canvas[y0:y0+new_h, x0:x0+new_w] = resized
+        return canvas
 
-    left = resize_to_width(raw_overlay, 960)
-    right = resize_to_width(trans_overlay, 960)
-    # Pad to same height for hstack
-    h = max(left.shape[0], right.shape[0])
-    def pad_to_h(img: np.ndarray, H: int) -> np.ndarray:
-        if img.shape[0] == H:
-            return img
-        pad = np.zeros((H, img.shape[1], 3), dtype=img.dtype)
-        pad[: img.shape[0], : img.shape[1]] = img
-        return pad
-    mosaic = np.hstack([pad_to_h(left, h), pad_to_h(right, h)])
+    box_w, box_h = 960, 540
+    left = fit_into_canvas(raw_overlay, box_w, box_h)
+    right = fit_into_canvas(trans_overlay, box_w, box_h)
+    mosaic = np.hstack([left, right])
+
+    # Auto-resize mosaic to fit on screen (keep ~95% of screen size)
+    def get_screen_size() -> Tuple[Optional[int], Optional[int]]:
+        try:
+            import tkinter as tk  # standard library
+            root = tk.Tk()
+            root.withdraw()
+            w, h = root.winfo_screenwidth(), root.winfo_screenheight()
+            root.destroy()
+            return int(w), int(h)
+        except Exception:
+            return None, None
+
+    scr_w, scr_h = get_screen_size()
+    if scr_w and scr_h:
+        max_w = int(scr_w * 0.95)
+        max_h = int(scr_h * 0.95)
+        if mosaic.shape[1] > max_w or mosaic.shape[0] > max_h:
+            scale = min(max_w / mosaic.shape[1], max_h / mosaic.shape[0])
+            new_w = max(1, int(round(mosaic.shape[1] * scale)))
+            new_h = max(1, int(round(mosaic.shape[0] * scale)))
+            mosaic = cv2.resize(mosaic, (new_w, new_h), interpolation=cv2.INTER_AREA)
 
     window = "TIFF Orientation Check"
+    cv2.namedWindow(window, cv2.WINDOW_NORMAL)
     cv2.imshow(window, mosaic)
     print("Press any key (window focused) to close...")
     cv2.waitKey(0)
