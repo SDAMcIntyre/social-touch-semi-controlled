@@ -2,7 +2,7 @@ import os
 from typing import Dict, Any, Optional
 from pathlib import Path
 
-from utils.package_utils import load_pyk4a
+from .....utils.package_utils import load_pyk4a
 
 # Import the new processor and other required modules
 from .xyz_extractor import BasePositionExtractor, MKVPositionExtractor, TIFFPositionExtractor
