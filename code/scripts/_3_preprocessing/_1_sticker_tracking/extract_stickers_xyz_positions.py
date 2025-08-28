@@ -42,21 +42,7 @@ def extract_stickers_xyz_positions(
     """
     source = Path(source)
     
-    # Validate input type and source
-    if input_type == 'mkv':
-        if not source.is_file():
-            raise FileNotFoundError(f"Source video not found: {source}")
-        # Load pyk4a only if needed
-        PyK4APlayback = load_pyk4a()
-        if PyK4APlayback is None:
-            raise ImportError("pyk4a is required for MKV processing but could not be imported")
-            
-    elif input_type == 'tiff':
-        if not source.is_dir():
-            raise FileNotFoundError(f"Source TIFF directory not found: {source}")
-    else:
-        raise ValueError("input_type must be either 'mkv' or 'tiff'")
-
+    # Validate input paths
     if not os.path.exists(input_csv_path):
         raise FileNotFoundError(f"Center CSV not found: {input_csv_path}")
 
@@ -96,22 +82,4 @@ def extract_stickers_xyz_positions(
         print("✅ Processing finished successfully!")
     except Exception as e:
         print(f"❌ An error occurred during processing: {e}")
-
-def read_tiff_frames(tiff_folder: Union[str, Path]) -> list:
-    """Read all TIFF frames from a folder in sorted order."""
-    tiff_folder = Path(tiff_folder)
-    tiff_files = sorted(glob.glob(os.path.join(tiff_folder, "*.tiff")))
-    if not tiff_files:
-        tiff_files = sorted(glob.glob(os.path.join(tiff_folder, "*.tif")))
-    
-    if not tiff_files:
-        raise ValueError(f"No TIFF files found in {tiff_folder}")
-    
-    return tiff_files
-
-def process_tiff_frame(tiff_path: str) -> np.ndarray:
-    """Read and process a single TIFF frame."""
-    with Image.open(tiff_path) as img:
-        depth_frame = np.array(img, dtype=np.float32)
-        return depth_frame
-
+        raise

@@ -91,20 +91,25 @@ class XYZStickerOrchestrator:
             if self.visualizer:
                 self.visualizer.release()
 
-    def _visualize_frame_callback(self, frame_index: int, capture: 'Capture', monitoring_data: Dict[str, Any]) -> bool:
+    def _visualize_frame_callback(self, frame_index: int, frame_data: Any, monitoring_data: Dict[str, Any]) -> bool:
         """
         A callback function passed to the processor to handle visualization for each frame.
 
         Args:
             frame_index: The index of the current frame.
-            capture: The K4A capture object for the frame.
+            frame_data: Either a K4A capture object (MKV) or numpy array (TIFF).
             monitoring_data: The processed 3D data for visualization.
 
         Returns:
             True if the user has requested to stop the visualization, otherwise False.
         """
+        if self.config.input_type == 'mkv':
+            depth_data = frame_data.transformed_depth
+        else:  # tiff
+            depth_data = frame_data
+            
         visual_frame = self.visualizer.create_frame(
-            frame_index, capture.transformed_depth, monitoring_data
+            frame_index, depth_data, monitoring_data
         )
         should_stop = self.visualizer.process_frame(visual_frame)
         return should_stop
