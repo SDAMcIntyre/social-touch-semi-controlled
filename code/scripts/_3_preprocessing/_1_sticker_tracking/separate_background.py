@@ -15,6 +15,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+from collections import OrderedDict
 
 import cv2
 import numpy as np
@@ -151,6 +152,43 @@ def load_roi_centers_for_frame(csv_path: str | Path, frame_index: int) -> Dict[s
     return centers
 
 
+def load_all_roi_centers(csv_path: str | Path) -> Dict[int, Dict[str, Tuple[float, float]]]:
+    """
+    Load the entire tracking CSV once and build centers per frame.
+    Returns: { frame_id: { object_name: (px, py) } }
+    """
+    csv_path = Path(csv_path)
+    if not csv_path.exists():
+        raise FileNotFoundError(f"Tracking CSV not found: {csv_path}")
+    try:
+        if csv_path.is_file() and csv_path.stat().st_size == 0:
+            raise ValueError(
+                f"Tracking CSV is empty (0 bytes): {csv_path}. "
+                f"Please regenerate it or pass a non-empty CSV path.")
+    except OSError:
+        pass
+
+    df = pd.read_csv(csv_path)
+    required = {"object_name", "frame_id", "roi_x", "roi_y", "roi_width", "roi_height"}
+    missing = required - set(df.columns)
+    if missing:
+        raise ValueError(f"CSV missing required columns: {sorted(missing)}")
+
+    # Compute centers once
+    df["px"] = df["roi_x"].astype(float) + df["roi_width"].astype(float) / 2.0
+    df["py"] = df["roi_y"].astype(float) + df["roi_height"].astype(float) / 2.0
+
+    centers_by_frame: Dict[int, Dict[str, Tuple[float, float]]] = {}
+    for frame_id, grp in df.groupby("frame_id"):
+        frame_centers: Dict[str, Tuple[float, float]] = {}
+        for _, r in grp.iterrows():
+            name = str(r["object_name"]) if pd.notna(r["object_name"]) else "unknown"
+            frame_centers[name] = (float(r["px"]) if pd.notna(r["px"]) else np.nan,
+                                   float(r["py"]) if pd.notna(r["py"]) else np.nan)
+        centers_by_frame[int(frame_id)] = frame_centers
+    return centers_by_frame
+
+
 def point_cloud_to_display(img_pc: np.ndarray) -> np.ndarray:
     """
     Convert a point-cloud TIFF (H,W,3 int16) to a displayable BGR image.
@@ -161,17 +199,17 @@ def point_cloud_to_display(img_pc: np.ndarray) -> np.ndarray:
     else:
         # Fallback for grayscale inputs
         z = img_pc
-    # Normalize ignoring zeros if possible
-    mask = z > 0
-    if np.any(mask):
-        z_valid = z[mask]
-        z_min, z_max = float(z_valid.min()), float(z_valid.max())
-    else:
-        z_min, z_max = float(z.min()), float(z.max())
-    if z_max <= z_min:
+    # Normalize using OpenCV for speed; ignore zeros via mask
+    try:
+        mask = (z > 0).astype(np.uint8)
+        min_val, max_val, _, _ = cv2.minMaxLoc(z, mask=mask)
+        z_min, z_max = float(min_val), float(max_val)
+    except Exception:
+        z_min, z_max = float(np.min(z)), float(np.max(z))
+    if not np.isfinite(z_min) or not np.isfinite(z_max) or z_max <= z_min:
         z8 = np.zeros_like(z, dtype=np.uint8)
     else:
-        z8 = np.clip((z.astype(np.float32) - z_min) * (255.0 / (z_max - z_min)), 0, 255).astype(np.uint8)
+        z8 = cv2.convertScaleAbs(z, alpha=255.0 / (z_max - z_min), beta=-255.0 * z_min / (z_max - z_min))
     color = cv2.applyColorMap(z8, cv2.COLORMAP_JET)
     return color
 
@@ -362,7 +400,8 @@ def visualize_tiff_sequence(
     start_index: int = 0,
     transpose: bool = True,
     play: bool = False,
-    fps: int = 15,
+    fps: int = 30,
+    cache_size: int = 24,
 ) -> None:
     """Interactive viewer to step frames and play back the sequence.
 
@@ -374,11 +413,55 @@ def visualize_tiff_sequence(
     window = "TIFF Sequence Viewer"
     cv2.namedWindow(window, cv2.WINDOW_NORMAL)
 
+    # Preload tracking once
+    centers_all = load_all_roi_centers(csv_path)
+
+    # Simple LRU caches for decoded frames and colorized displays
+    class LRU:
+        def __init__(self, capacity: int):
+            self.capacity = max(1, capacity)
+            self._d: OrderedDict = OrderedDict()
+        def get(self, key):
+            if key in self._d:
+                self._d.move_to_end(key)
+                return self._d[key]
+            return None
+        def put(self, key, value):
+            self._d[key] = value
+            self._d.move_to_end(key)
+            if len(self._d) > self.capacity:
+                self._d.popitem(last=False)
+
+    img_cache = LRU(cache_size)
+    disp_cache = LRU(cache_size)
+
+    # Add a progress slider
+    cv2.createTrackbar('Frame', window, idx, len(playback) - 1, lambda v: None)
+
     while True:
-        capture = playback.get_capture(idx)
-        centers = load_roi_centers_for_frame(csv_path, idx)
-        img = transpose_point_cloud(capture.image) if transpose else capture.image
-        disp = point_cloud_to_display(img)
+        # Sync with slider
+        slider_pos = cv2.getTrackbarPos('Frame', window)
+        if slider_pos != idx:
+            idx = slider_pos
+            play = False
+
+        # Get base image (with/without transpose) from cache or disk
+        key_img = (idx, transpose)
+        img = img_cache.get(key_img)
+        if img is None:
+            capture = playback.get_capture(idx)
+            base = transpose_point_cloud(capture.image) if transpose else capture.image
+            img_cache.put(key_img, base)
+            img = base
+
+        # Get colorized display from cache
+        key_disp = (idx, transpose)
+        disp = disp_cache.get(key_disp)
+        if disp is None:
+            disp = point_cloud_to_display(img)
+            disp_cache.put(key_disp, disp)
+
+        centers = centers_all.get(idx, {})
         overlay = draw_centers(disp, centers)
 
         # Info panel
@@ -395,7 +478,10 @@ def visualize_tiff_sequence(
         display_img = _fit_to_screen(overlay, margin=0.95)
         cv2.imshow(window, display_img)
 
-        wait = delay_ms if play else 0
+        # Keep the slider in sync
+        cv2.setTrackbarPos('Frame', window, idx)
+
+        wait = delay_ms if play else 30
         key = cv2.waitKey(wait) & 0xFF
         if key in (27, ord('q')):
             break
@@ -426,7 +512,8 @@ if __name__ == "__main__":
     parser.add_argument("--frame-index", type=int, default=0, help="Frame index to visualize/start from")
     parser.add_argument("--no-transpose", action="store_true", help="Display raw TIFF without transposing")
     parser.add_argument("--play", action="store_true", help="Start in playback mode")
-    parser.add_argument("--fps", type=int, default=15, help="Playback FPS when --play is enabled")
+    parser.add_argument("--fps", type=int, default=30, help="Playback FPS when --play is enabled (default: 30, Azure Kinect)" )
+    parser.add_argument("--cache-size", type=int, default=24, help="LRU cache size for frames/displays")
     args = parser.parse_args()
 
     if args.tracking_csv:
@@ -438,6 +525,7 @@ if __name__ == "__main__":
             transpose=(not args.no_transpose),
             play=args.play,
             fps=args.fps,
+            cache_size=max(1, args.cache_size),
         )
     else:
         image, path = load_single_tiff_frame(args.frames_dir)
