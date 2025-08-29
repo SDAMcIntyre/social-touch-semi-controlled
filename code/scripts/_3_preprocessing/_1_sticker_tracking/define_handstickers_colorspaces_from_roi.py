@@ -44,7 +44,7 @@ def define_object_colorspaces_for_video_wip(
         print(f"❌ Error loading source files: {e}")
         return
 
-    objects_to_track = metadata.get('obj_to_track', {})
+    objects_to_track = metadata.get('objects_to_track', {})
     if not objects_to_track:
         print("❌ Halting: 'obj_to_track' key missing or empty in source metadata.")
         return
@@ -140,7 +140,7 @@ def define_object_colorspaces_for_video(
         print(f"❌ Error loading source files: {e}")
         return
 
-    objects_to_track = metadata.get('obj_to_track', {})
+    objects_to_track = metadata.get('objects_to_track', {})
     if not objects_to_track:
         print("❌ Halting: 'obj_to_track' key missing or empty in source metadata.")
         return
