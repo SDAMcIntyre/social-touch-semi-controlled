@@ -153,6 +153,43 @@ def load_roi_centers_for_frame(csv_path: str | Path, frame_index: int) -> Dict[s
     return centers
 
 
+def load_roi_data_for_frame(csv_path: str | Path, frame_index: int) -> Dict[str, Dict[str, float]]:
+    """
+    Load ROI rectangles and centers for a specific frame.
+
+    Returns a mapping: { name: {px, py, roi_x, roi_y, roi_width, roi_height} }
+    """
+    csv_path = Path(csv_path)
+    if not csv_path.exists():
+        raise FileNotFoundError(f"Tracking CSV not found: {csv_path}")
+    df = pd.read_csv(csv_path)
+
+    required = {"object_name", "frame_id", "roi_x", "roi_y", "roi_width", "roi_height"}
+    missing = required - set(df.columns)
+    if missing:
+        raise ValueError(f"CSV missing required columns: {sorted(missing)}")
+
+    df_f = df[df["frame_id"] == frame_index].copy()
+    if df_f.empty:
+        return {}
+
+    df_f["px"] = df_f["roi_x"].astype(float) + df_f["roi_width"].astype(float) / 2.0
+    df_f["py"] = df_f["roi_y"].astype(float) + df_f["roi_height"].astype(float) / 2.0
+
+    out: Dict[str, Dict[str, float]] = {}
+    for _, r in df_f.iterrows():
+        name = str(r["object_name"]) if pd.notna(r["object_name"]) else "unknown"
+        out[name] = {
+            "px": float(r["px"]) if pd.notna(r["px"]) else np.nan,
+            "py": float(r["py"]) if pd.notna(r["py"]) else np.nan,
+            "roi_x": float(r["roi_x"]) if pd.notna(r["roi_x"]) else np.nan,
+            "roi_y": float(r["roi_y"]) if pd.notna(r["roi_y"]) else np.nan,
+            "roi_width": float(r["roi_width"]) if pd.notna(r["roi_width"]) else np.nan,
+            "roi_height": float(r["roi_height"]) if pd.notna(r["roi_height"]) else np.nan,
+        }
+    return out
+
+
 def load_all_roi_centers(csv_path: str | Path) -> Dict[int, Dict[str, Tuple[float, float]]]:
     """
     Load the entire tracking CSV once and build centers per frame.
@@ -188,6 +225,49 @@ def load_all_roi_centers(csv_path: str | Path) -> Dict[int, Dict[str, Tuple[floa
                                    float(r["py"]) if pd.notna(r["py"]) else np.nan)
         centers_by_frame[int(frame_id)] = frame_centers
     return centers_by_frame
+
+
+def load_all_roi_data(csv_path: str | Path) -> Dict[int, Dict[str, Dict[str, float]]]:
+    """
+    Load entire tracking CSV and build per-frame ROI rectangles and centers.
+
+    Returns: { frame_id: { name: {px, py, roi_x, roi_y, roi_width, roi_height} } }
+    """
+    csv_path = Path(csv_path)
+    if not csv_path.exists():
+        raise FileNotFoundError(f"Tracking CSV not found: {csv_path}")
+    try:
+        if csv_path.is_file() and csv_path.stat().st_size == 0:
+            raise ValueError(
+                f"Tracking CSV is empty (0 bytes): {csv_path}. "
+                f"Please regenerate it or pass a non-empty CSV path.")
+    except OSError:
+        pass
+
+    df = pd.read_csv(csv_path)
+    required = {"object_name", "frame_id", "roi_x", "roi_y", "roi_width", "roi_height"}
+    missing = required - set(df.columns)
+    if missing:
+        raise ValueError(f"CSV missing required columns: {sorted(missing)}")
+
+    df["px"] = df["roi_x"].astype(float) + df["roi_width"].astype(float) / 2.0
+    df["py"] = df["roi_y"].astype(float) + df["roi_height"].astype(float) / 2.0
+
+    out: Dict[int, Dict[str, Dict[str, float]]] = {}
+    for frame_id, grp in df.groupby("frame_id"):
+        frame_map: Dict[str, Dict[str, float]] = {}
+        for _, r in grp.iterrows():
+            name = str(r["object_name"]) if pd.notna(r["object_name"]) else "unknown"
+            frame_map[name] = {
+                "px": float(r["px"]) if pd.notna(r["px"]) else np.nan,
+                "py": float(r["py"]) if pd.notna(r["py"]) else np.nan,
+                "roi_x": float(r["roi_x"]) if pd.notna(r["roi_x"]) else np.nan,
+                "roi_y": float(r["roi_y"]) if pd.notna(r["roi_y"]) else np.nan,
+                "roi_width": float(r["roi_width"]) if pd.notna(r["roi_width"]) else np.nan,
+                "roi_height": float(r["roi_height"]) if pd.notna(r["roi_height"]) else np.nan,
+            }
+        out[int(frame_id)] = frame_map
+    return out
 
 
 def point_cloud_to_display(img_pc: np.ndarray, z_range: Optional[Tuple[float, float]] = None) -> np.ndarray:
@@ -287,21 +367,36 @@ def _draw_text_with_bg(img: np.ndarray, text: str, org: Tuple[int, int], color: 
     cv2.putText(img, text, (x, y), font, scale, color, thickness, cv2.LINE_AA)
 
 
-def draw_centers(img_bgr: np.ndarray, centers: Dict[str, Tuple[float, float]]) -> np.ndarray:
-    """Draw center markers and color-matched labels with semi-opaque backgrounds.
+def draw_centers(img_bgr: np.ndarray, centers: Dict[str, Tuple[float, float]] | Dict[str, Dict[str, float]]) -> np.ndarray:
+    """Draw full ROI rectangles plus center markers and labels.
 
+    Accepts either {name: (px, py)} or {name: {px, py, roi_x, roi_y, roi_width, roi_height}}.
     Attempts to avoid overlapping labels by trying a set of offsets.
     """
     out = img_bgr.copy()
     h, w = out.shape[:2]
     placed: List[Tuple[int, int, int, int]] = []
-    for name, (px, py) in centers.items():
+    for name, val in centers.items():
+        if isinstance(val, dict):
+            px, py = float(val.get("px", np.nan)), float(val.get("py", np.nan))
+            rx = val.get("roi_x", np.nan)
+            ry = val.get("roi_y", np.nan)
+            rw = val.get("roi_width", np.nan)
+            rh = val.get("roi_height", np.nan)
+        else:
+            px, py = val
+            rx = ry = rw = rh = np.nan
         if np.isnan(px) or np.isnan(py):
             continue
         ix, iy = int(round(px)), int(round(py))
         if not (0 <= ix < w and 0 <= iy < h):
             continue
         color = _color_from_name(name)
+        # Draw ROI rectangle if available
+        if not any(np.isnan(v) for v in (rx, ry, rw, rh)):
+            x0, y0 = int(round(rx)), int(round(ry))
+            x1, y1 = int(round(rx + rw)), int(round(ry + rh))
+            cv2.rectangle(out, (x0, y0), (x1, y1), color, 1, cv2.LINE_AA)
         cv2.circle(out, (ix, iy), 6, color, 2, cv2.LINE_AA)
 
         # Place label with anti-overlap attempts
@@ -344,7 +439,7 @@ def visualize_orientation_check(
     playback = TIFFPlayback(frames_dir)
     # Pick capture by index; assumes sorted order aligns with frame_id
     capture = playback.get_capture(frame_index if frame_index < len(playback) else 0)
-    centers = load_roi_centers_for_frame(csv_path, frame_index)
+    centers = load_roi_data_for_frame(csv_path, frame_index)
 
     img = transpose_point_cloud(capture.image) if transpose else capture.image
     disp = point_cloud_to_display(img, z_range=z_range)
@@ -451,7 +546,7 @@ def visualize_tiff_sequence(
     cv2.namedWindow(window, cv2.WINDOW_NORMAL)
 
     # Preload tracking once
-    centers_all = load_all_roi_centers(csv_path)
+    centers_all = load_all_roi_data(csv_path)
 
     # Fixed Z range based on depth mode
     fixed_z_range = _depth_mode_to_zrange(depth_mode)
@@ -587,34 +682,29 @@ def visualize_tiff_sequence(
 
 
 if __name__ == "__main__":
-    import argparse
+    # --- Define your settings here ---
+    frames_dir = "/Users/sarmc72/Library/CloudStorage/OneDrive-Linköpingsuniversitet/TEAMS/Documents - Social touch Kinect MNG/data/semi-controlled/1_primary/kinect/2022-06-15_ST14-01/block-order-01/2022-06-15_ST14-01_semicontrolled_block-order01_kinect_depth"  # required
+    tracking_csv = "/Users/sarmc72/Library/CloudStorage/OneDrive-Linköpingsuniversitet/TEAMS/Documents - Social touch Kinect MNG/data/semi-controlled/2_processed/kinect/2022-06-15_ST14-01/block-order-01/handstickers/2022-06-15_ST14-01_semicontrolled_block-order01_kinect_handstickers_roi_tracking.csv"  # set to CSV path to overlay ROI centers
+    frame_index = 0
+    transpose = True
+    play = False
+    fps = 30
+    cache_size = 64
+    depth_mode = "DepthMode.NFOV_UNBINNED"  # or WFOV_UNBINNED, NFOV_2X2BINNED, WFOV_2X2BINNED
 
-    parser = argparse.ArgumentParser(description="TIFF utilities for Kinect point clouds")
-    parser.add_argument("frames_dir", type=str, help="Path to folder with .tif/.tiff frames")
-    parser.add_argument("--tracking-csv", type=str, default=None, help="ROI tracking CSV path for overlay")
-    parser.add_argument("--frame-index", type=int, default=0, help="Frame index to visualize/start from")
-    parser.add_argument("--no-transpose", action="store_true", help="Display raw TIFF without transposing")
-    parser.add_argument("--play", action="store_true", help="Start in playback mode")
-    parser.add_argument("--fps", type=int, default=30, help="Playback FPS when --play is enabled (default: 30, Azure Kinect)" )
-    parser.add_argument("--cache-size", type=int, default=64, help="LRU cache size for frames/displays")
-    parser.add_argument("--depth-mode", type=str, default="DepthMode.NFOV_UNBINNED",
-                        help="Fixed depth range by Azure Kinect mode (e.g., DepthMode.NFOV_UNBINNED, WFOV_UNBINNED). If unknown, falls back to per-frame.")
-    args = parser.parse_args()
-
-    if args.tracking_csv:
-        # Use interactive sequence viewer by default
+    if tracking_csv:
         visualize_tiff_sequence(
-            args.frames_dir,
-            args.tracking_csv,
-            start_index=args.frame_index,
-            transpose=(not args.no_transpose),
-            play=args.play,
-            fps=args.fps,
-            cache_size=max(1, args.cache_size),
-            depth_mode=args.depth_mode,
+            frames_dir,
+            tracking_csv,
+            start_index=frame_index,
+            transpose=transpose,
+            play=play,
+            fps=fps,
+            cache_size=max(1, cache_size),
+            depth_mode=depth_mode,
         )
     else:
-        image, path = load_single_tiff_frame(args.frames_dir)
+        image, path = load_single_tiff_frame(frames_dir)
         h, w = image.shape[:2]
         channels = 1 if image.ndim == 2 else image.shape[2]
         dtype = image.dtype
