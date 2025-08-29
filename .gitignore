@@ -140,7 +140,6 @@ source/2_primary_processing/0_kinect_segmentation/createRGBvideo/createRGBvideo.
 source/2_primary_processing/0_kinect_segmentation/createRGBvideo/createRGBvideo.vcxproj.user
 source/2_primary_processing/0_kinect_segmentation/createRGBvideo/createRGBvideo.vcxproj
 .vscode/launch.json
-/code/scripts/misc
 
 # user config file with project path
 /configs

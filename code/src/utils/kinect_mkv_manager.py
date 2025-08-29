@@ -200,7 +200,7 @@ class KinectMKV:
         if not self._playback:
             raise RuntimeError("MKV not opened. Use within a 'with' block.")
         return self._playback.length
-    
+       
     # --- Delegated Reader Methods for Interactive Use ---
     def __len__(self) -> int:
         if not self._reader: raise RuntimeError("MKV not opened. Use within a 'with' block.")
@@ -213,7 +213,7 @@ class KinectMKV:
         if frame is None:
               raise IndexError(f"Could not retrieve valid frame at index {frame_index}.")
         return frame
-    
+        
     def __iter__(self) -> Iterator[KinectFrame]:
         if not self._reader: raise RuntimeError("MKV not opened. Use within a 'with' block.")
         self._reader.seek(0)

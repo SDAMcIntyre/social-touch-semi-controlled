@@ -8,23 +8,13 @@ from pydantic import BaseModel, DirectoryPath, FilePath, Field
 from _2_primary_processing._2_generate_rgb_depth_video import (
     generate_mkv_stream_analysis,
     extract_depth_to_tiff,
-    extract_color_to_mp4,
-    generate_foreground_masks,
-    remove_video_background
+    extract_color_to_mp4
 )
 
 from _3_preprocessing._1_sticker_tracking import (
     track_objects_in_video,
     ensure_tracking_is_valid,
-    convert_sticker_roi_to_center,
-
-    extract_stickers_xyz_positions,
-
-    unify_objects_rois_size,
-    create_windowed_videos,
-    fit_ellipses_on_correlation_videos,
-    adjust_ellipses_coord_to_frame,
-    generate_ellipses_on_frame_video
+    extract_stickers_xyz_positions
 )
 
 from _3_preprocessing._2_hand_tracking import (
@@ -56,7 +46,7 @@ import utils.path_tools as path_tools
 # ---------------------------------------
 # ---------------------
 # -----------
-PARALLEL_EXECUTION = True
+PARALLEL_EXECUTION = False
 # -----------
 # ---------------------
 # ---------------------------------------
@@ -119,39 +109,6 @@ def generate_rgb_video(source_video: Path, output_dir: Path) -> Path:
 
     return rgb_video_path
 
-    # Define the output path for the mask video
-    if 0:
-        mask_video_path =  output_dir / rgb_video_path.replace(".mp4", f"_fg_masks.mp4")
-        generate_foreground_masks(source_video, mask_video_path)
-
-        # 1. Define the parameter ranges you want to test
-        history_values = [2000, 3000, 5000]
-        threshold_values = [4, 8]
-
-        print("🚀 Starting batch generation of foreground masks...")
-        # 2. Loop through each combination of parameters
-        for history_val in history_values:
-            for threshold_val in threshold_values:
-                print(f"\n--- Processing with History={history_val}, Threshold={threshold_val} ---")
-
-                # 3. Create a unique filename for this combination
-                # This creates names like "video_fg_mask_h150_t16.mp4"
-                mask_filename = f"{rgb_video_path.stem}_fg_mask_h{history_val}_t{threshold_val}.mp4"
-                mask_video_path = output_dir / mask_filename
-
-                # 4. Call the function with the current set of parameters
-                generate_foreground_masks(
-                    video_path=source_video, 
-                    output_path=str(mask_video_path), # Use string representation of the path
-                    history=history_val,
-                    var_threshold=threshold_val
-                )
-                print(f"✅ Mask video successfully created at: {mask_video_path}")
-
-        print("\n🎉 Batch processing complete. All masks have been generated.")
-
-    return rgb_video_path
-
 @flow(name="2. Generate Depth Images")
 def generate_depth_images(source_video: Path, output_dir: Path) -> Path:
     """Requires .mkv video, generates a folder of .tiff images."""
@@ -194,7 +151,8 @@ def track_stickers(rgb_video_path: Path,
                    monitor_ui: bool = False
 ) -> Path:
     """Requires .mp4 video, generates a csv file of stickers position."""
-    
+    success = True
+
     print(f"[{output_dir.name}] Tracking stickers...")
     name_baseline =  rgb_video_path.stem + "_handstickers"
 
@@ -204,54 +162,14 @@ def track_stickers(rgb_video_path: Path,
 
     stickers_roi_csv_path = output_dir / (name_baseline + "_roi_tracking.csv")
     track_objects_in_video(rgb_video_path, metadata_roi_path, output_path=stickers_roi_csv_path)
-    return stickers_roi_csv_path
-
+    
     # defined by manual tasks pipeline
-    ensure_tracking_is_valid(metadata_roi_path)
-    # --------------------------------
-
-    ignore_ellipse_tracking = True
-    if not ignore_ellipse_tracking:
-        roi_unified_csv_path = output_dir / (name_baseline + "_roi_unified.csv")
-        unify_objects_rois_size(stickers_roi_csv_path, metadata_roi_path, roi_unified_csv_path)
-
-        roi_video_base_path = output_dir / (name_baseline + "_roi_unified.mp4")
-        create_windowed_videos(roi_unified_csv_path, rgb_video_path, roi_video_base_path)
-
-        # defined by manual tasks pipeline
-        metadata_colorspace_path = output_dir / (name_baseline + "_colorspace_metadata.json")
-        # --------------------------------
-
-        binary_video_base_path = output_dir / (name_baseline + "_corrmap_binary.mp4")
-        # generate_color_correlation_videos(corrmap_video_base_path, metadata_colorspace_path, binary_video_base_path)
-
-        fit_ellipses_path = output_dir / (name_baseline + "ellipses.csv")
-        fit_ellipses_on_correlation_videos(
-            video_path=binary_video_base_path,
-            md_path=metadata_colorspace_path,
-            output_path=fit_ellipses_path,
-            monitor_ui=monitor_ui)
-        
-        fit_ellipses_adj_path = output_dir / (name_baseline + "_ellipses_adj.csv")
-        adjust_ellipses_coord_to_frame(
-            roi_unified_csv_path=roi_unified_csv_path,
-            ellipses_csv_path=fit_ellipses_path,
-            metadata_path=metadata_colorspace_path,
-            output_path=fit_ellipses_adj_path)
-
-        ellipses_video_path = output_dir / (name_baseline + "_ellipses_adj.mp4")
-        generate_ellipses_on_frame_video(
-            rgb_video_path,
-            fit_ellipses_adj_path,
-            metadata_path=metadata_colorspace_path,
-            output_path=ellipses_video_path
-        )
-        return fit_ellipses_path
-        ensure_tracking_is_valid(metadata_pos_path)
-
-        ellipse_video_path = output_dir / (name_baseline + "ellipses_full_frame.mp4")
-        create_ellipses_on_full_frame_videos(rgb_video_path, roi_unified_csv_path, fit_ellipses_path, ellipse_video_path)
-
+    try:
+        ensure_tracking_is_valid(metadata_roi_path)
+    except Exception as e:
+        success = False
+        return stickers_roi_csv_path, success
+    
     result_csv_path = output_dir / (name_baseline + "_xyz_tracked.csv")
     result_video_path = output_dir / (name_baseline + "_xyz_tracked.mp4")
     result_md_path = output_dir / (name_baseline + "_xyz_tracked_metadata.json")
@@ -264,7 +182,7 @@ def track_stickers(rgb_video_path: Path,
         video_path=result_video_path,
         monitor=True)
     
-    return result_csv_path
+    return result_csv_path, success
     
 
 @flow(name="5. Generate TTL Signal")
@@ -350,13 +268,17 @@ def run_single_session_pipeline(inputs: SessionInputs, *, monitor_ui: bool = Fal
         
     # Stage 2&3: Stickers Tracking and 3D Reconstruction
     handstickers_dir = inputs.video_processed_output_dir / "handstickers"
-    sticker_tracking = track_stickers(rgb_video_path, inputs.source_video, handstickers_dir, monitor_ui=monitor_ui)
-    return  {"status": "success", "result": None}
+    sticker_tracking, success = track_stickers(rgb_video_path, inputs.source_video, handstickers_dir, monitor_ui=monitor_ui)
+    
+    if not success:
+        return  {"status": "stickers", "result": None}   
 
     hand_motion_glb_path = generate_3d_hand_motion(rgb_video_path, sticker_tracking, inputs.hand_models_dir, inputs.video_processed_output_dir)
     forearm_pointcloud = generate_forearm_pointcloud(inputs.source_video, inputs.video_processed_output_dir)
     somatosensory_chars = generate_somatosensory_chars(hand_motion_glb_path, forearm_pointcloud, inputs.video_processed_output_dir)
     
+    return  {"status": "somatosensory", "result": None}
+
     # Stage 4: Generate TTL from LED
     led_dir = inputs.video_processed_output_dir / "LED"
     led_TTL = track_led_blinking(rgb_video_path, inputs.stimulus_metadata, led_dir)
