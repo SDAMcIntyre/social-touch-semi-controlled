@@ -3,7 +3,7 @@ import pandas as pd
 from typing import List, Dict, Any, Tuple, Callable, Optional
 
 # Assuming these are the data structures passed in.
-from ..models.roi_tracked_data import ROITrackedObjects
+from ..models.roi_tracked_data import ROITrackedObject
 from pyk4a import PyK4APlayback
 
 class Sticker3DPositionExtractor:
@@ -12,10 +12,45 @@ class Sticker3DPositionExtractor:
     This version supports a callback function for frame-by-frame monitoring.
     """
 
-    def __init__(self, playback: PyK4APlayback, tracked_data: ROITrackedObjects):
+    def __init__(self, playback: PyK4APlayback, tracked_data: ROITrackedObject):
         self.playback = playback
         self.tracked_data = tracked_data
-        self.sticker_names = self.tracked_data.sticker_names
+        self.sticker_names = list(tracked_data.keys())
+    
+    @staticmethod
+    def get_xyz(roi: pd.Series, point_cloud: np.ndarray) -> Tuple[Dict[str, float], Dict[str, Any]]:
+        """
+        Extracts 3D coordinates and prepares monitoring data for a single frame.
+        """
+        # Calculate the center of the ROI in pixel coordinates
+        origin = np.array([roi["roi_x"], roi["roi_y"]])
+        size = np.array([roi["roi_width"], roi["roi_height"]])
+        center = origin + size / 2.0
+        
+        px, py = int(center[0]), int(center[1])
+
+        # Get the 3D coordinates from the point cloud at the calculated pixel
+        x_mm, y_mm, z_mm = Sticker3DPositionExtractor._get_xyz_from_point_cloud(point_cloud, px, py)
+
+        # Structure the output to match the type hint
+        coords_3d = {"x_mm": x_mm, "y_mm": y_mm, "z_mm": z_mm}
+        monitor_data = {"px": px, "py": py}
+
+        return coords_3d, monitor_data
+    
+    @staticmethod
+    def get_empty_xyz():
+        x_mm = np.nan
+        y_mm = np.nan
+        z_mm = np.nan
+        
+        px = np.nan
+        py = np.nan
+        # Structure the output to match the type hint
+        coords_3d = {"x_mm": x_mm, "y_mm": y_mm, "z_mm": z_mm}
+        monitor_data = {"px": px, "py": py}
+
+        return coords_3d, monitor_data
 
     def extract_positions(
         self,
@@ -60,7 +95,7 @@ class Sticker3DPositionExtractor:
         processed_count = frame_index + 1
         print(f"\nCompleted processing {processed_count} frames.")
         return results_data, processed_count
-
+    
     def _process_frame(self, point_cloud: np.ndarray, frame_centers: pd.DataFrame) -> Tuple[Dict[str, float], Dict[str, Any]]:
         """
         Extracts 3D coordinates and prepares monitoring data for a single frame.
@@ -76,9 +111,10 @@ class Sticker3DPositionExtractor:
             frame_results.update({f"{name}_x_mm": x_mm, f"{name}_y_mm": y_mm, f"{name}_z_mm": z_mm})
             monitoring_data[name] = {'px': px, 'py': py, 'x_mm': x_mm, 'y_mm': y_mm, 'z_mm': z_mm}
 
-        return frame_results, monitoring_data
-    
-    def _get_xyz_from_point_cloud(self, point_cloud: np.ndarray, px: float, py: float) -> Tuple[float, float, float]:
+        return frame_results, monitoring_data   
+     
+    @staticmethod
+    def _get_xyz_from_point_cloud(point_cloud: np.ndarray, px: float, py: float) -> Tuple[float, float, float]:
         """Retrieves the (x, y, z) coordinates from a point cloud at a given pixel location."""
         # This method remains unchanged from the previous version.
         if point_cloud is None or np.isnan(px) or np.isnan(py):

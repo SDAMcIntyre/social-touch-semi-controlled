@@ -69,10 +69,9 @@ class XYZMetadataModel:
         if error_message:
             self.error_message = error_message
 
-    def finalize(self, frames_processed: int):
+    def finalize(self):
         """Finalizes the metadata before saving (e.g., sets end time)."""
         self.end_time_utc = datetime.now(timezone.utc).isoformat()
-        self.update_processing_detail("frames_processed", frames_processed)
 
     def to_dict(self) -> Dict[str, Any]:
         """Converts the metadata model to a dictionary suitable for JSON serialization."""
