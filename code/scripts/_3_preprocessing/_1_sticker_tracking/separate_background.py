@@ -397,7 +397,8 @@ def draw_centers(img_bgr: np.ndarray, centers: Dict[str, Tuple[float, float]] | 
             x0, y0 = int(round(rx)), int(round(ry))
             x1, y1 = int(round(rx + rw)), int(round(ry + rh))
             cv2.rectangle(out, (x0, y0), (x1, y1), color, 1, cv2.LINE_AA)
-        cv2.circle(out, (ix, iy), 6, color, 2, cv2.LINE_AA)
+        # Draw a filled circle (point) for the center
+        cv2.circle(out, (ix, iy), 5, color, -1, cv2.LINE_AA)
 
         # Place label with anti-overlap attempts
         font, scale, thickness = cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1
