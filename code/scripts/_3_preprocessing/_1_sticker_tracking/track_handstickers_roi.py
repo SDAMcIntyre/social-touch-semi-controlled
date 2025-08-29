@@ -52,7 +52,7 @@ def track_objects_in_video(
         tracked_object = annotation_manager.get_object(object_name)
 
         if tracked_object.status == ROIProcessingStatus.TO_BE_PROCESSED.value:
-            tracked_roi = orchestrator.run(labeled_rois=tracked_object.rois)
+            tracked_roi = orchestrator.track(labeled_rois_df=tracked_object.rois)
 
             # 1. Track the object
             results[object_name] = tracked_roi
