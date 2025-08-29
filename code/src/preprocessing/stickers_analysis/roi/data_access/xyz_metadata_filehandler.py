@@ -1,31 +1,55 @@
+from typing import Any, Optional
+from pyk4a import PyK4APlayback
+from pathlib import Path
 import json
 
-from ..models.xyz_metadata_model import XYZMetadataModel
+from ..models.xyz_metadata_model import XYZMetadataModel, XYZMetadataConfig
 
 class XYZMetadataFileHandler:
-    """Handles the persistence (saving/loading) of metadata."""
+    """Orchestrates the creation and saving of processing metadata."""
 
-    def save_json(self, metadata: XYZMetadataModel):
+    def __init__(self, config: XYZMetadataConfig):
         """
-        Saves the provided MetadataModel to its specified path as a JSON file.
+        Initializes the manager with a configuration and a repository.
 
         Args:
-            metadata (MetadataModel): The metadata object to save.
-        
-        Raises:
-            ValueError: If the metadata_path is not set in the model.
-            IOError: If the file cannot be written.
+            config (XYZMetadataConfig): The configuration object containing paths and parameters.
+            repository (MetadataRepository, optional): The repository to use for persistence.
+                                                     Defaults to MetadataRepository.
         """
-        if not metadata.metadata_path:
-            print("\nWarning: metadata_path is not set. Skipping save.")
-            return
+        self.metadata = XYZMetadataModel(
+            source_video_path=config.source_video_path,
+            input_csv_path=config.input_csv_path,
+            output_csv_path=config.output_csv_path,
+            video_path=config.video_path,
+            metadata_path=config.metadata_path,
+            monitor=config.monitor
+        )
 
-        try:
-            with open(metadata.metadata_path, 'w') as f:
-                # Convert the model to a dict before dumping
-                json.dump(metadata.to_dict(), f, indent=4)
-            print(f"\nSuccessfully saved metadata to: {metadata.metadata_path}")
-        except IOError as e:
-            print(f"\nError: Could not write metadata file to {metadata.metadata_path}. Reason: {e}")
-            raise # Re-raise the exception so the caller can handle it if needed
-    
+    def get_metadata(self):
+        return self.metadata
+
+    def save(self, metadata: XYZMetadataModel, output_path: str): 
+        """
+        Serializes the metadata to a dictionary and saves it as a JSON file.
+        """
+        self.metadata = metadata
+        
+        # 🧙‍♂️ Best Practice: Use pathlib for robust path manipulation.
+        output_path = Path(output_path)
+        
+        # Ensure the parent directory exists to prevent FileNotFoundError.
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Get the dictionary representation of your metadata object.
+        data_to_save = self.metadata.to_dict()
+        
+        # Use a 'with' statement to safely open the file and handle closing it.
+        # 'w' opens the file for writing, creating it if it doesn't exist.
+        # 'encoding='utf-8'' is crucial for handling a wide range of characters.
+        with open(output_path, 'w', encoding='utf-8') as f:
+            # json.dump() writes the dictionary to the file object 'f'.
+            # 'indent=4' formats the JSON with 4-space indentation for readability.
+            json.dump(data_to_save, f, indent=4)
+            
+        print(f"✅ Metadata successfully saved to: {output_path}")

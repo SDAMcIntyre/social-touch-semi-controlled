@@ -1,17 +1,15 @@
 import os
+import pandas as pd
 from typing import Dict, Any
 
 from pyk4a import PyK4APlayback, K4AException
 
 # Import the new processor and other required modules
 from .xyz_extractor import Sticker3DPositionExtractor
-from ..data_access.roi_tracked_filehandler import ROITrackedFileHandler
 
 # Type hints for injected dependencies
-from ..models.xyz_metadata_manager import XYZMetadataManager
 from ..gui.xyz_monitor_gui import XYZVisualizationHandler
-from ..data_access.xyz_data_filehandler import XYZDataFileHandler
-from ..models.xyz_metadata_model import XYZMetadataModel
+from ..models.roi_tracked_data import ROITrackedObjects
 
 
 class XYZStickerOrchestrator:
@@ -22,9 +20,6 @@ class XYZStickerOrchestrator:
 
     def __init__(
         self,
-        config: XYZMetadataModel,
-        metadata_manager: XYZMetadataManager,
-        result_writer: XYZDataFileHandler,
         visualizer: XYZVisualizationHandler
     ):
         """
@@ -36,60 +31,55 @@ class XYZStickerOrchestrator:
             result_writer: The writer for saving final 3D data.
             visualizer: The handler for GUI visualization.
         """
-        self.config = config
-        self.metadata = metadata_manager
         self.visualizer = visualizer
-        self.result_writer = result_writer
 
-    def _validate_inputs(self):
-        """Checks for the existence of the source video."""
-        if not os.path.exists(self.config.source_video):
-            raise FileNotFoundError(f"Source video not found: {self.config.source_video}")
-
-    def run(self):
+    def run(self, source_video_path: str, tracked_data: ROITrackedObjects):
         """Executes the entire extraction and processing pipeline."""
         print("Starting sticker 3D position extraction...")
-        self._validate_inputs()
-        
-        processed_count = 0
+        object_names = list(tracked_data.keys())
+
+        results_data = {}
+        for object_name in object_names:
+            results_data[object_name] = []
+
         try:
-            # 1. Load Data
-            tracked_data_iohandler = ROITrackedFileHandler(self.config.center_csv_path)
-            tracked_data = tracked_data_iohandler.load_all_data()
-            sticker_names = list(tracked_data.keys())
-            self.metadata.update_processing_details("stickers_found", sticker_names)
+            with PyK4APlayback(source_video_path) as playback:
+                # Wrap the playback object with our iterator
+                for frame_index, capture in enumerate(self.playback_to_iterator(playback)):
+                    print(f"Processing frame: {frame_index}")
 
-            # 2. Process Video using a context manager for the playback resource
-            with PyK4APlayback(self.config.source_video) as playback:
-                print(f"Successfully opened MKV: {self.config.source_video}")
-                
-                # Setup visualization if enabled
-                if self.visualizer and self.visualizer.is_enabled:
-                    fps = self.metadata.add_mkv_metadata(playback)
-                    self.visualizer.setup_writer(fps)
-                    callback = self._visualize_frame_callback
-                else:
-                    callback = None
-                
-                # 3. Delegate Core Logic to the extractor
-                processor = Sticker3DPositionExtractor(playback, tracked_data)
-                results_data, processed_count = processor.extract_positions(
-                    on_frame_processed=callback
-                )
+                    for object_name in object_names:
+                        tracked_obj_row = tracked_data[object_name].loc[frame_index]
+                        if tracked_obj_row["status"] != "Failed":
+                            (coords_3d, monitor_data) = Sticker3DPositionExtractor.get_xyz(
+                                tracked_obj_row, 
+                                capture.transformed_depth_point_cloud)
+                        else:
+                            (coords_3d, monitor_data) = Sticker3DPositionExtractor.get_empty_xyz()
+                        results_data[object_name].append({**coords_3d, **monitor_data})
 
-            # 4. Save Results
-            self.result_writer.save(results_data, sticker_names, self.config.output_csv_path)
-            self.metadata.set_status("Completed")
+                print("Finished processing all frames.")
 
-        except (K4AException, FileNotFoundError, ValueError) as e:
-            self.metadata.set_status("Failed", str(e))
+        except K4AException as e:
+            print(f"Failed to open or process playback file: {e}")
+        except Exception as e:
             print(f"\nProcessing failed: {e}")
             raise
         finally:
-            self.metadata.save(processed_count)
             if self.visualizer:
                 self.visualizer.release()
+        
+        return results_data, frame_index
 
+    def playback_to_iterator(self, playback: PyK4APlayback):
+        """A generator to make PyK4APlayback iterable."""
+        while True:
+            try:
+                yield playback.get_next_capture()
+            except EOFError:
+                # End of the recording, the generator will stop.
+                break
+            
     def _visualize_frame_callback(self, frame_index: int, capture: 'Capture', monitoring_data: Dict[str, Any]) -> bool:
         """
         A callback function passed to the processor to handle visualization for each frame.

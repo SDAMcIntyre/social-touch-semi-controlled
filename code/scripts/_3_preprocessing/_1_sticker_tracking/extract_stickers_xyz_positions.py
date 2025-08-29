@@ -1,25 +1,18 @@
 import os
-import json
-from datetime import datetime, timezone
-from dataclasses import dataclass, field
-from typing import List, Dict, Any, Tuple, Optional
-
-import pandas as pd
-import numpy as np
-import cv2
-from pyk4a import PyK4APlayback, K4AException
-
 
 from preprocessing.stickers_analysis.roi import (
+    ROITrackedFileHandler,
+
     XYZMetadataModel,
-    XYZMetadataManager,
+    XYZMetadataFileHandler,
     XYZVisualizationHandler,
     XYZDataFileHandler,
     XYZStickerOrchestrator
 )
 
+
 def extract_stickers_xyz_positions(
-        source_video: str,
+        source_video_path: str,
         input_csv_path: str,
         output_csv_path: str,
         metadata_path: str = None,      # NEW: Added metadata path argument
@@ -28,13 +21,18 @@ def extract_stickers_xyz_positions(
     """
     Extracts 3D sticker positions and optionally shows a standard, non-distorted monitor window.
     """
-    if not os.path.exists(source_video): raise FileNotFoundError(f"Source video not found: {source_video}")
+    if not os.path.exists(source_video_path): raise FileNotFoundError(f"Source video not found: {source_video_path}")
     if not os.path.exists(input_csv_path): raise FileNotFoundError(f"Center CSV not found: {input_csv_path}")
+    
+    if os.path.exists(output_csv_path) and  os.path.exists(metadata_path):
+        print(f"data already processed. Skipping...")
+        return 
+
     print("Starting sticker 3D position extraction...")
 
     # 1. Define the configuration parameters for the job.
     config_data = {
-        "source_video_path": source_video,
+        "source_video_path": source_video_path,
         "input_csv_path": input_csv_path,
         "output_csv_path": output_csv_path,
         "metadata_path": metadata_path,
@@ -47,21 +45,32 @@ def extract_stickers_xyz_positions(
 
     # 2. Instantiate each dependency.
     #    These are the "services" the orchestrator will use.
-    metadata_manager = XYZMetadataManager(config)
     result_writer = XYZDataFileHandler()
     visualizer = XYZVisualizationHandler(config)
 
+    # 1. Load Data
+    tracked_data_iohandler = ROITrackedFileHandler(input_csv_path)
+    tracked_data = tracked_data_iohandler.load_all_data()
+    sticker_names = list(tracked_data.keys())
+
+    metadata_manager = XYZMetadataFileHandler(config)
+    metadata = metadata_manager.get_metadata()
+    metadata.update_processing_detail("stickers_found", sticker_names)
+
     # 3. Instantiate the main orchestrator with its dependencies.
-    orchestrator = XYZStickerOrchestrator(
-        config=config,
-        metadata_manager=metadata_manager,
-        result_writer=result_writer,
-        visualizer=visualizer
-    )
+    orchestrator = XYZStickerOrchestrator(visualizer=visualizer)
 
     # 4. Execute the process! 🚀
     try:
-        orchestrator.run()
+        results_data, processed_count = orchestrator.run(source_video_path, tracked_data)
         print("✅ Processing finished successfully!")
     except Exception as e:
         print(f"❌ An error occurred during processing: {e}")
+        raise
+    metadata.set_status("Completed")
+    metadata.update_processing_detail("frames_processed", processed_count)
+    metadata.finalize()
+
+    # 4. Save Results
+    result_writer.save(results_data, sticker_names, config.output_csv_path)
+    metadata_manager.save(metadata, config.metadata_path)
