@@ -1,7 +1,8 @@
 
 from preprocessing.stickers_analysis.roi import (
     ROIAnnotationFileHandler,
-    ROIAnnotationManager
+    ROIAnnotationManager,
+    ROIProcessingStatus
 )
 
 def ensure_tracking_is_valid(metadata_path: str):
@@ -18,5 +19,5 @@ def ensure_tracking_is_valid(metadata_path: str):
     annotation_data_iohandler = ROIAnnotationFileHandler.load(metadata_path)
     annotation_manager = ROIAnnotationManager(annotation_data_iohandler)
 
-    return annotation_manager.is_all_tracking_completed()
+    return annotation_manager.are_all_objects_with_status(ROIProcessingStatus.COMPLETED)
 
