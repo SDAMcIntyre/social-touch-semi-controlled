@@ -66,16 +66,18 @@ def processing_func(playback: PyK4APlayback,
         if shared_state:
             shared_state["is_running"] = False
 
-def extract_depth_to_tiff(mkv_path: str, output_dir: str, show: bool = False, frame_rate: int = 30):
+def extract_depth_to_tiff(
+        mkv_path: str, 
+        output_dir: str, 
+        *,
+        show: bool = False, 
+        frame_rate: int = 30
+):
     """
     Extracts depth frames from an MKV file and saves them as TIFF images.
     It calls a unified processing function either directly (for speed) or in a
     separate thread (to allow for visualization).
     """
-    if not os.path.exists(mkv_path):
-        raise FileNotFoundError(f"Input file not found at: {mkv_path}")
-
-    os.makedirs(output_dir, exist_ok=True)
     base_filename = os.path.splitext(os.path.basename(mkv_path))[0]
     marker_filename = f".SUCCESS_{base_filename}"
     marker_filepath = os.path.join(output_dir, marker_filename)
@@ -84,6 +86,9 @@ def extract_depth_to_tiff(mkv_path: str, output_dir: str, show: bool = False, fr
         print(f"Skipping '{mkv_path}' as it appears to be complete.")
         return
 
+    if not os.path.exists(mkv_path):
+        raise FileNotFoundError(f"Input file not found at: {mkv_path}")
+    
     try:
         playback = PyK4APlayback(mkv_path)
         playback.open()
@@ -96,6 +101,8 @@ def extract_depth_to_tiff(mkv_path: str, output_dir: str, show: bool = False, fr
     processing_thread = None
     was_successful = False
     fig = None # Initialize fig to None
+
+    os.makedirs(output_dir, exist_ok=True)
 
     try:
         if show:
@@ -168,6 +175,7 @@ def extract_depth_to_tiff(mkv_path: str, output_dir: str, show: bool = False, fr
 
         playback.close()
         print("Processing session finished.")
+
 
 
 def plot_capture(capture: PyK4ACapture, fig: plt.Figure):
