@@ -684,10 +684,10 @@ def visualize_tiff_sequence(
 
 if __name__ == "__main__":
     # --- Define your settings here ---
-    frames_dir = "/Users/sarmc72/Library/CloudStorage/OneDrive-Linköpingsuniversitet/TEAMS/Documents - Social touch Kinect MNG/data/semi-controlled/1_primary/kinect/2022-06-15_ST14-01/block-order-01/2022-06-15_ST14-01_semicontrolled_block-order01_kinect_depth"  # required
+    frames_dir = "/Volumes/sarmc72/2022-06-15_ST14-01_semicontrolled_block-order01_kinect_depth_2"  # required
     tracking_csv = "/Users/sarmc72/Library/CloudStorage/OneDrive-Linköpingsuniversitet/TEAMS/Documents - Social touch Kinect MNG/data/semi-controlled/2_processed/kinect/2022-06-15_ST14-01/block-order-01/handstickers/2022-06-15_ST14-01_semicontrolled_block-order01_kinect_handstickers_roi_tracking.csv"  # set to CSV path to overlay ROI centers
     frame_index = 0
-    transpose = True
+    transpose = False
     play = False
     fps = 30
     cache_size = 64
