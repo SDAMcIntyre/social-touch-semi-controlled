@@ -182,7 +182,7 @@ def track_stickers(rgb_video_path: Path,
         video_path=result_video_path,
         monitor=True)
     
-    return result_csv_path
+    return result_csv_path, success
     
 
 @flow(name="5. Generate TTL Signal")
