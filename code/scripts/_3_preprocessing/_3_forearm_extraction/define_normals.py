@@ -1,6 +1,6 @@
 import os
 
-from preprocessing.forearm_analysis import (
+from preprocessing.forearm_extraction import (
     PointCloudController,
     PointCloudModel,
     PointCloudVisualizer
