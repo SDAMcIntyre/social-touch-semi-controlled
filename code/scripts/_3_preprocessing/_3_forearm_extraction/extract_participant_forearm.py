@@ -3,13 +3,20 @@ import sys
 import cv2
 import numpy as np
 import yaml
-import json
-import cv2
-from dataclasses import dataclass
 
-from preprocessing.common.data_access.pc_data_handler import PointCloudDataHandler
-from preprocessing.forearm_extraction.arm_segmentation import ArmSegmentation
-from preprocessing.forearm_extraction.capture_manager import CaptureManager
+from utils.kinect_mkv_manager import (
+    KinectMKV,
+    KinectFrame
+)
+
+from preprocessing.common import PointCloudDataHandler
+
+from preprocessing.forearm_extraction import (
+    ArmSegmentation,
+    ForearmFrameParametersFileHandler,
+    RegionOfInterest,
+    ForearmSegmentationParamsFileHandler
+)
 
 
 CONFIG_PATH = 'config.yaml'
@@ -20,32 +27,6 @@ CONFIG_PATH = 'config.yaml'
 class ConfigError(Exception):
     """Exception raised for errors in the config file."""
     pass
-
-class DataIOError(Exception):
-    """Exception raised for errors related to data input/output."""
-    pass
-
-class PipelineError(Exception):
-    """Exception raised for errors during the processing pipeline."""
-    pass
-
-
-@dataclass
-class RegionOfInterest:
-    top_left_x: int
-    top_left_y: int
-    bottom_right_x: int
-    bottom_right_y: int
-
-@dataclass
-class VideoData:
-    video_path: str
-    reference_frame_idx: int
-    roi: RegionOfInterest
-    frame_width: int
-    frame_height: int
-    fps: float
-
 
 # -----------------------------------------------------------------
 # 3. Helper Functions (Separation of Concerns)
@@ -60,45 +41,29 @@ def load_config(config_path: str) -> dict:
     except yaml.YAMLError as e:
         raise ConfigError(f"Error parsing YAML configuration: {e}")
 
-def extract_video_config(file_path: str) -> VideoData:
-    """Reads metadata from the specified JSON file."""
-    try:
-        with open(file_path, 'r', encoding='utf-8') as f:
-            j = json.load(f)
-        roi_data = j["region_of_interest"]
-        return VideoData(
-            video_path=j["video_path"].replace('', 'ö'),
-            reference_frame_idx=j["reference_frame_idx"],
-            roi=RegionOfInterest(
-                top_left_x=roi_data["top_left_corner"]["x"], top_left_y=roi_data["top_left_corner"]["y"],
-                bottom_right_x=roi_data["bottom_right_corner"]["x"], bottom_right_y=roi_data["bottom_right_corner"]["y"]
-            ),
-            frame_width=j["frame_width"], frame_height=j["frame_height"], fps=j["fps"]
-        )
-    except FileNotFoundError:
-        raise DataIOError(f"Metadata file not found: {file_path}")
-    except (KeyError, json.JSONDecodeError) as e:
-        raise DataIOError(f"Error reading or parsing metadata file {file_path}: {e}")
+def get_corners_from_roi(roi: RegionOfInterest) -> np.ndarray:
+    p1 = (roi.top_left_corner.x, roi.top_left_corner.y)
+    p2 = (roi.bottom_right_corner.x, roi.bottom_right_corner.y)
+    return np.array([p1, p2])
 
-
-def get_3d_cuboid_from_roi(capture_manager: CaptureManager, roi: RegionOfInterest) -> np.ndarray:
+def get_3d_cuboid_from_roi(frame: KinectFrame, roi: RegionOfInterest) -> np.ndarray:
     """Converts the 2D ROI into 3D corner points for the box filter."""
-    p1 = capture_manager.convert_xy_coordinate_to_xyz_mm([roi.top_left_x, roi.top_left_y])
-    p2 = capture_manager.convert_xy_coordinate_to_xyz_mm([roi.bottom_right_x, roi.bottom_right_y])
+    top_left_corner, bottom_right_corner = get_corners_from_roi(roi)
+    p1 = frame.convert_xy_to_xyz(top_left_corner)
+    p2 = frame.convert_xy_to_xyz(bottom_right_corner)
     return np.array([p1, p2])
 
 def show_annotated_frames(
-        data: 'VideoData', 
-        cm: 'CaptureManager'):
+        roi: RegionOfInterest, 
+        frame: KinectFrame):
     """Displays the depth and color frames with the ROI rectangle."""
-    pt1 = (data.roi.top_left_x, data.roi.top_left_y)
-    pt2 = (data.roi.bottom_right_x, data.roi.bottom_right_y)
+    pt1, pt2 = get_corners_from_roi(roi)
     
-    depth_mat = cm.get_depth_as_rgb()
+    depth_mat = frame.get_depth_for_viewing()
     cv2.rectangle(depth_mat, pt1, pt2, (0, 0, 255), 2)
     cv2.imshow("Kinect Depth Frame with ROI", depth_mat)
 
-    color_mat = cm.color
+    color_mat = frame.color
     cv2.rectangle(color_mat, pt1, pt2, (0, 0, 255), 2)
     cv2.imshow("Kinect Color Frame with ROI", color_mat)
     
@@ -232,9 +197,11 @@ def show_video(source_video, frame_index = 542):
 def extract_forearm(
         video_path: str,
         metadata_path: str,
-        output_path:str,
+        output_ply_path: str,
+        output_params_path: str,
         *,
-        monitor: str = False
+        monitor: str = False,
+        interactive: str = False,
 ):
     """
     Orchestrates the entire processing pipeline for a single file.
@@ -243,9 +210,9 @@ def extract_forearm(
         config (dict): The loaded configuration dictionary.
     """
     
-    if os.path.exists(output_path):
+    if os.path.exists(output_ply_path) and os.path.exists(output_params_path):
         print(f"forearm has already been extracted. Skipping...")
-        return output_path
+        return output_ply_path
     
     # Load configuration
     config = load_config(os.path.join(os.path.dirname(__file__), CONFIG_PATH))
@@ -254,38 +221,38 @@ def extract_forearm(
         # 1. Load Data
         print(f"--- Processing {metadata_path} ---")
         
-        video_config = extract_video_config(metadata_path)
+        video_config = ForearmFrameParametersFileHandler.load(metadata_path)
         
         # 2. Setup Dependencies
         # Dependencies are created here and "injected" into the functions that need them.
-        capture_manager = CaptureManager(video_path, video_config.reference_frame_idx)
-        segmenter = ArmSegmentation()
+        with KinectMKV(video_path) as mkv:
+            frame: KinectFrame = mkv[video_config.reference_frame_idx]
+            point_cloud = frame.generate_o3d_point_cloud()
+            
+            segmenter = ArmSegmentation(config['segmentation_params'], interactive=interactive)
 
-        # 3. Run Core Pipeline
-        cuboid_oppposed_corners = get_3d_cuboid_from_roi(capture_manager, video_config.roi)
-        pcd = capture_manager.generate_point_cloud()
-        
-        pcd = segmenter.preprocess(
-            pcd,
-            config['segmentation_params'],
-            cuboid_oppposed_corners,
-            monitor #  config['visualization']['show_intermediate_steps']
-        )
-        
-        pcd = segmenter.extract_arm(
-            pcd,
-            config['segmentation_params']['region_growing'],
-            monitor #  config['visualization']['show_intermediate_steps']
-        )
-        
-        # 4. Finalize
-        if monitor: #  config['visualization']['show_intermediate_steps']
-            show_annotated_frames(video_config, capture_manager)
-        PointCloudDataHandler.save(pcd, output_path=output_path)
-        
-        return output_path
+            cuboid_oppposed_corners = get_3d_cuboid_from_roi(frame, video_config.region_of_interest)
+            pcd = segmenter.preprocess(
+                point_cloud,
+                cuboid_oppposed_corners,
+                monitor #  config['visualization']['show_intermediate_steps']
+            )
+            
+            pcd = segmenter.extract_arm(
+                pcd,
+                monitor #  config['visualization']['show_intermediate_steps']
+            )
+            
+            # 4. Finalize
+            if monitor: #  config['visualization']['show_intermediate_steps']
+                show_annotated_frames(video_config, frame)
+            PointCloudDataHandler.save(pcd, output_path=output_ply_path)
+            # save the parameters
+            ForearmSegmentationParamsFileHandler.save(segmenter.params, output_params_path)
+            
+        return output_ply_path
 
-    except (ConfigError, DataIOError, PipelineError) as e:
+    except (ConfigError) as e:
         print(f"❌ ERROR: A pipeline failure occurred: {e}", file=sys.stderr)
         sys.exit(1)
     except Exception as e:
