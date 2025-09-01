@@ -5,13 +5,7 @@ from pathlib import Path
 from pydantic import BaseModel, DirectoryPath, FilePath
 
 from _3_preprocessing._1_sticker_tracking import (
-    review_tracked_objects_in_video,
-    ensure_tracking_is_valid,
-    define_object_colorspaces_for_video,
-    generate_color_correlation_videos,
-    define_handstickers_color_threshold,
-    review_tracked_handstickers_position,
-    save_tracked_handstickers_position_as_video
+    review_tracked_objects_in_video
 )
 from _3_preprocessing._2_hand_tracking import select_hand_model_characteristics
 from _3_preprocessing._3_forearm_extraction import define_normals
@@ -54,60 +48,6 @@ def track_stickers(
     review_tracked_objects_in_video(rgb_video_path, metadata_roi_path, stickers_roi_csv_path)
     
     return stickers_roi_csv_path
-
-    ensure_tracking_is_valid(metadata_roi_path)
-
-    bypass_ellipse_tracking = True
-    if not bypass_ellipse_tracking:
-        # This block appears to contain unreachable or incomplete logic
-        # from the original script. Review if this code is necessary.
-        roi_video_base_path = output_dir / (name_baseline + "_roi_unified.mp4")
-        metadata_colorspace_path = output_dir / (name_baseline + "_colorspace_metadata.json")
-        define_object_colorspaces_for_video(
-            roi_video_base_path,
-            src_metadata_path=metadata_roi_path,
-            dest_metadata_path=metadata_colorspace_path
-        )
-
-        corrmap_video_base_path = output_dir / (name_baseline + "_corrmap.mp4")
-        generate_color_correlation_videos(
-            roi_video_base_path,
-            metadata_colorspace_path,
-            corrmap_video_base_path,
-            force_processing=True
-        )
-
-        define_handstickers_color_threshold(corrmap_video_base_path, md_path=metadata_colorspace_path)
-
-        roi_unified_csv_path = output_dir / (name_baseline + "_roi_unified.csv")
-        ellipses_csv_path = output_dir / (name_baseline + "_ellipses.csv")
-        ellipses_video_path = output_dir / (name_baseline + "_ellipses.mp4")
-
-        if not os.path.exists(ellipses_csv_path):
-            # This early exit might not be desirable.
-            return Path("")
-
-        review_tracked_handstickers_position(
-            rgb_video_path,
-            roi_unified_csv_path,
-            ellipses_csv_path,
-            metadata_colorspace_path,
-            output_video_path=ellipses_video_path
-        )
-
-        # The following section also appears unreachable/incomplete
-        # stickers_pos_video_path = output_dir / (name_baseline + "_pos_tracking.mp4")
-        # save_tracked_handstickers_position_as_video(rgb_video_path, stickers_pos_csv_path, metadata_pos_path, stickers_pos_video_path)
-        #
-        # try:
-        #     ensure_tracking_is_valid(metadata_pos_path)
-        # except ValueError as e:
-        #     return Path("")
-
-    # Assuming the final result is the ROI tracking file.
-    # Adjust if another file is the intended output.
-    result_csv_path = stickers_roi_csv_path
-    return result_csv_path
 
 
 def prepare_hand_tracking_session(
