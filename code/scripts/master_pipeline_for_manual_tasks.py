@@ -7,8 +7,15 @@ from pydantic import BaseModel, DirectoryPath, FilePath
 from _3_preprocessing._1_sticker_tracking import (
     review_tracked_objects_in_video
 )
+
 from _3_preprocessing._2_hand_tracking import select_hand_model_characteristics
-from _3_preprocessing._3_forearm_extraction import define_normals
+
+from _3_preprocessing._3_forearm_extraction import (
+    define_forearm_extraction_parameters,
+    extract_forearm,
+    define_normals
+)
+
 import utils.path_tools as path_tools
 
 # --- 1. Configuration Models (Unchanged) ---
@@ -66,17 +73,34 @@ def prepare_hand_tracking_session(
     return metadata_path
 
 
-def prepare_forearm(
-    point_cloud_path: Path,
+def generate_forearm_pointcloud(
+    rgb_video_path: Path,
+    source_video: Path,
+    primary_output_dir: Path,
     output_dir: Path
 ) -> tuple[Path, Path]:
     """Generates 3D position over time of the 3D hand model."""
-    print(f"[{output_dir.name}] Generating forearm data (normals)...")
-    output_ply_path = output_dir / "forearm_pointcloud_with_normals.ply"
-    output_metadata_path = output_dir / "forearm_pointcloud_with_normals_metadata.json"
-    define_normals(point_cloud_path, output_ply_path, output_metadata_path)
+    print(f"[{output_dir.name}] Generating forearm 3D point cloud...")
+    session_folder = source_video.parent.parent
 
-    return output_ply_path, output_metadata_path
+    md_filename = (source_video.name.split("_semicontrolled")[0] + "_kinect_arm_roi_metadata.json")
+    metadata_path = session_folder / md_filename
+    define_forearm_extraction_parameters(rgb_video_path, metadata_path)
+
+    forearm_ply_path = output_dir / "forearm_pointcloud.ply"
+    output_params_path = output_dir / "forearm_extraction_params.json"
+    extract_forearm(
+        source_video, 
+        metadata_path, 
+        output_ply_path=forearm_ply_path, 
+        output_params_path=output_params_path,
+        interactive=True)
+
+    forearm_ply_normals_path = output_dir / "forearm_pointcloud_with_normals.ply"
+    forearm_metadata_normals_path = output_dir / "forearm_pointcloud_with_normals_metadata.json"
+    define_normals(forearm_ply_path, forearm_ply_normals_path, forearm_metadata_normals_path)
+
+    return forearm_ply_normals_path, forearm_metadata_normals_path
 
 
 # --- 3. Main Pipeline Logic ---
@@ -88,6 +112,9 @@ def run_single_session_pipeline(inputs: SessionInputs):
     # Stage 1: Primary processing
     rgb_video_path = Path(str(inputs.source_video).replace(".mkv", ".mp4"))
 
+    generate_forearm_pointcloud(rgb_video_path, inputs.source_video, inputs.video_primary_output_dir, inputs.video_processed_output_dir)
+    return
+
     # Stage 2: Tracking
     # led_tracking_path = track_led_blinking(rgb_video_path, inputs.stimulus_metadata, inputs.video_processed_output_dir)
     track_stickers(rgb_video_path, inputs.source_video, inputs.video_processed_output_dir)
@@ -96,13 +123,6 @@ def run_single_session_pipeline(inputs: SessionInputs):
     # Stage 4: 3D Reconstruction
     prepare_hand_tracking_session(rgb_video_path, inputs.hand_models_dir, inputs.video_processed_output_dir)
     
-    forearm_pc_path = inputs.video_processed_output_dir / "forearm_pointcloud.ply"
-    if forearm_pc_path.exists():
-        prepare_forearm(forearm_pc_path, inputs.video_processed_output_dir)
-    else:
-        print(f"⚠️  Warning: Forearm point cloud not found at '{forearm_pc_path}', skipping normal generation.")
-
-
     # Stage 5: Data Integration (Placeholder)
     # unified_data = unify_dataset(somatosensory_chars, ttl_signal, inputs.video_processed_output_dir)
 
