@@ -5,7 +5,7 @@ from typing import Optional, Tuple, List, Dict, Any
 from dataclasses import dataclass
 import numpy as np
 
-from preprocessing.common.rgb_video_manager import RGBVideoManager
+from preprocessing.common.data_access.video_mp4_manager import VideoMP4Manager
 
 @dataclass
 class TrackingState:
@@ -49,7 +49,7 @@ class TrackingUIHandler(ABC):
         pass
 
     @abstractmethod
-    def handle_interrupt(self, vm: RGBVideoManager, all_results: Dict[int, Any], current_frame_num: int, frame_list: List[int]) -> UserInteractionResult:
+    def handle_interrupt(self, vm: VideoMP4Manager, all_results: Dict[int, Any], current_frame_num: int, frame_list: List[int]) -> UserInteractionResult:
         """
         Handle a major user interruption (e.g., pressing Enter to rewind).
         

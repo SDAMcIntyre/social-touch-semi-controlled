@@ -4,7 +4,7 @@ import sys
 from typing import List, Optional
 
 # --- MODULE 1: Video Handling ---
-class RGBVideoManager:
+class VideoMP4Manager:
     """
     Handles video file operations, providing frames on demand without
     loading the entire video into memory.

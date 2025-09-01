@@ -5,7 +5,7 @@ import trimesh
 import json
 from pathlib import Path
 
-from preprocessing.common.glb_data_handler import GLBDataHandler
+from preprocessing.common.data_access.glb_data_handler import GLBDataHandler
 from preprocessing.motion_analysis.hand_tracking.hand_mesh_processor import HandMeshProcessor
 from preprocessing.motion_analysis.objects_interaction_processor import ObjectsInteractionProcessor
 
