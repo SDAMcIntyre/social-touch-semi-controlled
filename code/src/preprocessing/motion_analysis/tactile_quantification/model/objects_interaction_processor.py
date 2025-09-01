@@ -5,6 +5,8 @@ from scipy.spatial import KDTree
 from scipy.spatial.transform import Rotation # <-- Essential for quaternion handling
 from typing import List, Optional, Dict
 
+from ..gui.debug_visualiser import DebugVisualizer
+
 class ObjectsInteractionProcessor:
     """
     Processes the interaction between a moving set of vertices and a static
@@ -15,7 +17,10 @@ class ObjectsInteractionProcessor:
                  base_vertices: np.ndarray,
                  tracked_points_groups_indices: Optional[List[List[int]]] = None,
                  tracked_points_groups_labels: Optional[List[str]] = None,
-                 fps: int = 30):
+                 *,
+                 fps: int = 30,
+                 use_debug: bool = True
+        ):
         if not reference_pcd.has_points() or not reference_pcd.has_normals():
             raise ValueError("reference_pcd must contain both points and normals.")
         
@@ -33,7 +38,7 @@ class ObjectsInteractionProcessor:
         self.ref_normals = np.asarray(self.ref_pcd.normals)
         self.ref_colors = np.asarray(self.ref_pcd.colors) if self.ref_pcd.has_colors() else None
 
-        self.kdtree = KDTree(self.ref_points)
+        self.ref_pcd_kdtree = KDTree(self.ref_points)
         self.base_vertices = base_vertices
         
         self._previous_tracked_points_pos: Dict[str, np.ndarray] = {}
@@ -44,6 +49,14 @@ class ObjectsInteractionProcessor:
         
         self.fps = fps
         self.dt = 1.0 / fps
+        
+        self._debug = use_debug
+
+          # Or set based on some config
+        if self._debug:
+            self.visualizer = DebugVisualizer(self.ref_pcd)
+        else:
+            self.visualizer = None
 
     @staticmethod
     def _calculate_rotation_from_planes(source_points: np.ndarray, target_points: np.ndarray) -> np.ndarray:
@@ -103,7 +116,8 @@ class ObjectsInteractionProcessor:
 
     def _calculate_tactile_data(self, v_transformed: np.ndarray) -> tuple[dict, dict]:
         """Calculates contact-related metrics for a single frame."""
-        distances, min_indices = self.kdtree.query(v_transformed)
+        # --- All the calculation logic remains exactly the same ---
+        distances, min_indices = self.ref_pcd_kdtree.query(v_transformed)
         hand_arm_vectors = v_transformed - self.ref_points[min_indices]
         normals_at_closest_points = self.ref_normals[min_indices]
         dot_products = np.einsum('ij,ij->i', hand_arm_vectors, normals_at_closest_points)
@@ -132,13 +146,24 @@ class ObjectsInteractionProcessor:
         }
         
         contact_info = {"contact_points": arm_intersect_unique, "contact_normals": self.ref_normals[unique_contact_indices]}
+        
+        if self._debug and self.visualizer and (not np.any(inside_mask)):
+            self.visualizer.show(
+                transformed_vertices=v_transformed,
+                contact_points=contact_info["contact_points"],
+                min_indices=min_indices,
+                dot_products=dot_products,
+                inside_mask=inside_mask,
+                normals_at_closest_points=normals_at_closest_points,
+                unique_contact_indices=unique_contact_indices
+            )
+        
         return contact_quantities, contact_info
 
     def _calculate_proprioceptive_data(
             self,
             v_transformed: np.ndarray,
-            contact_info: dict,
-        ) -> tuple[dict, dict]:
+            contact_info: dict) -> tuple[dict, dict]:
         """Calculates motion-related metrics for a single frame."""
         if not self.tracked_points_groups_labels:
             return {}, {}
@@ -164,11 +189,12 @@ class ObjectsInteractionProcessor:
             vel_longitudinal = np.dot(velocity, arm_longitudinal)
         proprio_data.update({"velocity_absolute": vel_abs, "velocity_normal": vel_normal, "velocity_lateral": vel_lateral, "velocity_longitudinal": vel_longitudinal})
         return proprio_data, current_positions
-
+    
     def process_single_frame(
             self, 
             translation: np.ndarray, 
-            rotation_quat: np.ndarray
+            rotation_quat: np.ndarray,
+            _debug: bool = False
         ) -> dict:
         """
         Processes a single frame of interaction.
@@ -181,6 +207,8 @@ class ObjectsInteractionProcessor:
         Returns:
             A dictionary containing calculated metrics and data for visualization.
         """
+        self._debug = _debug
+
         # Check for zero transformation input. If so, return a dictionary of NaNs.
         if np.all(rotation_quat == 0) or np.all(translation == 0):
             # Define all possible metric keys that would normally be generated.
@@ -214,13 +242,11 @@ class ObjectsInteractionProcessor:
             }
             
         v_transformed = self._transform_vertices(translation, rotation_quat)
-        
         contact_quantities, contact_info = self._calculate_tactile_data(v_transformed)
         proprio_quantities, current_tracked_points_pos = self._calculate_proprioceptive_data(
             v_transformed, 
             contact_info
         )
-
         if proprio_quantities:
             self._previous_tracked_points_pos = current_tracked_points_pos
 

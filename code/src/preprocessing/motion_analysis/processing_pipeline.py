@@ -6,7 +6,7 @@ import numpy as np
 import cv2
 from dataclasses import dataclass
 
-from ..forearm_analysis.capture_manager import CaptureManager
+from ..forearm_extraction.capture_manager import CaptureManager
 
 
 # -----------------------------------------------------------------

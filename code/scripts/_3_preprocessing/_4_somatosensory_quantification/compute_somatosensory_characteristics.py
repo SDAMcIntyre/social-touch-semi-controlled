@@ -1,10 +1,7 @@
-
-import open3d as o3d
-import numpy as np
-
 from preprocessing.common.glb_data_handler import GLBDataHandler
 from preprocessing.common.pc_data_handler import PointCloudDataHandler
-from preprocessing.motion_analysis.objects_interaction_controller import ObjectsInteractionController
+from preprocessing.motion_analysis.tactile_quantification.core.objects_interaction_orchestrator import ObjectsInteractionOrchestrator
+
 
 def compute_somatosensory_characteristics(
         hand_motion_glb_path: str, 
@@ -24,8 +21,8 @@ def compute_somatosensory_characteristics(
     if arm_pcd:
         print(f"Successfully loaded arm point cloud with {len(arm_pcd.points)} points.")
 
-    # 3. INITIALIZE AND RUN THE CONTROLLER
-    controller_with_vis = ObjectsInteractionController(
+    # 3. INITIALIZE AND RUN THE ORCHESTRATOR
+    controller_with_vis = ObjectsInteractionOrchestrator(
         hand_motion_data,
         arm_pcd,
         visualize=monitor,
@@ -40,3 +37,4 @@ def compute_somatosensory_characteristics(
     results_df.to_csv(output_csv_path, index=False)
 
     return output_csv_path
+
