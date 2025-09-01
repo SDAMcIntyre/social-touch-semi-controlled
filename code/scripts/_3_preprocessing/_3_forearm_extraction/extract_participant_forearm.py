@@ -8,8 +8,8 @@ import cv2
 from dataclasses import dataclass
 
 from preprocessing.common.pc_data_handler import PointCloudDataHandler
-from preprocessing.forearm_analysis.arm_segmentation import ArmSegmentation
-from preprocessing.forearm_analysis.capture_manager import CaptureManager
+from preprocessing.forearm_extraction.arm_segmentation import ArmSegmentation
+from preprocessing.forearm_extraction.capture_manager import CaptureManager
 
 
 CONFIG_PATH = 'config.yaml'
