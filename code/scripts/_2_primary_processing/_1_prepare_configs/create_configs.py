@@ -3,8 +3,10 @@ import yaml
 from pathlib import Path
 import re
 import os
+import tkinter as tk
+from tkinter import filedialog
 
-from primary_processing import KinectConfigFileHandler
+from config_manager import load_and_resolve_config
 import utils.path_tools as path_tools
 
 def parse_path_from_template(path_str: str, template: str) -> dict:
@@ -43,20 +45,12 @@ def generate_yaml_config(source_video_abs_path: Path, project_config: dict, proj
     hand_models_dir_str = templates['hand_models_dir'].format(**context)
     video_primary_output_dir_str = templates['video_primary_output_dir'].format(**context)
     video_processed_output_dir_str = templates['video_processed_output_dir'].format(**context)
-    session_primary_output_dir_str = templates['session_primary_output_dir'].format(**context)
-    session_processed_output_dir_str = templates['session_processed_output_dir'].format(**context)
-    
-    # --- MODIFIED SECTION ---
-    # Add 'session_id' from the extracted path parts to the config data.
     config_data = {
-        'session_id': extracted_parts['session_id'],
         'source_video': source_video_rel_path.as_posix(),
         'stimulus_metadata': Path(stimulus_path_str).as_posix(),
         'hand_models_dir': Path(hand_models_dir_str).as_posix(),
         'video_primary_output_dir': Path(video_primary_output_dir_str).as_posix(),
         'video_processed_output_dir': Path(video_processed_output_dir_str).as_posix(),
-        'session_primary_output_dir': Path(session_primary_output_dir_str).as_posix(),
-        'session_processed_output_dir': Path(session_processed_output_dir_str).as_posix(),
     }
 
     output_yaml_filename = f"kinect_config_{Path(video_filename).stem.replace('_kinect', '')}.yaml"
@@ -69,6 +63,7 @@ def generate_yaml_config(source_video_abs_path: Path, project_config: dict, proj
     
     # 3. Construct the final path within the code project
     output_yaml_path = config_output_dir / output_yaml_filename
+    # --- END MODIFIED SECTION ---
 
     with open(output_yaml_path, 'w') as f:
         yaml.dump(config_data, f, sort_keys=False, default_flow_style=False)
@@ -90,7 +85,7 @@ def main():
     # 3. Load Project Config from the determined data root
     try:
         project_config_path = project_data_root / "project_config.yaml"
-        project_config = KinectConfigFileHandler.load_and_resolve_config(project_config_path)
+        project_config = load_and_resolve_config(project_config_path)
     except FileNotFoundError:
         print(f"❌ Error: 'project_config.yaml' not found in the selected directory: {project_data_root.resolve()}")
         return
@@ -119,13 +114,9 @@ def main():
             # Pass BOTH root paths to the generator function
             generate_yaml_config(video_path, project_config, project_data_root, project_code_root)
             success_count += 1
-        except (ValueError, FileNotFoundError, KeyError) as e:
-            if isinstance(e, KeyError) and 'session_id' in str(e):
-                 print(f"❗️ Failed to process {video_path.name}: 'session_id' key not found in path template. Check your 'project_config.yaml'.")
-            else:
-                print(f"❗️ Failed to process {video_path.name}: {e}")
+        except (ValueError, FileNotFoundError) as e:
+            print(f"❗️ Failed to process {video_path.name}: {e}")
             fail_count += 1
-
 
     print(f"\n--- 🚀 Processing Complete ---")
     print(f"Successfully generated: {success_count} config(s)")

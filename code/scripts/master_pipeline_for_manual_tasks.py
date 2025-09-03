@@ -2,7 +2,11 @@ import os
 import yaml
 from pathlib import Path
 
-from pydantic import BaseModel, DirectoryPath, FilePath
+import utils.path_tools as path_tools
+from primary_processing import (
+    KinectConfigFileHandler,
+    KinectConfig
+)
 
 from _3_preprocessing._1_sticker_tracking import (
     review_tracked_objects_in_video
@@ -16,17 +20,6 @@ from _3_preprocessing._3_forearm_extraction import (
     define_normals
 )
 
-import utils.path_tools as path_tools
-
-# --- 1. Configuration Models (Unchanged) ---
-# This model defines the validated structure for our YAML configuration files.
-class SessionInputs(BaseModel):
-    """The complete, validated configuration for a single session."""
-    source_video: FilePath
-    stimulus_metadata: FilePath
-    hand_models_dir: DirectoryPath
-    video_primary_output_dir: Path
-    video_processed_output_dir: Path
 
 
 # --- 2. Processing Functions (Prefect decorators removed) ---
@@ -76,19 +69,18 @@ def prepare_hand_tracking_session(
 def generate_forearm_pointcloud(
     rgb_video_path: Path,
     source_video: Path,
-    primary_output_dir: Path,
-    output_dir: Path
+    session_input_dir: Path,
+    session_output_dir: Path
 ) -> tuple[Path, Path]:
     """Generates 3D position over time of the 3D hand model."""
-    print(f"[{output_dir.name}] Generating forearm 3D point cloud...")
-    session_folder = source_video.parent.parent
+    print(f"[{session_output_dir.name}] Generating forearm 3D point cloud...")
 
-    md_filename = (source_video.name.split("_semicontrolled")[0] + "_kinect_arm_roi_metadata.json")
-    metadata_path = session_folder / md_filename
+    md_filename = source_video.name.split("_semicontrolled")[0] + "_kinect_arm_roi_metadata.json"
+    metadata_path = session_input_dir / md_filename
     define_forearm_extraction_parameters(rgb_video_path, metadata_path)
 
-    forearm_ply_path = output_dir / "forearm_pointcloud.ply"
-    output_params_path = output_dir / "forearm_extraction_params.json"
+    forearm_ply_path = session_output_dir / "forearm_pointcloud.ply"
+    output_params_path = session_output_dir / "forearm_extraction_params.json"
     extract_forearm(
         source_video, 
         metadata_path, 
@@ -96,8 +88,8 @@ def generate_forearm_pointcloud(
         output_params_path=output_params_path,
         interactive=True)
 
-    forearm_ply_normals_path = output_dir / "forearm_pointcloud_with_normals.ply"
-    forearm_metadata_normals_path = output_dir / "forearm_pointcloud_with_normals_metadata.json"
+    forearm_ply_normals_path = session_output_dir / "forearm_pointcloud_with_normals.ply"
+    forearm_metadata_normals_path = session_output_dir / "forearm_pointcloud_with_normals_metadata.json"
     define_normals(forearm_ply_path, forearm_ply_normals_path, forearm_metadata_normals_path)
 
     return forearm_ply_normals_path, forearm_metadata_normals_path
@@ -105,14 +97,18 @@ def generate_forearm_pointcloud(
 
 # --- 3. Main Pipeline Logic ---
 
-def run_single_session_pipeline(inputs: SessionInputs):
+def run_single_session_pipeline(inputs: KinectConfig):
     """This function processes a SINGLE dataset by calling the appropriate sub-routines."""
     print(f"🚀 Starting pipeline for session: {inputs.video_processed_output_dir.name}")
 
     # Stage 1: Primary processing
     rgb_video_path = Path(str(inputs.source_video).replace(".mkv", ".mp4"))
 
-    generate_forearm_pointcloud(rgb_video_path, inputs.source_video, inputs.video_primary_output_dir, inputs.video_processed_output_dir)
+    generate_forearm_pointcloud(
+        rgb_video_path, 
+        inputs.source_video, 
+        inputs.video_primary_output_dir.parent, 
+        inputs.video_processed_output_dir.parent)
     return
 
     # Stage 2: Tracking
@@ -134,29 +130,25 @@ def batch_process_all_sessions(configs_kinect_dir: Path, project_data_root: Path
     if not configs_kinect_dir.is_dir():
         raise ValueError(f"Sessions folder not found: {configs_kinect_dir}")
 
-    session_files = sorted(list(configs_kinect_dir.glob("*.yaml")))
-    if not session_files:
+    block_files = sorted(list(configs_kinect_dir.glob("*.yaml")))
+    if not block_files:
         print(f"⚠️  Warning: No session *.yaml files found in '{configs_kinect_dir}'.")
         return
-        
-    print(f"Found {len(session_files)} session(s) to process in '{configs_kinect_dir}'.")
+    
+    print(f"Found {len(block_files)} session(s) to process in '{configs_kinect_dir}'.")
     print("Processing sessions one by one...")
 
-    for i, session_file in enumerate(session_files):
-        print(f"\n--- Processing session {i+1}/{len(session_files)}: {session_file.name} ---")
+    for i, block_file in enumerate(block_files):
+        print(f"\n--- Processing session {i+1}/{len(block_files)}: {block_file.name} ---")
         try:
-            with open(session_file, 'r') as f:
-                config_data = yaml.safe_load(f)
-
-            # Resolve paths relative to the project root
-            config_data_abs = {key: project_data_root / value for key, value in config_data.items()}
-            validated_inputs = SessionInputs(**config_data_abs)
+            config_data = KinectConfigFileHandler.load_and_resolve_config(block_file)
+            validated_inputs = KinectConfig(config_data=config_data, database_path=project_data_root)
 
             # Direct, blocking call to the pipeline for a single session.
             run_single_session_pipeline(inputs=validated_inputs)
 
         except Exception as e:
-            print(f"❌ ERROR processing session {session_file.name}: {e}")
+            print(f"❌ ERROR processing session {block_file.name}: {e}")
             print("Skipping to next session.")
             continue # Move to the next session if an error occurs
 
@@ -169,9 +161,9 @@ if __name__ == "__main__":
     
     # It's good practice to define paths relative to the script location
     # or a well-defined root to avoid ambiguity.
-    project_root = Path(__file__).resolve().parent.parent.parent
+    project_root = Path(__file__).resolve().parents[2]
     configs_dir = project_root / "configs"
-    kinect_dir = "kinect_configs" # Subdirectory name
+    kinect_dir = "kinect_configs/automatic_stickers_processing" # Subdirectory name
     configs_kinect_dir = configs_dir / kinect_dir
     
     # Assuming path_tools is aware of your project structure
