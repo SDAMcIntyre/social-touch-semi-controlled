@@ -1,7 +1,3 @@
-from preprocessing.common.glb_data_handler import GLBDataHandler
-from preprocessing.common.pc_data_handler import PointCloudDataHandler
-from preprocessing.motion_analysis.tactile_quantification.core.objects_interaction_orchestrator import ObjectsInteractionOrchestrator
-
 import re
 import logging
 import open3d as o3d
@@ -98,7 +94,7 @@ def compute_somatosensory_characteristics(
     forearms_dict = get_forearms_with_fallback(catalog, current_video_filename)
 
     # 3. INITIALIZE AND RUN THE ORCHESTRATOR
-    controller_with_vis = ObjectsInteractionOrchestrator(
+    controller_with_vis = ObjectsInteractionController(
         hand_motion_data,
         forearms_dict,
         visualize=monitor,

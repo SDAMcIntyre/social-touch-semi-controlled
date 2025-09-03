@@ -11,7 +11,7 @@ from ..model.objects_interaction_processor import ObjectsInteractionProcessor
 from ..gui.objects_interaction_visualizer import ObjectsInteractionVisualizer
 
 
-class ObjectsInteractionOrchestrator:
+class ObjectsInteractionController:
     """
     Manages the simulation, coordinating the ObjectsInteractionProcessor (Model)
     and ObjectsInteractionVisualizer (View). This is the 'Controller'.
