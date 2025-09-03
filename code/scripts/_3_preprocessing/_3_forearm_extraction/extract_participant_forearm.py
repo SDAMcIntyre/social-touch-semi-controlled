@@ -12,9 +12,12 @@ from utils.kinect_mkv_manager import (
 from preprocessing.common import PointCloudDataHandler
 
 from preprocessing.forearm_extraction import (
-    ArmSegmentation,
     ForearmFrameParametersFileHandler,
+    ForearmParameters,
     RegionOfInterest,
+
+    ArmSegmentation,
+
     ForearmSegmentationParamsFileHandler
 )
 
@@ -196,7 +199,7 @@ def show_video(source_video, frame_index = 542):
 # -----------------------------------------------------------------
 def extract_forearm(
         video_path: str,
-        metadata_path: str,
+        video_config: ForearmParameters,
         output_ply_path: str,
         output_params_path: str,
         *,
@@ -210,26 +213,25 @@ def extract_forearm(
         config (dict): The loaded configuration dictionary.
     """
     
-    if os.path.exists(output_ply_path) and os.path.exists(output_params_path):
-        print(f"forearm has already been extracted. Skipping...")
-        return output_ply_path
-    
     # Load configuration
     config = load_config(os.path.join(os.path.dirname(__file__), CONFIG_PATH))
 
+    if os.path.exists(output_params_path):
+        segmentation_params = ForearmSegmentationParamsFileHandler.load(output_params_path)
+    else:
+        segmentation_params = config['segmentation_params']
+
     try:
         # 1. Load Data
-        print(f"--- Processing {metadata_path} ---")
-        
-        video_config = ForearmFrameParametersFileHandler.load(metadata_path)
+        print(f"--- Processing {os.path.basename(video_path)} ---")
         
         # 2. Setup Dependencies
         # Dependencies are created here and "injected" into the functions that need them.
         with KinectMKV(video_path) as mkv:
-            frame: KinectFrame = mkv[video_config.reference_frame_idx]
+            frame: KinectFrame = mkv[video_config.frame_id]
             point_cloud = frame.generate_o3d_point_cloud()
             
-            segmenter = ArmSegmentation(config['segmentation_params'], interactive=interactive)
+            segmenter = ArmSegmentation(segmentation_params, interactive=interactive)
 
             cuboid_oppposed_corners = get_3d_cuboid_from_roi(frame, video_config.region_of_interest)
             pcd = segmenter.preprocess(
@@ -245,7 +247,7 @@ def extract_forearm(
             
             # 4. Finalize
             if monitor: #  config['visualization']['show_intermediate_steps']
-                show_annotated_frames(video_config, frame)
+                show_annotated_frames(video_config.region_of_interest, frame)
             PointCloudDataHandler.save(pcd, output_path=output_ply_path)
             # save the parameters
             ForearmSegmentationParamsFileHandler.save(segmenter.params, output_params_path)
