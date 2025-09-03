@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import List, TypeVar
 
 # ----------------------------------------------------------------------------
 # 1. Data Storage Classes
@@ -21,11 +22,23 @@ class RegionOfInterest:
 @dataclass
 class ForearmParameters:
     """A comprehensive container for all video-related metadata."""
-    reference_frame_idx: int
+    video_filename: str
+    frame_id: int
     region_of_interest: RegionOfInterest
     frame_width: int
     frame_height: int
     fps: float
     nframes: int
     fourcc_str: str
-    
+
+
+# Define a generic TypeVar bound to the base class
+T = TypeVar('T', bound=ForearmParameters)
+
+def sort_forearm_parameters_by_video_and_frame(
+    parameters_list: List[T]
+) -> List[T]:
+    """
+    Sorts a list of ForearmParameters objects by video_filename and frame_id.
+    """
+    return sorted(parameters_list, key=lambda p: (p.video_filename, p.frame_id))

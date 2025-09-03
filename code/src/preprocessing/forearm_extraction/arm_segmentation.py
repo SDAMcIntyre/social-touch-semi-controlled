@@ -74,7 +74,7 @@ class ArmSegmentation:
         self.interactive = interactive
         # Store original colors for clustering visualization
         self._original_colors = None
-
+    
     def preprocess(self,
                    pcd: o3d.geometry.PointCloud,
                    box_corners: np.ndarray,
