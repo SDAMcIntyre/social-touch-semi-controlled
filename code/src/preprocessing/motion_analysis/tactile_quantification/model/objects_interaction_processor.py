@@ -177,7 +177,7 @@ class ObjectsInteractionProcessor:
     def _calculate_tactile_data(self, v_transformed: np.ndarray) -> tuple[dict, dict]:
         """Calculates contact-related metrics for a single frame."""
         # --- All the calculation logic remains exactly the same ---
-        distances, min_indices = self.ref_pcd_kdtree.query(v_transformed)
+        distances, min_indices = self.kdtree.query(v_transformed)
         hand_arm_vectors = v_transformed - self.ref_points[min_indices]
         normals_at_closest_points = self.ref_normals[min_indices]
         dot_products = np.einsum('ij,ij->i', hand_arm_vectors, normals_at_closest_points)
