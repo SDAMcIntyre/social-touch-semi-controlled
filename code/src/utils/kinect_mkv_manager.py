@@ -1,7 +1,6 @@
 import csv
 import logging
 from pathlib import Path
-from dataclasses import dataclass
 from typing import Iterator, Dict
 
 import cv2
@@ -95,6 +94,44 @@ class KinectFrame:
         pcd.points = o3d.utility.Vector3dVector(points_xyz)
         pcd.colors = o3d.utility.Vector3dVector(points_rgb)
         return pcd
+
+    def convert_xy_to_xyz(self, xy: tuple[int, int]) -> np.ndarray:
+        """
+        Looks up the 3D coordinate (in mm) for a given 2D pixel coordinate.
+
+        Args:
+            xy (tuple): The (x, y) pixel coordinate.
+
+        Returns:
+            np.ndarray: The [X, Y, Z] coordinate in millimeters, or [0,0,0] if invalid.
+        """
+        x, y = xy
+        point_cloud_map = self.transformed_depth_point_cloud
+        if point_cloud_map is not None and 0 <= y < point_cloud_map.shape[0] and 0 <= x < point_cloud_map.shape[1]:
+            xyz_point = point_cloud_map[y, x]
+            # Check for invalid points (often represented as NaNs or zeros)
+            if np.any(np.isnan(xyz_point)) or np.all(xyz_point == 0):
+                    return np.array([0.0, 0.0, 0.0], dtype=np.float32)
+            return xyz_point
+        return np.array([0.0, 0.0, 0.0], dtype=np.float32)
+
+    def get_depth_for_viewing(self) -> np.ndarray | None:
+        """
+        Converts the raw depth map (in mm) to a visualizable 8-bit RGB image.
+        Clips depth values at 5 meters for better contrast.
+        """
+        depth_map = self.depth
+        if depth_map is None:
+            return None
+        
+        # Clip depth to a practical range (e.g., 0 to 5000mm) for visualization
+        depth_clipped = np.clip(depth_map, 0, 5000)
+        
+        # Normalize the clipped depth map to the 0-255 range
+        norm_depth = cv2.normalize(depth_clipped, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
+        
+        # Apply a colormap for better visual distinction
+        return cv2.applyColorMap(norm_depth, cv2.COLORMAP_JET)
 
 # --- Internal Implementation (The "Complex" Subsystem) ---
 

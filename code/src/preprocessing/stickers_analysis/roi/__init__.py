@@ -16,7 +16,7 @@ from .models.roi_tracked_data import ROITrackedObjects, ROITrackedObject, ROITra
 
 from .core.review_tracking_orchestrator import TrackerReviewOrchestrator, TrackerReviewStatus
 from .gui.review_tracking_gui import TrackerReviewGUI
-from .gui.frame_roi_square import FrameROISquare
+#from ...common.gui.frame_roi_square import FrameROISquare
 from .models.video_review_manager import VideoReviewManager
 
 from .core.roi_tracking_orchestrator import TrackingOrchestrator
@@ -45,6 +45,6 @@ __all__ = [
     "TrackerReviewOrchestrator", 
     "TrackerReviewStatus",
     "TrackerReviewGUI", 
-    "FrameROISquare",
+    #"FrameROISquare",
     "VideoReviewManager", 
 ]

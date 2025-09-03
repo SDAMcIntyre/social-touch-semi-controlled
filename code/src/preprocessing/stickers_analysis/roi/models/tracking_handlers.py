@@ -5,11 +5,11 @@ import tkinter as tk
 import numpy as np
 from typing import Optional, Tuple, List, Dict, Any
 
-from preprocessing.common.rgb_video_manager import RGBVideoManager
+from preprocessing.common.data_access.video_mp4_manager import VideoMP4Manager
+from preprocessing.common.gui.frame_roi_square import FrameROISquare
+from preprocessing.common.gui.video_frame_selector import VideoFrameSelector
 
 from .tracking_contracts import TrackingUIHandler, TrackingState, UserInteractionResult
-from ..gui.frame_roi_square import FrameROISquare
-from ..gui.video_frame_selector import VideoFrameSelector
 from .video_review_manager import VideoReviewManager
 
 
@@ -26,7 +26,7 @@ class HeadlessUIHandler(TrackingUIHandler):
         print("Tracking failed. Cannot redefine ROI in headless mode.")
         return None
 
-    def handle_interrupt(self, vm: RGBVideoManager, all_results: Dict[int, Any], current_frame_num: int, frame_list: List[int]) -> UserInteractionResult:
+    def handle_interrupt(self, vm: VideoMP4Manager, all_results: Dict[int, Any], current_frame_num: int, frame_list: List[int]) -> UserInteractionResult:
         """Interrupts are not possible in headless mode."""
         print("User interrupt requested, but not supported in headless mode.")
         return UserInteractionResult()
@@ -76,7 +76,7 @@ class InteractiveGUIHandler(TrackingUIHandler):
             return (roi_data['x'], roi_data['y'], roi_data['width'], roi_data['height'])
         return None
 
-    def handle_interrupt(self, vm: RGBVideoManager, all_results: Dict[int, Any], current_frame_num: int, frame_list: List[int]) -> UserInteractionResult:
+    def handle_interrupt(self, vm: VideoMP4Manager, all_results: Dict[int, Any], current_frame_num: int, frame_list: List[int]) -> UserInteractionResult:
         """Handles user interruption to rewind and re-select an ROI."""
         print("\n--- Tracking Interrupted ---")
         

@@ -9,7 +9,9 @@ from preprocessing.forearm_extraction import (
 def define_normals(
         input_ply_path: str,
         output_ply_path: str,
-        output_metadata_path:str
+        output_metadata_path:str,
+        *,
+        force_processing: bool = True
 ):
     """
     Main function to set up and run the application.
@@ -18,9 +20,10 @@ def define_normals(
         print(f"Input PLY couldn't be found: {input_ply_path}. Run automatic pipeline first.")
         return None
     
-    if os.path.exists(output_ply_path) and os.path.exists(output_metadata_path):
-        print(f"Normals have already been estimated for file {input_ply_path}.")
-        return output_ply_path, output_metadata_path
+    if not force_processing:
+        if os.path.exists(output_ply_path) and os.path.exists(output_metadata_path):
+            print(f"Normals have already been estimated for file {input_ply_path}.")
+            return output_ply_path, output_metadata_path
     
     # --- MVC Setup ---
     # 1. Create the Model
@@ -39,8 +42,6 @@ def define_normals(
     # Load data, which triggers the first computation and plot
     controller.load_point_cloud(input_ply_path, output_ply_path, output_metadata_path)
 
-    # Launch the visualizer's event loop
-    visualizer.launch()
-
+    controller.run()
 
     return output_ply_path, output_metadata_path
