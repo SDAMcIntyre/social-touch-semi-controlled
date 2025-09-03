@@ -158,6 +158,16 @@ class ObjectsInteractionVisualizer(QMainWindow):
         if len(self.actors) == 1:
             self.plotter.view_isometric()
             self.plotter.reset_camera()
+    
+    def is_existing_geometry(self, name: str):
+        return name in self.actors
+
+    def update_geometry(self, name:str, geometry: o3d.geometry.Geometry):
+        # If it exists, remove the old geometry from the viewer.
+        # Using reset_bounding_box=False prevents the camera from auto-resizing.
+        if self.is_existing_geometry(name):
+            self.plotter.remove_actor(self.actors[name])
+        self.add_geometry(name, geometry)
 
     def add_plot(self, title: str, data_vector: list, color: str = 'r', y_label: str = 'Value'):
         """

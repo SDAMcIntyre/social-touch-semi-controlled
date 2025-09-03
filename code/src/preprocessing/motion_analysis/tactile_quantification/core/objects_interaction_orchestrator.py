@@ -2,16 +2,13 @@ import sys
 import pandas as pd
 import open3d as o3d
 import numpy as np
+from typing import Dict
 from scipy.spatial.transform import Rotation as R
 
 from PyQt5.QtWidgets import QApplication
 
-try:
-    from ..model.objects_interaction_processor import ObjectsInteractionProcessor
-    from ..gui.objects_interaction_visualizer import ObjectsInteractionVisualizer
-except:
-    from ..model.objects_interaction_processor import ObjectsInteractionProcessor
-    from ..gui.objects_interaction_visualizer import ObjectsInteractionVisualizer
+from ..model.objects_interaction_processor import ObjectsInteractionProcessor
+from ..gui.objects_interaction_visualizer import ObjectsInteractionVisualizer
 
 
 class ObjectsInteractionOrchestrator:
@@ -26,14 +23,15 @@ class ObjectsInteractionOrchestrator:
     """
     def __init__(self,
                  hand_motion_data: dict,
-                 reference_pcd: o3d.geometry.PointCloud,
+                 references_pcd: Dict[int, o3d.geometry.PointCloud],
                  *,
                  visualize: bool = True,
                  fps: int = 30,
                  visualizer_width_sec: int = 3
     ):
+        
         self.processor = ObjectsInteractionProcessor(
-            reference_pcd=reference_pcd,
+            references_pcd=references_pcd,
             base_vertices=hand_motion_data['vertices'],
             fps=fps
         )
@@ -54,9 +52,9 @@ class ObjectsInteractionOrchestrator:
         self.base_triangles = base_mesh.triangles
     
         self.visualize = visualize
-        self.visualizer = None
+        self.view = None
         self.hand_motion_data = hand_motion_data  
-        self.visualizer_width_in_frame = visualizer_width_sec * fps       
+        self.view_width_in_frame = visualizer_width_sec * fps       
 
     def run(self) -> pd.DataFrame:
         """
@@ -78,88 +76,91 @@ class ObjectsInteractionOrchestrator:
         print(f"Pre-computing {num_frames} frames for monitoring...")
         visualization_frames = []
 
-        for i, time in enumerate(self.trajectory_data['time_points']):
+        for frame_id, time in enumerate(self.trajectory_data['time_points']):
+            if self.processor.is_valid_pcd_key(frame_id):
+                self.processor.set_current_pcd(frame_id)
             
-            use_debug = (i == 625)
+            use_debug = (frame_id == 625)
             
             frame_result = self.processor.process_single_frame(
-                translation=self.trajectory_data['translations'][i],
-                rotation_quat=self.trajectory_data['rotations'][i],
+                translation=self.trajectory_data['translations'][frame_id],
+                rotation_quat=self.trajectory_data['rotations'][frame_id],
                 _debug=use_debug
             )
             
-            # 1. Prepare and store visualization data for this frame
-            vis_data = frame_result["visualization"]
-            transformed_mesh = o3d.geometry.TriangleMesh(
-                o3d.utility.Vector3dVector(vis_data["transformed_vertices"]),
-                self.base_triangles
-            )
-            vis_data["transformed_hand_mesh"] = transformed_mesh
-            visualization_frames.append(vis_data)
-
-            # 2. Store metrics
+            # Store metrics
             metrics = frame_result["metrics"]
             metrics["time"] = time
-            metrics["frame_index"] = i
+            metrics["frame_index"] = frame_id
             results.append(metrics)
             
+            # Prepare and store visualization data for this frame
+            if self.visualize:
+                vis_data = frame_result["visualization"]
+                transformed_mesh = o3d.geometry.TriangleMesh(
+                    o3d.utility.Vector3dVector(vis_data["transformed_vertices"]),
+                    self.base_triangles
+                )
+                vis_data["transformed_hand_mesh"] = transformed_mesh
+                visualization_frames.append(vis_data)
+
             # 3. Log progress
-            if (i + 1) % self.processor.fps == 0 or (i + 1) == num_frames:
-                print(f"  Computed frame {i + 1}/{num_frames}")
-        
+            if (frame_id + 1) % self.processor.fps == 0 or (frame_id + 1) == num_frames:
+                print(f"  Computed frame {frame_id + 1}/{num_frames}")
         print("Pre-computation finished.")
 
         # 4. Launch interactive session with all pre-computed data
         if self.visualize:
-            print("Starting interactive monitoring session...")
-
-            if QApplication.instance() is None:
-                app = QApplication(sys.argv)
-            
-            self.visualizer = ObjectsInteractionVisualizer(width=self.visualizer_width_in_frame)
-            self.visualizer.add_geometry('object', self.processor.ref_pcd)
-            self.visualizer.add_geometry('hand', self.base_mesh)
-            contact_pcd = o3d.geometry.PointCloud()
-            contact_pcd.paint_uniform_color([1.0, 0.0, 0.0]) # Red 
-            self.visualizer.add_geometry('contacts', contact_pcd)
-
-            # 4a. Load frame data into the visualizer
-            self.visualizer.set_frame_data(visualization_frames)
-
-            # 4b. Extract metric data and add plots
-            avg_depth_data = [r.get('depth', 0) for r in results]
-            contact_area_data = [r.get('area', 0) for r in results]
-
-            self.visualizer.add_plot(
-                title="Contact Properties",
-                data_vector=avg_depth_data,
-                color='g',
-                y_label='Depth (NA)'
-            )
-            self.visualizer.add_plot(
-                title="Contact Properties", # This title is ignored, only the first one is used
-                data_vector=contact_area_data,
-                color='m',
-                y_label='Contact Area (cm^2)'
-            )
-
-            # To recenter the view on a reference object (like a point cloud or mesh),
-            # you first calculate its center point. The .get_center() method from
-            # Open3D can be used on most geometry types.
-            center_point = self.processor.ref_pcd.get_center()
-            self.visualizer.recenter_view_on_point(center_point)
-
-            # 4c. Run the visualizer and the Qt app
-            self.visualizer.run()
-
-            # The event loop is started here, blocking until the visualizer window is closed.
-            # We get the global instance rather than relying on a locally stored one.
-            app = QApplication.instance()
-            sys.exit(app.exec())
+            self.interactive_view(visualization_frames, results)
 
         print("Simulation finished.")
         return pd.DataFrame(results)
 
+    def interactive_view(self, visualization_frames, results):
+        print("Starting interactive monitoring session...")
+        if QApplication.instance() is None:
+            app = QApplication(sys.argv)
+        
+        self.view = ObjectsInteractionVisualizer(width=self.view_width_in_frame)
+        self.view.add_geometry('object', self.processor.ref_pcd)
+        self.view.add_geometry('hand', self.base_mesh)
+        contact_pcd = o3d.geometry.PointCloud()
+        contact_pcd.paint_uniform_color([1.0, 0.0, 0.0]) # Red 
+        self.view.add_geometry('contacts', contact_pcd)
+
+        # 4a. Load frame data into the visualizer
+        self.view.set_frame_data(visualization_frames)
+
+        # 4b. Extract metric data and add plots
+        avg_depth_data = [r.get('depth', 0) for r in results]
+        contact_area_data = [r.get('area', 0) for r in results]
+
+        self.view.add_plot(
+            title="Contact Properties",
+            data_vector=avg_depth_data,
+            color='g',
+            y_label='Depth (NA)'
+        )
+        self.view.add_plot(
+            title="Contact Properties", # This title is ignored, only the first one is used
+            data_vector=contact_area_data,
+            color='m',
+            y_label='Contact Area (cm^2)'
+        )
+
+        # To recenter the view on a reference object (like a point cloud or mesh),
+        # you first calculate its center point. The .get_center() method from
+        # Open3D can be used on most geometry types.
+        center_point = self.processor.ref_pcd.get_center()
+        self.view.recenter_view_on_point(center_point)
+
+        # 4c. Run the visualizer and the Qt app
+        self.view.run()
+
+        # The event loop is started here, blocking until the visualizer window is closed.
+        # We get the global instance rather than relying on a locally stored one.
+        app = QApplication.instance()
+        sys.exit(app.exec())
 
 def create_mock_data(num_frames=200, fps=30):
     """
