@@ -4,7 +4,7 @@ import sys
 from typing import List, Optional
 
 # --- MODULE 1: Video Handling ---
-class RGBVideoManager:
+class VideoMP4Manager:
     """
     Handles video file operations, providing frames on demand without
     loading the entire video into memory.
@@ -18,6 +18,10 @@ class RGBVideoManager:
         self.total_frames = int(self.capture.get(cv2.CAP_PROP_FRAME_COUNT))
         self.frame_width = int(self.capture.get(cv2.CAP_PROP_FRAME_WIDTH))
         self.frame_height = int(self.capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        self.fps = self.capture.get(cv2.CAP_PROP_FPS)
+        fourcc_int = int(self.capture.get(cv2.CAP_PROP_FOURCC))
+        self.fourcc_str = "".join([chr((fourcc_int >> 8 * i) & 0xFF) for i in range(4)])
+
 
     def get_frame(self, frame_num: int) -> Optional[np.ndarray]:
         """
@@ -40,7 +44,12 @@ class RGBVideoManager:
     def get_frames_range(self, start: int, end: int) -> List[np.ndarray]:
         """Loads a specific range of frames with progress feedback."""
         frames = []
+        # Ensure 'end' does not exceed the total number of frames
+        end = min(end, self.total_frames)
         total = end - start
+        if total <= 0:
+            return []
+            
         print(f"Loading frames {start} to {end-1}...")
         for i, frame_num in enumerate(range(start, end)):
             frame = self.get_frame(frame_num)
@@ -54,6 +63,15 @@ class RGBVideoManager:
         print("\nLoading complete.")
         return frames
 
+    def get_frames(self) -> List[np.ndarray]:
+        """
+        Retrieves all frames from the video.
+
+        Returns:
+            A list containing all frames of the video as NumPy arrays.
+        """
+        return self.get_frames_range(0, self.total_frames)
+
     def release(self):
         """Releases the video capture object."""
         self.capture.release()
@@ -63,5 +81,3 @@ class RGBVideoManager:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.release()
-
-

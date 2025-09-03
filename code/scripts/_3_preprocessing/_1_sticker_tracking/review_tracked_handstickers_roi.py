@@ -3,6 +3,8 @@ import os
 from typing import Optional, List, Dict, Tuple
 import pandas as pd
 
+from preprocessing.common.gui.frame_roi_square import FrameROISquare
+
 from preprocessing.stickers_analysis.roi import (
     ROIProcessingStatus,
     ROIAnnotationFileHandler,
@@ -14,7 +16,6 @@ from preprocessing.stickers_analysis.roi import (
     TrackerReviewOrchestrator, 
     TrackerReviewStatus,
     TrackerReviewGUI,
-    FrameROISquare,
     VideoReviewManager
 )
 

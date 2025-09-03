@@ -2,8 +2,8 @@
 import open3d as o3d
 import numpy as np
 
-from preprocessing.common.glb_data_handler import GLBDataHandler
-from preprocessing.common.pc_data_handler import PointCloudDataHandler
+from preprocessing.common.data_access.glb_data_handler import GLBDataHandler
+from preprocessing.common.data_access.pc_data_handler import PointCloudDataHandler
 from preprocessing.motion_analysis.objects_interaction_controller import ObjectsInteractionController
 
 def compute_somatosensory_characteristics(

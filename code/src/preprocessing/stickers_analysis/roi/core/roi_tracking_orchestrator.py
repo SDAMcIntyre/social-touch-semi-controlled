@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd  # Added pandas import
 from typing import List, Dict, Any, Optional, Tuple, Iterable
 
-from preprocessing.common.rgb_video_manager import RGBVideoManager
+from preprocessing.common.data_access.video_mp4_manager import VideoMP4Manager
 from ..models.tracking_contracts import TrackingUIHandler, TrackingState
 from ..models.tracker_wrapper import TrackerWrapper
 from ..models.tracking_handlers import HeadlessUIHandler, InteractiveGUIHandler
@@ -50,7 +50,7 @@ class TrackingOrchestrator:
             return pd.DataFrame()
 
         try:
-            with RGBVideoManager(self.video_path) as vm:
+            with VideoMP4Manager(self.video_path) as vm:
                 # MODIFICATION: Prepare initial data from the DataFrame.
                 # Sort by frame_id to ensure the first row is the earliest annotation.
                 labeled_rois = labeled_rois.sort_values(by='frame_id').reset_index(drop=True)
@@ -119,7 +119,7 @@ class TrackingOrchestrator:
                 })
         return pd.DataFrame(results_list)
 
-    def _track_pass(self, vm: RGBVideoManager, start_frame_num: int, start_roi: Tuple, labeled_rois: Dict, frame_range: Iterable[int], expansion: Optional[int]):
+    def _track_pass(self, vm: VideoMP4Manager, start_frame_num: int, start_roi: Tuple, labeled_rois: Dict, frame_range: Iterable[int], expansion: Optional[int]):
         """Performs a single tracking pass, delegating all UI to the handler."""
         tracker = TrackerWrapper()
         initial_frame_rgb = vm.get_frame(start_frame_num)
@@ -211,7 +211,7 @@ class TrackingOrchestrator:
     # input DataFrame enforces a standard structure.
 
     @staticmethod
-    def _get_status(is_tracking: bool, box: Tuple, vm: RGBVideoManager) -> str:
+    def _get_status(is_tracking: bool, box: Tuple, vm: VideoMP4Manager) -> str:
         if not is_tracking: return "Failure"
         x, y, w, h = box
         if x <= 0 or y <= 0 or (x + w) >= vm.frame_width or (y + h) >= vm.frame_height:

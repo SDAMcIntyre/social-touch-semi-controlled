@@ -5,6 +5,13 @@ from pathlib import Path
 from prefect import flow
 from pydantic import BaseModel, DirectoryPath, FilePath, Field
 
+import utils.path_tools as path_tools
+from primary_processing import (
+    KinectConfigFileHandler,
+    KinectConfig
+)
+
+
 from _2_primary_processing._2_generate_rgb_depth_video import (
     generate_mkv_stream_analysis,
     extract_depth_to_tiff,
@@ -36,8 +43,6 @@ from _3_preprocessing._5_led_tracking import (
     validate_and_correct_led_timing_from_stimuli
 )
 
-import utils.path_tools as path_tools
-
 
 
 
@@ -54,30 +59,9 @@ PARALLEL_EXECUTION = False
 
 
 
-# --- 1. Configuration Models (Unchanged) ---
-# These models define the validated structure for our YAML configuration files.
+# --- 1. Configuration ---
 
-class ProcessingParams(BaseModel):
-    """A model for algorithm-specific parameters."""
-    sticker_confidence_threshold: float = Field(
-        default=0.95, description="Confidence threshold for sticker tracking."
-    )
-    led_brightness_min: int = Field(
-        default=200, description="Minimum brightness to register an LED blink."
-    )
-    num_trials_to_process: int = Field(
-        default=3, description="Number of trial files to generate."
-    )
-
-class SessionInputs(BaseModel):
-    """The complete, validated configuration for a single session."""
-    source_video: FilePath
-    stimulus_metadata: FilePath
-    hand_models_dir: DirectoryPath
-    video_primary_output_dir: Path
-    video_processed_output_dir: Path
-
-def get_session_files(configs_kinect_dir: Path):
+def get_block_files(configs_kinect_dir: Path):
     """Helper to find and validate session configuration files."""
     if not configs_kinect_dir.is_dir():
         raise ValueError(f"Sessions folder not found: {configs_kinect_dir}")
@@ -194,21 +178,6 @@ def generate_ttl_signal(led_tracking_path: Path, output_dir: Path) -> Path:
     return ttl_path
 
 
-@flow(name="6. Generate Forearm Point Cloud")
-def generate_forearm_pointcloud(source_video: Path, output_dir: Path) -> Path:
-    """Generates a 3D point cloud .ply file."""
-    print(f"[{output_dir.name}] Generating forearm 3D point cloud...")
-    metadata_path = source_video.parent.parent / (source_video.name.split("_semicontrolled")[0] + "_kinect_arm_roi_metadata.txt")
-    forearm_ply_path = output_dir / "forearm_pointcloud.ply"
-    extract_forearm(source_video, metadata_path, forearm_ply_path)
-
-    forearm_ply_with_normals_path = output_dir / "forearm_pointcloud_with_normals.ply"
-    if not os.path.exists(forearm_ply_with_normals_path):
-        raise ValueError(f"Assessing the normals of forearm is necessary before continuing, please run manual_pipeline.py ({forearm_ply_path})")
-
-    return forearm_ply_with_normals_path
-
-
 @flow(name="7. Generate 3D Hand Position")
 def generate_3d_hand_motion(
     rgb_video_path: Path,
@@ -230,14 +199,25 @@ def generate_3d_hand_motion(
     return hand_motion_glb_path
 
 @flow(name="8. Generate Somatosensory Characteristics")
-def generate_somatosensory_chars(hand_motion_glb_path: Path, forearm_ply_path: Path, output_dir: Path) -> Path:
+def generate_somatosensory_chars(
+    hand_motion_glb_path: Path, 
+    session_processed_dir: Path,
+    session_id: str,
+    current_video_filename: str,
+    output_dir: Path) -> Path:
     """Generates a csv file of contact characteristics."""
     print(f"[{output_dir.name}] Generating somatosensory characteristics...")
     contact_characteristics_path = output_dir / "contact_characteristics.csv"
     
+    forearm_pointcloud_dir = session_processed_dir / "forearm_pointclouds"
+    metadata_filaname = session_id + "_arm_roi_metadata.json"
+    metadata_path = forearm_pointcloud_dir / metadata_filaname
+    
     compute_somatosensory_characteristics(
-        hand_motion_glb_path, 
-        forearm_ply_path, 
+        hand_motion_glb_path,
+        metadata_path,
+        forearm_pointcloud_dir, 
+        current_video_filename,
         contact_characteristics_path)
 
     return contact_characteristics_path
@@ -255,39 +235,44 @@ def unify_dataset(
 # --- 4. The "Worker" Flow ---
 # This flow orchestrates the 11 sub-flows for a single session.
 @flow(name="Run Single Session Pipeline")
-def run_single_session_pipeline(inputs: SessionInputs, *, monitor_ui: bool = False):
+def run_single_session_pipeline(config: KinectConfig, *, monitor_ui: bool = False):
     """This flow processes a SINGLE dataset by calling the appropriate sub-flows."""
-    print(f"🚀 Starting pipeline for session: {inputs.video_processed_output_dir.name}")
+    print(f"🚀 Starting pipeline for session: {config.video_processed_output_dir.name}")
 
     # Stage 1: Primary processing
-    validate_mkv_video(inputs.source_video, inputs.video_primary_output_dir)
-    rgb_video_path = generate_rgb_video(inputs.source_video, inputs.video_primary_output_dir)
+    validate_mkv_video(config.source_video, config.video_primary_output_dir)
+    rgb_video_path = generate_rgb_video(config.source_video, config.video_primary_output_dir)
     
     # ignore for now as it generates 30GB of data per 5GB mkv file.
-    # depth_images_path = generate_depth_images(inputs.source_video, inputs.video_primary_output_dir)
+    # depth_images_path = generate_depth_images(config.source_video, config.video_primary_output_dir)
         
     # Stage 2&3: Stickers Tracking and 3D Reconstruction
-    handstickers_dir = inputs.video_processed_output_dir / "handstickers"
-    sticker_tracking, success = track_stickers(rgb_video_path, inputs.source_video, handstickers_dir, monitor_ui=monitor_ui)
+    handstickers_dir = config.video_processed_output_dir / "handstickers"
+    sticker_tracking, success = track_stickers(rgb_video_path, config.source_video, handstickers_dir, monitor_ui=monitor_ui)
     
     if not success:
         return  {"status": "stickers", "result": None}   
 
-    hand_motion_glb_path = generate_3d_hand_motion(rgb_video_path, sticker_tracking, inputs.hand_models_dir, inputs.video_processed_output_dir)
-    forearm_pointcloud = generate_forearm_pointcloud(inputs.source_video, inputs.video_processed_output_dir)
-    somatosensory_chars = generate_somatosensory_chars(hand_motion_glb_path, forearm_pointcloud, inputs.video_processed_output_dir)
+    hand_motion_glb_path = generate_3d_hand_motion(rgb_video_path, sticker_tracking, config.hand_models_dir, config.video_processed_output_dir)
+
+    somatosensory_chars = generate_somatosensory_chars(
+        hand_motion_glb_path, 
+        config.session_processed_output_dir,
+        config.session_id,
+        rgb_video_path.name,
+        config.video_processed_output_dir)
     
     return  {"status": "somatosensory", "result": None}
 
     # Stage 4: Generate TTL from LED
-    led_dir = inputs.video_processed_output_dir / "LED"
-    led_TTL = track_led_blinking(rgb_video_path, inputs.stimulus_metadata, led_dir)
-    ttl_signal = generate_ttl_signal(led_TTL, inputs.video_processed_output_dir)
+    led_dir = config.video_processed_output_dir / "LED"
+    led_TTL = track_led_blinking(rgb_video_path, config.stimulus_metadata, led_dir)
+    ttl_signal = generate_ttl_signal(led_TTL, config.video_processed_output_dir)
 
     # Stage 5: Data Integration
-    unified_data = unify_dataset(somatosensory_chars, ttl_signal, inputs.video_processed_output_dir)
+    unified_data = unify_dataset(somatosensory_chars, ttl_signal, config.video_processed_output_dir)
     
-    print(f"✅ Pipeline finished for session: {inputs.video_processed_output_dir.name}")
+    print(f"✅ Pipeline finished for session: {config.video_processed_output_dir.name}")
     
     return {"status": "success", "result": None}
 
@@ -301,23 +286,20 @@ def run_batch_in_parallel(configs_kinect_dir: Path, project_data_root: Path):
     if not configs_kinect_dir.is_dir():
         raise ValueError(f"Sessions folder not found: {configs_kinect_dir}")
 
-    session_files = list(configs_kinect_dir.glob("*.yaml"))
-    print(f"Found {len(session_files)} session(s) to process in '{configs_kinect_dir}'.")
+    block_files = list(configs_kinect_dir.glob("*.yaml"))
+    print(f"Found {len(block_files)} session(s) to process in '{configs_kinect_dir}'.")
 
     # A list to hold our submitted flow runs (futures)
     submitted_runs = []
 
-    for session_file in session_files:
-        print(f"Dispatching run for {session_file.name}...")
-        with open(session_file, 'r') as f:
-            config_data = yaml.safe_load(f)
-        
-        config_data_abs = {key: project_data_root / value for key, value in config_data.items()}
-        validated_inputs = SessionInputs(**config_data_abs)
+    for block_file in block_files:
+        print(f"Dispatching run for {block_file.name}...")
+        config_data = KinectConfigFileHandler.load_and_resolve_config(block_file)
+        validated_config = KinectConfig(config_data=config_data, database_path=project_data_root)
 
         run = run_single_session_pipeline.with_options(
-            flow_run_name=f"session-{validated_inputs.video_processed_output_dir.parent.name}/{validated_inputs.video_processed_output_dir.name}"
-        )(inputs=validated_inputs)
+            flow_run_name=f"session-{validated_config.video_processed_output_dir.parent.name}/{validated_config.video_processed_output_dir.name}"
+        )(config=validated_config)
         
         # Optionally, collect the run objects if you need to wait for them later
         submitted_runs.append(run)
@@ -342,20 +324,17 @@ def run_batch_sequentially(configs_kinect_dir: Path,
     """
     Runs all session pipelines one by one, waiting for each to complete.
     """
-    session_files = get_session_files(configs_kinect_dir)
+    block_files = get_block_files(configs_kinect_dir)
     results = []
-    for session_file in session_files:
-        print(f"Running session: {session_file.name}")
-        with open(session_file, 'r') as f:
-            config_data = yaml.safe_load(f)
-        
-        config_data_abs = {key: project_data_root / value for key, value in config_data.items()}
-        validated_inputs = SessionInputs(**config_data_abs)
+    for block_file in block_files:
+        print(f"Running session: {block_file.name}")
+        config_data = KinectConfigFileHandler.load_and_resolve_config(block_file)
+        validated_config = KinectConfig(config_data=config_data, database_path=project_data_root)
 
         # In Prefect 3, this call is BLOCKING. It runs the subflow to completion.
-        result = run_single_session_pipeline(validated_inputs, monitor_ui=monitor_ui)
+        result = run_single_session_pipeline(validated_config, monitor_ui=monitor_ui)
         results.append(result)
-        print(f"Completed session: {session_file.name} | Status: {result['status']}")
+        print(f"Completed session: {block_file.name} | Status: {result['status']}")
     
     print("✅ All sequential runs have completed.")
 
@@ -365,7 +344,7 @@ if __name__ == "__main__":
     print("🛠️  Setting up files for processing...")
     
     configs_dir = Path("configs")
-    kinect_dir = Path("kinect_configs")
+    kinect_dir = Path("kinect_configs/automatic_stickers_processing")
 
     configs_kinect_dir = configs_dir / kinect_dir
     project_data_root = path_tools.get_project_data_root()

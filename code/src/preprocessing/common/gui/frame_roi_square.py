@@ -7,7 +7,8 @@ import tkinter as tk # Import tkinter to get screen dimensions
 class FrameROISquare:
     """
     A class to display an image, allow the user to zoom, pan, draw a 
-    rectangular region of interest (ROI), and return its dimensions.
+    rectangular region of interest (ROI), and return its dimensions. 
+    Can also be initialized with a predefined ROI.
 
     Controls:
         - 'Proceed' Button: Confirm the ROI and exit.
@@ -20,7 +21,8 @@ class FrameROISquare:
     """
 
     def __init__(self, image_input, is_rgb: bool = True, window_title: str = None, 
-                 color_live: tuple = (0, 255, 0), color_final: tuple = (0, 0, 255)):
+                 color_live: tuple = (0, 255, 0), color_final: tuple = (0, 0, 255),
+                 predefined_roi: dict = None):
         """
         Initializes the tracker with an image.
 
@@ -33,6 +35,8 @@ class FrameROISquare:
                                 Defaults to green.
             color_final (tuple): BGR color tuple for the finalized ROI. 
                                  Defaults to red.
+            predefined_roi (dict, optional): A dictionary with keys 'x', 'y', 
+                                             'width', 'height' to pre-load an ROI.
         """
         image_array_rgb = None
 
@@ -78,6 +82,25 @@ class FrameROISquare:
         self.roi_rect = None # Stores (x, y, w, h) in original image coordinates
         self.roi_confirmed = False
 
+        # --- New: Process predefined_roi ---
+        if predefined_roi:
+            # Validate that the input is a dictionary with the required keys
+            if isinstance(predefined_roi, dict) and all(k in predefined_roi for k in ['x', 'y', 'width', 'height']):
+                x = predefined_roi['x']
+                y = predefined_roi['y']
+                w = predefined_roi['width']
+                h = predefined_roi['height']
+                
+                # Basic validation: ensure ROI is within image bounds
+                img_h, img_w = self.original_image.shape[:2]
+                if 0 <= x < img_w and 0 <= y < img_h and x + w <= img_w and y + h <= img_h:
+                    self.roi_rect = (int(x), int(y), int(w), int(h))
+                    print(f"✅ Predefined ROI loaded: {self.roi_rect}")
+                else:
+                    print(f"[Warning] Predefined ROI {predefined_roi} is out of image bounds ({img_w}x{img_h}). Ignoring.")
+            else:
+                print("[Warning] 'predefined_roi' must be a dictionary with keys 'x', 'y', 'width', 'height'. Ignoring.")
+
         self._setup_window()
 
     def _setup_window(self):
@@ -90,7 +113,6 @@ class FrameROISquare:
             root.withdraw()
             screen_width = root.winfo_screenwidth()
             screen_height = root.winfo_screenheight()
-            # --- Cleanly destroy the window ---
             root.destroy()
 
             center_x = max(0, int(screen_width / 2 - self.window_w / 2))
@@ -239,8 +261,8 @@ class FrameROISquare:
             # Define the four corners in display coordinates
             pt1 = (int(disp_x), int(disp_y))               # Top-left
             pt2 = (int(disp_x + disp_w), int(disp_y + disp_h)) # Bottom-right
-            pt3 = (int(disp_x + disp_w), int(disp_y))       # Top-right
-            pt4 = (int(disp_x), int(disp_y + disp_h))       # Bottom-left
+            pt3 = (int(disp_x + disp_w), int(disp_y))      # Top-right
+            pt4 = (int(disp_x), int(disp_y + disp_h))      # Bottom-left
             
             # Draw rectangle
             cv2.rectangle(display_image, pt1, pt2, color, thickness)
