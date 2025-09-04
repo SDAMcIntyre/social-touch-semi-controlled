@@ -104,16 +104,16 @@ def run_single_session_pipeline(inputs: KinectConfig):
     # Stage 1: Primary processing
     rgb_video_path = Path(str(inputs.source_video).replace(".mkv", ".mp4"))
 
+    # Stage 2: Tracking
+    # led_tracking_path = track_led_blinking(rgb_video_path, inputs.stimulus_metadata, inputs.video_processed_output_dir)
+    track_stickers(rgb_video_path, inputs.source_video, inputs.video_processed_output_dir)
+    return
+
     generate_forearm_pointcloud(
         rgb_video_path, 
         inputs.source_video, 
         inputs.video_primary_output_dir.parent, 
         inputs.video_processed_output_dir.parent)
-    return
-
-    # Stage 2: Tracking
-    # led_tracking_path = track_led_blinking(rgb_video_path, inputs.stimulus_metadata, inputs.video_processed_output_dir)
-    track_stickers(rgb_video_path, inputs.source_video, inputs.video_processed_output_dir)
     return
 
     # Stage 4: 3D Reconstruction
@@ -163,7 +163,7 @@ if __name__ == "__main__":
     # or a well-defined root to avoid ambiguity.
     project_root = Path(__file__).resolve().parents[2]
     configs_dir = project_root / "configs"
-    kinect_dir = "kinect_configs/automatic_stickers_processing" # Subdirectory name
+    kinect_dir = "kinect_configs" # Subdirectory name
     configs_kinect_dir = configs_dir / kinect_dir
     
     # Assuming path_tools is aware of your project structure
