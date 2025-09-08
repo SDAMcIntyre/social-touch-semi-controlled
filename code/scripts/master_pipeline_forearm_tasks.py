@@ -27,6 +27,18 @@ from _3_preprocessing._3_forearm_extraction import (
 
 
 
+# --- CHOOSE YOUR EXECUTION MODE HERE ---
+# ------------------------------------------------------
+# ---------------------------------------
+# ---------------------
+# -----------
+FORCE_PROCESSING = True
+# -----------
+# ---------------------
+# ---------------------------------------
+# ------------------------------------------------------
+
+
 def create_confirmation_flag():
     """
     Displays a confirmation dialog. If 'Yes' is clicked,
@@ -164,7 +176,7 @@ def generate_forearm_pointcloud(
     pointclouds_output_dir = _setup_session_directories(inputs.session_processed_path)
 
     flag_file = pointclouds_output_dir / ".SUCCESS"
-    if os.path.exists(flag_file):
+    if not FORCE_PROCESSING and os.path.exists(flag_file):
         print(f"⚠️ Flag file found in '{pointclouds_output_dir}'. Skip this session.")
         return True
     
@@ -195,7 +207,8 @@ def generate_forearm_pointcloud(
         print(f"✅ Confirmation received. Flag file created at: {flag_file.resolve()}")
         print("✅ Pipeline finished successfully.")
     else:
-        print("❌ Action cancelled by user. No flag file was created.")
+        Path(flag_file).unlink()
+        print(f"🧹 Removed old flag file from previous run.")
 
 
     return True
