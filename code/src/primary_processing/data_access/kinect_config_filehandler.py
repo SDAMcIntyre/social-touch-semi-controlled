@@ -1,6 +1,7 @@
 import yaml
 import re
 from typing import Any, Dict
+from pathlib import Path
 
 class UnresolvedVariableError(Exception):
     """Custom exception for unresolved variables."""
@@ -103,4 +104,10 @@ class KinectConfigFileHandler:
         return KinectConfigFileHandler._recursive_substitute(config_data, variables)
     
 
-    
+def get_block_files(kinect_configs_dir: Path):
+    """Helper to find and validate session configuration files."""
+    if not kinect_configs_dir.is_dir():
+        raise ValueError(f"Sessions folder not found: {kinect_configs_dir}")
+    files = list(kinect_configs_dir.glob("*.yaml"))
+    print(f"Found {len(files)} session(s) to process.")
+    return files
