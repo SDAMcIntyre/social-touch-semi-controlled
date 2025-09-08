@@ -3,7 +3,7 @@ import pandas as pd
 from typing import List, Dict, Any, Tuple, Callable, Optional
 
 # Assuming these are the data structures passed in.
-from ..models.roi_tracked_data import ROITrackedObject
+from ...roi.models.roi_tracked_data import ROITrackedObject
 from pyk4a import PyK4APlayback
 
 class Sticker3DPositionExtractor:
