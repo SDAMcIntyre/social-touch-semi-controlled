@@ -15,19 +15,22 @@ def extract_stickers_xyz_positions(
         source_video_path: str,
         input_csv_path: str,
         output_csv_path: str,
-        metadata_path: str = None,      # NEW: Added metadata path argument
-        monitor: bool = False,
-        video_path: str = None):
+        metadata_path: str = None,
+        video_path: str = None,
+        *,
+        force_processing: bool = False,
+        monitor: bool = False
+):
     """
     Extracts 3D sticker positions and optionally shows a standard, non-distorted monitor window.
     """
+    if not force_processing and os.path.exists(output_csv_path) and os.path.exists(metadata_path):
+        print(f"data already processed. Skipping...")
+        return 
+    
     if not os.path.exists(source_video_path): raise FileNotFoundError(f"Source video not found: {source_video_path}")
     if not os.path.exists(input_csv_path): raise FileNotFoundError(f"Center CSV not found: {input_csv_path}")
     
-    if os.path.exists(output_csv_path) and  os.path.exists(metadata_path):
-        print(f"data already processed. Skipping...")
-        return 
-
     print("Starting sticker 3D position extraction...")
 
     # 1. Define the configuration parameters for the job.
@@ -43,9 +46,7 @@ def extract_stickers_xyz_positions(
     # Create the typed config object.
     config = XYZMetadataModel(**config_data)
 
-    # 2. Instantiate each dependency.
-    #    These are the "services" the orchestrator will use.
-    result_writer = XYZDataFileHandler()
+    # 2. Instantiate dependency.
     visualizer = XYZVisualizationHandler(config)
 
     # 1. Load Data
@@ -62,7 +63,7 @@ def extract_stickers_xyz_positions(
 
     # 4. Execute the process! 🚀
     try:
-        results_data, processed_count = orchestrator.run(source_video_path, tracked_data)
+        results_df, processed_count = orchestrator.run(source_video_path, tracked_data)
         print("✅ Processing finished successfully!")
     except Exception as e:
         print(f"❌ An error occurred during processing: {e}")
@@ -72,5 +73,5 @@ def extract_stickers_xyz_positions(
     metadata.finalize()
 
     # 4. Save Results
-    result_writer.save(results_data, sticker_names, config.output_csv_path)
+    XYZDataFileHandler.save(results_df, config.output_csv_path)
     metadata_manager.save(metadata, config.metadata_path)

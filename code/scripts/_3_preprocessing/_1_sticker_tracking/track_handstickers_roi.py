@@ -16,6 +16,7 @@ def track_objects_in_video(
         metadata_path: str, 
         output_path: str,
         *,
+        force_processing: bool = False,
         gui_control: bool = False,
         show_gui: bool = False) -> Optional[str]:
     """

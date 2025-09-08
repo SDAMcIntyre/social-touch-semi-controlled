@@ -9,7 +9,9 @@ from utils.kinect_mkv_manager import KinectMKV
 def extract_depth_to_tiff(
         mkv_path: str, 
         output_dir: str, 
-        verbose: bool = True
+        *,
+        verbose: bool = True,
+        force_processing: bool = False
 ):
     """
     Extracts point cloud data from an Azure Kinect MKV file and saves each
