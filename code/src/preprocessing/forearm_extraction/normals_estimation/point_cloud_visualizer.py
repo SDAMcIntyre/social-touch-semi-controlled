@@ -30,6 +30,7 @@ class PointCloudVisualizer:
             window_size=(1600, 1000),
             off_screen=False,
         )
+
         # Add key bindings for quitting the application
         self.plotter.add_key_event('q', self.controller.request_save_and_close)
         self.plotter.add_key_event('Return', self.controller.request_save_and_close)
@@ -57,6 +58,7 @@ class PointCloudVisualizer:
         self.plotter.set_background('white')
         self._add_widgets()
         self.update_plot() # Render the initial state
+        self._center_window() # Center the window after it has been created (it must not belong to __init__).
 
     def close(self):
         """Closes the plotter window. This will allow the main script to exit."""
@@ -69,7 +71,20 @@ class PointCloudVisualizer:
         """Check if the plotter window is still open."""
         # The BackgroundPlotter tracks its actors. An empty list means it's closed.
         return self.plotter.renderer is not None and len(self.plotter.actors) > 0
-
+    
+    def _center_window(self):
+            """Centers the plotter window on the primary screen."""
+            try:
+                screen = self.plotter.app.primaryScreen()
+                screen_geometry = screen.geometry()
+                x = (screen_geometry.width() - self.plotter.window_size[0]) // 2
+                y = (screen_geometry.height() - self.plotter.window_size[1]) // 2
+                self.plotter.main_window.move(x, y)
+            except AttributeError:
+                # Fallback or log a warning if the window/screen isn't ready,
+                # though it should be by the time this is called.
+                print("Warning: Could not center the window. 'main_window' not found.")
+                
     def _setup_plotter(self, width=1600, height=1000):
         """Configures the plotter's window size and background color."""
         self.plotter.window_size = [width, height]
@@ -287,4 +302,3 @@ class PointCloudVisualizer:
                 f"Bounds (Z): [{min_vals[2]:.2f}, {max_vals[2]:.2f}]"
             )
         self.bounds_text_actor = self.plotter.add_text(bounds_text, position='upper_right', font_size=12, color='black')
-
