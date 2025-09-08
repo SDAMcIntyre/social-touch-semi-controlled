@@ -1,0 +1,63 @@
+# A dependency-aware configuration representing a task graph (DAG).
+# 'depends_on' specifies which tasks must be completed before this one can run.
+# Set 'enabled: false' to skip a task and all tasks that depend on it.
+
+parameters:
+  # Set to true to run different sessions in parallel, false to run them one by one.
+  parallel_execution: false
+  kinect_configs_directory: "kinect_configs"
+
+tasks:
+  # --- Stage 1: Primary video processing ---
+  validate_mkv_video:
+    enabled: true
+    depends_on: [] # This is a root task, it has no dependencies
+
+  generate_rgb_video:
+    enabled: true
+    depends_on: [validate_mkv_video]
+
+  generate_depth_images:
+    enabled: false # Disabled by default as it can generate very large files
+    depends_on: [validate_mkv_video]
+
+  # --- Stage 2: LED Tracking for TTL signal ---
+  track_led_blinking:
+    enabled: true
+    depends_on: [generate_rgb_video]
+
+  generate_ttl_signal:
+    enabled: true
+    depends_on: [track_led_blinking]
+
+  # --- Stage 3: Hand and Forearm Validation ---
+  validate_forearm_extraction:
+    enabled: true
+    depends_on: [validate_mkv_video, generate_rgb_video]
+
+  validate_hand_extraction:
+    enabled: true
+    depends_on: [validate_mkv_video, generate_rgb_video]
+
+  # --- Stage 4: Hand/Sticker Tracking and 3D reconstruction ---
+  track_stickers:
+    enabled: true
+    depends_on: [generate_rgb_video]
+
+  generate_xyz_stickers:
+    enabled: true
+    depends_on: [track_stickers]
+
+  generate_3d_hand_motion:
+    enabled: true
+    depends_on: [validate_hand_extraction, generate_xyz_stickers]
+
+  generate_somatosensory_chars:
+    enabled: true
+    depends_on: [validate_forearm_extraction, generate_3d_hand_motion]
+
+  # --- Stage 5: Final data integration ---
+  unify_dataset:
+    enabled: true
+    # This task depends on outputs from two different branches of the graph
+    depends_on: [generate_somatosensory_chars, generate_ttl_signal]
