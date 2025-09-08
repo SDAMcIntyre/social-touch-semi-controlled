@@ -130,7 +130,7 @@ def main():
     print(f"Project root identified at: {project_root}")
 
     configs_dir = project_root / "configs"
-    SOURCE_CONFIGS_DIR = configs_dir / "kinect_configs"
+    SOURCE_CONFIGS_DIR = configs_dir / "kinect_configs" / "all_valid_configs"
     OUTPUT_SESSIONS_DIR = configs_dir / "forearm_configs"
 
     # Ensure the output directory exists
