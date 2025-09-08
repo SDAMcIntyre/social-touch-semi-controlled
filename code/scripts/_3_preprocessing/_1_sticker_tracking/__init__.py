@@ -4,7 +4,7 @@
 This file makes key sticker tracking functions available at the package level,
 simplifying imports elsewhere in the project.
 """
-from .ensure_tracking_is_valid import ensure_tracking_is_valid
+from .is_2d_stickers_tracking_valid import is_2d_stickers_tracking_valid
 
 # automatic computation
 from .track_handstickers_roi import track_objects_in_video

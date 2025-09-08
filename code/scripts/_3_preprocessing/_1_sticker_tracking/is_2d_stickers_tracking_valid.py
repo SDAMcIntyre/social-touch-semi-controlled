@@ -5,7 +5,7 @@ from preprocessing.stickers_analysis.roi import (
     ROIProcessingStatus
 )
 
-def ensure_tracking_is_valid(metadata_path: str):
+def is_2d_stickers_tracking_valid(metadata_path: str):
     """
     Wrapper function that calls tracking_valid and raises an exception on failure.
 
