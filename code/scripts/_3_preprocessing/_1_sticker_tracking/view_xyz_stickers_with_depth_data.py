@@ -53,12 +53,14 @@ def define_custom_colors(string_list: Iterable[str]) -> dict[str, str]:
     
     return found_colors
 
-def review_xyz_stickers_on_depth_data(
+def view_xyz_stickers_on_depth_data(
     xyz_csv_path: Path,
     kinect_video_path: Path,
     forearm_pointcloud_dir: Path,
     forearm_metadata_path: Path,
-    rgb_video_path: Path
+    rgb_video_path: Path,
+    *,
+    force_processing: bool = False
 ):
     
     try:
@@ -147,7 +149,7 @@ if __name__ == "__main__":
     forearm_metadata_path = Path('F:/liu-onedrive-nospecial-carac/_Teams/Social touch Kinect MNG/data/semi-controlled/2_processed/kinect/2022-06-15_ST14-01/forearm_pointclouds/2022-06-15_ST14-01_arm_roi_metadata.json')
 
     # Run the review process
-    review_xyz_stickers_on_depth_data(
+    view_xyz_stickers_on_depth_data(
         xyz_csv_path=xyz_csv,
         kinect_video_path=kinect_video_path,
         forearm_pointcloud_dir=forearm_pointcloud_dir,

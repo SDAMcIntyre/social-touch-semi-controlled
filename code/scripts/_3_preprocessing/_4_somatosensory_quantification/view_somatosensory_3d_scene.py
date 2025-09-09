@@ -61,13 +61,15 @@ def define_custom_colors(string_list: Iterable[str]) -> dict[str, str]:
     return found_colors
 
 
-def review_somatosensory_3d_scene(
+def view_somatosensory_3d_scene(
     xyz_csv_path: Path,
     kinect_video_path: Path,
     forearm_pointcloud_dir: Path,
     forearm_metadata_path: Path,
     rgb_video_path: Path,
-    hand_motion_glb_path: Path
+    hand_motion_glb_path: Path,
+    *,
+    force_processing: bool = False
 ):
     
     try:
