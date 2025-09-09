@@ -249,7 +249,6 @@ def run_batch_sequentially(kinect_configs_dir: Path, project_data_root: Path, da
 # --- Main execution block ---
 if __name__ == "__main__":
     print("🛠️  Setting up files for manual processing...")
-
     project_data_root = path_tools.get_project_data_root()
 
     configs_dir = Path("configs")
