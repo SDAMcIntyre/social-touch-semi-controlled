@@ -11,26 +11,24 @@ class PointSelectorWindow(QWidget):
     """
     A widget for selecting points on a 3D mesh.
 
-    This window is non-modal and uses a signal to communicate selections
-    back to its parent in real-time.
+    This window is non-modal and uses a signal to communicate the final
+    set of selections back to its parent upon validation.
     """
-    pointSelected = pyqtSignal(str, int)
+    selectionsValidated = pyqtSignal(dict)
 
     def __init__(self, mesh: pv.PolyData, point_labels: list[str], existing_points: dict, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Point Selector")
         self.setGeometry(200, 200, 800, 600)
 
-        # Ensure the widget is deleted when closed to prevent memory leaks
         self.setAttribute(Qt.WA_DeleteOnClose)
 
         self.mesh = mesh
         self.point_labels = point_labels
         self.selections = {}
-        # You can expand this list for more unique colors if needed
         self.colors = ["yellow", "blue", "green", "red", "purple", "cyan", "magenta", "orange", "pink"]
         
-        self.sphere_radius = 1.0  # Default radius for the spheres
+        self.sphere_radius = 1.0
 
         # --- UI Setup ---
         self.main_layout = QHBoxLayout(self)
@@ -63,22 +61,18 @@ class PointSelectorWindow(QWidget):
         self.controls_layout.addWidget(self.size_slider)
 
         # --- Buttons and Spacer ---
-        self.controls_layout.addStretch() # Pushes buttons to the bottom
+        self.controls_layout.addStretch()
 
-        # Create and configure the help button
         self.help_button = QPushButton("Help (?)")
         self.help_button.setToolTip("Show instructions on how to use the selector.")
         self.help_button.clicked.connect(self._show_help_message)
         self.controls_layout.addWidget(self.help_button)
 
-        # --- NEW: Validation Button ---
-        # Create the button that will be used to validate the final selection
         self.validate_button = QPushButton("Validate Selections")
         self.validate_button.setToolTip("Enabled when all points are selected.")
-        self.validate_button.setEnabled(False) # Initially disabled
-        self.validate_button.clicked.connect(self.close) # Connect click to close window
+        self.validate_button.setEnabled(False)
+        self.validate_button.clicked.connect(self._on_validate_and_close)
         self.controls_layout.addWidget(self.validate_button)
-        # --- End of new code ---
 
         # --- PyVista Plotter Setup ---
         self.plotter = QtInteractor(self)
@@ -90,11 +84,17 @@ class PointSelectorWindow(QWidget):
 
         self.load_existing_selections(existing_points)
 
+    def _on_validate_and_close(self):
+        """
+        Emits the final selections and closes the window.
+        This method is the designated "save" action.
+        """
+        final_points = {label: data['id'] for label, data in self.selections.items()}
+        self.selectionsValidated.emit(final_points)
+        self.close()
+
     def _show_help_message(self):
-        """
-        Displays a message box with instructions for using the point selector.
-        """
-        # --- MODIFIED: Used HTML for better list formatting ---
+        """Displays a message box with instructions for using the point selector."""
         help_text = (
             "<b>How to Select Points:</b>"
             "<ul>"
@@ -108,9 +108,7 @@ class PointSelectorWindow(QWidget):
         QMessageBox.information(self, "Help", help_text)
 
     def _update_sphere_size(self, value: int):
-        """
-        Callback for the size_slider. Updates the radius and redraws all spheres.
-        """
+        """Callback for the size_slider. Updates the radius and redraws all spheres."""
         self.sphere_radius = value / 100.0
         self.size_label.setText(f"Sphere Size: {self.sphere_radius:.2f}")
 
@@ -129,12 +127,9 @@ class PointSelectorWindow(QWidget):
             )
             
             self.selections[label]['actor'] = new_actor
-
+    
     def _on_left_click(self, interactor, event):
-        """
-        Callback for the 'LeftButtonPressEvent'. Handles point picking when
-        the Control key is held down.
-        """
+        """Callback for the 'LeftButtonPressEvent'."""
         if interactor.GetControlKey():
             click_pos = interactor.GetEventPosition()
             
@@ -154,8 +149,8 @@ class PointSelectorWindow(QWidget):
 
     def _handle_pick(self, point_id: int):
         """
-        Processes a successful point pick. Updates the selection, visualizes
-        the picked point, and emits the pointSelected signal.
+        Processes a successful point pick. Updates the internal selection state
+        and visualizes the picked point.
         """
         checked_button = self.radio_button_group.checkedButton()
         if not checked_button:
@@ -176,16 +171,11 @@ class PointSelectorWindow(QWidget):
             pv.Sphere(radius=self.sphere_radius, center=point_coords), color=color
         )
         self.selections[current_label] = {'id': point_id, 'actor': highlight_actor}
-
-        self.pointSelected.emit(current_label, point_id)
         
-        # --- NEW: Check if all points are selected to update button state ---
         self._check_selection_completion()
 
     def load_existing_selections(self, existing_points: dict):
-        """
-        Loads and visualizes previously selected points passed during initialization.
-        """
+        """Loads and visualizes previously selected points passed during initialization."""
         for label, point_id in existing_points.items():
             if point_id is not None and label in self.point_labels:
                 label_index = self.point_labels.index(label)
@@ -197,14 +187,22 @@ class PointSelectorWindow(QWidget):
                 )
                 self.selections[label] = {'id': point_id, 'actor': highlight_actor}
         
-        # --- NEW: Check completion status after loading existing points ---
         self._check_selection_completion()
 
     def _check_selection_completion(self):
-        """
-        Checks if all required point labels have a selection.
-        If they do, the validation button is enabled.
-        """
+        """Checks if all required point labels have a selection."""
         all_selected = len(self.selections) == len(self.point_labels)
         self.validate_button.setEnabled(all_selected)
-    
+
+    # --- ADDED METHOD ---
+    def closeEvent(self, event):
+        """
+        Overrides the default close event to ensure a clean shutdown of the plotter.
+        
+        This releases graphics resources before the window is destroyed, preventing
+        VTK OpenGL errors that occur when the renderer tries to access a context
+        that is already being torn down.
+        """
+        if self.plotter:
+            self.plotter.close()
+        super().closeEvent(event)
