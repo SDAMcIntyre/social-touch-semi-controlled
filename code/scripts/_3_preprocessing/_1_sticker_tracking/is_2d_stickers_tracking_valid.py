@@ -1,5 +1,5 @@
 
-from preprocessing.stickers_analysis.roi import (
+from preprocessing.stickers_analysis import (
     ROIAnnotationFileHandler,
     ROIAnnotationManager,
     ROIProcessingStatus

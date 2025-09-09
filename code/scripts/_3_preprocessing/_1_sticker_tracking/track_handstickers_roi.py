@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 from typing import Optional
 
-from preprocessing.stickers_analysis.roi import (
+from preprocessing.stickers_analysis import (
     ROIProcessingStatus,
     ROIAnnotationFileHandler,
     ROIAnnotationManager,

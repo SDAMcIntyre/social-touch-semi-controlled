@@ -1,6 +1,6 @@
 import os
 
-from preprocessing.stickers_analysis.roi import (
+from preprocessing.stickers_analysis import (
     ROITrackedFileHandler,
 
     XYZMetadataModel,
@@ -34,6 +34,7 @@ def extract_stickers_xyz_positions(
     print("Starting sticker 3D position extraction...")
 
     # 1. Define the configuration parameters for the job.
+    # Create the typed config object.
     config_data = {
         "source_video_path": source_video_path,
         "input_csv_path": input_csv_path,
@@ -42,16 +43,13 @@ def extract_stickers_xyz_positions(
         "monitor": monitor,
         "video_path": video_path
     }
-    
-    # Create the typed config object.
     config = XYZMetadataModel(**config_data)
 
     # 2. Instantiate dependency.
     visualizer = XYZVisualizationHandler(config)
 
     # 1. Load Data
-    tracked_data_iohandler = ROITrackedFileHandler(input_csv_path)
-    tracked_data = tracked_data_iohandler.load_all_data()
+    tracked_data = ROITrackedFileHandler(input_csv_path).load_all_data()
     sticker_names = list(tracked_data.keys())
 
     metadata_manager = XYZMetadataFileHandler(config)
