@@ -199,9 +199,7 @@ def unify_dataset(contact_chars_path: Path, ttl_path: Path, output_dir: Path, *,
 @flow(name="Run Single Session Pipeline")
 def run_single_session_pipeline(
     config: KinectConfig,
-    dag_handler: DagConfigHandler,
-    *,
-    monitor_ui: bool = False
+    dag_handler: DagConfigHandler
 ):
     """
     Processes a single dataset by explicitly calling processing functions
@@ -321,12 +319,14 @@ def run_single_session_pipeline(
 
         if dag_handler.can_run('generate_xyz_stickers'):
             print(f"[{block_name}] ==> Running task: generate_xyz_stickers")
-            force = dag_handler.get_task_options('generate_xyz_stickers').get('force_processing', False)
+            options = dag_handler.get_task_options('generate_xyz_stickers')
+            force = options.get('force_processing', False)
+            use_monitor = options.get('monitor', False)
             sticker_3d_tracking_path = generate_xyz_stickers(
                 stickers_2d_path=sticker_2d_tracking_path,
                 source_video=config.source_video,
                 output_dir=handstickers_dir,
-                monitor_ui=monitor_ui,
+                monitor_ui=use_monitor,
                 force_processing=force
             )
             dag_handler.mark_completed('generate_xyz_stickers')
@@ -403,7 +403,7 @@ def run_batch_in_parallel(kinect_configs_dir: Path, project_data_root: Path, dag
     print(f"All {len(block_files)} session flows have been submitted.")
 
 @flow(name="Run Batch Sequentially", log_prints=True)
-def run_batch_sequentially(kinect_configs_dir: Path, project_data_root: Path, dag_config_path: Path, *, monitor_ui: bool = False):
+def run_batch_sequentially(kinect_configs_dir: Path, project_data_root: Path, dag_config_path: Path):
     """Runs all session pipelines one by one, waiting for each to complete."""
     dag_handler_template = DagConfigHandler(dag_config_path)
 
@@ -415,8 +415,7 @@ def run_batch_sequentially(kinect_configs_dir: Path, project_data_root: Path, da
         dag_handler_instance = dag_handler_template.copy() # Use copy for a fresh run state
         result = run_single_session_pipeline(
             config=validated_config,
-            dag_handler=dag_handler_instance,
-            monitor_ui=monitor_ui
+            dag_handler=dag_handler_instance
         )
         print(f"--- Completed session: {block_file.name} | Status: {result.get('status', 'unknown')} ---")
     print("✅ All sequential runs have completed.")
