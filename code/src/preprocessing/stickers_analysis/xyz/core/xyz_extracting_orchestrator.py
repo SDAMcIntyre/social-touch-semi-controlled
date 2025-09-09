@@ -2,7 +2,7 @@ import os
 import pandas as pd
 from typing import Dict, Any, Tuple
 
-from utils.kinect_mkv_manager import KinectMKV
+from preprocessing.common import KinectMKV
 
 # Import the new processor and other required modules
 from .xyz_extractor import Sticker3DPositionExtractor

@@ -4,12 +4,11 @@ import cv2
 import numpy as np
 import yaml
 
-from utils.kinect_mkv_manager import (
+from preprocessing.common import (
     KinectMKV,
-    KinectFrame
+    KinectFrame,
+    PointCloudDataHandler
 )
-
-from preprocessing.common import PointCloudDataHandler
 
 from preprocessing.forearm_extraction import (
     ForearmFrameParametersFileHandler,

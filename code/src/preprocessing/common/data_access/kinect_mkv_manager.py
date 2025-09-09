@@ -192,6 +192,17 @@ class _KinectReader:
                     return frame_data
         except EOFError:
             return None
+    
+    def read_once(self) -> KinectFrame | None:
+        try:
+            capture = self._playback.get_next_capture()
+            self._current_frame_index += 1
+            frame_data = self._get_frame_from_capture(capture)
+            if frame_data and (frame_data.color is not None or frame_data.depth is not None):
+                return frame_data
+        except EOFError:
+            return None
+        return None
 
 # --- The Public Facade Class ---
 
@@ -246,7 +257,7 @@ class KinectMKV:
     def __getitem__(self, frame_index: int) -> KinectFrame:
         if not self._reader: raise RuntimeError("MKV not opened. Use within a 'with' block.")
         self._reader.seek(frame_index)
-        frame = self._reader.read()
+        frame = self._reader.read_once()
         if frame is None:
               raise IndexError(f"Could not retrieve valid frame at index {frame_index}.")
         return frame

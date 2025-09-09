@@ -8,7 +8,10 @@ import numpy as np
 import open3d as o3d
 
 # Import the high-level facade and its data structure
-from utils.kinect_mkv_manager import KinectMKV, KinectFrame
+from preprocessing.common import (
+    KinectMKV, 
+    KinectFrame
+)
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 

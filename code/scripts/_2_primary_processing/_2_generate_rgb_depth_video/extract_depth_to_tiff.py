@@ -3,7 +3,7 @@ import datetime
 import numpy as np
 import tifffile as tiff
 
-from utils.kinect_mkv_manager import KinectMKV
+from preprocessing.common import KinectMKV
 
 
 def extract_depth_to_tiff(
