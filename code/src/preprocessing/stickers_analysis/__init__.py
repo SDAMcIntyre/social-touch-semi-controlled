@@ -27,8 +27,6 @@ from .xyz.gui.xyz_monitor_gui import XYZVisualizationHandler
 from .xyz.data_access.xyz_data_filehandler import XYZDataFileHandler
 from .xyz.core.xyz_extracting_orchestrator import XYZStickerOrchestrator
 
-from .xyz.gui.xyz_review_with_forearm_gui import XYZReviewWithForearmGUI
-
 
 # Define what gets imported with 'from .roi. import *'
 __all__ = [

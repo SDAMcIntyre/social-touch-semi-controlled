@@ -1,2 +1,3 @@
 
 from .compute_somatosensory_characteristics import compute_somatosensory_characteristics
+from .review_somatosensory_3d_scene import review_somatosensory_3d_scene

@@ -17,7 +17,7 @@ from primary_processing import (
 
 from _3_preprocessing._1_sticker_tracking import (
     review_tracked_objects_in_video,
-    review_xyz_stickers_with_forearm_pointcloud
+    review_xyz_stickers_on_depth_data
 )
 
 from _3_preprocessing._2_hand_tracking import (
@@ -26,6 +26,10 @@ from _3_preprocessing._2_hand_tracking import (
 
 from _3_preprocessing._3_forearm_extraction import (
     is_forearm_valid
+)
+
+from _3_preprocessing._4_somatosensory_quantification import (
+    review_somatosensory_3d_scene
 )
 
 
@@ -65,6 +69,7 @@ def review_2d_stickers(
 
 
 def review_xyz_stickers(
+    source_video: Path,
     xyz_sticker_csv_dir: Path,
     rgb_video_path: Path,
     session_common_dir: Path,
@@ -78,13 +83,47 @@ def review_xyz_stickers(
         return False
     
     # Base name derived from the 2D tracking file for consistency
+    name = rgb_video_path.stem.replace('_roi_tracking', '_handstickers_xyz_tracked.csv')
+    xyz_csv_path = xyz_sticker_csv_dir / name
+    review_xyz_stickers_on_depth_data(
+        xyz_csv_path, 
+        source_video, 
+        forearm_pointcloud_dir, 
+        forearm_metadata_path, 
+        rgb_video_path.name)
+    return True
+
+
+def review_somatosensory_assessement(
+    source_video: Path,
+    xyz_sticker_csv_dir: Path,
+    rgb_video_path: Path,
+    processed_dir: Path,
+    session_common_dir: Path,
+    session_id: str
+) -> Path:
+    print(f"[{rgb_video_path.name}] Validating xyz stickers extraction...")
+    forearm_pointcloud_dir = session_common_dir / "forearm_pointclouds"
+    metadata_filaname = session_id + "_arm_roi_metadata.json"
+    forearm_metadata_path = forearm_pointcloud_dir / metadata_filaname
+    if not is_forearm_valid(forearm_pointcloud_dir):
+        return False
+    
+    # Base name derived from the 2D tracking file for consistency
     name_baseline = rgb_video_path.stem.replace('_roi_tracking', '')
     xyz_csv_path = xyz_sticker_csv_dir / (name_baseline + "_handstickers_xyz_tracked.csv")
-    xyz_md_path = xyz_sticker_csv_dir / (name_baseline + "_handstickers_xyz_tracked_metadata.json")
-    review_xyz_stickers_with_forearm_pointcloud(xyz_csv_path, xyz_md_path, forearm_pointcloud_dir, forearm_metadata_path, rgb_video_path.name)
 
+    name_baseline = rgb_video_path.stem + "_handmodel"
+    hand_motion_glb_path = processed_dir / (name_baseline + "_motion.glb")
+
+    review_somatosensory_3d_scene(
+        xyz_csv_path, 
+        source_video, 
+        forearm_pointcloud_dir, 
+        forearm_metadata_path, 
+        rgb_video_path.name,
+        hand_motion_glb_path)
     return True
-    
 
 
 # --- The "Worker" Flow ---
@@ -117,6 +156,7 @@ def run_single_session_pipeline(
         if dag_handler.can_run('review_xyz_stickers'):
             print(f"[{block_name}] ==> Running task: review_xyz_stickers")
             valid_data =  review_xyz_stickers(
+                source_video=config.source_video,
                 xyz_sticker_csv_dir=config.video_processed_output_dir / "handstickers",
                 rgb_video_path=rgb_video_path,
                 session_common_dir=config.session_processed_output_dir,
@@ -124,7 +164,6 @@ def run_single_session_pipeline(
             )
             if valid_data:
                 dag_handler.mark_completed('review_xyz_stickers')
-
 
         if dag_handler.can_run('prepare_hand_model'):
             print(f"[{block_name}] ==> Running task: prepare_hand_model")
@@ -134,6 +173,20 @@ def run_single_session_pipeline(
                 output_dir=config.video_processed_output_dir
             )
             dag_handler.mark_completed('prepare_hand_model')
+
+        if dag_handler.can_run('review_somatosensory_assessement'):
+            print(f"[{block_name}] ==> Running task: review_somatosensory_assessement")
+            valid_data =  review_somatosensory_assessement(
+                source_video=config.source_video,
+                xyz_sticker_csv_dir=config.video_processed_output_dir / "handstickers",
+                rgb_video_path=rgb_video_path,
+                processed_dir=config.video_processed_output_dir,
+                session_common_dir=config.session_processed_output_dir,
+                session_id=config.session_id
+            )
+            if valid_data:
+                dag_handler.mark_completed('review_somatosensory_assessement')
+
 
     except Exception as e:
         print(f"❌ Pipeline failed during manual processing. Error: {e}")
