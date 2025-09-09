@@ -3,13 +3,15 @@ import datetime
 import numpy as np
 import tifffile as tiff
 
-from utils.kinect_mkv_manager import KinectMKV
+from preprocessing.common import KinectMKV
 
 
 def extract_depth_to_tiff(
         mkv_path: str, 
         output_dir: str, 
-        verbose: bool = True
+        *,
+        verbose: bool = True,
+        force_processing: bool = False
 ):
     """
     Extracts point cloud data from an Azure Kinect MKV file and saves each
@@ -52,7 +54,6 @@ def extract_depth_to_tiff(
             # Iterate through each frame using a for loop
             for frame_index, frame in enumerate(mkv):
                 print(f"--- Processing Frame {frame_index} ---")
-
                 # 2. Safely check for the depth map
                 if frame.transformed_depth_point_cloud is None:
                     print("  ❌ No depth map in this frame.")

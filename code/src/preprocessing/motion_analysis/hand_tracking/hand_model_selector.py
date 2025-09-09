@@ -71,7 +71,6 @@ class HandModelSelectorGUI(QMainWindow):
         self.right_panel = QWidget()
         self.right_layout = QVBoxLayout(self.right_panel)
 
-        # --- Hand Orientation Selection Box ---
         self.orientation_groupbox = QGroupBox("Hand Orientation")
         self.orientation_layout = QHBoxLayout()
         self.left_radio = QRadioButton("Left Hand")
@@ -109,10 +108,14 @@ class HandModelSelectorGUI(QMainWindow):
         self.raise_()
         self.activateWindow()
 
-    def _update_selected_point(self, label: str, vertex_id: int):
-        """This method is a slot that connects to the pointSelected signal."""
-        print(f"SLOT: Received point '{label}' -> vertex {vertex_id}")
-        self.selected_points[label] = vertex_id
+    # MODIFIED: Replaced the real-time update slot with one that accepts the final dictionary.
+    def _on_selections_validated(self, validated_points: dict):
+        """
+        This slot connects to the `selectionsValidated` signal from the selector window
+        and updates the main GUI's state in one atomic operation.
+        """
+        print(f"SLOT: Received validated points: {validated_points}")
+        self.selected_points.update(validated_points)
 
     def open_point_selector_window(self):
         """
@@ -123,7 +126,9 @@ class HandModelSelectorGUI(QMainWindow):
             print("A 3D model must be loaded first.")
             return
 
-        if self.selector_window and self.selector_window.isVisible():
+        # MODIFIED: This check is now robust. It no longer calls a method
+        # on a potentially deleted object.
+        if self.selector_window is not None:
             self.selector_window.raise_()
             self.selector_window.activateWindow()
         else:
@@ -132,8 +137,20 @@ class HandModelSelectorGUI(QMainWindow):
                 point_labels=self.point_labels,
                 existing_points=self.selected_points
             )
-            self.selector_window.pointSelected.connect(self._update_selected_point)
+            self.selector_window.selectionsValidated.connect(self._on_selections_validated)
+            
+            # This ensures self.selector_window is set to None when the user
+            # closes the window.
+            self.selector_window.destroyed.connect(self._on_selector_window_destroyed)
+            
             self.selector_window.show()
+        
+    def _on_selector_window_destroyed(self):
+        """
+        Slot connected to the selector window's `destroyed` signal.
+        This sets the reference to None, preventing calls on a deleted C++ object.
+        """
+        self.selector_window = None
 
     def _on_hand_orientation_changed(self):
         self.is_left = self.left_radio.isChecked()
@@ -186,11 +203,6 @@ class HandModelSelectorGUI(QMainWindow):
         Validates the selections, saves the data to a metadata file with a
         clear structure for selected points, and closes the application.
         """
-        # --- MODIFIED: Restructure selected_points for clearer JSON output ---
-        # Transform the internal dictionary into a list of objects. Each object
-        # explicitly contains the 'label' and its corresponding 'vertex_id'.
-        # This makes the output metadata file more readable and self-descriptive.
-        # Points that were not selected (have a value of None) are filtered out.
         selected_points_list = [
             {"label": label, "vertex_id": vertex_id}
             for label, vertex_id in self.selected_points.items()
@@ -211,7 +223,6 @@ class HandModelSelectorGUI(QMainWindow):
 
     def closeEvent(self, event):
         self.video_capture.release()
-        # Ensure the selector window is also closed
         if self.selector_window:
             self.selector_window.close()
         super().closeEvent(event)

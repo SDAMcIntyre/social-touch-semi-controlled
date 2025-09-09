@@ -172,7 +172,8 @@ def extract_color_to_mp4(
         output_filepath: str,
         *,
         show: bool = False, 
-        frame_rate: int = 30
+        frame_rate: int = 30,
+        force_processing: bool = False
 ):
     """
     Extracts the color stream from an MKV file and saves it as an MP4 video.

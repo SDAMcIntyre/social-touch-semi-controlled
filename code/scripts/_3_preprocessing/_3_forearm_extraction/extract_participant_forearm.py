@@ -4,12 +4,11 @@ import cv2
 import numpy as np
 import yaml
 
-from utils.kinect_mkv_manager import (
+from preprocessing.common import (
     KinectMKV,
-    KinectFrame
+    KinectFrame,
+    PointCloudDataHandler
 )
-
-from preprocessing.common import PointCloudDataHandler
 
 from preprocessing.forearm_extraction import (
     ForearmFrameParametersFileHandler,
@@ -22,7 +21,7 @@ from preprocessing.forearm_extraction import (
 )
 
 
-CONFIG_PATH = 'config.yaml'
+DEFAULT_CONFIG_PATH = 'config.yaml'
 
 # -----------------------------------------------------------------
 # 1. Custom Exceptions for Better Error Handling
@@ -214,11 +213,11 @@ def extract_forearm(
     """
     
     # Load configuration
-    config = load_config(os.path.join(os.path.dirname(__file__), CONFIG_PATH))
 
     if os.path.exists(output_params_path):
         segmentation_params = ForearmSegmentationParamsFileHandler.load(output_params_path)
     else:
+        config = load_config(os.path.join(os.path.dirname(__file__), DEFAULT_CONFIG_PATH))
         segmentation_params = config['segmentation_params']
 
     try:

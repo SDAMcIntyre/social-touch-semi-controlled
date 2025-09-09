@@ -7,11 +7,13 @@ from pathlib import Path
 
 from preprocessing.common.data_access.glb_data_handler import GLBDataHandler
 from preprocessing.motion_analysis.hand_tracking.hand_mesh_processor import HandMeshProcessor
-from preprocessing.motion_analysis.objects_interaction_processor import ObjectsInteractionProcessor
+from preprocessing.motion_analysis.tactile_quantification.model.objects_interaction_processor import ObjectsInteractionProcessor
 
 
 # This function remains unchanged.
-def parse_coordinates_from_dataframe(df: pd.DataFrame, sticker_names: list[str]) -> np.ndarray:
+def parse_coordinates_from_dataframe(
+        df: pd.DataFrame, 
+        sticker_names: list[str]) -> np.ndarray:
     """
     Parses a DataFrame and extracts coordinate data for three specified stickers,
     formatting it into a NumPy array suitable for the animation function.
@@ -53,7 +55,8 @@ def generate_hand_motion(
     output_glb_path: str,
     output_csv_path: str,
     *,
-    fps: int = 30
+    fps: int = 30,
+    force_processing: bool = False
 ):
     """
     Generates and stores a moving 3D hand model as an animated glTF/GLB file
@@ -67,10 +70,9 @@ def generate_hand_motion(
         output_csv_path (str): Path to save the output translation and rotation data as a .csv file.
         fps (int): Frames per second for the animation.
     """
-    if os.path.exists(output_glb_path) and os.path.exists(output_csv_path):
+    if not force_processing and os.path.exists(output_glb_path) and os.path.exists(output_csv_path):
         print("hand motion has been processed already, skipping...")
         return output_glb_path, output_csv_path
-    
     
     # 1. Load All Input Data
     print("Step 1: Loading input data...")
@@ -153,6 +155,7 @@ def generate_hand_motion(
     if not glb_input_is_clean(data_to_check):
         # --- Clean the data before saving ---
         # Apply this to all float arrays that might be affected.
+        print(f"🔧 Transforming invalid values in glTF data with zero (and infinity with large finite numbers).")
         vertex_positions = np.nan_to_num(vertex_positions)
         translations = np.nan_to_num(translations)
         rotations = np.nan_to_num(rotations)

@@ -1,5 +1,3 @@
-
-
-
 from .select_hand_model_characteristics import select_hand_model_characteristics
 from .generate_3d_hand_motion import generate_hand_motion
+from .is_hand_model_valid import is_hand_model_valid

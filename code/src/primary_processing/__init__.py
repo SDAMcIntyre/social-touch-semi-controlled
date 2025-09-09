@@ -1,4 +1,4 @@
-from .data_access.kinect_config_filehandler import KinectConfigFileHandler
+from .data_access.kinect_config_filehandler import KinectConfigFileHandler, get_block_files
 from .models.kinect_config import KinectConfig
 
 from .data_access.forearm_config_filehandler import ForearmConfigFileHandler

@@ -1,14 +1,10 @@
-
-import sys
 import json
 from pathlib import Path
-from PyQt5.QtWidgets import QApplication
 from typing import List, Tuple
 
-from preprocessing.motion_analysis.hand_tracking.hand_model_selector import HandModelSelectorGUI
 
 
-def is_valid(
+def is_hand_model_valid(
     metadata_path: Path,
     hand_models_dir: Path,
     expected_labels: List[str]
@@ -84,47 +80,3 @@ def is_valid(
     
     is_valid = not errors
     return is_valid, errors
-
-
-def select_hand_model_characteristics(
-        rgb_video_path: Path, 
-        hand_models_dir: Path, 
-        point_labels: list[str],
-        metadata_path: Path,
-        *,
-        force_processing: bool = False
-):
-    """
-    Creates and launches an interactive GUI to select a hand model and video frame.
-
-    This function instantiates the HandModelSelectorGUI, which provides a user
-    interface for visualizing a video alongside interactive 3D hand models.
-    The user's final selection is saved to a specified metadata file.
-
-    Args:
-        rgb_video_path (Path): Path to the RGB video file.
-        hand_models_dir (Path): Directory containing `.ply` 3D hand models.
-        metadata_path (Path): Path to save the output JSON metadata file.
-    """
-    if not force_processing and is_valid(metadata_path, hand_models_dir, point_labels)[0]:
-        print(f"hand model characteristics already existing and valid: {metadata_path}. Skipping...")
-        return metadata_path
-    
-    # PyQt requires a QApplication instance.
-    # We check if one already exists to avoid conflicts in larger applications.
-    app = QApplication.instance()
-    if app is None:
-        app = QApplication(sys.argv)
-    
-    window = HandModelSelectorGUI(
-        rgb_video_path, 
-        hand_models_dir,
-        point_labels, 
-        metadata_path)
-    window.show()
-    
-    # Start the application's event loop. The script will block here until the
-    # user closes the window or clicks the validate button.
-    app.exec_()
-
-    return metadata_path

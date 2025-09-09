@@ -1,0 +1,19 @@
+# A dependency-aware configuration for the MANUAL processing pipeline.
+# Use 'enabled: true' for the manual task you wish to perform for each session.
+# Unlike the automatic pipeline, these tasks are typically independent setup steps.
+
+parameters:
+  # Directory containing the session configs for which you want to run manual tasks.
+  kinect_configs_directory: "kinect_configs"
+
+tasks:
+  # --- Manual Task Definitions ---
+  review_stickers:
+    enabled: true
+    description: "Manually define/review the tracking ROI for stickers on the hand."
+    depends_on: []
+
+  prepare_hand_model:
+    enabled: false
+    description: "Manually select reference points on the hand and 3D hand model."
+    depends_on: []

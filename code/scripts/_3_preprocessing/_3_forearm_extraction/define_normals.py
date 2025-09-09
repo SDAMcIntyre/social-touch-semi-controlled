@@ -44,4 +44,5 @@ def define_normals(
 
     controller.run()
 
+
     return output_ply_path, output_metadata_path

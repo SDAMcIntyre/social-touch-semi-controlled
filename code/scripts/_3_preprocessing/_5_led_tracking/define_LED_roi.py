@@ -8,7 +8,12 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 from .utils.KinectLEDRegionOfInterestMP4 import KinectLEDRegionOfInterestMP4  # noqa: E402
 
 
-def define_led_roi(video_path: Path, output_path: Path) -> bool:
+def define_led_roi(
+        video_path: Path, 
+        output_path: Path,
+        *,
+        force_processing: bool = False
+) -> bool:
     """
     Identifies and saves the LED Region of Interest (ROI) from a video file.
 

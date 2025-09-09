@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 from typing import Optional
 
-from preprocessing.stickers_analysis.roi import (
+from preprocessing.stickers_analysis import (
     ROIProcessingStatus,
     ROIAnnotationFileHandler,
     ROIAnnotationManager,
@@ -16,6 +16,7 @@ def track_objects_in_video(
         metadata_path: str, 
         output_path: str,
         *,
+        force_processing: bool = False,
         gui_control: bool = False,
         show_gui: bool = False) -> Optional[str]:
     """
@@ -52,7 +53,7 @@ def track_objects_in_video(
         tracked_object = annotation_manager.get_object(object_name)
 
         if tracked_object.status == ROIProcessingStatus.TO_BE_PROCESSED.value:
-            tracked_roi = orchestrator.track(labeled_rois_df=tracked_object.rois)
+            tracked_roi = orchestrator.run(labeled_rois=tracked_object.rois)
 
             # 1. Track the object
             results[object_name] = tracked_roi

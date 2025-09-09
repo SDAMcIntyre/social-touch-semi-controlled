@@ -17,7 +17,10 @@ from .models.forearm_parameters import (
 
 from .gui.multivideo_frames_selector import MultiVideoFramesSelector
 
-from .models.forearm_catalog import ForearmCatalog
+from .models.forearm_catalog import (
+    ForearmCatalog,
+    get_forearms_with_fallback
+)
 
 
 __all__ = [

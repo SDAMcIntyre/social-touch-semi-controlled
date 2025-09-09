@@ -142,7 +142,7 @@ source/2_primary_processing/0_kinect_segmentation/createRGBvideo/createRGBvideo.
 .vscode/launch.json
 
 # user config file with project path
-/configs
+/configs/**/*.yaml
 semi_controlled_project_data_config.json
 
 # sandbox scripts
