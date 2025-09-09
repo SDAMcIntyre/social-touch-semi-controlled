@@ -21,7 +21,7 @@ class XYZVisualizationHandler:
         if not self.writer.isOpened():
             raise IOError(f"Could not open video writer for path: {self.video_path}")
         print(f"Saving monitoring video to: {self.video_path} at {fps} FPS")
-
+    
     def _resize_with_padding(self, image: np.ndarray, target_dims: tuple) -> np.ndarray:
         # (Implementation from original script)
         target_w, target_h = target_dims

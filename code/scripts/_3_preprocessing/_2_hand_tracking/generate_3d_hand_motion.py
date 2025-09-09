@@ -155,6 +155,7 @@ def generate_hand_motion(
     if not glb_input_is_clean(data_to_check):
         # --- Clean the data before saving ---
         # Apply this to all float arrays that might be affected.
+        print(f"🔧 Transforming invalid values in glTF data with zero (and infinity with large finite numbers).")
         vertex_positions = np.nan_to_num(vertex_positions)
         translations = np.nan_to_num(translations)
         rotations = np.nan_to_num(rotations)

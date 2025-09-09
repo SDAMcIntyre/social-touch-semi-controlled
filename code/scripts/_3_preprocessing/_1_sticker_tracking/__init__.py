@@ -13,6 +13,6 @@ from .extract_stickers_xyz_positions import extract_stickers_xyz_positions
 
 # user review or tasks
 from .review_tracked_handstickers_roi import review_tracked_objects_in_video
-from .review_xyz_stickers_with_forearm_pointcloud import review_xyz_stickers_with_forearm_pointcloud
+from .review_xyz_stickers_with_depth_data import review_xyz_stickers_on_depth_data
 
 

@@ -29,7 +29,6 @@ class ObjectsInteractionController:
                  fps: int = 30,
                  visualizer_width_sec: int = 3
     ):
-        
         self.processor = ObjectsInteractionProcessor(
             references_pcd=references_pcd,
             base_vertices=hand_motion_data['vertices'],

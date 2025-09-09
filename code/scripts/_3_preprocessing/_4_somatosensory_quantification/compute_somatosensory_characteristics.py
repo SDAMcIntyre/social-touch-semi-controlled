@@ -42,9 +42,8 @@ def compute_somatosensory_characteristics(
     if hand_motion_data:
         print(f"Successfully loaded hand motion dictionary.")
 
-    forearm_params: List[ForearmParameters] = ForearmFrameParametersFileHandler.load(metadata_path)
-
     # Collect the forearms pointclouds for the specific video
+    forearm_params: List[ForearmParameters] = ForearmFrameParametersFileHandler.load(metadata_path)
     catalog = ForearmCatalog(forearm_params, forearm_pointcloud_dir)
     forearms_dict = get_forearms_with_fallback(catalog, current_video_filename)
 
