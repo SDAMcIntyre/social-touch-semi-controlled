@@ -90,7 +90,10 @@ def select_hand_model_characteristics(
         rgb_video_path: Path, 
         hand_models_dir: Path, 
         point_labels: list[str],
-        metadata_path: Path):
+        metadata_path: Path,
+        *,
+        force_processing: bool = False
+):
     """
     Creates and launches an interactive GUI to select a hand model and video frame.
 
@@ -103,7 +106,7 @@ def select_hand_model_characteristics(
         hand_models_dir (Path): Directory containing `.ply` 3D hand models.
         metadata_path (Path): Path to save the output JSON metadata file.
     """
-    if is_valid(metadata_path, hand_models_dir, point_labels)[0]:
+    if not force_processing and is_valid(metadata_path, hand_models_dir, point_labels)[0]:
         print(f"hand model characteristics already existing and valid: {metadata_path}. Skipping...")
         return metadata_path
     

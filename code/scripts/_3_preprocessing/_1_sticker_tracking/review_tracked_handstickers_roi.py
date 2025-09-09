@@ -171,7 +171,9 @@ def review_tracking(
 def review_tracked_objects_in_video(
     video_path: str, 
     metadata_path: str,
-    tracked_data_path: str
+    tracked_data_path: str,
+    *,
+    force_processing: bool = False
 ) -> Optional[str]:
     """
     Main pipeline to review tracking, validate, or trigger re-annotation.
@@ -179,7 +181,7 @@ def review_tracked_objects_in_video(
     annotation_data_iohandler = ROIAnnotationFileHandler.load(metadata_path)
     annotation_manager = ROIAnnotationManager(annotation_data_iohandler)
 
-    if annotation_manager.are_no_objects_with_status(ROIProcessingStatus.TO_BE_REVIEWED):
+    if not force_processing and annotation_manager.are_no_objects_with_status(ROIProcessingStatus.TO_BE_REVIEWED):
         print(f"No object has been assigned to be reviewed: either ✅ Tracking is completed or automatic algorithm has to process it.")
         return tracked_data_path
     

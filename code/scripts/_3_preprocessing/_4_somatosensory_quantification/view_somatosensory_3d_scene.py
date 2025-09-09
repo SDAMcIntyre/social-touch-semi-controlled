@@ -67,9 +67,7 @@ def view_somatosensory_3d_scene(
     forearm_pointcloud_dir: Path,
     forearm_metadata_path: Path,
     rgb_video_path: Path,
-    hand_motion_glb_path: Path,
-    *,
-    force_processing: bool = False
+    hand_motion_glb_path: Path
 ):
     
     try:

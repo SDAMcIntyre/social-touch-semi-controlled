@@ -1,8 +1,4 @@
-import os
-import yaml
-import copy
 from pathlib import Path
-from typing import Dict, Any, List, Set
 
 from prefect import flow
 
@@ -17,7 +13,7 @@ from primary_processing import (
 
 from _3_preprocessing._1_sticker_tracking import (
     review_tracked_objects_in_video,
-    review_xyz_stickers_on_depth_data
+    view_xyz_stickers_on_depth_data
 )
 
 from _3_preprocessing._2_hand_tracking import (
@@ -29,7 +25,7 @@ from _3_preprocessing._3_forearm_extraction import (
 )
 
 from _3_preprocessing._4_somatosensory_quantification import (
-    review_somatosensory_3d_scene
+    view_somatosensory_3d_scene
 )
 
 
@@ -39,7 +35,9 @@ from _3_preprocessing._4_somatosensory_quantification import (
 def prepare_hand_model(
     rgb_video_path: Path,
     hand_models_dir: Path,
-    output_dir: Path
+    output_dir: Path,
+    *,
+    force_processing: bool = False
 ) -> Path:
     """Manually define landmarks for the 3D hand model."""
     print(f"[{output_dir.name}] Preparing hand tracking session...")
@@ -47,13 +45,23 @@ def prepare_hand_model(
     metadata_path = output_dir / (name_baseline + "_metadata.json")
 
     point_labels = ["sticker_yellow", "sticker_blue", "sticker_green"]
-    select_hand_model_characteristics(rgb_video_path, hand_models_dir, point_labels, metadata_path)
+    # NOTE: The underlying function `select_hand_model_characteristics` must be updated
+    # to accept and use the `force_processing` argument.
+    select_hand_model_characteristics(
+        rgb_video_path,
+        hand_models_dir,
+        point_labels,
+        metadata_path,
+        force_processing=force_processing
+    )
     return metadata_path
 
 @flow(name="Manual: Review Stickers")
 def review_2d_stickers(
     rgb_video_path: Path,
-    root_output_dir: Path
+    root_output_dir: Path,
+    *,
+    force_processing: bool = False
 ) -> Path:
     """Manually define ROI and review sticker tracking."""
     output_dir = root_output_dir / "handstickers"
@@ -64,17 +72,25 @@ def review_2d_stickers(
     metadata_roi_path = output_dir / (name_baseline + "_roi_metadata.json")
     stickers_roi_csv_path = output_dir / (name_baseline + "_roi_tracking.csv")
 
-    review_tracked_objects_in_video(rgb_video_path, metadata_roi_path, stickers_roi_csv_path)
+    # NOTE: The underlying function `review_tracked_objects_in_video` must be updated
+    # to accept and use the `force_processing` argument.
+    review_tracked_objects_in_video(
+        rgb_video_path,
+        metadata_roi_path,
+        stickers_roi_csv_path,
+        force_processing=force_processing
+    )
     return stickers_roi_csv_path
 
 
-def review_xyz_stickers(
+def view_xyz_stickers(
     source_video: Path,
     xyz_sticker_csv_dir: Path,
     rgb_video_path: Path,
     session_common_dir: Path,
-    session_id: str,
+    session_id: str
 ) -> Path:
+    """Visualize the 3D sticker data on the depth point cloud."""
     print(f"[{rgb_video_path.name}] Validating xyz stickers extraction...")
     forearm_pointcloud_dir = session_common_dir / "forearm_pointclouds"
     metadata_filaname = session_id + "_arm_roi_metadata.json"
@@ -85,16 +101,18 @@ def review_xyz_stickers(
     # Base name derived from the 2D tracking file for consistency
     name = rgb_video_path.stem.replace('_roi_tracking', '_handstickers_xyz_tracked.csv')
     xyz_csv_path = xyz_sticker_csv_dir / name
-    review_xyz_stickers_on_depth_data(
+    
+    view_xyz_stickers_on_depth_data(
         xyz_csv_path, 
         source_video, 
         forearm_pointcloud_dir, 
         forearm_metadata_path, 
-        rgb_video_path.name)
+        rgb_video_path.name
+    )
     return True
 
 
-def review_somatosensory_assessement(
+def view_somatosensory_assessement(
     source_video: Path,
     xyz_sticker_csv_dir: Path,
     rgb_video_path: Path,
@@ -102,7 +120,8 @@ def review_somatosensory_assessement(
     session_common_dir: Path,
     session_id: str
 ) -> Path:
-    print(f"[{rgb_video_path.name}] Validating xyz stickers extraction...")
+    """Visualize the complete 3D scene for somatosensory assessment."""
+    print(f"[{rgb_video_path.name}] Validating somatosensory assessment...")
     forearm_pointcloud_dir = session_common_dir / "forearm_pointclouds"
     metadata_filaname = session_id + "_arm_roi_metadata.json"
     forearm_metadata_path = forearm_pointcloud_dir / metadata_filaname
@@ -116,13 +135,14 @@ def review_somatosensory_assessement(
     name_baseline = rgb_video_path.stem + "_handmodel"
     hand_motion_glb_path = processed_dir / (name_baseline + "_motion.glb")
 
-    review_somatosensory_3d_scene(
+    view_somatosensory_3d_scene(
         xyz_csv_path, 
         source_video, 
         forearm_pointcloud_dir, 
         forearm_metadata_path, 
         rgb_video_path.name,
-        hand_motion_glb_path)
+        hand_motion_glb_path
+    )
     return True
 
 
@@ -145,17 +165,30 @@ def run_single_session_pipeline(
         return {"status": "failed", "error": "RGB video not found"}
 
     try:
+        if dag_handler.can_run('prepare_hand_model'):
+            print(f"[{block_name}] ==> Running task: prepare_hand_model")
+            force = dag_handler.get_task_options('prepare_hand_model').get('force_processing', False)
+            prepare_hand_model(
+                rgb_video_path=rgb_video_path,
+                hand_models_dir=config.hand_models_dir,
+                output_dir=config.video_processed_output_dir,
+                force_processing=force
+            )
+            dag_handler.mark_completed('prepare_hand_model')
+
         if dag_handler.can_run('review_2d_stickers'):
             print(f"[{block_name}] ==> Running task: review_2d_stickers")
+            force = dag_handler.get_task_options('review_2d_stickers').get('force_processing', False)
             review_2d_stickers(
                 rgb_video_path=rgb_video_path,
-                root_output_dir=config.video_processed_output_dir
+                root_output_dir=config.video_processed_output_dir,
+                force_processing=force
             )
             dag_handler.mark_completed('review_2d_stickers')
-
-        if dag_handler.can_run('review_xyz_stickers'):
-            print(f"[{block_name}] ==> Running task: review_xyz_stickers")
-            valid_data =  review_xyz_stickers(
+        
+        if dag_handler.can_run('view_xyz_stickers'):
+            print(f"[{block_name}] ==> Running task: view_xyz_stickers")
+            valid_data =  view_xyz_stickers(
                 source_video=config.source_video,
                 xyz_sticker_csv_dir=config.video_processed_output_dir / "handstickers",
                 rgb_video_path=rgb_video_path,
@@ -163,20 +196,11 @@ def run_single_session_pipeline(
                 session_id=config.session_id
             )
             if valid_data:
-                dag_handler.mark_completed('review_xyz_stickers')
+                dag_handler.mark_completed('view_xyz_stickers')
 
-        if dag_handler.can_run('prepare_hand_model'):
-            print(f"[{block_name}] ==> Running task: prepare_hand_model")
-            prepare_hand_model(
-                rgb_video_path=rgb_video_path,
-                hand_models_dir=config.hand_models_dir,
-                output_dir=config.video_processed_output_dir
-            )
-            dag_handler.mark_completed('prepare_hand_model')
-
-        if dag_handler.can_run('review_somatosensory_assessement'):
-            print(f"[{block_name}] ==> Running task: review_somatosensory_assessement")
-            valid_data =  review_somatosensory_assessement(
+        if dag_handler.can_run('view_somatosensory_assessement'):
+            print(f"[{block_name}] ==> Running task: view_somatosensory_assessement")
+            valid_data =  view_somatosensory_assessement(
                 source_video=config.source_video,
                 xyz_sticker_csv_dir=config.video_processed_output_dir / "handstickers",
                 rgb_video_path=rgb_video_path,
@@ -185,7 +209,7 @@ def run_single_session_pipeline(
                 session_id=config.session_id
             )
             if valid_data:
-                dag_handler.mark_completed('review_somatosensory_assessement')
+                dag_handler.mark_completed('view_somatosensory_assessement')
 
 
     except Exception as e:

@@ -58,9 +58,7 @@ def view_xyz_stickers_on_depth_data(
     kinect_video_path: Path,
     forearm_pointcloud_dir: Path,
     forearm_metadata_path: Path,
-    rgb_video_path: Path,
-    *,
-    force_processing: bool = False
+    rgb_video_path: Path
 ):
     
     try:
