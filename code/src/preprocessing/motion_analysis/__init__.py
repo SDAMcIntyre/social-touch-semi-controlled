@@ -8,8 +8,10 @@ from the 'tactile_quantification' namespace, decoupling their code from our inte
 """
 
 # Import from sub-modules to "lift" them into this package's namespace
+from .hand_tracking.hand_motion import HandMotion
 
 from .tactile_quantification.core.objects_interaction_controller import ObjectsInteractionController
+
 
 __all__ = [
     "ObjectsInteractionController",
