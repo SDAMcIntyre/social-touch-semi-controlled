@@ -7,12 +7,15 @@ simplifying imports elsewhere in the project.
 from .is_2d_stickers_tracking_valid import is_2d_stickers_tracking_valid
 
 # automatic computation
+# - 2d tracking process
 from .track_handstickers_roi import track_objects_in_video
+# - ellipses processes
+from .define_handstickers_colorspaces_from_roi import define_handstickers_colorspaces_from_roi
 
+# - XYZ stickers location process
 from .extract_stickers_xyz_positions import extract_stickers_xyz_positions
 
 # user review or tasks
 from .review_tracked_handstickers_roi import review_tracked_objects_in_video
 from .view_xyz_stickers_with_depth_data import view_xyz_stickers_on_depth_data
-
 

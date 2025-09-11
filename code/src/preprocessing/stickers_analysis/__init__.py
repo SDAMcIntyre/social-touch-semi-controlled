@@ -15,11 +15,13 @@ from .roi.models.roi_tracked_data import ROITrackedObjects, ROITrackedObject, RO
 
 from .roi.core.review_tracking_orchestrator import TrackerReviewOrchestrator, TrackerReviewStatus
 from .roi.gui.review_tracking_gui import TrackerReviewGUI
-#from .roi...common.gui.frame_roi_square import FrameROISquare
 from .roi.models.video_review_manager import VideoReviewManager
 
 from .roi.core.roi_tracking_orchestrator import TrackingOrchestrator
 from .roi.models.tracking_handlers import InteractiveGUIHandler
+
+from .ellipse.data_access.color_space_filehandler import ColorSpaceFileHandler
+from .ellipse.gui.frame_roi_color_gui import FrameROIColor
 
 from .xyz.models.xyz_metadata_model import XYZMetadataModel, XYZMetadataConfig
 from .xyz.data_access.xyz_metadata_filehandler import XYZMetadataFileHandler
@@ -45,6 +47,5 @@ __all__ = [
     "TrackerReviewOrchestrator", 
     "TrackerReviewStatus",
     "TrackerReviewGUI", 
-    #"FrameROISquare",
     "VideoReviewManager", 
 ]

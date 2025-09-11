@@ -50,7 +50,7 @@ class ROIAnnotationFileHandler:
             raise
 
     @staticmethod
-    def load(filepath: str, create_if_not_exists: bool = True) -> 'AnnotationData':
+    def load(filepath: str, create_if_not_exists: bool = True) -> AnnotationData:
         """Loads and constructs an AnnotationData object from a JSON file."""
         if not os.path.exists(filepath):
             if create_if_not_exists:

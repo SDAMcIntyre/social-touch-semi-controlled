@@ -1,13 +1,16 @@
 import cv2
 from enum import Enum
-from dataclasses import dataclass
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
+
+
+from preprocessing.common import (
+    VideoMP4Manager
+)
 
 from ..gui.review_tracking_gui import (
     TrackerReviewGUI,
     FrameAction
 )
-from ..models.video_review_manager import VideoReviewManager
 from ..models.roi_tracked_data import ROITrackedObjects
 from ..models.roi_review_shared_types import FrameAction, FrameMark
 
@@ -25,12 +28,12 @@ class TrackerReviewOrchestrator:
     Manages the application's state and logic. Connects the Model and the View.
     This class is completely UI-agnostic.
     """
-    def __init__(self, model: VideoReviewManager, view: TrackerReviewGUI, tracking_history: ROITrackedObjects = None):
+    def __init__(self, model: VideoMP4Manager, view: TrackerReviewGUI, tracking_history: Optional[ROITrackedObjects] = None):
         """
         Initializes the orchestrator.
 
         Args:
-            model (VideoReviewManager): The data model for video access.
+            model (VideoMP4Manager): The data model for video access.
             view (TrackerReviewGUI): The UI view.
             tracking_history (ROITrackedObjects, optional): A dictionary where keys are object IDs (str)
                                                                  and values are pandas DataFrames containing
@@ -70,19 +73,35 @@ class TrackerReviewOrchestrator:
         self.view.setup_ui()
         self.update_view_full()
         self.view.start_mainloop()
+            
+        # Case 1: tracking_history IS NOT present. Return simple lists of frame numbers.
+        if not self.tracking_history:
+            frames_for_labeling = []
+            frames_for_deleting = []
+            for frame_num, mark in self.marked_frames.items():
+                if mark.action == FrameAction.LABEL:
+                    frames_for_labeling.append(frame_num)
+                elif mark.action == FrameAction.DELETE:
+                    frames_for_deleting.append(frame_num)
+
+            return (self.status, 
+                    sorted(frames_for_labeling), 
+                    sorted(frames_for_deleting))
+
+        # Case 2: tracking_history IS present. Return dicts with object IDs.
+        else:
+            frames_for_labeling = {}
+            frames_for_deleting = {}
+            for frame_num, mark in self.marked_frames.items():
+                if mark.action == FrameAction.LABEL:
+                    frames_for_labeling[frame_num] = mark.object_ids
+                elif mark.action == FrameAction.DELETE:
+                    frames_for_deleting[frame_num] = mark.object_ids
+            
+            return (self.status, 
+                    dict(sorted(frames_for_labeling.items())), 
+                    dict(sorted(frames_for_deleting.items())))
         
-        # --- REFACTORED: Deconstruct the unified dictionary for the caller ---
-        frames_for_labeling = {}
-        frames_for_deleting = {}
-        for frame_num, mark in self.marked_frames.items():
-            if mark.action == FrameAction.LABEL:
-                frames_for_labeling[frame_num] = mark.object_ids
-            elif mark.action == FrameAction.DELETE:
-                frames_for_deleting[frame_num] = mark.object_ids
-        
-        return (self.status, 
-                dict(sorted(frames_for_labeling.items())), 
-                dict(sorted(frames_for_deleting.items())))
 
     def toggle_play_pause(self):
         """Toggles the playback state."""
@@ -186,7 +205,7 @@ class TrackerReviewOrchestrator:
         """
         Gets the current frame and draws tracking data for all objects.
         """
-        frame = self.model.get_frame(self.current_frame_num).copy()
+        frame = self.model[self.current_frame_num].copy()
         for obj_id, df_history in self.tracking_history.items():
             if self.current_frame_num in df_history.index:
                 object_data_at_frame = df_history.loc[self.current_frame_num]
