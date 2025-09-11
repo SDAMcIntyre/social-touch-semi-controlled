@@ -13,6 +13,7 @@ from primary_processing import (
 
 from _3_preprocessing._1_sticker_tracking import (
     review_tracked_objects_in_video,
+    define_handstickers_colorspaces_from_roi,
     view_xyz_stickers_on_depth_data
 )
 
@@ -80,8 +81,33 @@ def review_2d_stickers(
         stickers_roi_csv_path,
         force_processing=force_processing
     )
+
     return stickers_roi_csv_path
 
+@flow(name="Manual: Define Colorspace")
+def prepare_stickers_colorspace(
+    rgb_video_path: Path,
+    root_output_dir: Path,
+    *,
+    force_processing: bool = False
+) -> Path:
+    success = True
+
+    output_dir = root_output_dir / "handstickers"
+    name_baseline = rgb_video_path.stem + "_handstickers"
+
+    roi_video_base_path = output_dir / (name_baseline + "_roi_unified.mp4")
+    metadata_roi_path = output_dir / (name_baseline + "_roi_metadata.json")
+    
+    metadata_colorspace_path = output_dir / (name_baseline + "_colorspace_metadata.json")
+    define_handstickers_colorspaces_from_roi(
+        roi_video_base_path,
+        metadata_roi_path,
+        metadata_colorspace_path,
+        force_processing=force_processing
+        )
+    
+    return success
 
 def view_xyz_stickers(
     source_video: Path,
@@ -186,6 +212,17 @@ def run_single_session_pipeline(
             )
             dag_handler.mark_completed('review_2d_stickers')
         
+        if dag_handler.can_run('prepare_stickers_colorspace'):
+            print(f"[{block_name}] ==> Running task: prepare_stickers_colorspace")
+            force = dag_handler.get_task_options('prepare_stickers_colorspace').get('force_processing', False)
+            prepare_stickers_colorspace(
+                rgb_video_path=rgb_video_path,
+                root_output_dir=config.video_processed_output_dir,
+                force_processing=force
+            )
+            dag_handler.mark_completed('prepare_stickers_colorspace')
+        
+
         if dag_handler.can_run('view_xyz_stickers'):
             print(f"[{block_name}] ==> Running task: view_xyz_stickers")
             valid_data =  view_xyz_stickers(
