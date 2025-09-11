@@ -15,6 +15,8 @@ from .create_standardized_roi_videos import create_standardized_roi_videos
 from .create_color_correlation_videos import create_color_correlation_videos
 from .define_handstickers_colorspaces_from_roi import define_handstickers_colorspaces_from_roi
 from .define_handstickers_color_threshold import define_handstickers_color_threshold
+from .fit_ellipses_on_correlation_videos import fit_ellipses_on_correlation_videos
+
 # - XYZ stickers location process
 from .extract_stickers_xyz_positions import extract_stickers_xyz_positions
 

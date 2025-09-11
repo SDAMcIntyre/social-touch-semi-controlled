@@ -24,6 +24,7 @@ from _3_preprocessing._1_sticker_tracking import (
     generate_standard_roi_size_dataset,
     create_standardized_roi_videos,
     create_color_correlation_videos,
+    fit_ellipses_on_correlation_videos,
     
     extract_stickers_xyz_positions
 )
@@ -134,13 +135,31 @@ def track_stickers(rgb_video_path: Path, output_dir: Path, *, force_processing: 
     roi_unified_csv_path = output_dir / (name_baseline + "_roi_standard_size.csv")
     generate_standard_roi_size_dataset(stickers_roi_csv_path, roi_unified_csv_path)
     corrmap_video_base_path = output_dir / (name_baseline + "_roi_unified.mp4")
-    create_standardized_roi_videos(roi_unified_csv_path, rgb_video_path, corrmap_video_base_path, force_processing=True) # force_processing)
+    create_standardized_roi_videos(roi_unified_csv_path, rgb_video_path, corrmap_video_base_path, force_processing=force_processing) # force_processing)
     
     # defined by manual tasks pipeline
     metadata_colorspace_path = output_dir / (name_baseline + "_colorspace_metadata.json")
     binary_video_base_path = output_dir / (name_baseline + "_corrmap_binary.mp4")
-    create_color_correlation_videos(corrmap_video_base_path, metadata_colorspace_path, binary_video_base_path)
+    create_color_correlation_videos(corrmap_video_base_path, metadata_colorspace_path, binary_video_base_path, force_processing=force_processing)
     
+    fit_ellipses_path = output_dir / (name_baseline + "_ellipses.csv")
+    fit_ellipses_on_correlation_videos(
+        video_path=binary_video_base_path,
+        md_path=metadata_colorspace_path,
+        output_path=fit_ellipses_path,
+        force_processing=force_processing)
+    
+    # merge_result_into_standard_frame
+
+    return stickers_roi_csv_path, True
+
+    fit_ellipses_adj_path = output_dir / (name_baseline + "_ellipses_adj.csv")
+    adjust_ellipses_coord_to_frame(
+        roi_unified_csv_path=roi_unified_csv_path,
+        ellipses_csv_path=fit_ellipses_path,
+        metadata_path=metadata_colorspace_path,
+        output_path=fit_ellipses_adj_path)
+
     return stickers_roi_csv_path, False
 
 @flow(name="6. Generate XYZ Sticker Positions (3D)")
@@ -249,7 +268,7 @@ def run_single_session_pipeline(
                 source_video=config.source_video,
                 output_dir=config.video_primary_output_dir,
                 force_processing=force
-            )
+                    )
             dag_handler.mark_completed('generate_rgb_video')
 
         if dag_handler.can_run('generate_depth_images'):
