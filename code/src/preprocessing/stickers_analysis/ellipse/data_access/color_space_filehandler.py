@@ -1,5 +1,5 @@
 import json
-from ..models.color_space_manager_model import ColorSpaceManager
+from ..models.color_space_manager import ColorSpaceManager
 
 class ColorSpaceFileHandler:
     """
@@ -20,8 +20,7 @@ class ColorSpaceFileHandler:
         except json.JSONDecodeError as e:
             print(f"Error: Could not decode JSON from {filepath}. Details: {e}")
             raise
-
-    # --- NEW METHOD ---
+    
     @staticmethod
     def write(filepath: str, metadata: ColorSpaceManager):
         """
