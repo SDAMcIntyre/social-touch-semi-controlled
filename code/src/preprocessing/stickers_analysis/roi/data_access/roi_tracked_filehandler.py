@@ -98,7 +98,6 @@ class ROITrackedFileHandler:
         """
         if not all_objects_data:
             # If there's no data, ensure the file is empty.
-            return
             open(self.file_path, 'w').close()
             return
 
