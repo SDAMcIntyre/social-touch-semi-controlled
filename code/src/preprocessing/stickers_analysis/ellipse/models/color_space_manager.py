@@ -27,16 +27,19 @@ class ColorSpaceManager:
         return list(self._data.keys())
 
     def are_no_objects_with_status(self, status: ColorSpaceStatus) -> bool:
-        """
-        Checks if there are no colorspace objects with the specified status.
+        return not self.any_objects_with_status(status)
+    
+    def any_objects_with_status(self, status: ColorSpaceStatus) -> bool:
+        return any(cs.status == status.value for cs in self._data.values())
+    
+    def all_objects_with_status(self, status: ColorSpaceStatus) -> bool:
+        return all(cs.status == status.value for cs in self._data.values())
+    
+    def not_all_objects_with_status(self, status: ColorSpaceStatus) -> bool:
+        return not self.all_objects_with_status(status)
 
-        Args:
-            status (ColorSpaceStatus): The status to check for.
-
-        Returns:
-            bool: True if no objects have the given status, False otherwise.
-        """
-        return not any(cs.status == status.value for cs in self._data.values())
+    # An alternative, more explicit implementation:
+    # return any(cs.status != status.value for cs in self._data.values())
     
     def update_status(self, name: str, status: str) -> None:
         """
@@ -176,7 +179,7 @@ class ColorSpaceManager:
                 "Use add_object() or update_or_add_object()."
             )
         colorspace_obj = self.get_colorspace(object_name)
-        
+
         print(f"✅ Updating object '{object_name}'. Merge={merge}.")
         colorspace_obj.update(
             frame_ids=frame_ids,
