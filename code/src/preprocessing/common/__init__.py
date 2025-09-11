@@ -9,7 +9,7 @@ from .data_access.glb_data_handler import GLBDataHandler
 from .data_access.kinect_mkv_manager import KinectFrame, KinectMKV
 from .data_access.kinect_pointcloud_wrapper import KinectPointCloudView
 from .data_access.pc_data_handler import PointCloudDataHandler
-from .data_access.video_mp4_manager import VideoMP4Manager
+from .data_access.video_mp4_manager import VideoMP4Manager, ColorFormat
 
 # --- GUI Layer ---
 # For visualizing data and interacting with it through graphical components.

@@ -39,7 +39,7 @@ def track_objects_in_video(
     annotation_data_iohandler = ROIAnnotationFileHandler.load(metadata_path)
     annotation_manager = ROIAnnotationManager(annotation_data_iohandler)
 
-    if annotation_manager.are_no_objects_with_status(ROIProcessingStatus.TO_BE_PROCESSED):
+    if not force_processing and annotation_manager.are_no_objects_with_status(ROIProcessingStatus.TO_BE_PROCESSED):
         print(f"No object has been assigned to be processed: either ✅ Tracking is completed or user has to review.")
         return output_path
     
@@ -52,7 +52,7 @@ def track_objects_in_video(
     for object_name in annotation_manager.get_object_names():
         tracked_object = annotation_manager.get_object(object_name)
 
-        if tracked_object.status == ROIProcessingStatus.TO_BE_PROCESSED.value:
+        if force_processing or tracked_object.status == ROIProcessingStatus.TO_BE_PROCESSED.value:
             tracked_roi = orchestrator.run(labeled_rois=tracked_object.rois)
 
             # 1. Track the object

@@ -20,6 +20,11 @@ from _2_primary_processing._2_generate_rgb_depth_video import (
 from _3_preprocessing._1_sticker_tracking import (
     track_objects_in_video,
     is_2d_stickers_tracking_valid,
+    
+    generate_standard_roi_size_dataset,
+    create_standardized_roi_videos,
+    create_color_correlation_videos,
+    
     extract_stickers_xyz_positions
 )
 
@@ -120,16 +125,23 @@ def track_stickers(rgb_video_path: Path, output_dir: Path, *, force_processing: 
     metadata_roi_path = output_dir / (name_baseline + "_roi_metadata.json")
     stickers_roi_csv_path = output_dir / (name_baseline + "_roi_tracking.csv")
 
-    # MODIFIED: Use `force_processing` to bypass the validation check
-    if not force_processing and is_2d_stickers_tracking_valid(metadata_roi_path):
-        print("--> 2D sticker tracking is already valid. Skipping.")
-        return stickers_roi_csv_path, True
-    else:
-        if force_processing:
-            print("--> `force_processing` is true. Re-tracking 2D stickers.")
-        # Propagate the flag to the underlying implementation function
-        track_objects_in_video(rgb_video_path, metadata_roi_path, output_path=stickers_roi_csv_path, force_processing=force_processing)
+    track_objects_in_video(rgb_video_path, metadata_roi_path, output_path=stickers_roi_csv_path, force_processing=force_processing)
+    
+    if not is_2d_stickers_tracking_valid(metadata_roi_path):
+        print("--> 2D sticker tracking is not valid. Cannot continue the pipeline.")
         return stickers_roi_csv_path, False
+    
+    roi_unified_csv_path = output_dir / (name_baseline + "_roi_standard_size.csv")
+    generate_standard_roi_size_dataset(stickers_roi_csv_path, roi_unified_csv_path)
+    corrmap_video_base_path = output_dir / (name_baseline + "_roi_unified.mp4")
+    create_standardized_roi_videos(roi_unified_csv_path, rgb_video_path, corrmap_video_base_path, force_processing=True) # force_processing)
+    
+    # defined by manual tasks pipeline
+    metadata_colorspace_path = output_dir / (name_baseline + "_colorspace_metadata.json")
+    binary_video_base_path = output_dir / (name_baseline + "_corrmap_binary.mp4")
+    create_color_correlation_videos(corrmap_video_base_path, metadata_colorspace_path, binary_video_base_path)
+    
+    return stickers_roi_csv_path, False
 
 @flow(name="6. Generate XYZ Sticker Positions (3D)")
 def generate_xyz_stickers(stickers_2d_path: Path, source_video: Path, output_dir: Path, *, monitor_ui: bool = False, force_processing: bool = False) -> Path:

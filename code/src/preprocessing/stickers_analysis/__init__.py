@@ -9,6 +9,7 @@ from he 'roi' namespace, decoupling their code from .roiour internal file struct
 
 from .roi.data_access.roi_manual_annotation_filehandler import ROIAnnotationFileHandler
 from .roi.models.roi_manual_annotation import ROIAnnotationManager, ROIProcessingStatus
+from .roi.models.video_review_manager import VideoReviewManager
 
 from .roi.data_access.roi_tracked_filehandler import ROITrackedFileHandler
 from .roi.models.roi_tracked_data import ROITrackedObjects, ROITrackedObject, ROITrackedStatus
@@ -21,6 +22,10 @@ from .roi.core.roi_tracking_orchestrator import TrackingOrchestrator
 from .roi.models.tracking_handlers import InteractiveGUIHandler
 
 from .ellipse.data_access.color_space_filehandler import ColorSpaceFileHandler
+from .ellipse.models.color_space_manager_model import ColorSpaceManager
+from .ellipse.models.color_space_model import ColorSpace
+from .ellipse.models.color_family_model import ColorFamilyModel
+from .ellipse.gui.color_correlation_visualiser import ColorCorrelationVisualizer
 from .ellipse.gui.frame_roi_color_gui import FrameROIColor
 
 from .xyz.models.xyz_metadata_model import XYZMetadataModel, XYZMetadataConfig
