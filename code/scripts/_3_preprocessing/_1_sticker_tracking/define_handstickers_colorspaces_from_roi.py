@@ -21,7 +21,10 @@ from preprocessing.stickers_analysis import (
 
     FrameROIColor,
 
-    ColorSpaceFileHandler
+    ColorSpaceFileHandler,
+    ColorSpaceManager,
+    ColorSpaceStatus,
+    ColorSpace
 )
 
 
@@ -213,6 +216,12 @@ def define_handstickers_colorspaces_from_roi(
         print("🟡 Skipping: Destination metadata file already exists.")
         # TODO: Implement colorspace assessment/update for existing files.
         return
+    
+    metadata_exists = os.path.exists(dest_metadata_path)
+    if metadata_exists:
+        colorspace_manager: ColorSpaceManager = ColorSpaceFileHandler.load(dest_metadata_path)
+    else:
+        colorspace_manager = ColorSpaceManager()
 
     # --- 2. Load Source Data ---
     annotation_data = ROIAnnotationFileHandler.load(roi_metadata_path, create_if_not_exists=False)
@@ -223,8 +232,20 @@ def define_handstickers_colorspaces_from_roi(
         return
 
     color_config = generate_color_config(object_names)
+    colorspace_modified = False
 
+    
     for object_name in object_names:
+        current_colorspace: ColorSpace = colorspace_manager.get_colorspace(object_name)
+
+        # Decide whether to process this specific object
+        # if it is the first time, current_colorspace.status doesn't exist (no file)
+        should_process = not metadata_exists or force_processing or (current_colorspace.status == ColorSpaceStatus.TO_BE_REVIEWED.value)
+
+        if not should_process:
+            print(f"Skipping '{object_name}' (status: '{current_colorspace.status}').")
+            continue
+
         print(f"\n➡️ Processing object: '{object_name}'")
         # Construct the new filename by inserting your object_name.
         object_video_filename = f"{video_path.stem}_{object_name}{video_path.suffix}"
@@ -232,12 +253,14 @@ def define_handstickers_colorspaces_from_roi(
 
         print(f"Loading video '{object_video_path.name}'...")
         video_manager = VideoMP4Manager(object_video_path)
-            
-           
-           
+        
         # Step 3b: Manually select the best frames for colorspace definition
         print("   - Waiting for user to select representative frames...")
-        view = TrackerReviewGUI(title=object_video_path.name, windowState='maximized')
+        try:
+            landmarks = current_colorspace.get_frame_ids()
+            view = TrackerReviewGUI(title=object_video_path.name, landmarks=landmarks, windowState='maximized')
+        except:
+            view = TrackerReviewGUI(title=object_video_path.name, windowState='maximized')
         controller = TrackerReviewOrchestrator(model=video_manager, view=view)
         _, selected_frame_indices, _ = controller.run()
 
@@ -245,22 +268,34 @@ def define_handstickers_colorspaces_from_roi(
             print(f"   - No frames selected for '{object_name}'. Skipping.")
             continue
             
-        selected_frames = [video_manager.get_frame(i) for i in selected_frame_indices]
+        selected_frames = [video_manager[i] for i in selected_frame_indices]
 
         # Step 3c: Define colorspaces based on the selected cropped frames (ROIs)
         # The coordinates will be relative to the top-left of the cropped image.
-        colorspaces = run_colorspace_definition_tool(
+        colorspace_from_gui = run_colorspace_definition_tool(
             selected_frames, 
             colors_rgb=color_config.get(object_name),
             title=object_video_filename
         )
 
-        # Step 3e: Prepare payload and update the destination JSON file
-
-        ColorSpaceFileHandler
-        json_payload = prepare_json_update_payload(selected_frame_indices, colorspaces)
-        update_json_object(dest_metadata_path, object_name, json_payload)
-        print(f"   ✅ Successfully defined and saved colorspace for '{object_name}'.")
+        try:
+            colorspace_manager.add_object(
+                object_name, 
+                selected_frame_indices, 
+                colorspace_from_gui,
+                status=ColorSpaceStatus.TO_BE_PROCESSED)
+        except ValueError as e:
+            colorspace_manager.update_object(
+                object_name, 
+                selected_frame_indices, 
+                colorspace_from_gui,
+                status=ColorSpaceStatus.TO_BE_PROCESSED)
+        colorspace_modified = True
+    
+    # Step 3e: Update the destination JSON file
+    if colorspace_modified:
+        ColorSpaceFileHandler.write(dest_metadata_path, colorspace_manager)
+    print(f"   ✅ Successfully defined and saved colorspace for '{object_name}'.")
 
     print(f"\n🎉 Finished processing for: '{Path(video_path).name}'")
 

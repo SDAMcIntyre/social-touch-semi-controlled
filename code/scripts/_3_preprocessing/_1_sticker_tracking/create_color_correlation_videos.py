@@ -24,71 +24,11 @@ from preprocessing.stickers_analysis import (
     ColorSpaceFileHandler, 
     ColorSpaceManager,
     ColorSpace,
+    ColorSpaceStatus,
 
     ColorFamilyModel,
     ColorCorrelationVisualizer
 )
-
-
-
-def extract_pixel_rgb_values(
-    colorspaces_data: list,
-    output_format: str = 'array'
-) -> Union[np.ndarray, list]:
-    """
-    Extracts all RGB color triplets from the nested 'freehand_pixels'
-    dictionary within a list of colorspace data.
-
-    This function iterates through a list of frame data dictionaries. For each
-    frame, it safely navigates to ['colorspace']['freehand_pixels']['rgb']
-    to find the list of RGB triplets. All found triplets are aggregated and
-    returned in the specified format.
-
-    Args:
-        colorspaces_data (list): The list of dictionaries, corresponding to
-                                 metadata.colorspaces.
-        output_format (str, optional): The desired output format. Can be
-                                'array' for a NumPy array (default) or
-                                'list' for a standard Python list.
-
-    Returns:
-        Union[np.ndarray, list]: A collection of all extracted RGB triplets.
-                                 The type is a 2D NumPy array by default,
-                                 or a list of lists if specified.
-
-    Raises:
-        ValueError: If an unsupported output_format is provided.
-    """
-    all_rgb_triplets = []
-
-    # Core extraction logic (remains the same)
-    for frame_data in colorspaces_data:
-        freehand_pixels_data = frame_data.get('colorspace', {}).get('freehand_pixels', {})
-
-        if freehand_pixels_data:
-            rgb_list = freehand_pixels_data.get('rgb')
-            if rgb_list:
-                all_rgb_triplets.extend(rgb_list)
-
-    # --- New: Format the output based on the parameter ---
-
-    # Handle the case where no colors were found
-    if not all_rgb_triplets:
-        if output_format == 'array':
-            # Return an empty NumPy array with the correct shape (0 rows, 3 columns)
-            return np.empty((0, 3), dtype=np.uint8)
-        else:
-            return []
-
-    # Convert to the specified format
-    if output_format == 'array':
-        # Convert the list of lists to a 2D NumPy array.
-        # np.uint8 is the standard data type for 8-bit color values (0-255).
-        return np.array(all_rgb_triplets, dtype=np.uint8)
-    elif output_format == 'list':
-        return all_rgb_triplets
-    else:
-        raise ValueError(f"Invalid output_format: '{output_format}'. Please choose 'array' or 'list'.")
 
 
 def generate_correlation_maps(
@@ -111,7 +51,7 @@ def generate_correlation_maps(
     Returns:
         List[Any]: A list of correlation maps, one for each frame.
     """
-    family_colors = extract_pixel_rgb_values(metadata.colorspaces, output_format='array')
+    family_colors = metadata.extract_rgb_triplets(output_format='array')
     model = ColorFamilyModel(
         family_colors, color_space='rgb',
         conversion_mode=conversion_mode)
@@ -211,25 +151,6 @@ def save_correlation_results_to_mp4(
         video_writer.release()
         print(f"✅ Video successfully saved to '{output_path}'.")
 
-
-# --- Core Component 1: Loading ---
-def _load_metadata(md_path: str) -> Dict[str, Any]:
-    """
-    Responsibility: Loads and validates metadata and tracking data from files.
-    """
-    if not os.path.exists(md_path):
-        raise FileNotFoundError(f"Metadata file not found at '{md_path}'.")
-
-    try:
-        with open(md_path, "r") as f:
-            metadata = json.load(f)
-    except (json.JSONDecodeError, IOError) as e:
-        raise ValueError(f"Could not read or parse metadata file '{md_path}'.") from e
-
-    print(f"✅ Successfully loaded metadata.")
-    return metadata
-
-
 def invert_correlation_maps(corr_maps: List[np.ndarray]) -> List[np.ndarray]:
     """
     Inverts the values of correlation maps for grayscale video visualization.
@@ -267,6 +188,7 @@ def invert_correlation_maps(corr_maps: List[np.ndarray]) -> List[np.ndarray]:
     return inverted_maps
 
 
+
 def create_color_correlation_videos(
     video_path: Path,
     md_path: Path,
@@ -275,41 +197,62 @@ def create_color_correlation_videos(
     force_processing: bool = False
 ):
     """
-    Orchestrates the video processing workflow.
+    Orchestrates the video processing workflow, processing only objects
+    marked as 'TO_BE_PROCESSED' unless 'force_processing' is enabled.
     """
-    print(f"--- Starting Video Processing ---")
+    print("--- Starting Video Processing ---")
 
-    # 2. Identify objects to process
-    colorspace_manager = ColorSpaceFileHandler.load(md_path)
+    # 1. Load the metadata manager
+    colorspace_manager: ColorSpaceManager = ColorSpaceFileHandler.load(md_path)
+
+    # 2. Early exit: If not forcing and no objects need processing, stop.
+    if not force_processing and colorspace_manager.are_no_objects_with_status(ColorSpaceStatus.TO_BE_PROCESSED):
+        print("✅ No objects are marked 'to_be_processed'. Nothing to do.")
+        return output_path
+
+    # 3. Process each object sequentially based on its status
+    metadata_file_modified = False
     object_names = colorspace_manager.colorspace_names
-
-    # 3. Process each object sequentially
     for name in object_names:
-        print(f"Processing '{name}'...")
+        current_colorspace = colorspace_manager.get_colorspace(name)
 
-        input_video_path = video_path.parent / (video_path.stem + f"_{name}.mp4")
+        # 4. Decide whether to process this specific object
+        should_process = force_processing or (current_colorspace.status == ColorSpaceStatus.TO_BE_PROCESSED.value)
+
+        if not should_process:
+            print(f"Skipping '{name}' (status: '{current_colorspace.status}').")
+            continue
+            
+        print(f"Processing '{name}'...")
         output_object_path = output_path.parent / (output_path.stem + f"_{name}.mp4")
 
         if not force_processing and os.path.exists(output_object_path):
-            print(f"output file already exists (file = {output_object_path}): Skipping...")
+            print(f"Output file already exists, skipping: {output_object_path}")
             continue
 
+        input_video_path = video_path.parent / (video_path.stem + f"_{name}.mp4")
         print(f"Loading video '{input_video_path}'...")
+        
         video_manager = VideoMP4Manager(input_video_path)
         video_manager.color_format = ColorFormat.BGR
-
-        current_metadata = colorspace_manager.get_colorspace(name)
         
-        conversion_mode = 'circular' # 'xyz', 'circular'
+        conversion_mode = 'circular'
         corr_maps = generate_correlation_maps(
             frames_bgr=video_manager,
-            metadata=current_metadata,
+            metadata=current_colorspace,
             show=False,
-            conversion_mode=conversion_mode)
+            conversion_mode=conversion_mode
+        )
         
         corr_maps = invert_correlation_maps(corr_maps)
         
         save_correlation_results_to_mp4(corr_maps, output_object_path)
         print(f"✅ Finished processing for '{name}'.")
+        colorspace_manager.update_status(name, ColorSpaceStatus.TO_BE_REVIEWED.value)
+        metadata_file_modified = True
 
-    print(f"--- Standalone Processing Complete ---")
+    if metadata_file_modified:
+        ColorSpaceFileHandler.write(md_path, colorspace_manager)
+    
+    print("--- Standalone Processing Complete ---")
+    return output_path

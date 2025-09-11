@@ -13,7 +13,10 @@ from primary_processing import (
 
 from _3_preprocessing._1_sticker_tracking import (
     review_tracked_objects_in_video,
+
     define_handstickers_colorspaces_from_roi,
+    define_handstickers_color_threshold,
+
     view_xyz_stickers_on_depth_data
 )
 
@@ -91,11 +94,11 @@ def prepare_stickers_colorspace(
     *,
     force_processing: bool = False
 ) -> Path:
-    success = True
-
     output_dir = root_output_dir / "handstickers"
-    name_baseline = rgb_video_path.stem + "_handstickers"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    print(f"[{output_dir.name}] Define sticker Colorspace...")
 
+    name_baseline = rgb_video_path.stem + "_handstickers"
     roi_video_base_path = output_dir / (name_baseline + "_roi_unified.mp4")
     metadata_roi_path = output_dir / (name_baseline + "_roi_metadata.json")
     
@@ -105,9 +108,33 @@ def prepare_stickers_colorspace(
         metadata_roi_path,
         metadata_colorspace_path,
         force_processing=force_processing
-        )
+    )
     
-    return success
+    return
+
+
+@flow(name="Manual: Define correlation videos thresholding")
+def review_handstickers_color_threshold(
+    rgb_video_path: Path,
+    root_output_dir: Path,
+    *,
+    force_processing: bool = False
+) -> Path:
+    output_dir = root_output_dir / "handstickers"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    print(f"[{output_dir.name}] Define correlation videos thresholding...")
+
+    name_baseline = rgb_video_path.stem + "_handstickers"
+    metadata_colorspace_path = output_dir / (name_baseline + "_colorspace_metadata.json")
+    corrmap_video_base_path = output_dir / (name_baseline + "_corrmap.mp4")
+    define_handstickers_color_threshold(
+        corrmap_video_base_path, 
+        md_path=metadata_colorspace_path,
+        force_processing=force_processing
+    )
+
+    return
+
 
 def view_xyz_stickers(
     source_video: Path,
@@ -211,6 +238,16 @@ def run_single_session_pipeline(
                 force_processing=force
             )
             dag_handler.mark_completed('review_2d_stickers')
+        
+        if dag_handler.can_run('review_handstickers_color_threshold'):
+            print(f"[{block_name}] ==> Running task: review_handstickers_color_threshold")
+            force = dag_handler.get_task_options('review_handstickers_color_threshold').get('force_processing', False)
+            review_handstickers_color_threshold(
+                rgb_video_path=rgb_video_path,
+                root_output_dir=config.video_processed_output_dir,
+                force_processing=force
+            )
+            dag_handler.mark_completed('review_handstickers_color_threshold')
         
         if dag_handler.can_run('prepare_stickers_colorspace'):
             print(f"[{block_name}] ==> Running task: prepare_stickers_colorspace")
