@@ -17,6 +17,8 @@ from .define_handstickers_colorspaces_from_roi import define_handstickers_colors
 from .define_handstickers_color_threshold import define_handstickers_color_threshold
 from .fit_ellipses_on_correlation_videos import fit_ellipses_on_correlation_videos
 from .adjust_ellipse_centers_to_global_frame import adjust_ellipse_centers_to_global_frame
+# merge 2d results
+from .consolidate_2d_tracking_data import consolidate_2d_tracking_data
 
 # - XYZ stickers location process
 from .extract_stickers_xyz_positions import extract_stickers_xyz_positions

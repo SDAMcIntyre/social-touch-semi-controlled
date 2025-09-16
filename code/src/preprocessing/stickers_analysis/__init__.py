@@ -33,6 +33,9 @@ from .ellipse.gui.threshold_selector_tool_gui import ThresholdSelectorTool
 # fit ellipses on correlation map
 from .ellipse.data_access.fitted_ellipses_filehandler import FittedEllipsesFileHandler
 from .ellipse.models.fitted_ellipses_manager import FittedEllipsesManager
+# XY center of the ellipses/roi
+from .center.data_access.consolidated_tracks_filehandler import ConsolidatedTracksFileHandler
+from .center.models.consolidated_tracks_manager import ConsolidatedTracksManager
 
 from .xyz.models.xyz_metadata_model import XYZMetadataModel, XYZMetadataConfig
 from .xyz.data_access.xyz_metadata_filehandler import XYZMetadataFileHandler
