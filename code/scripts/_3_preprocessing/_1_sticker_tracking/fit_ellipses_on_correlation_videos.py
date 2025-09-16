@@ -10,12 +10,17 @@ import cv2
 import numpy as np
 import pandas as pd
 
+# Local application/library specific imports
 from preprocessing.common import VideoMP4Manager
 from preprocessing.stickers_analysis import (
     ColorSpaceFileHandler,
     ColorSpaceManager,
-    ColorSpaceStatus
+    ColorSpaceStatus,
+    
+    FittedEllipsesFileHandler,
+    FittedEllipsesManager
 )
+
 
 def fit_ellipse_on_frame(binary_frame: np.ndarray) -> Optional[Dict]:
     """
@@ -98,11 +103,8 @@ def fit_ellipses_on_grayscale_frames(frames: List[np.ndarray], threshold: int) -
         if best_result_for_frame:
             best_result_for_frame['frame_number'] = frame_number
             all_frame_results.append(best_result_for_frame)
-            # This can be noisy, so commented out for cleaner logs.
-            # print(f"Frame {frame_number}: Found fit with score {best_result_for_frame['score']:.4f}.")
         else:
             # If no ellipse was found, append a row with NaN values
-            # print(f"Frame {frame_number}: No suitable ellipse found. Adding NaN row.")
             nan_result = {
                 'frame_number': frame_number, 'center_x': np.nan, 'center_y': np.nan,
                 'axes_major': np.nan, 'axes_minor': np.nan, 'angle': np.nan, 'score': np.nan,
@@ -122,23 +124,21 @@ def fit_ellipses_on_correlation_videos(
     """
     Orchestrates the video processing workflow for grayscale videos.
     It loads grayscale frames, applies a binary threshold from metadata,
-    fits ellipses, and saves the results.
+    fits ellipses, and saves the results using the dedicated manager and file handler.
     """
     print(f"--- Starting Video Processing ---")
     
+    # --- MODIFICATION START ---
+    # 1. Load metadata and perform pre-flight checks
+    # ---
     colorspace_manager: ColorSpaceManager = ColorSpaceFileHandler.load(md_path)
-    if colorspace_manager.not_all_objects_with_status(ColorSpaceStatus.REVIEW_COMPLETED):
-        print("🛑 Skipping: Not all objects have the 'REVIEW_COMPLETED' status.")
+    if not force_processing and colorspace_manager.not_all_objects_with_status(ColorSpaceStatus.REVIEW_COMPLETED):
+        print(" Skipping: Not all objects have the 'REVIEW_COMPLETED' status.")
         return 
     
-    if not force_processing and os.path.exists(output_path):
-        print(f"🛑 Skipping: Output file '{output_path}' already exists and 'force_processing' is False.")
-        return
-
+    # 2. Initialize the manager to handle results in memory.
+    results_manager = FittedEllipsesManager()
     object_names = colorspace_manager.colorspace_names
-
-    ellipses_results = {}
-    video_path = Path(video_path)
     
     # 3. Process each object sequentially
     for name in object_names:
@@ -152,17 +152,19 @@ def fit_ellipses_on_correlation_videos(
         frames_grayscale_array = np.array(frames_grayscale)
         frames_grayscale_squeezed = frames_grayscale_array[:, :, :, 0]
 
-        # Process the grayscale frames using the specific threshold
-        ellipse_results = fit_ellipses_on_grayscale_frames(frames=frames_grayscale_squeezed, threshold=current_colorspace.threshold)
-        print(f"✅ Finished processing for '{name}'.")
-
-        ellipses_results[name] = ellipse_results
+        # Process the grayscale frames to get ellipse data for this object
+        object_ellipse_df = fit_ellipses_on_grayscale_frames(
+            frames=frames_grayscale_squeezed,
+            threshold=current_colorspace.threshold
+        )
         
-    # 4. Save all results
+        # Add the resulting DataFrame to the manager. The manager will handle
+        # the complexity of prefixing and merging later.
+        results_manager.add_result(name, object_ellipse_df)
+        print(f"✅ Finished processing and stored results for '{name}' in manager.")
+        
+    # 4. Save all results using the dedicated file handler.
     print("\n--- Aggregating and Saving Results ---")
-    prefixed_dfs = [df.add_prefix(f'{key}_') for key, df in ellipses_results.items()]
-    results_df = pd.concat(prefixed_dfs, axis=1)
-    results_df.to_csv(output_path, index=False)
-    print(f"✅ Results saved to '{output_path}'.")
+    FittedEllipsesFileHandler.save(results_manager, output_path)
+    print(f"✅ Results successfully saved to '{output_path}'.")
     print(f"--- Processing Complete ---")
- 
