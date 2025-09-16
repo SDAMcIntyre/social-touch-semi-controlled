@@ -1,13 +1,19 @@
 import pandas as pd
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List, Iterator, Tuple
 
-class ConsolidatedTracksManager:
+# Assuming 'tracked_data_interface.py' is in the same directory or a reachable path
+from .tracked_data_interface import TrackedDataInterface
+
+class ConsolidatedTracksManager(TrackedDataInterface):
     """
     Manages the calculated center coordinate data for multiple tracked objects.
 
     This class encapsulates the final coordinate data within a dictionary, where
     keys are object names and values are DataFrames containing the data for that
     specific object. This provides fast, direct access to data for any given object.
+
+    This class implements the TrackedDataInterface, allowing it to serve as a
+    standardized data source for tracked items.
 
     Attributes:
         data (Dict[str, pd.DataFrame]): A dictionary mapping object names to
@@ -39,6 +45,21 @@ class ConsolidatedTracksManager:
             for name, group in coordinates_df.groupby('object_name')
         }
 
+    def get_items_for_frame(self, frame_index: int) -> Iterator[Tuple[str, pd.Series]]:
+        """
+        Yields the object name and its corresponding data row for a specific frame.
+        
+        This method fulfills the TrackedDataInterface requirement.
+        """
+        for object_name, df in self.data.items():
+            # Filter the DataFrame for the specific frame_index
+            frame_data = df[df['frame_number'] == frame_index]
+            
+            # If an entry exists for that frame, yield the object name and the data row
+            if not frame_data.empty:
+                # .iloc[0] is safe as there's only one entry per object per frame
+                yield object_name, frame_data.iloc[0]
+
     def get_all_data(self) -> pd.DataFrame:
         """
         Reconstructs and returns a single DataFrame from the internal dictionary.
@@ -67,7 +88,11 @@ class ConsolidatedTracksManager:
 
     @property
     def object_names(self) -> List[str]:
-        """Returns a unique list of object names managed by this instance."""
+        """
+        Returns a unique list of object names managed by this instance.
+        
+        This method fulfills the TrackedDataInterface requirement.
+        """
         return list(self.data.keys())
 
     def __len__(self) -> int:

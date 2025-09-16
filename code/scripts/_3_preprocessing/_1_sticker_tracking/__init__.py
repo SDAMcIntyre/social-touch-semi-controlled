@@ -26,4 +26,6 @@ from .extract_stickers_xyz_positions import extract_stickers_xyz_positions
 # user review or tasks
 from .review_tracked_handstickers_roi import review_tracked_objects_in_video
 from .view_xyz_stickers_with_depth_data import view_xyz_stickers_on_depth_data
+from .view_summary_stickers_on_rgb_data import view_summary_stickers_on_rgb_data
+
 

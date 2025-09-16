@@ -16,7 +16,8 @@ from _3_preprocessing._1_sticker_tracking import (
 
     define_handstickers_colorspaces_from_roi,
     define_handstickers_color_threshold,
-
+    
+    view_summary_stickers_on_rgb_data,
     view_xyz_stickers_on_depth_data
 )
 
@@ -135,10 +136,26 @@ def review_handstickers_color_threshold(
 
     return
 
+def view_consolidated_2d_tracking_data(
+    rgb_video_path: Path,
+    sticker_dir: Path
+) -> Path:
+    """Visualize the 3D sticker data on the depth point cloud."""
+    print(f"[{rgb_video_path.name}] Viewing xy stickers tracking data...")
+    # Base name derived from the 2D tracking file for consistency
+    xy_csv_path = sticker_dir / (rgb_video_path.stem + "_handstickers_summary_2d_coordinates.csv")
+    
+    view_summary_stickers_on_rgb_data(
+        xy_csv_path,
+        rgb_video_path
+    )
+    return True
+
+
 
 def view_xyz_stickers(
     source_video: Path,
-    xyz_sticker_csv_dir: Path,
+    sticker_dir: Path,
     rgb_video_path: Path,
     session_common_dir: Path,
     session_id: str
@@ -153,7 +170,7 @@ def view_xyz_stickers(
     
     # Base name derived from the 2D tracking file for consistency
     name = rgb_video_path.stem.replace('_roi_tracking', '_handstickers_xyz_tracked.csv')
-    xyz_csv_path = xyz_sticker_csv_dir / name
+    xyz_csv_path = sticker_dir / name
     
     view_xyz_stickers_on_depth_data(
         xyz_csv_path, 
@@ -167,7 +184,7 @@ def view_xyz_stickers(
 
 def view_somatosensory_assessement(
     source_video: Path,
-    xyz_sticker_csv_dir: Path,
+    sticker_dir: Path,
     rgb_video_path: Path,
     processed_dir: Path,
     session_common_dir: Path,
@@ -183,7 +200,7 @@ def view_somatosensory_assessement(
     
     # Base name derived from the 2D tracking file for consistency
     name_baseline = rgb_video_path.stem.replace('_roi_tracking', '')
-    xyz_csv_path = xyz_sticker_csv_dir / (name_baseline + "_handstickers_xyz_tracked.csv")
+    xyz_csv_path = sticker_dir / (name_baseline + "_handstickers_xyz_tracked.csv")
 
     name_baseline = rgb_video_path.stem + "_handmodel"
     hand_motion_glb_path = processed_dir / (name_baseline + "_motion.glb")
@@ -260,11 +277,20 @@ def run_single_session_pipeline(
             dag_handler.mark_completed('prepare_stickers_colorspace')
         
 
+        if dag_handler.can_run('view_consolidated_2d_tracking_data'):
+            print(f"[{block_name}] ==> Running task: view_consolidated_2d_tracking_data")
+            valid_data =  view_consolidated_2d_tracking_data(
+                rgb_video_path=rgb_video_path,
+                sticker_dir=config.video_processed_output_dir / "handstickers"
+            )
+            if valid_data:
+                dag_handler.mark_completed('view_consolidated_2d_tracking_data')
+
         if dag_handler.can_run('view_xyz_stickers'):
             print(f"[{block_name}] ==> Running task: view_xyz_stickers")
             valid_data =  view_xyz_stickers(
                 source_video=config.source_video,
-                xyz_sticker_csv_dir=config.video_processed_output_dir / "handstickers",
+                sticker_dir=config.video_processed_output_dir / "handstickers",
                 rgb_video_path=rgb_video_path,
                 session_common_dir=config.session_processed_output_dir,
                 session_id=config.session_id
@@ -276,7 +302,7 @@ def run_single_session_pipeline(
             print(f"[{block_name}] ==> Running task: view_somatosensory_assessement")
             valid_data =  view_somatosensory_assessement(
                 source_video=config.source_video,
-                xyz_sticker_csv_dir=config.video_processed_output_dir / "handstickers",
+                sticker_dir=config.video_processed_output_dir / "handstickers",
                 rgb_video_path=rgb_video_path,
                 processed_dir=config.video_processed_output_dir,
                 session_common_dir=config.session_processed_output_dir,
