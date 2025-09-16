@@ -21,13 +21,18 @@ from .roi.models.video_review_manager import VideoReviewManager
 from .roi.core.roi_tracking_orchestrator import TrackingOrchestrator
 from .roi.models.tracking_handlers import InteractiveGUIHandler
 
+# colorspace definition 
 from .ellipse.data_access.color_space_filehandler import ColorSpaceFileHandler
 from .ellipse.models.color_space_manager import ColorSpaceManager
 from .ellipse.models.color_space_model import ColorSpace, ColorSpaceDefault, ColorSpaceStatus
+# correlation map of the colorspace
 from .ellipse.models.color_family_model import ColorFamilyModel
 from .ellipse.gui.color_correlation_visualiser import ColorCorrelationVisualizer
 from .ellipse.gui.frame_roi_color_gui import FrameROIColor
 from .ellipse.gui.threshold_selector_tool_gui import ThresholdSelectorTool
+# fit ellipses on correlation map
+from .ellipse.data_access.fitted_ellipses_filehandler import FittedEllipsesFileHandler
+from .ellipse.models.fitted_ellipses_manager import FittedEllipsesManager
 
 from .xyz.models.xyz_metadata_model import XYZMetadataModel, XYZMetadataConfig
 from .xyz.data_access.xyz_metadata_filehandler import XYZMetadataFileHandler
