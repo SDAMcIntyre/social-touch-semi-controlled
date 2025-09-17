@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 
 # Local application/library specific imports
+from utils.should_process_task import should_process_task
 from preprocessing.stickers_analysis import (
     ROITrackedFileHandler,
     ROITrackedObjects,
@@ -61,12 +62,9 @@ def consolidate_2d_tracking_data(
     Returns:
         Optional[ConsolidatedTracksManager]: A manager object with final coordinates.
     """
-    if not force_processing and output_csv_path.exists():
-        print(f"✅ Output file '{output_csv_path}' already exists. Loading from disk.")
-        try:
-            return ConsolidatedTracksFileHandler.load(output_csv_path)
-        except Exception as e:
-            print(f"⚠️ Could not load existing file: {e}. Reprocessing...")
+    if not should_process_task(output_paths=output_csv_path, input_paths=[roi_csv_path, ellipse_csv_path], force=force_processing):
+        print(f"✅ Output file '{output_csv_path}' already exists. Use --force to overwrite.")
+        return
 
     try:
         # 1. Load Data using robust handlers

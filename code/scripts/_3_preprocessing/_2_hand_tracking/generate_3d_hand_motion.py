@@ -5,6 +5,7 @@ import trimesh
 import json
 from pathlib import Path
 
+from utils.should_process_task import should_process_task
 from preprocessing.common.data_access.glb_data_handler import GLBDataHandler
 from preprocessing.motion_analysis.hand_tracking.hand_mesh_processor import HandMeshProcessor
 from preprocessing.motion_analysis.tactile_quantification.model.objects_interaction_processor import ObjectsInteractionProcessor
@@ -70,9 +71,12 @@ def generate_hand_motion(
         output_csv_path (str): Path to save the output translation and rotation data as a .csv file.
         fps (int): Frames per second for the animation.
     """
-    if not force_processing and os.path.exists(output_glb_path) and os.path.exists(output_csv_path):
-        print("hand motion has been processed already, skipping...")
-        return output_glb_path, output_csv_path
+    if not should_process_task(
+        output_paths=[output_csv_path, output_glb_path], 
+        input_paths=[stickers_path, metadata_path], 
+        force=force_processing):
+        print(f"✅ Output file '{output_csv_path}' and {output_glb_path} already exist. Use --force to overwrite.")
+        return
     
     # 1. Load All Input Data
     print("Step 1: Loading input data...")

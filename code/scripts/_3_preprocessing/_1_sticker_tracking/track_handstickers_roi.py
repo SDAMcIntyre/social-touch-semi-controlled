@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 from typing import Optional
 
+from utils.should_process_task import should_process_task
 from preprocessing.stickers_analysis import (
     ROIProcessingStatus,
     ROIAnnotationFileHandler,
@@ -9,7 +10,6 @@ from preprocessing.stickers_analysis import (
     TrackingOrchestrator,
     ROITrackedFileHandler,
 )
-
 
 def track_objects_in_video(
         video_path: str, 
@@ -36,12 +36,15 @@ def track_objects_in_video(
     Returns:
         Optional[str]: The output path if results were successfully saved, otherwise None.
     """
+    # This block only runs if Step 1 determined that processing might be needed.
+    print("🔎 Performing task-specific check on annotation status...")
+    need_to_process = should_process_task(output_paths=output_path, input_paths=[metadata_path, video_path], force=force_processing)
     annotation_data_iohandler = ROIAnnotationFileHandler.load(metadata_path)
     annotation_manager = ROIAnnotationManager(annotation_data_iohandler)
-
-    if not force_processing and annotation_manager.are_no_objects_with_status(ROIProcessingStatus.TO_BE_PROCESSED):
-        print(f"No object has been assigned to be processed: either ✅ Tracking is completed or user has to review.")
-        return output_path
+    # Logic to check the JSON content.
+    if not need_to_process and annotation_manager.are_no_objects_with_status(ROIProcessingStatus.TO_BE_PROCESSED):
+        print("✅ Task-specific check passed: No objects require processing. Skipping.")
+        return
     
     print(f"--- Starting processing for: {os.path.basename(video_path)} ---")
 

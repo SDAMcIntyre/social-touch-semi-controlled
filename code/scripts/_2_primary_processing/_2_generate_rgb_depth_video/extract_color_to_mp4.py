@@ -9,6 +9,8 @@ import datetime
 import threading
 import contextlib
 
+from utils.should_process_task import should_process_task
+
 # This maps the stable enum to the hardware's known dimensions (width, height).
 CUSTOM_RESOLUTION_MAP = {
     ColorResolution.RES_720P: (1280, 720),
@@ -183,9 +185,9 @@ def extract_color_to_mp4(
     if not os.path.exists(mkv_path):
         raise FileNotFoundError(f"Input file not found at: {mkv_path}")
 
+    need_to_process = should_process_task(output_paths=output_filepath, input_paths=mkv_path, force=force_processing)
     marker_filepath = f"{output_filepath}.SUCCESS"
-
-    if os.path.exists(marker_filepath):
+    if not need_to_process and os.path.exists(marker_filepath):
         print(f"Skipping '{mkv_path}' as output file already validated.")
         return output_filepath
 

@@ -5,6 +5,8 @@ from pathlib import Path
 from typing import List, Dict, Optional
 
 
+from utils.should_process_task import should_process_task
+
 from preprocessing.common import (
     GLBDataHandler
 )
@@ -36,6 +38,13 @@ def compute_somatosensory_characteristics(
         monitor: bool = False,
         fps: bool = 30
 ) -> str:
+    if not should_process_task(
+        output_paths=output_csv_path, 
+        input_paths=[hand_motion_glb_path, metadata_path], 
+        force=force_processing):
+        print(f"✅ Output file '{output_csv_path}' already exists. Use --force to overwrite.")
+        return
+    
     loader = GLBDataHandler()
     loader.load(hand_motion_glb_path)
     hand_motion_data = loader.get_data()

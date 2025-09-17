@@ -25,6 +25,8 @@ from _3_preprocessing._1_sticker_tracking import (
     create_standardized_roi_videos,
     create_color_correlation_videos,
     fit_ellipses_on_correlation_videos,
+    adjust_ellipse_centers_to_global_frame,
+    consolidate_2d_tracking_data,
     
     extract_stickers_xyz_positions
 )
@@ -52,9 +54,6 @@ from _3_preprocessing._5_led_tracking import (
 
 
 # --- 3. Sub-Flows (Formerly Tasks) ---
-# Each major processing step is now a self-contained, runnable flow.
-# MODIFIED: All sub-flows now accept a `force_processing` keyword argument.
-
 @flow(name="0. Analyse MKV video")
 def validate_mkv_video(source_video: Path, output_dir: Path, *, force_processing: bool = False) -> Path:
     print(f"[{output_dir.name}] Analysing MKV video...")
@@ -116,9 +115,7 @@ def validate_hand_extraction(rgb_video_path: Path, hand_models_dir: Path, output
     expected_labels = ["sticker_yellow", "sticker_blue", "sticker_green"]
     # The `force_processing` flag would be used inside is_hand_model_valid to bypass checks
     return is_hand_model_valid(metadata_path, hand_models_dir, expected_labels)
-# ---
 
-# --- MODIFIED: Sticker tracking split into two separate flows ---
 @flow(name="6. Track Stickers (2D)")
 def track_stickers(rgb_video_path: Path, output_dir: Path, *, force_processing: bool = False) -> tuple[Path | None, bool]:
     print(f"[{output_dir.name}] Tracking stickers (2D)...")
@@ -139,7 +136,7 @@ def track_stickers(rgb_video_path: Path, output_dir: Path, *, force_processing: 
     
     # defined by manual tasks pipeline
     metadata_colorspace_path = output_dir / (name_baseline + "_colorspace_metadata.json")
-    binary_video_base_path = output_dir / (name_baseline + "_corrmap_binary.mp4")
+    binary_video_base_path = output_dir / (name_baseline + "_corrmap.mp4")
     create_color_correlation_videos(corrmap_video_base_path, metadata_colorspace_path, binary_video_base_path, force_processing=force_processing)
     
     fit_ellipses_path = output_dir / (name_baseline + "_ellipses.csv")
@@ -149,39 +146,44 @@ def track_stickers(rgb_video_path: Path, output_dir: Path, *, force_processing: 
         output_path=fit_ellipses_path,
         force_processing=force_processing)
     
-    # merge_result_into_standard_frame
+    adj_ellipses_path = output_dir / (name_baseline + "_ellipses_center_adjusted.csv")
+    adjust_ellipse_centers_to_global_frame(
+        roi_unified_csv_path,
+        fit_ellipses_path,
+        output_csv_path=adj_ellipses_path,
+        force_processing=force_processing
+    )
+    
+    final_csv_path = output_dir / (name_baseline + "_summary_2d_coordinates.csv")
+    consolidate_2d_tracking_data(
+        roi_unified_csv_path,
+        adj_ellipses_path,
+        output_csv_path=final_csv_path,
+        score_threshold=0.7,
+        force_processing=force_processing
+    )
 
-    return stickers_roi_csv_path, True
-
-    fit_ellipses_adj_path = output_dir / (name_baseline + "_ellipses_adj.csv")
-    adjust_ellipses_coord_to_frame(
-        roi_unified_csv_path=roi_unified_csv_path,
-        ellipses_csv_path=fit_ellipses_path,
-        metadata_path=metadata_colorspace_path,
-        output_path=fit_ellipses_adj_path)
-
-    return stickers_roi_csv_path, False
+    return final_csv_path, True
 
 @flow(name="6. Generate XYZ Sticker Positions (3D)")
-def generate_xyz_stickers(stickers_2d_path: Path, source_video: Path, output_dir: Path, *, monitor_ui: bool = False, force_processing: bool = False) -> Path:
+def generate_xyz_stickers(stickers_2d_path: Path, source_video: Path, output_dir: Path, *, force_processing: bool = False) -> Path:
     print(f"[{output_dir.name}] Generating XYZ sticker positions (3D)...")
     # Base name derived from the 2D tracking file for consistency
-    name_baseline = stickers_2d_path.stem.replace('_roi_tracking', '')
+    name_baseline = stickers_2d_path.stem.replace('_summary_2d_coordinates', '')
     result_csv_path = output_dir / (name_baseline + "_xyz_tracked.csv")
-    result_video_path = output_dir / (name_baseline + "_xyz_tracked.mp4")
     result_md_path = output_dir / (name_baseline + "_xyz_tracked_metadata.json")
+    method = "centroid"
 
     # Propagate the flag to the underlying implementation function
     extract_stickers_xyz_positions(
-        source_video, stickers_2d_path,
+        source_video, 
+        stickers_2d_path,
+        method,
         result_csv_path,
-        metadata_path=result_md_path,
-        video_path=result_video_path,
-        monitor=monitor_ui,
+        result_md_path,
         force_processing=force_processing
     )
     return result_csv_path
-# ---
 
 @flow(name="7. Generate 3D Hand Position")
 def generate_3d_hand_motion(rgb_video_path: Path, stickers_xyz_path: Path, hand_models_dir: Path, output_dir: Path, *, force_processing: bool = False) -> Path:
@@ -352,12 +354,10 @@ def run_single_session_pipeline(
             print(f"[{block_name}] ==> Running task: generate_xyz_stickers")
             options = dag_handler.get_task_options('generate_xyz_stickers')
             force = options.get('force_processing', False)
-            use_monitor = options.get('monitor', False)
             sticker_3d_tracking_path = generate_xyz_stickers(
                 stickers_2d_path=sticker_2d_tracking_path,
                 source_video=config.source_video,
                 output_dir=handstickers_dir,
-                monitor_ui=use_monitor,
                 force_processing=force
             )
             dag_handler.mark_completed('generate_xyz_stickers')

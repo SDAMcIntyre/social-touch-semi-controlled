@@ -7,6 +7,7 @@ from typing import Tuple
 from preprocessing.stickers_analysis import (
     ROITrackedFileHandler
 )
+from utils.should_process_task import should_process_task
 
 # --- Helper & Core Logic Functions ---
 
@@ -62,9 +63,14 @@ def generate_standard_roi_size_dataset(
     Loads ROI tracking data, standardises ROI sizes for each tracked object,
     and saves the result to a new file.
     """
-    if not force_processing and os.path.exists(output_roi_path):
+    if not should_process_task(
+        output_paths=output_roi_path,
+        input_paths=roi_path,
+        force=force_processing
+    ):
         print(f"Unified ROI dataset already exists: {output_roi_path}. Skipping.")
-        return
+        return # Skips if outputs are up-to-date
+
 
     print("--- Starting ROI Standardisation Process ---")
 

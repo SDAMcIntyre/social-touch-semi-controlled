@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 
 # Local application/library specific imports
+from utils.should_process_task import should_process_task
 from preprocessing.common import VideoMP4Manager
 from preprocessing.stickers_analysis import (
     ColorSpaceFileHandler,
@@ -126,16 +127,17 @@ def fit_ellipses_on_correlation_videos(
     It loads grayscale frames, applies a binary threshold from metadata,
     fits ellipses, and saves the results using the dedicated manager and file handler.
     """
-    print(f"--- Starting Video Processing ---")
-    
     # --- MODIFICATION START ---
     # 1. Load metadata and perform pre-flight checks
     # ---
     colorspace_manager: ColorSpaceManager = ColorSpaceFileHandler.load(md_path)
-    if not force_processing and colorspace_manager.not_all_objects_with_status(ColorSpaceStatus.REVIEW_COMPLETED):
+    need_to_process = should_process_task(output_paths=output_path, input_paths=[md_path, video_path], force=force_processing)
+    if not need_to_process and colorspace_manager.not_all_objects_with_status(ColorSpaceStatus.REVIEW_COMPLETED):
         print(" Skipping: Not all objects have the 'REVIEW_COMPLETED' status.")
         return 
     
+    print(f"--- Starting Video Processing ---")
+
     # 2. Initialize the manager to handle results in memory.
     results_manager = FittedEllipsesManager()
     object_names = colorspace_manager.colorspace_names
