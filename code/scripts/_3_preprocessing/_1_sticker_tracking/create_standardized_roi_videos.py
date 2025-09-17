@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 
 # Third-party imports
+from utils.should_process_task import should_process_task
 from preprocessing.stickers_analysis import ROITrackedFileHandler
 from preprocessing.common import VideoMP4Manager, ColorFormat
 
@@ -148,7 +149,12 @@ def create_standardized_roi_videos(
     for obj_name, roi_df in rois_df_dict.items():
         # Create a unique output path for this object's video
         output_video_path = output_dir / f"{base_name}_{obj_name}.mp4"
-        if not force_processing and os.path.exists(output_video_path):
+
+        if not should_process_task(
+            output_paths=output_video_path,
+            input_paths=[roi_file_path, video_path],
+            force=force_processing
+        ):
             print(f"Video {output_video_path} has been already processed. Skipping...")
             continue
 

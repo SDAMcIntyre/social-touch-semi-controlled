@@ -19,6 +19,7 @@ import numpy as np
 import pandas as pd
 
 # Local application imports
+from utils.should_process_task import should_process_task
 from preprocessing.common import VideoMP4Manager, ColorFormat
 from preprocessing.stickers_analysis import (
     ColorSpaceFileHandler, 
@@ -200,15 +201,15 @@ def create_color_correlation_videos(
     Orchestrates the video processing workflow, processing only objects
     marked as 'TO_BE_PROCESSED' unless 'force_processing' is enabled.
     """
-    print("--- Starting Video Processing ---")
-
     # 1. Load the metadata manager
     colorspace_manager: ColorSpaceManager = ColorSpaceFileHandler.load(md_path)
-
     # 2. Early exit: If not forcing and no objects need processing, stop.
-    if not force_processing and colorspace_manager.are_no_objects_with_status(ColorSpaceStatus.TO_BE_PROCESSED):
+    need_to_process = should_process_task(output_paths=output_path, input_paths=[md_path, video_path], force=force_processing)
+    if not need_to_process and colorspace_manager.are_no_objects_with_status(ColorSpaceStatus.TO_BE_PROCESSED):
         print("✅ No objects are marked 'to_be_processed'. Nothing to do.")
         return output_path
+
+    print("--- Starting Video Processing ---")
 
     # 3. Process each object sequentially based on its status
     metadata_file_modified = False
