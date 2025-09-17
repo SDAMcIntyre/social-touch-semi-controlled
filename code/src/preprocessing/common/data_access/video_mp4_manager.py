@@ -3,7 +3,7 @@ import logging
 from contextlib import contextmanager
 from enum import Enum, auto
 from pathlib import Path
-from typing import Iterator, List, Optional, Union
+from typing import Iterator, List, Optional, Union, Tuple
 
 # Third-party imports
 import cv2
@@ -38,14 +38,15 @@ class VideoMP4Manager:
     """
     A robust and efficient manager for reading video files using OpenCV.
 
-    This class provides a lazy-loaded, list-like interface to a video's frames.
-    It opens the video file only when frames are requested, ensuring efficient
-    resource management. It also supports optional pre-loading of all frames
-    into memory for performance-critical applications.
+    This class provides a lazy-loaded, list-like and ndarray-like interface 
+    to a video's frames. It supports indexing, slicing, and properties like `.shape` 
+    and `.dtype`. It can also be directly converted to a NumPy array using `np.array()`.
 
     Features:
     - Lazy loading by default (low memory usage).
     - Efficient slicing and indexing (`video[10]`, `video[100:200]`).
+    - ndarray-like properties (`.shape`, `.ndim`, `.dtype`).
+    - Direct conversion to a NumPy array (`np.asarray(video)`).
     - On-the-fly color conversion (RGB/BGR).
     - Optional pre-loading into memory.
     - Context-manager-based file handling for safety.
@@ -73,6 +74,56 @@ class VideoMP4Manager:
             self._frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
             self._fps = cap.get(cv2.CAP_PROP_FPS)
 
+    # --------------------------------------------------------------------------
+    # NumPy-like Properties
+    # --------------------------------------------------------------------------
+    
+    @property
+    def shape(self) -> Tuple[int, int, int, int]:
+        """Returns the video's shape as (frames, height, width, channels)."""
+        # Assuming 3 channels (BGR or RGB) for standard video frames
+        return (self._total_frames, self._frame_height, self._frame_width, 3)
+
+    @property
+    def ndim(self) -> int:
+        """Returns the number of dimensions of the video array (always 4)."""
+        return 4
+
+    @property
+    def dtype(self) -> np.dtype:
+        """Returns the NumPy dtype of the frames (assumed np.uint8)."""
+        return np.dtype('uint8')
+
+    def __array__(self, dtype: Optional[np.dtype] = None) -> np.ndarray:
+        """
+        Implements the NumPy array protocol for direct conversion.
+        
+        This allows you to call `np.array(video_manager_instance)`.
+        Warning: This loads the entire video into memory.
+
+        Args:
+            dtype (np.dtype, optional): The desired data type for the array. 
+                                        If None, the default (uint8) is used.
+        
+        Returns:
+            np.ndarray: A NumPy array containing all video frames.
+        """
+        logging.info("Converting VideoMP4Manager to a NumPy array. This may consume significant memory.")
+        
+        all_frames = self.get_frames() # Leverage existing method to get all frames
+        
+        # Stack the list of frames into a single ndarray
+        array = np.stack(all_frames, axis=0)
+        
+        # Convert to the requested dtype if specified
+        if dtype is not None:
+            return array.astype(dtype, copy=False)
+        return array
+
+    # --------------------------------------------------------------------------
+    # Core Functionality
+    # --------------------------------------------------------------------------
+
     @property
     def color_format(self) -> ColorFormat:
         """Gets the current color format (ColorFormat.RGB or ColorFormat.BGR)."""
@@ -82,13 +133,12 @@ class VideoMP4Manager:
     def color_format(self, new_format: ColorFormat):
         """
         Sets the color format. If frames are pre-loaded, this will trigger
-        a re-load or in-memory conversion. For simplicity, this implementation
-        clears the cache.
+        a re-load or in-memory conversion. This implementation clears the cache.
         """
         if not isinstance(new_format, ColorFormat):
             raise TypeError("color_format must be an instance of ColorFormat Enum")
         if new_format != self._color_format:
-            logging.info(f"Color format changed to {new_format.name}. Clearing frame cache if it exists.")
+            logging.info(f"Color format changed to {new_format.name}. Clearing frame cache.")
             self._color_format = new_format
             self._frames = None # Invalidate cache
 
@@ -111,10 +161,8 @@ class VideoMP4Manager:
             return
 
         logging.info(f"Pre-loading all {self.total_frames} frames into memory...")
-        # Use the efficient slicing implementation to load all frames
         frame_iterator = self[0:self.total_frames]
         
-        # Use provided tqdm instance or create a default one if available
         if progress_bar:
             progress_bar.reset(total=self.total_frames)
             self._frames = [frame for frame in frame_iterator if progress_bar.update(1) or True]
@@ -135,13 +183,9 @@ class VideoMP4Manager:
     def __getitem__(self, index: Union[int, slice]) -> Union[np.ndarray, List[np.ndarray]]:
         """
         Retrieves frames by index or slice, providing list-like access.
-
-        This method is highly efficient. For slices, it seeks only once and
-        reads frames sequentially.
         """
         if self.is_preloaded:
             logging.debug(f"Fetching frame(s) {index} from memory cache.")
-            # Let the list handle the slice or index error
             return self._frames[index]
 
         if isinstance(index, int):
@@ -162,7 +206,6 @@ class VideoMP4Manager:
             frames = []
             
             with video_capture(self.video_path) as cap:
-                # Efficiently read a range of frames
                 cap.set(cv2.CAP_PROP_POS_FRAMES, start)
                 pos = start
                 while pos < stop:
@@ -191,42 +234,22 @@ class VideoMP4Manager:
                     yield self._process_frame(frame)
 
     def get_frames_range(self, start: int, end: int) -> List[np.ndarray]:
-        """
-        Retrieves a range of frames efficiently.
-
-        This method is a convenient wrapper around the class's slice access (`video[start:end]`).
-        If pre-loaded, it returns a slice from memory; otherwise, it seeks to the
-        start frame and reads sequentially from the file.
-
-        Args:
-            start: The starting frame index (inclusive).
-            end: The ending frame index (exclusive).
-
-        Returns:
-            A list of frames as NumPy arrays. Returns an empty list if the
-            range is invalid or out of bounds.
-        """
-        # The slice notation `self[start:end]` inherently handles bounds gracefully,
-        # returning an empty list for invalid ranges (e.g., start >= end or out of bounds).
+        """A convenient wrapper around slice access `video[start:end]`."""
         start = max(0, start)
         return self[start:end]
 
     def get_frames(self) -> List[np.ndarray]:
-        """
-        Retrieves all frames from the video.
-
-        This is equivalent to `get_frames_range(0, total_frames)`. If the video
-        is already pre-loaded, it returns the cached list directly.
-
-        Returns:
-            A list containing all frames as NumPy arrays.
-        """
+        """Retrieves all frames from the video as a list of arrays."""
         if self.is_preloaded:
             return self._frames
-        return self.get_frames_range(0, self.total_frames)
+        return self[0:self.total_frames]
+
+    # --------------------------------------------------------------------------
+    # Metadata Properties
+    # --------------------------------------------------------------------------
 
     @property
-    def total_frames(self):
+    def total_frames(self) -> int:
         return self._total_frames
     
     @property
@@ -242,5 +265,6 @@ class VideoMP4Manager:
         return self._fps
 
     def __repr__(self) -> str:
-        return (f"VideoMP4Manager(path='{self.video_path.name}', frames={self._total_frames}, "
-                f"resolution=({self.width}x{self.height}), preloaded={self.is_preloaded})")
+        """Provides a developer-friendly representation of the object."""
+        return (f"VideoMP4Manager(path='{self.video_path.name}', shape={self.shape}, "
+                f"fps={self.fps:.2f}, preloaded={self.is_preloaded})")
