@@ -1,75 +1,85 @@
 import os
+from pathlib import Path
 
+from utils.should_process_task import should_process_task
 from preprocessing.stickers_analysis import (
-    ROITrackedFileHandler,
+    ConsolidatedTracksFileHandler,
+    ConsolidatedTracksManager,
 
-    XYZMetadataModel,
     XYZMetadataFileHandler,
-    XYZVisualizationHandler,
+    XYZMetadataModel,
+
     XYZDataFileHandler,
+
+    XYZExtractorFactory,
     XYZStickerOrchestrator
 )
 
-
 def extract_stickers_xyz_positions(
-        source_video_path: str,
-        input_csv_path: str,
-        output_csv_path: str,
-        metadata_path: str = None,
-        video_path: str = None,
+        source_video_path: Path,
+        input_csv_path: Path,
+        method: str,  # This string will be used to select the extractor
+        output_csv_path: Path,
+        output_metadata_path: Path = None,
         *,
-        force_processing: bool = False,
-        monitor: bool = False
+        force_processing: bool = False
 ):
     """
-    Extracts 3D sticker positions and optionally shows a standard, non-distorted monitor window.
+    Extracts 3D sticker positions using a dynamically selected method.
     """
-    if not force_processing and os.path.exists(output_csv_path) and os.path.exists(metadata_path):
-        print(f"data already processed. Skipping...")
-        return 
-    
-    if not os.path.exists(source_video_path): raise FileNotFoundError(f"Source video not found: {source_video_path}")
-    if not os.path.exists(input_csv_path): raise FileNotFoundError(f"Center CSV not found: {input_csv_path}")
-    
-    print("Starting sticker 3D position extraction...")
+    if not source_video_path.exists():
+        raise FileNotFoundError(f"Source video not found: {source_video_path}")
 
-    # 1. Define the configuration parameters for the job.
-    # Create the typed config object.
-    config_data = {
-        "source_video_path": source_video_path,
-        "input_csv_path": input_csv_path,
-        "output_csv_path": output_csv_path,
-        "metadata_path": metadata_path,
-        "monitor": monitor,
-        "video_path": video_path
-    }
-    config = XYZMetadataModel(**config_data)
+    if not input_csv_path.exists():
+        raise FileNotFoundError(f"Center CSV not found: {input_csv_path}")
+    
+    if not should_process_task(
+        output_paths=[output_csv_path, output_metadata_path], 
+        input_paths=[source_video_path, input_csv_path], 
+        force=force_processing):
+        print(f"✅ Output file '{output_csv_path}' and {output_metadata_path} already exist. Use --force to overwrite.")
+        return
 
-    # 2. Instantiate dependency.
-    visualizer = XYZVisualizationHandler(config)
+    print(f"Starting sticker 3D position extraction using method: '{method}'...")
 
     # 1. Load Data
-    tracked_data = ROITrackedFileHandler(input_csv_path).load_all_data()
-    sticker_names = list(tracked_data.keys())
+    tracked_data: ConsolidatedTracksManager = ConsolidatedTracksFileHandler.load(input_csv_path)
+    sticker_names = tracked_data.object_names
 
-    metadata_manager = XYZMetadataFileHandler(config)
-    metadata = metadata_manager.get_metadata()
+    # 2. Define the configuration parameters for the job.
+    metadata = XYZMetadataModel(source_video_path, input_csv_path, output_csv_path)
     metadata.update_processing_detail("stickers_found", sticker_names)
+    # 2a. Record the chosen extraction method in the metadata.
+    metadata.update_processing_detail("extraction_method", method)
 
-    # 3. Instantiate the main orchestrator with its dependencies.
-    orchestrator = XYZStickerOrchestrator(visualizer=visualizer)
-
-    # 4. Execute the process! 🚀
     try:
-        results_df, processed_count = orchestrator.run(source_video_path, tracked_data)
+        # 3. Get the specific extractor instance from the factory using the method parameter.
+        extractor = XYZExtractorFactory.get_extractor(method)
+        print(f"✅ Successfully loaded extractor: {extractor.__class__.__name__}")
+
+        # 4. Execute the process! 🚀
+        # The orchestrator now receives the extractor object to use for its logic.
+        # Note: The XYZStickerOrchestrator.run() method must be updated to accept this new 'extractor' argument.
+        results_df, processed_count = XYZStickerOrchestrator.run(
+            source_video_path=source_video_path,
+            data_source=tracked_data,
+            extractor=extractor
+        )
         print("✅ Processing finished successfully!")
+
+        metadata.set_status("Completed")
+        metadata.update_processing_detail("frames_processed", processed_count)
+        metadata.finalize()
+
+        # 5. Save Results
+        XYZDataFileHandler.save(results_df, output_csv_path)
+        XYZMetadataFileHandler.save(metadata, output_metadata_path)
+
     except Exception as e:
         print(f"❌ An error occurred during processing: {e}")
+        # Optionally, update metadata status on failure
+        metadata.set_status("Failed")
+        metadata.update_processing_detail("error_message", str(e))
+        metadata.finalize()
+        XYZMetadataFileHandler.save(metadata, output_metadata_path)
         raise
-    metadata.set_status("Completed")
-    metadata.update_processing_detail("frames_processed", processed_count)
-    metadata.finalize()
-
-    # 4. Save Results
-    XYZDataFileHandler.save(results_df, config.output_csv_path)
-    metadata_manager.save(metadata, config.metadata_path)

@@ -17,6 +17,8 @@ from _3_preprocessing._1_sticker_tracking import (
     define_handstickers_colorspaces_from_roi,
     define_handstickers_color_threshold,
     
+    view_ellipse_tracking,
+    view_ellipse_tracking_adjusted,
     view_summary_stickers_on_rgb_data,
     view_xyz_stickers_on_depth_data
 )
@@ -136,6 +138,36 @@ def review_handstickers_color_threshold(
 
     return
 
+def view_ellipse_tracking_flow(
+    rgb_video_path: Path,
+    sticker_dir: Path
+) -> Path:
+    """Visualize the 3D sticker data on the depth point cloud."""
+    name_baseline = rgb_video_path.stem + "_handstickers"
+
+    print(f"[{rgb_video_path.name}] Viewing xy stickers tracking data...")
+    # Base name derived from the 2D tracking file for consistency
+    metadata_colorspace_path = sticker_dir / (name_baseline + "_colorspace_metadata.json")
+    binary_video_base_path = sticker_dir / (name_baseline + "_corrmap.mp4")
+    fit_ellipses_path = sticker_dir / (name_baseline + "_ellipses.csv")
+
+    view_ellipse_tracking(binary_video_base_path, metadata_colorspace_path, fit_ellipses_path)
+    return True
+    
+
+def view_ellipse_adjusted_tracking_flow(
+    rgb_video_path: Path,
+    sticker_dir: Path
+) -> Path:
+    """Visualize the 3D sticker data on the depth point cloud."""
+    name_baseline = rgb_video_path.stem + "_handstickers"
+    print(f"[{rgb_video_path.name}] Viewing xy stickers tracking data...")
+    # Base name derived from the 2D tracking file for consistency
+    fit_ellipses_path = sticker_dir / (name_baseline + "_ellipses_center_adjusted.csv")
+    view_ellipse_tracking_adjusted(rgb_video_path, fit_ellipses_path)
+    return True
+
+
 def view_consolidated_2d_tracking_data(
     rgb_video_path: Path,
     sticker_dir: Path
@@ -150,7 +182,6 @@ def view_consolidated_2d_tracking_data(
         rgb_video_path
     )
     return True
-
 
 
 def view_xyz_stickers(
@@ -276,10 +307,27 @@ def run_single_session_pipeline(
             )
             dag_handler.mark_completed('prepare_stickers_colorspace')
         
+        if dag_handler.can_run('view_ellipse_tracking'):
+            print(f"[{block_name}] ==> Running task: view_ellipse_tracking")
+            valid_data = view_ellipse_tracking_flow(
+                rgb_video_path=rgb_video_path,
+                sticker_dir=config.video_processed_output_dir / "handstickers"
+            )
+            if valid_data:
+                dag_handler.mark_completed('view_ellipse_tracking')
+
+        if dag_handler.can_run('view_ellipse_tracking_adjusted'):
+            print(f"[{block_name}] ==> Running task: view_ellipse_tracking_adjusted")
+            valid_data = view_ellipse_adjusted_tracking_flow(
+                rgb_video_path=rgb_video_path,
+                sticker_dir=config.video_processed_output_dir / "handstickers"
+            )
+            if valid_data:
+                dag_handler.mark_completed('view_ellipse_tracking_adjusted')
 
         if dag_handler.can_run('view_consolidated_2d_tracking_data'):
             print(f"[{block_name}] ==> Running task: view_consolidated_2d_tracking_data")
-            valid_data =  view_consolidated_2d_tracking_data(
+            valid_data = view_consolidated_2d_tracking_data(
                 rgb_video_path=rgb_video_path,
                 sticker_dir=config.video_processed_output_dir / "handstickers"
             )
@@ -288,7 +336,7 @@ def run_single_session_pipeline(
 
         if dag_handler.can_run('view_xyz_stickers'):
             print(f"[{block_name}] ==> Running task: view_xyz_stickers")
-            valid_data =  view_xyz_stickers(
+            valid_data = view_xyz_stickers(
                 source_video=config.source_video,
                 sticker_dir=config.video_processed_output_dir / "handstickers",
                 rgb_video_path=rgb_video_path,
@@ -300,7 +348,7 @@ def run_single_session_pipeline(
 
         if dag_handler.can_run('view_somatosensory_assessement'):
             print(f"[{block_name}] ==> Running task: view_somatosensory_assessement")
-            valid_data =  view_somatosensory_assessement(
+            valid_data = view_somatosensory_assessement(
                 source_video=config.source_video,
                 sticker_dir=config.video_processed_output_dir / "handstickers",
                 rgb_video_path=rgb_video_path,

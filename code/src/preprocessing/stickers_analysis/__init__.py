@@ -33,16 +33,19 @@ from .ellipse.gui.threshold_selector_tool_gui import ThresholdSelectorTool
 # fit ellipses on correlation map
 from .ellipse.data_access.fitted_ellipses_filehandler import FittedEllipsesFileHandler
 from .ellipse.models.fitted_ellipses_manager import FittedEllipsesManager
-# XY center of the ellipses/roi
-from .center.data_access.consolidated_tracks_filehandler import ConsolidatedTracksFileHandler
-from .center.models.consolidated_tracks_manager import ConsolidatedTracksManager
+from .ellipse.gui.ellipse_fit_view_gui import EllipseFitViewGUI
+# Summary of the ellipses and rois
+from .common.data_access.consolidated_tracks_filehandler import ConsolidatedTracksFileHandler
+from .common.models.consolidated_tracks_manager import ConsolidatedTracksManager
+from .common.gui.consolidated_tracks_gui import ConsolidatedTracksReviewGUI
 
-from .xyz.models.xyz_metadata_model import XYZMetadataModel, XYZMetadataConfig
+from .xyz.models.xyz_metadata_model import XYZMetadataModel
 from .xyz.data_access.xyz_metadata_filehandler import XYZMetadataFileHandler
-from .xyz.gui.xyz_monitor_gui import XYZVisualizationHandler
 from .xyz.data_access.xyz_data_filehandler import XYZDataFileHandler
+from .xyz.core.xyz_extractor_factory import XYZExtractorFactory
 from .xyz.core.xyz_extracting_orchestrator import XYZStickerOrchestrator
 
+from .common.models.tracked_data_interface import TrackedDataInterface
 
 # Define what gets imported with 'from .roi. import *'
 __all__ = [

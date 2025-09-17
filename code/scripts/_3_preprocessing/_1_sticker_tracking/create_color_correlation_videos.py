@@ -226,8 +226,9 @@ def create_color_correlation_videos(
             
         print(f"Processing '{name}'...")
         output_object_path = output_path.parent / (output_path.stem + f"_{name}.mp4")
-
-        if not force_processing and os.path.exists(output_object_path):
+        
+        need_to_process = should_process_task(output_paths=output_object_path, input_paths=[md_path, video_path], force=force_processing)
+        if not need_to_process:
             print(f"Output file already exists, skipping: {output_object_path}")
             continue
 

@@ -1,45 +1,49 @@
 import os
 from typing import Any, Optional, Dict, Tuple
-from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from pyk4a import PyK4APlayback
 
 
-@dataclass
-class XYZMetadataConfig:
-    """Holds all configuration for the XYZ extraction process."""
-    source_video_path: str
-    input_csv_path: str
-    output_csv_path: str
-    metadata_path: Optional[str] = None
-    monitor: bool = False
-    video_path: Optional[str] = None
-    display_dims: Tuple[int, int] = (1080, 1920)
-
-
-@dataclass
 class XYZMetadataModel:
-    """A data class representing the structure and state of processing metadata."""
+    """
+    A self-contained class representing the configuration, dynamic state, 
+    and results of a processing job.
     
-    # --- Input and Configuration ---
-    source_video_path: str
-    input_csv_path: str
-    output_csv_path: str
-    metadata_path: Optional[str] = None
-    monitor: bool = False 
-    video_path: Optional[str] = None
-    display_dims: Tuple[int, int] = (1080, 1920)
+    The constructor directly accepts all necessary configuration parameters.
+    """
+    
+    def __init__(
+        self, 
+        source_video_path: str, 
+        input_csv_path: str, 
+        output_csv_path: str, 
+        display_dims: Tuple[int, int] = (1080, 1920)
+    ):
+        """
+        Initializes the metadata model with all configuration parameters.
+        
+        Args:
+            source_video_path: Path to the source MKV video file.
+            input_csv_path: Path to the input CSV file.
+            output_csv_path: Path where the output CSV will be saved.
+            display_dims (optional): The display dimensions as a (height, width) tuple.
+        """
+        # --- Input and Configuration ---
+        self.source_video_path = source_video_path
+        self.input_csv_path = input_csv_path
+        self.output_csv_path = output_csv_path
+        self.display_dims = display_dims
 
-    # --- Timestamps and Status ---
-    start_time_utc: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
-    end_time_utc: Optional[str] = None
-    status: str = "In Progress"
-    error_message: Optional[str] = None
+        # --- Timestamps and Status ---
+        self.start_time_utc: str = datetime.now(timezone.utc).isoformat()
+        self.end_time_utc: Optional[str] = None
+        self.status: str = "In Progress"
+        self.error_message: Optional[str] = None
 
-    # --- Dynamic Data ---
-    mkv_metadata: Dict[str, Any] = field(default_factory=dict)
-    processing_details: Dict[str, Any] = field(default_factory=dict)
+        # --- Dynamic Data (Populated during processing) ---
+        self.mkv_metadata: Dict[str, Any] = {}
+        self.processing_details: Dict[str, Any] = {}
 
     def populate_from_mkv(self, playback: PyK4APlayback) -> int:
         """
@@ -69,12 +73,20 @@ class XYZMetadataModel:
         if error_message:
             self.error_message = error_message
 
-    def finalize(self):
-        """Finalizes the metadata before saving (e.g., sets end time)."""
+    def finalize(self, success: bool = True):
+        """
+        Finalizes the metadata before saving, setting the end time and status.
+        """
         self.end_time_utc = datetime.now(timezone.utc).isoformat()
+        if success and self.status == "In Progress":
+            self.set_status("Completed")
+        elif not success and self.status == "In Progress":
+            self.set_status("Failed")
 
     def to_dict(self) -> Dict[str, Any]:
-        """Converts the metadata model to a dictionary suitable for JSON serialization."""
+        """
+        Converts the metadata model to a dictionary suitable for JSON serialization.
+        """
         return {
             "start_time_utc": self.start_time_utc,
             "end_time_utc": self.end_time_utc,
@@ -86,10 +98,7 @@ class XYZMetadataModel:
             },
             "outputs": {
                 "output_csv_path": os.path.abspath(self.output_csv_path),
-                "video_path": os.path.abspath(self.video_path) if self.video_path else None,
-                "metadata_path": os.path.abspath(self.metadata_path) if self.metadata_path else None,
             },
-            "parameters": {"monitor": self.monitor},
             "mkv_metadata": self.mkv_metadata,
             "processing_details": self.processing_details,
         }
