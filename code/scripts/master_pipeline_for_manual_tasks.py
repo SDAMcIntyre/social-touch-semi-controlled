@@ -79,8 +79,6 @@ def review_2d_stickers(
     metadata_roi_path = output_dir / (name_baseline + "_roi_metadata.json")
     stickers_roi_csv_path = output_dir / (name_baseline + "_roi_tracking.csv")
 
-    # NOTE: The underlying function `review_tracked_objects_in_video` must be updated
-    # to accept and use the `force_processing` argument.
     review_tracked_objects_in_video(
         rgb_video_path,
         metadata_roi_path,
@@ -235,7 +233,7 @@ def view_somatosensory_assessement(
 
     name_baseline = rgb_video_path.stem + "_handmodel"
     hand_motion_glb_path = processed_dir / (name_baseline + "_motion.glb")
-
+    
     view_somatosensory_3d_scene(
         xyz_csv_path, 
         source_video, 
