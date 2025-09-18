@@ -19,12 +19,43 @@ class FittedEllipsesManager:
         """
         Adds the ellipse fitting result for a specific object.
 
+        This method will raise an error if a result for the object_name
+        already exists. Use `add_or_update_result` to overwrite existing data.
+
         Args:
             object_name (str): The name of the object (e.g., 'sticker_1').
             result_df (pd.DataFrame): The DataFrame containing results for this object.
+        
+        Raises:
+            ValueError: If the input DataFrame does not contain a 'frame_number' column,
+                        or if a result for the specified object_name already exists.
+        """
+        if object_name in self._results:
+            raise ValueError(
+                f"Result for object '{object_name}' already exists. "
+                "Use add_or_update_result() to overwrite."
+            )
+        if 'frame_number' not in result_df.columns:
+            raise ValueError("Input DataFrame must contain a 'frame_number' column.")
+        
+        self._results[object_name] = result_df.copy()
+
+    def add_or_update_result(self, object_name: str, result_df: pd.DataFrame) -> None:
+        """
+        Adds a new result or updates an existing one for a specific object.
+
+        If a result for the object_name already exists, it will be replaced.
+
+        Args:
+            object_name (str): The name of the object (e.g., 'sticker_1').
+            result_df (pd.DataFrame): The DataFrame containing results for this object.
+        
+        Raises:
+            ValueError: If the input DataFrame does not contain a 'frame_number' column.
         """
         if 'frame_number' not in result_df.columns:
             raise ValueError("Input DataFrame must contain a 'frame_number' column.")
+            
         self._results[object_name] = result_df.copy()
     
     def get_all_results(self) -> Dict[str, pd.DataFrame]:
@@ -34,7 +65,7 @@ class FittedEllipsesManager:
     def get_combined_dataframe(self) -> pd.DataFrame:
         """
         Combines all stored results into a single, wide-format DataFrame by
-        **merging on the 'frame_number' column**. This guarantees a single,
+        merging on the 'frame_number' column. This guarantees a single,
         shared 'frame_number' column in the final output.
 
         Returns:
