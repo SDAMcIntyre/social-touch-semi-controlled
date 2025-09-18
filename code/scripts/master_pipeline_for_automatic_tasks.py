@@ -20,6 +20,7 @@ from _2_primary_processing._2_generate_rgb_depth_video import (
 from _3_preprocessing._1_sticker_tracking import (
     track_objects_in_video,
     is_2d_stickers_tracking_valid,
+    is_correlation_videos_threshold_defined,
     
     generate_standard_roi_size_dataset,
     create_standardized_roi_videos,
@@ -139,6 +140,10 @@ def track_stickers(rgb_video_path: Path, output_dir: Path, *, force_processing: 
     binary_video_base_path = output_dir / (name_baseline + "_corrmap.mp4")
     create_color_correlation_videos(corrmap_video_base_path, metadata_colorspace_path, binary_video_base_path, force_processing=force_processing)
     
+    if not is_correlation_videos_threshold_defined(metadata_colorspace_path):
+        print("--> correlation videos threshold is not valid. Cannot continue the pipeline.Execute the corresponding manual task. ")
+        return binary_video_base_path, False
+    
     fit_ellipses_path = output_dir / (name_baseline + "_ellipses.csv")
     fit_ellipses_on_correlation_videos(
         video_path=binary_video_base_path,
@@ -187,18 +192,19 @@ def generate_xyz_stickers(stickers_2d_path: Path, source_video: Path, output_dir
 
 @flow(name="7. Generate 3D Hand Position")
 def generate_3d_hand_motion(rgb_video_path: Path, stickers_xyz_path: Path, hand_models_dir: Path, output_dir: Path, *, force_processing: bool = False) -> Path:
-    print(f"[{output_dir.name}] Generating 3D hand position...")
+    print(f"[{output_dir.name}] Generating 3D hand motion...")
     name_baseline = rgb_video_path.stem + "_handmodel"
     metadata_path = output_dir / (name_baseline + "_metadata.json")
     hand_motion_glb_path = output_dir / (name_baseline + "_motion.glb")
     hand_motion_csv_path = output_dir / (name_baseline + "_motion.csv")
     # Propagate the flag to the underlying implementation function
     generate_hand_motion(stickers_xyz_path, hand_models_dir, metadata_path, hand_motion_glb_path, hand_motion_csv_path, force_processing=force_processing)
-    return hand_motion_glb_path
+    return hand_motion_glb_path, metadata_path
 
 @flow(name="8. Generate Somatosensory Characteristics")
 def generate_somatosensory_chars(
     hand_motion_glb_path: Path,
+    hand_metadata_path: Path,
     session_processed_dir: Path,
     session_id: str,
     current_video_filename: str,
@@ -214,7 +220,8 @@ def generate_somatosensory_chars(
     metadata_path = forearm_pointcloud_dir / metadata_filaname
     # Propagate the flag to the underlying implementation function
     compute_somatosensory_characteristics(
-        hand_motion_glb_path, metadata_path, forearm_pointcloud_dir,
+        hand_motion_glb_path, hand_metadata_path,
+        metadata_path, forearm_pointcloud_dir,
         current_video_filename, contact_characteristics_path, 
         monitor=monitor, force_processing=force_processing
     )
@@ -365,7 +372,7 @@ def run_single_session_pipeline(
         if dag_handler.can_run('generate_3d_hand_motion'):
             print(f"[{block_name}] ==> Running task: generate_3d_hand_motion")
             force = dag_handler.get_task_options('generate_3d_hand_motion').get('force_processing', False)
-            hand_motion_glb_path = generate_3d_hand_motion(
+            hand_motion_glb_path, hand_metadata_path = generate_3d_hand_motion(
                 rgb_video_path=rgb_video_path,
                 stickers_xyz_path=sticker_3d_tracking_path,
                 hand_models_dir=config.hand_models_dir,
@@ -382,6 +389,7 @@ def run_single_session_pipeline(
 
             somatosensory_chars_path = generate_somatosensory_chars(
                 hand_motion_glb_path=hand_motion_glb_path,
+                hand_metadata_path=hand_metadata_path,
                 session_processed_dir=config.session_processed_output_dir,
                 session_id=config.session_id,
                 current_video_filename=rgb_video_path.name,
