@@ -96,13 +96,11 @@ def consolidate_2d_tracking_data(
             ignore_index=True
         )
     
-    # --- MODIFICATION START 1 ---
     # Rename original ellipse center columns to avoid name conflicts and preserve the data.
     ellipses_long_df.rename(
         columns={'center_x': 'ellipse_center_x', 'center_y': 'ellipse_center_y'},
         inplace=True
     )
-    # --- MODIFICATION END 1 ---
     
     # 3. Merge ROI and Ellipse Data
     print("🤝 Merging ROI and ellipse information...")
@@ -137,7 +135,6 @@ def consolidate_2d_tracking_data(
     output_df['center_x'] = convert_to_int_where_finite(output_df['center_x_float'])
     output_df['center_y'] = convert_to_int_where_finite(output_df['center_y_float'])
 
-    
     # Remove the intermediate floating-point columns used for calculation.
     output_df.drop(columns=['center_x_float', 'center_y_float'], inplace=True)
 
