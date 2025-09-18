@@ -24,6 +24,7 @@ class ObjectsInteractionController:
     def __init__(self,
                  hand_motion_data: dict,
                  references_pcd: Dict[int, o3d.geometry.PointCloud],
+                 selected_points: dict = None,
                  *,
                  visualize: bool = True,
                  fps: int = 30,
@@ -32,6 +33,8 @@ class ObjectsInteractionController:
         self.processor = ObjectsInteractionProcessor(
             references_pcd=references_pcd,
             base_vertices=hand_motion_data['vertices'],
+            tracked_points_groups_indices=selected_points.values(),
+            tracked_points_groups_labels=list(selected_points.keys()),
             fps=fps
         )
         self.trajectory_data = {
@@ -53,7 +56,7 @@ class ObjectsInteractionController:
         self.visualize = visualize
         self.view = None
         self.hand_motion_data = hand_motion_data  
-        self.view_width_in_frame = visualizer_width_sec * fps       
+        self.view_width_in_frame = visualizer_width_sec * fps      
 
     def run(self) -> pd.DataFrame:
         """
@@ -107,13 +110,36 @@ class ObjectsInteractionController:
             if (frame_id + 1) % self.processor.fps == 0 or (frame_id + 1) == num_frames:
                 print(f"  Computed frame {frame_id + 1}/{num_frames}")
         print("Pre-computation finished.")
-
+        
         # 4. Launch interactive session with all pre-computed data
         if self.visualize:
             self.interactive_view(visualization_frames, results)
 
         print("Simulation finished.")
-        return pd.DataFrame(results)
+        
+        if not results:
+            return pd.DataFrame()
+
+        df = pd.DataFrame(results)
+        all_cols = list(df.columns)
+        
+        # Define the desired primary order
+        ordered_prefix = ['frame_index', 'time', 'contact_detected']
+        
+        # Dynamically find columns matching patterns
+        contact_loc_cols = sorted([c for c in all_cols if c.startswith('contact_location_')])
+        velocity_cols = sorted([c for c in all_cols if c.startswith('velocity_')])
+        
+        # Combine the ordered and patterned columns
+        new_order_start = ordered_prefix + contact_loc_cols + velocity_cols
+        
+        # Get the remaining columns, ensuring no duplicates and maintaining a sorted order
+        remaining_cols = sorted([c for c in all_cols if c not in new_order_start])
+        
+        # Create the final column list and reorder the DataFrame
+        final_order = new_order_start + remaining_cols
+        
+        return df[final_order]
 
     def interactive_view(self, visualization_frames, results):
         print("Starting interactive monitoring session...")
@@ -241,7 +267,7 @@ if __name__ == '__main__':
 
     # 3. Instantiate the controller with the mock data
     # The controller will manage the simulation logic and the UI.
-    controller = ObjectsInteractionOrchestrator(
+    controller = ObjectsInteractionController(
         hand_motion_data=mock_hand_data,
         reference_pcd=mock_static_object,
         visualize=True,
