@@ -3,7 +3,7 @@ import pandas as pd
 import open3d as o3d
 from scipy.spatial import KDTree
 from scipy.spatial.transform import Rotation # <-- Essential for quaternion handling
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Union
 
 from ..gui.debug_visualiser import DebugVisualizer
 
@@ -16,7 +16,7 @@ class ObjectsInteractionProcessor:
     def __init__(self,
                  references_pcd: Dict[int, o3d.geometry.PointCloud],
                  base_vertices: np.ndarray,
-                 tracked_points_groups_indices: Optional[List[List[int]]] = None,
+                 tracked_points_groups_indices: Optional[Union[List[int], List[List[int]]]] = None,
                  tracked_points_groups_labels: Optional[List[str]] = None,
                  *,
                  fps: int = 30,
@@ -29,8 +29,11 @@ class ObjectsInteractionProcessor:
             references_pcd (Dict[int, o3d.geometry.PointCloud]): A dictionary
                 mapping integer keys to reference point clouds.
             base_vertices (np.ndarray): The base vertices of the moving object.
-            tracked_points_groups_indices (Optional[List[List[int]]]): Indices
-                for tracked point groups on the base vertices.
+            tracked_points_groups_indices (Optional[Union[List[int], List[List[int]]]]):
+                Indices of vertices to track from `base_vertices`. This can be a
+                **flat list** of integers for individual vertices, or a **nested list**
+                where each sublist groups vertex indices to be **averaged** into a
+                single, more stable tracked point.
             tracked_points_groups_labels (Optional[List[str]]): Labels for
                 the tracked point groups.
             fps (int): Frames per second for velocity calculations.
@@ -189,7 +192,7 @@ class ObjectsInteractionProcessor:
             inside_mask &= color_mask
             
         if not np.any(inside_mask):
-            contact_quantities = {"contact_detected": 0, "depth": 0.0, "area": 0.0, "contact_location_x": np.nan, "contact_location_y": np.nan, "contact_location_z": np.nan}
+            contact_quantities = {"contact_detected": 0, "contact_depth": 0.0, "contact_area": 0.0, "contact_points": [], "contact_location_x": np.nan, "contact_location_y": np.nan, "contact_location_z": np.nan}
             contact_info = {"contact_points": np.array([]), "contact_normals": np.array([])}
             return contact_quantities, contact_info
 
@@ -198,8 +201,9 @@ class ObjectsInteractionProcessor:
         
         contact_quantities = {
             "contact_detected": 1,
-            "depth": np.mean(distances[inside_mask]),
-            "area": len(unique_contact_indices) * self.point_area,
+            "contact_depth": np.mean(distances[inside_mask]),
+            "contact_area": len(unique_contact_indices) * self.point_area,
+            "contact_points": arm_intersect_unique,
             "contact_location_x": np.mean(arm_intersect_unique[:, 0]),
             "contact_location_y": np.mean(arm_intersect_unique[:, 1]),
             "contact_location_z": np.mean(arm_intersect_unique[:, 2]),
@@ -229,9 +233,9 @@ class ObjectsInteractionProcessor:
             return {}, {}
         proprio_data, current_positions = {}, {}
         for label, indices in zip(self.tracked_points_groups_labels, self.tracked_points_groups_indices):
-            position = np.mean(v_transformed[indices], axis=0)
-            current_positions[label] = position
-            proprio_data[f"{label}_position_x"], proprio_data[f"{label}_position_y"], proprio_data[f"{label}_position_z"] = position
+            position_xyz = np.mean(v_transformed[np.atleast_1d(indices), :], axis=0)
+            current_positions[label] = position_xyz
+            proprio_data[f"{label}_position_x"], proprio_data[f"{label}_position_y"], proprio_data[f"{label}_position_z"] = position_xyz
         primary_label = self.tracked_points_groups_labels[0]
         primary_position = current_positions[primary_label]
         primary_pos_prev = self._previous_tracked_points_pos.get(primary_label)
@@ -272,7 +276,7 @@ class ObjectsInteractionProcessor:
         # Check for zero transformation input. If so, return a dictionary of NaNs.
         if np.all(rotation_quat == 0) or np.all(translation == 0):
             contact_keys = [
-                "contact_detected", "depth", "area", "contact_location_x",
+                "contact_detected", "contact_depth", "contact_area", "contact_location_x",
                 "contact_location_y", "contact_location_z"
             ]
             proprio_keys = []

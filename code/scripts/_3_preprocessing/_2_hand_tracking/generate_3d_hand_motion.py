@@ -7,7 +7,7 @@ from pathlib import Path
 
 from utils.should_process_task import should_process_task
 from preprocessing.common.data_access.glb_data_handler import GLBDataHandler
-from preprocessing.motion_analysis.hand_tracking.hand_mesh_processor import HandMeshProcessor
+from preprocessing.motion_analysis.hand_tracking.core.hand_mesh_processor import HandMeshProcessor
 from preprocessing.motion_analysis.tactile_quantification.model.objects_interaction_processor import ObjectsInteractionProcessor
 
 

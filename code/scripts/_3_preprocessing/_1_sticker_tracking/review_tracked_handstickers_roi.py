@@ -131,6 +131,7 @@ def remove_frames_from_metadata(
         for object_name in object_names:
             annotation_manager.remove_roi_ifexists(object_name, frame_id)
 
+
 def review_tracking(
         video_manager: VideoReviewManager, 
         annotation_manager: ROIAnnotationManager, 

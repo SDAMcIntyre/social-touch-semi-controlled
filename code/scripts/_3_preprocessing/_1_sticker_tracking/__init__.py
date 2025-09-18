@@ -4,7 +4,7 @@
 This file makes key sticker tracking functions available at the package level,
 simplifying imports elsewhere in the project.
 """
-from .is_2d_stickers_tracking_valid import is_2d_stickers_tracking_valid
+from .is_tracking_valid_funcs import is_2d_stickers_tracking_valid, is_correlation_videos_threshold_defined
 
 # automatic computation
 # - 2d tracking process

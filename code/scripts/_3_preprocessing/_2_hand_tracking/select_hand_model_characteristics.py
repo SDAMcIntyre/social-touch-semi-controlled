@@ -5,8 +5,13 @@ from pathlib import Path
 from PyQt5.QtWidgets import QApplication
 from typing import List, Tuple
 
-from preprocessing.motion_analysis.hand_tracking.hand_model_selector import HandModelSelectorGUI
+from preprocessing.motion_analysis import (
+    HandModelSelectorGUI,
+    HandMetadataManager,
+    HandMetadataFileHandler
 
+
+)
 
 def is_valid(
     metadata_path: Path,
@@ -122,7 +127,15 @@ def select_hand_model_characteristics(
         point_labels, 
         metadata_path)
     window.show()
-    
+
+    # 3. After the window is closed, check for the result.
+    if window.result_metadata:
+        # 4. Use the FileHandler to save the data.
+        HandMetadataFileHandler.save_json(window.result_metadata, metadata_path)
+        return metadata_path
+    else:
+        print("Process was cancelled or failed. No metadata was saved.")
+        return None
     # Start the application's event loop. The script will block here until the
     # user closes the window or clicks the validate button.
     app.exec_()

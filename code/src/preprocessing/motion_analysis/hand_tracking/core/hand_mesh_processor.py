@@ -2,8 +2,8 @@ from pathlib import Path
 import numpy as np
 import open3d as o3d
 
-from .imported.hand_mesh import HandMesh
-from .imported import config
+from ..imported.hand_mesh import HandMesh
+from ..imported import config
 
 
 class HandMeshProcessor:

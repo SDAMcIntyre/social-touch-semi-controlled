@@ -12,7 +12,9 @@ from preprocessing.common import (
 )
 
 from preprocessing.motion_analysis import (
-    ObjectsInteractionController
+    ObjectsInteractionController,
+    HandMetadataFileHandler,
+    HandMetadataManager
 )
 
 from preprocessing.forearm_extraction import (
@@ -29,6 +31,7 @@ logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
 def compute_somatosensory_characteristics(
         hand_motion_glb_path: Path, 
+        hand_metadata_path: Path, 
         metadata_path: Path,
         forearm_pointcloud_dir: Path,
         current_video_filename: str,
@@ -51,6 +54,8 @@ def compute_somatosensory_characteristics(
     if hand_motion_data:
         print(f"Successfully loaded hand motion dictionary.")
 
+    hand_metadata: HandMetadataManager = HandMetadataFileHandler.load(hand_metadata_path)
+
     # Collect the forearms pointclouds for the specific video
     forearm_params: List[ForearmParameters] = ForearmFrameParametersFileHandler.load(metadata_path)
     catalog = ForearmCatalog(forearm_params, forearm_pointcloud_dir)
@@ -60,6 +65,7 @@ def compute_somatosensory_characteristics(
     controller = ObjectsInteractionController(
         hand_motion_data,
         forearms_dict,
+        selected_points=hand_metadata.selected_points,
         visualize=monitor,
         fps=fps
     )
