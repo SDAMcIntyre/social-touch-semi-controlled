@@ -38,7 +38,8 @@ def track_objects_in_video(
     """
     # This block only runs if Step 1 determined that processing might be needed.
     print("🔎 Performing task-specific check on annotation status...")
-    need_to_process = should_process_task(output_paths=output_path, input_paths=[metadata_path, video_path], force=force_processing)
+    # we should exclude metadata_path as it is updated manually to assess the quality of the automatic process 
+    need_to_process = should_process_task(output_paths=output_path, input_paths=video_path, force=force_processing)
     annotation_data_iohandler = ROIAnnotationFileHandler.load(metadata_path)
     annotation_manager = ROIAnnotationManager(annotation_data_iohandler)
     # Logic to check the JSON content.

@@ -191,9 +191,9 @@ def invert_correlation_maps(corr_maps: List[np.ndarray]) -> List[np.ndarray]:
 
 
 def create_color_correlation_videos(
-    video_path: Path,
+    video_standard_format_path: Path,
     md_path: Path,
-    output_path: Path,
+    output_standard_format_path: Path,
     *,
     force_processing: bool = False
 ):
@@ -203,38 +203,23 @@ def create_color_correlation_videos(
     """
     # 1. Load the metadata manager
     colorspace_manager: ColorSpaceManager = ColorSpaceFileHandler.load(md_path)
-    # 2. Early exit: If not forcing and no objects need processing, stop.
-    need_to_process = should_process_task(output_paths=output_path, input_paths=[md_path, video_path], force=force_processing)
-    if not need_to_process and colorspace_manager.are_no_objects_with_status(ColorSpaceStatus.TO_BE_PROCESSED):
-        print("✅ No objects are marked 'to_be_processed'. Nothing to do.")
-        return output_path
 
     print("--- Starting Video Processing ---")
-
     # 3. Process each object sequentially based on its status
     metadata_file_modified = False
-    object_names = colorspace_manager.colorspace_names
-    for name in object_names:
+    for name in colorspace_manager.colorspace_names:
         current_colorspace = colorspace_manager.get_colorspace(name)
+        input_video_path = video_standard_format_path.parent / (video_standard_format_path.stem + f"_{name}.mp4")
+        output_video_path = output_standard_format_path.parent / (output_standard_format_path.stem + f"_{name}.mp4")
 
         # 4. Decide whether to process this specific object
-        should_process = force_processing or (current_colorspace.status == ColorSpaceStatus.TO_BE_PROCESSED.value)
-
-        if not should_process:
+        need_to_process = should_process_task(output_paths=output_video_path, input_paths=input_video_path, force=force_processing)
+        if not need_to_process and not (current_colorspace.status == ColorSpaceStatus.TO_BE_PROCESSED.value):
             print(f"Skipping '{name}' (status: '{current_colorspace.status}').")
             continue
-            
+        
         print(f"Processing '{name}'...")
-        output_object_path = output_path.parent / (output_path.stem + f"_{name}.mp4")
-        
-        need_to_process = should_process_task(output_paths=output_object_path, input_paths=[md_path, video_path], force=force_processing)
-        if not need_to_process:
-            print(f"Output file already exists, skipping: {output_object_path}")
-            continue
-
-        input_video_path = video_path.parent / (video_path.stem + f"_{name}.mp4")
         print(f"Loading video '{input_video_path}'...")
-        
         video_manager = VideoMP4Manager(input_video_path)
         video_manager.color_format = ColorFormat.BGR
         
@@ -248,13 +233,15 @@ def create_color_correlation_videos(
         
         corr_maps = invert_correlation_maps(corr_maps)
         
-        save_correlation_results_to_mp4(corr_maps, output_object_path)
+        save_correlation_results_to_mp4(corr_maps, output_video_path)
         print(f"✅ Finished processing for '{name}'.")
         colorspace_manager.update_status(name, ColorSpaceStatus.TO_BE_REVIEWED.value)
         metadata_file_modified = True
 
     if metadata_file_modified:
         ColorSpaceFileHandler.write(md_path, colorspace_manager)
+        print("--- Standalone Processing Complete ---")
+    else:
+        print("✅ No objects are marked 'to_be_processed'. Nothing to do.")
     
-    print("--- Standalone Processing Complete ---")
-    return output_path
+    return output_video_path

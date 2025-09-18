@@ -127,27 +127,26 @@ def fit_ellipses_on_correlation_videos(
     It loads grayscale frames, applies a binary threshold from metadata,
     fits ellipses, and saves the results using the dedicated manager and file handler.
     """
-    # --- MODIFICATION START ---
-    # 1. Load metadata and perform pre-flight checks
-    # ---
     colorspace_manager: ColorSpaceManager = ColorSpaceFileHandler.load(md_path)
-    need_to_process = should_process_task(output_paths=output_path, input_paths=[md_path, video_path], force=force_processing)
-    if not need_to_process and colorspace_manager.not_all_objects_with_status(ColorSpaceStatus.REVIEW_COMPLETED):
-        print(" Skipping: Not all objects have the 'REVIEW_COMPLETED' status.")
-        return 
-    
     print(f"--- Starting Video Processing ---")
-
     # 2. Initialize the manager to handle results in memory.
-    results_manager = FittedEllipsesManager()
-    object_names = colorspace_manager.colorspace_names
+    try: 
+        results_manager: FittedEllipsesManager = FittedEllipsesFileHandler.load(output_path)
+    except:
+        results_manager = FittedEllipsesManager()
     
+    processed_occured = False
     # 3. Process each object sequentially
-    for name in object_names:
+    for name in colorspace_manager.colorspace_names:
         print(f"\nProcessing '{name}'...")
         current_colorspace = colorspace_manager.get_colorspace(name)
-        
         input_video_path = video_path.parent / (video_path.stem + f"_{name}.mp4")
+        
+        # 4. Decide whether to process this specific object
+        need_to_process = should_process_task(output_paths=output_path, input_paths=input_video_path, force=force_processing)
+        if not need_to_process and not (current_colorspace.status == ColorSpaceStatus.TO_BE_PROCESSED.value):
+            print(f"Skipping '{name}' (status: '{current_colorspace.status}').")
+            continue
         
         print(f"Loading video '{input_video_path}'...")
         frames_grayscale = VideoMP4Manager(input_video_path).get_frames()
@@ -162,11 +161,15 @@ def fit_ellipses_on_correlation_videos(
         
         # Add the resulting DataFrame to the manager. The manager will handle
         # the complexity of prefixing and merging later.
-        results_manager.add_result(name, object_ellipse_df)
+        results_manager.add_or_update_result(name, object_ellipse_df)
+        processed_occured = True
         print(f"✅ Finished processing and stored results for '{name}' in manager.")
         
     # 4. Save all results using the dedicated file handler.
-    print("\n--- Aggregating and Saving Results ---")
-    FittedEllipsesFileHandler.save(results_manager, output_path)
-    print(f"✅ Results successfully saved to '{output_path}'.")
-    print(f"--- Processing Complete ---")
+    if processed_occured:
+        print("\n--- Aggregating and Saving Results ---")
+        FittedEllipsesFileHandler.save(results_manager, output_path)
+        print(f"✅ Results successfully saved to '{output_path}'.")
+        print(f"--- Processing Complete ---")
+    else:
+        print(f"--- All object skipped. No need to update the results. ---")
