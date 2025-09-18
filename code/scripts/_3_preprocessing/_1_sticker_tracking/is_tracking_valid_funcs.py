@@ -2,7 +2,11 @@
 from preprocessing.stickers_analysis import (
     ROIAnnotationFileHandler,
     ROIAnnotationManager,
-    ROIProcessingStatus
+    ROIProcessingStatus,
+    
+    ColorSpaceFileHandler,
+    ColorSpaceManager,
+    ColorSpaceStatus
 )
 
 def is_2d_stickers_tracking_valid(metadata_path: str):
@@ -20,4 +24,9 @@ def is_2d_stickers_tracking_valid(metadata_path: str):
     annotation_manager = ROIAnnotationManager(annotation_data_iohandler)
 
     return annotation_manager.are_all_objects_with_status(ROIProcessingStatus.COMPLETED)
+
+
+def is_correlation_videos_threshold_defined(metadata_path: str):
+    manager: ColorSpaceManager = ColorSpaceFileHandler.load(metadata_path)
+    return manager.all_objects_with_status(ColorSpaceStatus.REVIEW_COMPLETED)
 
