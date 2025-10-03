@@ -42,7 +42,7 @@ def glb_input_is_clean(data_to_check):
     print("Checking for invalid float values (NaN or infinity)...")
     for name, arr in data_to_check.items():
         if not np.all(np.isfinite(arr)):
-            print(f"❌ Found invalid values in '{name}' array!")
+            print(f"⚠️ Found invalid values in '{name}' array!")
             is_clean = False
 
     return is_clean

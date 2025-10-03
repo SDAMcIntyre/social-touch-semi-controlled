@@ -2,12 +2,11 @@ import json
 from pathlib import Path
 from typing import List, Tuple
 
-
-
 def is_hand_model_valid(
     metadata_path: Path,
     hand_models_dir: Path,
-    expected_labels: List[str]
+    expected_labels: List[str],
+    verbose: bool = False
 ) -> Tuple[bool, List[str]]:
     """
     Validates a metadata JSON file against a set of rules.
@@ -22,6 +21,9 @@ def is_hand_model_valid(
             The directory where the hand model .txt files are stored.
         expected_labels (List[str]):
             A list of strings representing the valid labels for selected points.
+        verbose (bool, optional):
+            If True, prints the validation result to the console.
+            Defaults to False.
 
     Returns:
         Tuple[bool, List[str]]:
@@ -33,6 +35,7 @@ def is_hand_model_valid(
     
     # 1. Check if metadata file exists and is valid JSON
     if not metadata_path.is_file():
+        # Early return as subsequent checks depend on the file existing
         return False, [f"Metadata file not found at: {metadata_path}"]
     
     try:
@@ -79,4 +82,14 @@ def is_hand_model_valid(
                 errors.append(f"Invalid point label '{label}' found. It is not in the list of expected labels.")
     
     is_valid = not errors
+    
+    # Handle verbose output
+    if verbose:
+        if is_valid:
+            print(f"✅ Hand model has been validated for: {metadata_path.name}")
+        else:
+            print(f"❌ Hand model has not been manually validated for: {metadata_path.name}")
+            for error in errors:
+                print(f"  - {error}")
+
     return is_valid, errors

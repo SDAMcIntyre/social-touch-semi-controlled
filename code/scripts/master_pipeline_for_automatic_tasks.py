@@ -106,7 +106,7 @@ def generate_ttl_signal(led_tracking_path: Path, output_dir: Path, *, force_proc
 @flow(name="5. Validate Forearm Extraction")
 def validate_forearm_extraction(session_output_dir: Path) -> Path:
     print(f"[{session_output_dir.name}] Validating forearm extraction...")
-    return is_forearm_valid(session_output_dir / "forearm_pointclouds")
+    return is_forearm_valid(session_output_dir / "forearm_pointclouds", verbose=True)
 
 @flow(name="5. Validate Hand Extraction")
 def validate_hand_extraction(rgb_video_path: Path, hand_models_dir: Path, output_dir: Path) -> Path:
@@ -114,8 +114,7 @@ def validate_hand_extraction(rgb_video_path: Path, hand_models_dir: Path, output
     name_baseline = rgb_video_path.stem + "_handmodel"
     metadata_path = output_dir / (name_baseline + "_metadata.json")
     expected_labels = ["sticker_yellow", "sticker_blue", "sticker_green"]
-    # The `force_processing` flag would be used inside is_hand_model_valid to bypass checks
-    return is_hand_model_valid(metadata_path, hand_models_dir, expected_labels)
+    return is_hand_model_valid(metadata_path, hand_models_dir, expected_labels, verbose=True)
 
 @flow(name="6. Track Stickers (2D)")
 def track_stickers(rgb_video_path: Path, output_dir: Path, *, force_processing: bool = False) -> tuple[Path | None, bool]:
@@ -127,7 +126,7 @@ def track_stickers(rgb_video_path: Path, output_dir: Path, *, force_processing: 
     track_objects_in_video(rgb_video_path, metadata_roi_path, output_path=stickers_roi_csv_path, force_processing=force_processing)
     
     if not is_2d_stickers_tracking_valid(metadata_roi_path):
-        print("--> 2D sticker tracking is not valid. Cannot continue the pipeline.")
+        print("❌ --> 2D sticker tracking has not been manually valided. Cannot continue the pipeline.")
         return stickers_roi_csv_path, False
     
     roi_unified_csv_path = output_dir / (name_baseline + "_roi_standard_size.csv")
@@ -141,7 +140,7 @@ def track_stickers(rgb_video_path: Path, output_dir: Path, *, force_processing: 
     create_color_correlation_videos(corrmap_video_base_path, metadata_colorspace_path, binary_video_base_path, force_processing=force_processing)
     
     if not is_correlation_videos_threshold_defined(metadata_colorspace_path):
-        print("--> correlation videos threshold is not valid. Cannot continue the pipeline.Execute the corresponding manual task. ")
+        print("❌ --> correlation videos threshold has not been manually valided. Cannot continue the pipeline.Execute the corresponding manual task. ")
         return binary_video_base_path, False
     
     fit_ellipses_path = output_dir / (name_baseline + "_ellipses.csv")

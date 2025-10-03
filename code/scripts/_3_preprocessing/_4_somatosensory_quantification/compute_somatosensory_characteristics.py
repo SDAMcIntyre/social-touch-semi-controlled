@@ -45,7 +45,7 @@ def compute_somatosensory_characteristics(
         output_paths=output_csv_path, 
         input_paths=[hand_motion_glb_path, metadata_path], 
         force=force_processing):
-        print(f"✅ Output file '{output_csv_path}' already exists. Use --force to overwrite.")
+        print(f"✅ Output file '{output_csv_path}' already exists. Use force_processing to overwrite.")
         return
     
     loader = GLBDataHandler()
