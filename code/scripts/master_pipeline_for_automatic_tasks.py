@@ -126,7 +126,7 @@ def track_stickers(rgb_video_path: Path, output_dir: Path, *, force_processing: 
     track_objects_in_video(rgb_video_path, metadata_roi_path, output_path=stickers_roi_csv_path, force_processing=force_processing)
     
     if not is_2d_stickers_tracking_valid(metadata_roi_path):
-        print("❌ --> 2D sticker tracking has not been manually valided. Cannot continue the pipeline.")
+        print("❌ --> 2D sticker tracking has not been manually validated. Cannot continue the pipeline.")
         return stickers_roi_csv_path, False
     
     roi_unified_csv_path = output_dir / (name_baseline + "_roi_standard_size.csv")
@@ -140,7 +140,7 @@ def track_stickers(rgb_video_path: Path, output_dir: Path, *, force_processing: 
     create_color_correlation_videos(corrmap_video_base_path, metadata_colorspace_path, binary_video_base_path, force_processing=force_processing)
     
     if not is_correlation_videos_threshold_defined(metadata_colorspace_path):
-        print("❌ --> correlation videos threshold has not been manually valided. Cannot continue the pipeline.Execute the corresponding manual task. ")
+        print("❌ --> correlation videos threshold has not been manually validated. Cannot continue the pipeline.Execute the corresponding manual task. ")
         return binary_video_base_path, False
     
     fit_ellipses_path = output_dir / (name_baseline + "_ellipses.csv")
