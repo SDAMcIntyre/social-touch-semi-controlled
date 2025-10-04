@@ -124,8 +124,7 @@ def select_hand_model_characteristics(
     window = HandModelSelectorGUI(
         rgb_video_path, 
         hand_models_dir,
-        point_labels, 
-        metadata_path)
+        point_labels)
     window.show()
 
     # 3. After the window is closed, check for the result.
