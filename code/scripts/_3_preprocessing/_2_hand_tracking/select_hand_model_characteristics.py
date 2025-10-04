@@ -127,6 +127,10 @@ def select_hand_model_characteristics(
         point_labels)
     window.show()
 
+    # 5. Start the application's event loop.
+    #    Execution of your script will block here until the GUI is closed.
+    app.exec_()
+
     # 3. After the window is closed, check for the result.
     if window.result_metadata:
         # 4. Use the FileHandler to save the data.
