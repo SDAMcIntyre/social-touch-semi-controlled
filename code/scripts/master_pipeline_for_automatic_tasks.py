@@ -106,7 +106,8 @@ def generate_ttl_signal(led_tracking_path: Path, output_dir: Path, *, force_proc
 @flow(name="5. Validate Forearm Extraction")
 def validate_forearm_extraction(session_output_dir: Path) -> Path:
     print(f"[{session_output_dir.name}] Validating forearm extraction...")
-    return is_forearm_valid(session_output_dir / "forearm_pointclouds", verbose=True)
+    is_valid = is_forearm_valid(session_output_dir / "forearm_pointclouds", verbose=True)
+    return is_valid
 
 @flow(name="5. Validate Hand Extraction")
 def validate_hand_extraction(rgb_video_path: Path, hand_models_dir: Path, output_dir: Path) -> Path:
@@ -114,7 +115,8 @@ def validate_hand_extraction(rgb_video_path: Path, hand_models_dir: Path, output
     name_baseline = rgb_video_path.stem + "_handmodel"
     metadata_path = output_dir / (name_baseline + "_metadata.json")
     expected_labels = ["sticker_yellow", "sticker_blue", "sticker_green"]
-    return is_hand_model_valid(metadata_path, hand_models_dir, expected_labels, verbose=True)
+    is_valid, errors = is_hand_model_valid(metadata_path, hand_models_dir, expected_labels, verbose=True)
+    return is_valid
 
 @flow(name="6. Track Stickers (2D)")
 def track_stickers(rgb_video_path: Path, output_dir: Path, *, force_processing: bool = False) -> tuple[Path | None, bool]:
