@@ -9,7 +9,7 @@ from utils.should_process_task import should_process_task  # noqa: E402
 
 from preprocessing.led_analysis import (
     ROIManager,
-    LEDFilesHandler
+    LEDROIFilesHandler
 )
 
 
@@ -47,7 +47,7 @@ def generate_led_roi(
     try:
         # 3. Core Logic with improved control flow
         led_roi = ROIManager(video_path)
-        fileHandler = LEDFilesHandler()
+        fileHandler = LEDROIFilesHandler()
         led_roi.set_parameters(fileHandler.load_metadata(metadata_path))
         
         led_roi.extract_roi_video()
