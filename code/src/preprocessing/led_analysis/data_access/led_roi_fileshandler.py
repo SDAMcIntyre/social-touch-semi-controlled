@@ -4,7 +4,7 @@ import cv2
 import numpy as np
 from pathlib import Path
 
-class LEDFilesHandler:
+class LEDROIFilesHandler:
     """Handles saving and loading of processing results."""
 
     def save_metadata(self, file_path: str, metadata: dict):
