@@ -107,11 +107,10 @@ def validate_forearm_extraction(session_output_dir: Path) -> Path:
     return is_valid
 
 @flow(name="5. Validate Hand Extraction")
-def validate_hand_extraction(rgb_video_path: Path, hand_models_dir: Path, output_dir: Path) -> Path:
+def validate_hand_extraction(rgb_video_path: Path, hand_models_dir: Path, expected_labels: list, output_dir: Path) -> Path:
     print(f"[{output_dir.name}] Validating hand extraction...")
     name_baseline = rgb_video_path.stem + "_handmodel"
     metadata_path = output_dir / (name_baseline + "_metadata.json")
-    expected_labels = ["sticker_yellow", "sticker_blue", "sticker_green"]
     is_valid, errors = is_hand_model_valid(metadata_path, hand_models_dir, expected_labels, verbose=True)
     return is_valid
 
@@ -329,6 +328,7 @@ def run_single_session_pipeline(
             valid_data = validate_hand_extraction(
                 rgb_video_path=rgb_video_path,
                 hand_models_dir=config.hand_models_dir,
+                expected_labels=config.objects_to_track,
                 output_dir=config.video_processed_output_dir
             )
             if valid_data:

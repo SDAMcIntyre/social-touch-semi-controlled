@@ -54,6 +54,7 @@ def prepare_led_tracking(rgb_video_path: Path, output_dir: Path, *, force_proces
 def prepare_hand_model(
     rgb_video_path: Path,
     hand_models_dir: Path,
+    objects_to_track: list[str],
     output_dir: Path,
     *,
     force_processing: bool = False
@@ -63,13 +64,12 @@ def prepare_hand_model(
     name_baseline = rgb_video_path.stem + "_handmodel"
     metadata_path = output_dir / (name_baseline + "_metadata.json")
 
-    point_labels = ["sticker_yellow", "sticker_blue", "sticker_green"]
     # NOTE: The underlying function `select_hand_model_characteristics` must be updated
     # to accept and use the `force_processing` argument.
     select_hand_model_characteristics(
         rgb_video_path,
         hand_models_dir,
-        point_labels,
+        objects_to_track,
         metadata_path,
         force_processing=force_processing
     )
@@ -293,6 +293,7 @@ def run_single_session_pipeline(
             prepare_hand_model(
                 rgb_video_path=rgb_video_path,
                 hand_models_dir=config.hand_models_dir,
+                objects_to_track=config.objects_to_track,
                 output_dir=config.video_processed_output_dir,
                 force_processing=force
             )
