@@ -1,9 +1,9 @@
+from .core.ROIManager import ROIManager
+from .data_access.led_roi_fileshandler import LEDROIFilesHandler
 
-from .core.KinectLEDBlinking import KinectLEDBlinking
-from .core.KinectLEDBlinkingMP4 import KinectLEDBlinkingMP4
-from .gui.waitforbuttonpress_popup import WaitForButtonPressPopup
+from .core.led_blinking_analyzer import LEDBlinkingAnalyzer
+from .data_access.led_blinking_fileshandler import LEDBlinkingFilesHandler
+
 from .gui.KinectLEDValidation import LedSignalValidator
 
-
-from .core.ROIManager import ROIManager
-from .data_access.led_roi_fileshandler import LEDFilesHandler
+from .gui.waitforbuttonpress_popup import WaitForButtonPressPopup
