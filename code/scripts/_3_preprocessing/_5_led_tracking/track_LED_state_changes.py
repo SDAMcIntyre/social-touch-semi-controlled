@@ -1,12 +1,20 @@
 import matplotlib.pyplot as plt
 import numpy as np
-from pathlib import Path
-import time
 import traceback
 from typing import Optional
+import logging
+from pathlib import Path
 
-from .utils.KinectLEDBlinkingMP4 import KinectLEDBlinkingMP4
-from .utils.waitforbuttonpress_popup import WaitForButtonPressPopup
+# Setup a basic logger
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+from utils.should_process_task import should_process_task
+
+from preprocessing.led_analysis import (
+    KinectLEDBlinkingMP4, 
+    WaitForButtonPressPopup
+)
+
 
 # ===================================================================
 #  STEP 1: Core Logic (Analysis Only)
@@ -49,6 +57,7 @@ def save_analysis_results(
     processor.save_result_metadata(metadata_output_path)
     print(f"INFO: Successfully saved results for '{processor.video_path.name}'.")
 
+
 def plot_analysis_results(processor: KinectLEDBlinkingMP4) -> None:
     """Displays a plot of the analysis results."""
     plt.style.use('seaborn-v0_8-whitegrid')
@@ -83,10 +92,12 @@ def track_led_states_changes(
     This function handles file checks, calls the analysis, saves the
     results, and optionally plots them. It serves as the main entry point.
     """
-    # 1. Handle file existence check (Application logic)
-    if not force_processing and csv_output_path.exists():
-        print(f"INFO: Output for '{video_path.name}' already exists. Skipping.")
-        return
+    if not should_process_task(
+         input_paths=video_path, 
+         output_paths=[csv_output_path, metadata_output_path], 
+         force=force_processing):
+        logging.info(f"Output file already exists. Skipping ROI definition for '{video_path.name}'.")
+        return True
 
     # 2. Run the core analysis (Computation)
     analysis_results = analyze_led_blinking(video_path)

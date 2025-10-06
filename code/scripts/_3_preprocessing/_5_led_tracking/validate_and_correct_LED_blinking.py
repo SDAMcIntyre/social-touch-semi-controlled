@@ -5,8 +5,18 @@ from pathlib import Path
 import warnings
 from typing import List, Optional, Tuple, NamedTuple
 
-from .utils.KinectLEDValidation import LedSignalValidator
+import logging
+from pathlib import Path
 
+# Setup a basic logger
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+from utils.should_process_task import should_process_task
+
+
+from preprocessing.led_analysis import (
+    LedSignalValidator
+)
 
 # ===================================================================
 #  STEP 1: Data Handling Functions
@@ -177,14 +187,12 @@ def validate_and_correct_led_timing_from_stimuli(
     5. Saves the corrected data if validation passes.
     """
     file_name = csv_led_path.name
-
-    # --- Pre-computation and File Checks ---
-    if not force_processing and output_path.exists():
-        print(f"INFO: Output for '{file_name}' already exists. Skipping.")
-        return
-    if not stimulus_metadata_path.exists():
-        print(f"WARN: Skipping '{file_name}'. Matching stimulus file not found.")
-        return
+    if not should_process_task(
+         input_paths=[csv_led_path, stimulus_metadata_path], 
+         output_paths=[output_path],
+         force=force_processing):
+        logging.info(f"Output file already exists. Skipping ROI definition for '{file_name}'.")
+        return True
 
     print(f"INFO: Processing file: {file_name}")
 
@@ -213,8 +221,10 @@ def validate_and_correct_led_timing_from_stimuli(
         if is_valid:
             _save_corrected_data(output_path, led_df, validator.corrected_signal)
             print(f"INFO: Successfully saved corrected file to '{output_path}'")
+            return True
         else:
             print(f"WARN: Validation failed for '{file_name}'. File not saved.")
+            return False
 
     except (DataIOException, Exception) as e:
         print(f"ERROR: An unexpected error occurred while processing '{file_name}'. Reason: {e}")

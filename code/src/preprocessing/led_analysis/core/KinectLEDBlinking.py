@@ -23,8 +23,7 @@ import warnings
 from sklearn.mixture import GaussianMixture
 from sklearn.exceptions import ConvergenceWarning
 
-from .time_cost_function import time_it
-from .waitforbuttonpress_popup import WaitForButtonPressPopup
+from ..gui.waitforbuttonpress_popup import WaitForButtonPressPopup
 
 
 class KinectLEDBlinking:
@@ -114,7 +113,6 @@ class KinectLEDBlinking:
         self.roi_frames = np.array(self.roi_frames)
         self.nframes = self.roi_frames.shape[0]
 
-    @time_it
     def find_bimodal_green_pixels(self, min_frames_threshold=10, min_unique_values=5, bic_diff_threshold=10, min_separation_factor=0.1, min_weight=0.1):
         """
         Analyzes green channel intensity of each pixel over time to find bimodal pixels.
@@ -330,8 +328,6 @@ class KinectLEDBlinking:
         print("Monitoring of bimodal pixels complete. Results stored in self.green_levels.")
         return self.green_levels
 
-
-    @time_it
     def monitor_green_levels(self, show=False):
         if self.roi_frames is None:
             raise Exception("Error: Area of Interest was not initialized.")
@@ -584,7 +580,7 @@ class KinectLEDBlinking:
 
     def save_result_metadata(self, file_path_abs):
         metadata = {
-            "video_path": self.video_path,
+            "video_path": str(self.video_path),
             "lower_green": self.lower_green.tolist(),
             "upper_green": self.upper_green.tolist(),
             "threshold_value": self.threshold_value,

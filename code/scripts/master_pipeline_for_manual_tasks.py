@@ -35,8 +35,20 @@ from _3_preprocessing._4_somatosensory_quantification import (
     view_somatosensory_3d_scene
 )
 
+from _3_preprocessing._5_led_tracking import (
+    define_led_roi
+)
+
 
 # --- Sub-Flows (Manual Tasks) ---
+@flow(name="3. Track LED Blinking")
+def prepare_led_tracking(rgb_video_path: Path, output_dir: Path, *, force_processing: bool = False) -> Path:
+    print(f"[{output_dir.name}] Tracking LED blinking...")
+    name_baseline = rgb_video_path.stem + "_LED"
+    roi_metadata_path = output_dir / (name_baseline + "_roi_metadata.json")
+    define_led_roi(rgb_video_path, roi_metadata_path, force_processing=force_processing)
+    return True
+
 
 @flow(name="Manual: Prepare Hand Model")
 def prepare_hand_model(
@@ -264,6 +276,17 @@ def run_single_session_pipeline(
         return {"status": "failed", "error": "RGB video not found"}
 
     try:
+        led_dir = config.video_processed_output_dir / "LED"
+        if dag_handler.can_run('prepare_led_tracking'):
+            print(f"[{block_name}] ==> Running task: prepare_led_tracking")
+            force = dag_handler.get_task_options('prepare_led_tracking').get('force_processing', False)
+            prepare_led_tracking(
+                rgb_video_path=rgb_video_path,
+                output_dir=led_dir,
+                force_processing=force
+            )
+            dag_handler.mark_completed('prepare_led_tracking')
+
         if dag_handler.can_run('prepare_hand_model'):
             print(f"[{block_name}] ==> Running task: prepare_hand_model")
             force = dag_handler.get_task_options('prepare_hand_model').get('force_processing', False)
