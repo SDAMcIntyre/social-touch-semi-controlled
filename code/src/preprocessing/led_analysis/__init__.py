@@ -6,4 +6,4 @@ from .gui.KinectLEDValidation import LedSignalValidator
 
 
 from .core.ROIManager import ROIManager
-from .data_access.led_fileshandler import LEDFilesHandler
+from .data_access.led_roi_fileshandler import LEDFilesHandler
