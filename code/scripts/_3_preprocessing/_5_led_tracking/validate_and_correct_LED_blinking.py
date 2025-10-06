@@ -15,6 +15,7 @@ from utils.should_process_task import should_process_task
 
 
 from preprocessing.led_analysis import (
+    LEDBlinkingFilesHandler,
     LedSignalValidator
 )
 
@@ -34,13 +35,13 @@ def _load_data(
     """
     try:
         stimuli_df = pd.read_csv(stimulus_metadata_path)
-        led_df = pd.read_csv(csv_led_path)
+        filehandler = LEDBlinkingFilesHandler()
+        led_df = filehandler.load_timeseries_from_csv(csv_led_path, output_format='dataframe')
 
-        if "LED on" not in led_df.columns:
-            raise KeyError("'LED on' column not found.")
+        if "led_on" not in led_df.columns:
+            raise KeyError("'led_on' column not found.")
 
-        led_on_signal = led_df["LED on"].values
-        led_on_signal[np.isnan(led_on_signal)] = 0
+        led_on_signal = led_df["led_on"].values
         return led_df, led_on_signal, stimuli_df
     except (FileNotFoundError, pd.errors.EmptyDataError, KeyError) as e:
         raise DataIOException(f"Failed to load or parse data. Reason: {e}")
@@ -51,14 +52,14 @@ def _save_corrected_data(
 ) -> None:
     """Saves the DataFrame with the corrected signal."""
     output_df = led_df.copy()
-    output_df["LED on"] = corrected_signal
+    output_df["led_on"] = corrected_signal
 
     # Ensure signal length matches the original DataFrame's length
     if len(output_df) != len(corrected_signal):
         new_signal = np.zeros(len(output_df))
         size_to_copy = min(len(output_df), len(corrected_signal))
         new_signal[:size_to_copy] = corrected_signal[:size_to_copy]
-        output_df["LED on"] = new_signal
+        output_df["led_on"] = new_signal
         warnings.warn(f"Corrected signal length mismatch in {output_path.name}. "
                       f"Signal has been resized from {len(corrected_signal)} "
                       f"to {len(output_df)} frames.")
@@ -71,6 +72,32 @@ def _save_corrected_data(
 # ===================================================================
 #  STEP 2: Validation and Visualization Functions
 # ===================================================================
+def fill_nan_nearest(arr: np.ndarray) -> np.ndarray:
+    """
+    Fills NaN values in a 1D NumPy array using the nearest non-NaN value.
+
+    This function prioritizes filling from the right (the next non-NaN value).
+    If no non-NaN value is available to the right (e.g., for NaNs at the
+    end of the array), it then fills from the left (the previous non-NaN value).
+
+    Args:
+        arr: The input 1D NumPy array, which may contain NaN values.
+
+    Returns:
+        A new NumPy array with NaN values filled according to the described logic.
+        If the input array contains only NaNs, it will be returned unchanged.
+    """
+    # Convert to a Pandas Series, which provides powerful fill methods
+    s = pd.Series(arr)
+    
+    # 1. Back-fill: Propagate next valid observation backward.
+    # 2. Forward-fill: Propagate last valid observation forward.
+    # This combination satisfies the "look right, then left" requirement.
+    filled_s = s.bfill().ffill()
+    
+    # Convert the filled Series back to a NumPy array
+    return filled_s.to_numpy()
+
 class ValidationResult(NamedTuple):
     """A structured result for a validation check."""
     passed: bool
@@ -200,7 +227,9 @@ def validate_and_correct_led_timing_from_stimuli(
     try:
         # Step 1: Load Data
         led_df, led_on_signal, stimuli_df = _load_data(csv_led_path, stimulus_metadata_path)
-
+        
+        # modify potential nan values to their nearest right or left non-nan neighbour:
+        led_on_signal = fill_nan_nearest(led_on_signal)
         # Step 2: Process Signal
         validator = LedSignalValidator(
             led_on_signal=led_on_signal,

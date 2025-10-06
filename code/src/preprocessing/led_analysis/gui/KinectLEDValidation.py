@@ -155,7 +155,9 @@ class LedSignalValidator:
 
     def _find_block_id(self) -> None:
         """Identifies the block ID from the initial blinks in the signal."""
-        lengths, labels = group_lengths(self.raw_signal)
+        # Sanitize the raw signal for this operation to avoid nan issues
+        signal_copy = np.nan_to_num(self.raw_signal.copy(), nan=0.0)
+        lengths, labels = group_lengths(signal_copy)
         
         # We only care about the 'ON' signals (label == 1) for block ID
         on_lengths = lengths[labels == 1]
@@ -180,7 +182,9 @@ class LedSignalValidator:
     def _clean_and_count_trials(self) -> None:
         """Cleans the trial portion of the signal and counts the trials."""
         trial_signal = self.raw_signal[self.block_id_end_frame + 1:].copy()
-        trial_signal[np.isnan(trial_signal)] = 0 # Sanitize NaNs
+        
+        # --- FIX: Sanitize NaN values by replacing them with 0 ---
+        trial_signal[np.isnan(trial_signal)] = 0
         
         lengths, labels = group_lengths(trial_signal)
         
@@ -192,7 +196,9 @@ class LedSignalValidator:
 
     def _generate_corrected_signal(self) -> None:
         """Reconstructs the full signal from the processed parts."""
-        block_id_part = self.raw_signal[:self.block_id_end_frame + 1]
+        # To ensure the corrected signal doesn't contain NaNs from the original block_id part
+        block_id_part = self.raw_signal[:self.block_id_end_frame + 1].copy()
+        block_id_part[np.isnan(block_id_part)] = 0
         
         # Ensure cleaned_lengths and labels are available
         if self.cleaned_lengths.size == 0 or self.cleaned_labels.size == 0:
