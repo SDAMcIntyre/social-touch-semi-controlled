@@ -224,7 +224,7 @@ def define_handstickers_colorspaces_from_roi(
         colorspace_manager = ColorSpaceManager()
 
     # --- 2. Load Source Data ---
-    annotation_data = ROIAnnotationFileHandler.load(roi_metadata_path, create_if_not_exists=False)
+    annotation_data = ROIAnnotationFileHandler.load(roi_metadata_path)
     object_names = ROIAnnotationManager(annotation_data).get_object_names()
 
     if not object_names:
