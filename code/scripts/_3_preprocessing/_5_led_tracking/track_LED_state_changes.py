@@ -112,7 +112,7 @@ def track_led_states_changes(
         analyzer.run_analysis(
             led_on_method="bimodal", 
             update_on_occlusion=False,
-            show=True)
+            show=False)
     except Exception as e:
         logging.error(f"Analysis failed for '{video_path.name}': {e}")
         traceback.print_exc()
