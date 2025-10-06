@@ -13,9 +13,10 @@ from preprocessing.led_analysis import (
 )
 
 
-def define_led_roi(
+def generate_led_roi(
         video_path: Path, 
-        output_metadata_path: Path,
+        metadata_path: Path,
+        output_video_path: Path,
         *,
         force_processing: bool = False
 ) -> bool:
@@ -35,8 +36,8 @@ def define_led_roi(
     """
     # 1. Idempotency Check (using pathlib and with logging)
     if not should_process_task(
-         input_paths=video_path, 
-         output_paths=[output_metadata_path], 
+         input_paths=[video_path, metadata_path], 
+         output_paths=[output_video_path], 
          force=force_processing):
         logging.info(f"Output file already exists. Skipping ROI definition for '{video_path.name}'.")
         return True
@@ -46,10 +47,11 @@ def define_led_roi(
     try:
         # 3. Core Logic with improved control flow
         led_roi = ROIManager(video_path)
-        led_roi.choose_parameters()
-        
         fileHandler = LEDROIFilesHandler()
-        fileHandler.save_metadata(output_metadata_path, led_roi.metadata)
+        led_roi.set_parameters(fileHandler.load_metadata(metadata_path))
+        
+        led_roi.extract_roi_video()
+        fileHandler.save_video(output_video_path, led_roi.roi_frames, led_roi.metadata['fps'])
         return True
 
     # 4. Robust Error Handling

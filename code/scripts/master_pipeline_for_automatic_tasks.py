@@ -46,8 +46,7 @@ from _3_preprocessing._4_somatosensory_quantification import (
 )
 
 from _3_preprocessing._5_led_tracking import (
-    define_led_roi,
-    generate_LED_roi_video,
+    generate_led_roi,
     track_led_states_changes,
     validate_and_correct_led_timing_from_stimuli
 )
@@ -83,16 +82,18 @@ def generate_depth_images(source_video: Path, output_dir: Path, *, force_process
 def track_led_blinking(video_path: Path, stimulus_metadata: Path, output_dir: Path, *, force_processing: bool = False) -> Path:
     print(f"[{output_dir.name}] Tracking LED blinking...")
     name_baseline = video_path.stem + "_LED"
-    metadata_path = output_dir / (name_baseline + "_roi_metadata.txt")
-    # Propagate the flag to all underlying implementation functions in this flow
-    define_led_roi(video_path, metadata_path, force_processing=force_processing)
-    video_led_path = output_dir / (name_baseline + "_roi.mp4")
-    generate_LED_roi_video(video_path, metadata_path, video_led_path, force_processing=force_processing)
+    
+    roi_metadata_path = output_dir / (name_baseline + "_roi_metadata.json")
+    roi_video_path = output_dir / (name_baseline + "_roi.mp4")
+    generate_led_roi(video_path, roi_metadata_path, roi_video_path, force_processing=force_processing)
+
     csv_led_path = output_dir / (name_baseline + ".csv")
-    metadata_led_state_path = output_dir / (name_baseline + "_metadata.txt")
-    track_led_states_changes(video_led_path, csv_led_path, metadata_led_state_path, force_processing=force_processing)
+    metadata_led_state_path = output_dir / (name_baseline + "_metadata.json")
+    track_led_states_changes(roi_video_path, csv_led_path, metadata_led_state_path, force_processing=force_processing)
+
     csv_led_path_corrected = output_dir / (name_baseline + "_corrected.csv")
     validate_and_correct_led_timing_from_stimuli(csv_led_path, stimulus_metadata, csv_led_path_corrected, force_processing=force_processing)
+
     return csv_led_path_corrected
 
 @flow(name="4. Generate TTL Signal")
@@ -278,7 +279,7 @@ def run_single_session_pipeline(
                 source_video=config.source_video,
                 output_dir=config.video_primary_output_dir,
                 force_processing=force
-                    )
+            )
             dag_handler.mark_completed('generate_rgb_video')
 
         if dag_handler.can_run('generate_depth_images'):
@@ -296,10 +297,10 @@ def run_single_session_pipeline(
 
     # --- Stage 2: LED Tracking for TTL signal ---
     try:
+        led_dir = config.video_processed_output_dir / "LED"
         if dag_handler.can_run('track_led_blinking'):
             print(f"[{block_name}] ==> Running task: track_led_blinking")
             force = dag_handler.get_task_options('track_led_blinking').get('force_processing', False)
-            led_dir = config.video_processed_output_dir / "LED"
             led_tracking_path = track_led_blinking(
                 video_path=rgb_video_path,
                 stimulus_metadata=config.stimulus_metadata,
@@ -320,7 +321,7 @@ def run_single_session_pipeline(
     except Exception as e:
         print(f"❌ Pipeline failed during Stage 2: LED & TTL. Error: {e}")
         return {"status": "failed", "stage": 2, "error": str(e)}
-
+    
     # --- Stage 3: Hand and Forearm Validation ---
     try:
         if dag_handler.can_run('validate_forearm_extraction'):
@@ -463,7 +464,7 @@ def run_batch_sequentially(kinect_configs_dir: Path, project_data_root: Path, da
 
 # --- 6. Main execution block ---
 if __name__ == "__main__":
-    print("🛠️  Setting up files for processing...")
+    print("🛠️ Setting up files for processing...")
 
     project_data_root = path_tools.get_project_data_root()
 

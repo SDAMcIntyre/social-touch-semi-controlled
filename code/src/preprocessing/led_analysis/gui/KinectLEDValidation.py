@@ -71,6 +71,43 @@ def merge_small_groups(lengths: np.ndarray, labels: np.ndarray, threshold: int) 
     return np.array(new_lengths), np.array(new_labels)
 
 
+def clean_and_merge_groups(lengths: np.ndarray, labels: np.ndarray, threshold: int) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Merges small groups and consecutive groups with the same label in a single pass.
+    
+    This is an efficient, append-only approach.
+    """
+    if lengths.size == 0:
+        return np.array([]), np.array([])
+
+    # Use lists for efficient appending, then convert to numpy array at the end
+    merged_lengths = [lengths[0]]
+    merged_labels = [labels[0]]
+
+    for i in range(1, len(lengths)):
+        current_length = lengths[i]
+        current_label = labels[i]
+        last_merged_label = merged_labels[-1]
+
+        # Case 1: Current group is large enough
+        if current_length >= threshold:
+            if current_label == last_merged_label:
+                # Merge with previous group of same label
+                merged_lengths[-1] += current_length
+            else:
+                # Append as a new group
+                merged_lengths.append(current_length)
+                merged_labels.append(current_label)
+        
+        # Case 2: Current group is small and should be absorbed
+        else:
+            # Absorb its length into the previous group, regardless of label
+            merged_lengths[-1] += current_length
+
+    return np.array(merged_lengths), np.array(merged_labels)
+
+
+
 # --- Main Processor Class ---
 
 class LedSignalValidator:
@@ -99,6 +136,8 @@ class LedSignalValidator:
         self.led_ntrials: int = 0
         self.block_id_end_frame: int = -1
         self.corrected_signal: np.ndarray = np.array([])
+        self.cleaned_lengths: np.ndarray = np.array([])
+        self.cleaned_labels: np.ndarray = np.array([])
 
     def process(self) -> None:
         """
@@ -116,7 +155,9 @@ class LedSignalValidator:
 
     def _find_block_id(self) -> None:
         """Identifies the block ID from the initial blinks in the signal."""
-        lengths, labels = group_lengths(self.raw_signal)
+        # Sanitize the raw signal for this operation to avoid nan issues
+        signal_copy = np.nan_to_num(self.raw_signal.copy(), nan=0.0)
+        lengths, labels = group_lengths(signal_copy)
         
         # We only care about the 'ON' signals (label == 1) for block ID
         on_lengths = lengths[labels == 1]
@@ -141,26 +182,31 @@ class LedSignalValidator:
     def _clean_and_count_trials(self) -> None:
         """Cleans the trial portion of the signal and counts the trials."""
         trial_signal = self.raw_signal[self.block_id_end_frame + 1:].copy()
-        trial_signal[np.isnan(trial_signal)] = 0 # Sanitize NaNs
+        
+        # --- FIX: Sanitize NaN values by replacing them with 0 ---
+        trial_signal[np.isnan(trial_signal)] = 0
         
         lengths, labels = group_lengths(trial_signal)
         
         # Merge small spurious signals
-        self.cleaned_lengths, self.cleaned_labels = merge_small_groups(lengths, labels, self.merge_threshold)
+        self.cleaned_lengths, self.cleaned_labels = clean_and_merge_groups(lengths, labels, self.merge_threshold)
         
         # Count trials (sum of 'ON' labels)
         self.led_ntrials = int(np.sum(self.cleaned_labels))
 
     def _generate_corrected_signal(self) -> None:
         """Reconstructs the full signal from the processed parts."""
-        block_id_part = self.raw_signal[:self.block_id_end_frame + 1]
+        # To ensure the corrected signal doesn't contain NaNs from the original block_id part
+        block_id_part = self.raw_signal[:self.block_id_end_frame + 1].copy()
+        block_id_part[np.isnan(block_id_part)] = 0
         
         # Ensure cleaned_lengths and labels are available
-        if not hasattr(self, 'cleaned_lengths') or not hasattr(self, 'cleaned_labels'):
-             warnings.warn("Cleaning step was not run. Corrected signal will be incomplete.")
-             self.corrected_signal = block_id_part
-             return
+        if self.cleaned_lengths.size == 0 or self.cleaned_labels.size == 0:
+            if np.any(self.raw_signal[self.block_id_end_frame + 1:]):
+                 warnings.warn("Cleaning step resulted in an empty trial signal. Corrected signal will be incomplete.")
+            self.corrected_signal = block_id_part
+            return
 
-        trial_part = np.repeat(self.cleaned_labels, self.cleaned_lengths)
+        trial_part = np.repeat(self.cleaned_labels, self.cleaned_lengths.astype(int))
         
         self.corrected_signal = np.concatenate([block_id_part, trial_part])

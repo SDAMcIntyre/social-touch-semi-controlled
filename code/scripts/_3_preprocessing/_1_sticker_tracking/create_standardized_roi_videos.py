@@ -1,115 +1,168 @@
 # Standard library imports
-import ast
-import os
+import shutil
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Dict, List
+from typing import Iterator
 
 # Third-party imports
 import cv2
 import numpy as np
 import pandas as pd
 
-# Third-party imports
-from utils.should_process_task import should_process_task
+# Local application imports
+from preprocessing.common import ColorFormat, VideoMP4Manager
 from preprocessing.stickers_analysis import ROITrackedFileHandler
-from preprocessing.common import VideoMP4Manager, ColorFormat
+from utils.should_process_task import should_process_task
 
 
-def create_windowed_video(
-    video_frames: List[np.ndarray],
-    output_video_path: str,
-    roi_df: pd.DataFrame,
-    fps: float = 30
-):
+@contextmanager
+def video_capture_manager(path: str) -> Iterator[cv2.VideoCapture]:
+    """A context manager for cv2.VideoCapture to ensure it's always released."""
+    cap = cv2.VideoCapture(path)
+    try:
+        yield cap
+    finally:
+        cap.release()
+
+def success_video_file_quality_check(video_path: str) -> bool:
     """
-    Creates a cropped video from preloaded frames based on a DataFrame of ROIs.
-
-    For each frame, it uses the corresponding ROI from the DataFrame to crop
-    the frame. If an ROI is missing for a frame or the status is 'Black Frame',
-    a black frame is written instead to ensure the output frame count matches the input.
+    Verifies a video file by trying to open it and read the first frame.
 
     Args:
-        video_frames: A list of video frames, where each frame is a NumPy array.
-        output_video_path: Path where the new cropped video will be saved.
-        roi_df: A pandas DataFrame with columns including 'frame_id', 'roi_x',
-                'roi_y', 'roi_width', 'roi_height', and 'status'.
-        fps: The frames per second for the output video.
+        video_path: The path to the video file to verify.
+
+    Returns:
+        True if the video is valid and readable, False otherwise.
     """
-    # 1. Validate input
-    if not video_frames:
-        print("⚠️ Warning: Empty list of video frames provided. No video will be created.")
-        return
+    try:
+        print(f"🔎 Verifying video file: '{video_path}'...")
+        with video_capture_manager(video_path) as cap:
+            # Check 1: Was the file opened successfully?
+            if not cap.isOpened():
+                print("Verification failed: Could not open the video file.")
+                return False
+            
+            # Check 2: Can we read at least one frame?
+            ret, frame = cap.read()
+            if not ret or frame is None:
+                print("Verification failed: Could not read a frame from the video.")
+                return False
 
-    # 2. Get video properties for the output
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # Codec for .mp4 files
+        print("✅ Verification successful.")
+        return True
+    except Exception as e:
+        print(f"Verification failed with an exception: {e}")
+        return False
 
-    # Determine output video dimensions from the first valid ROI.
-    # We filter out 'Black Frame' statuses to find a tracked ROI for dimensions.
+
+@contextmanager
+def video_writer_manager(
+    path: str, fourcc: int, fps: float, frame_size: tuple[int, int]
+) -> Iterator[cv2.VideoWriter]:
+    """A context manager for cv2.VideoWriter to ensure it's always released."""
+    writer = cv2.VideoWriter(path, fourcc, fps, frame_size)
+    if not writer.isOpened():
+        raise IOError(f"Error opening video writer for: '{path}'")
+
+    try:
+        # Yield the writer object to the 'with' block
+        yield writer
+    finally:
+        # This code is guaranteed to run, ensuring the file is finalized
+        print("Finalizing video stream...")
+        writer.release()
+
+def create_windowed_video(
+    video_manager: VideoMP4Manager, output_video_path: str, roi_df: pd.DataFrame
+):
+    """
+    Creates a cropped video from a source, ensuring the output is never corrupted.
+
+    This version uses a context manager for the VideoWriter and an atomic move
+    operation to guarantee file integrity.
+    """
+    # 1. Input Validation
+    required_cols = ['frame_id', 'roi_x', 'roi_y', 'roi_width', 'roi_height', 'status']
+    if not all(col in roi_df.columns for col in required_cols):
+        raise ValueError(f"roi_df is missing required columns: {required_cols}")
+
+    output_dir = Path(output_video_path).parent
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # 2. Determine output dimensions from the first valid ROI
     valid_roi_df = roi_df[roi_df['status'] != 'Black Frame'].dropna(
         subset=['roi_width', 'roi_height']
     )
     if valid_roi_df.empty:
-        print("⚠️ Error: No valid ROIs found in the DataFrame. Cannot determine output dimensions.")
-        return
+        raise ValueError("No valid ROIs found. Cannot determine output dimensions.")
 
     first_valid_roi = valid_roi_df.iloc[0]
     out_w = int(first_valid_roi['roi_width'])
     out_h = int(first_valid_roi['roi_height'])
-    
-    # Create a black frame template based on the determined dimensions
-    black_frame = np.zeros((out_h, out_w, 3), dtype=np.uint8)
 
-    # 3. Create the VideoWriter object
-    writer = cv2.VideoWriter(output_video_path, fourcc, fps, (out_w, out_h))
-    if not writer.isOpened():
-        raise IOError(f"Error opening output video writer for: '{output_video_path}'")
+    # 3. Setup for Atomic Write Operation
+    p = Path(output_video_path)
+    temp_output_path = p.with_suffix(f".tmp{p.suffix}")
 
-    print(f"🎬 Processing video for '{output_video_path}' with frame size ({out_w}, {out_h})...")
+    try:
+        # Use a modern and widely compatible codec (H.264).
+        # 'avc1' is for H.264, often better than the older 'mp4v' (MPEG-4 Part 2).
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
 
-    # For efficient lookup, set 'frame_id' as the index of the DataFrame
-    roi_df_indexed = roi_df.set_index('frame_id')
+        # The 'with' statement handles opening and (crucially) releasing the writer
+        with video_writer_manager(
+            str(temp_output_path), fourcc, video_manager.fps, (out_w, out_h)
+        ) as writer:
+            print(f"🎬 Processing video for '{output_video_path}' with frame size ({out_w}, {out_h})...")
+            black_frame = np.zeros((out_h, out_w, 3), dtype=np.uint8)
+            roi_df_indexed = roi_df.set_index('frame_id')
+            roi_coord_cols = ['roi_x', 'roi_y', 'roi_width', 'roi_height']
 
-    # 4. Iterate through preloaded frames
-    for frame_idx, frame in enumerate(video_frames):
-        try:
-            # Get the ROI row for the current frame
-            roi_row = roi_df_indexed.loc[frame_idx]
+            # 4. Main writing loop
+            for frame_idx in range(len(video_manager)):
+                try:
+                    roi_row = roi_df_indexed.loc[frame_idx]
+                    if roi_row['status'] == 'Black Frame' or roi_row[roi_coord_cols].isnull().any():
+                        writer.write(black_frame)
+                        continue
 
-            # 5. Crop the frame if the ROI is valid, otherwise write a black frame
-            if roi_row['status'] != 'Black Frame':
-                x = int(roi_row['roi_x'])
-                y = int(roi_row['roi_y'])
-                w = int(roi_row['roi_width'])
-                h = int(roi_row['roi_height'])
+                    frame = video_manager[frame_idx]
+                    x, y, _, _ = roi_row[roi_coord_cols].astype(int)
+                    x1, y1 = max(0, x), max(0, y)
+                    x2, y2 = min(frame.shape[1], x + out_w), min(frame.shape[0], y + out_h)
 
-                # Clamp coordinates to be within the frame boundaries
-                frame_h, frame_w, _ = frame.shape
-                x1 = max(0, x)
-                y1 = max(0, y)
-                x2 = min(frame_w, x + w)
-                y2 = min(frame_h, y + h)
+                    cropped_frame = frame[y1:y2, x1:x2]
 
-                # Crop the frame
-                cropped_frame = frame[y1:y2, x1:x2]
+                    if cropped_frame.size > 0:
+                        writer.write(cv2.resize(cropped_frame, (out_w, out_h)))
+                    else:
+                        writer.write(black_frame)
 
-                # Resize cropped frame to the target dimensions in case clamping changed the size.
-                if cropped_frame.size > 0:
-                    resized_cropped_frame = cv2.resize(cropped_frame, (out_w, out_h))
-                    writer.write(resized_cropped_frame)
-                else:
+                except KeyError:
+                    # Frame index not found in ROI data, write a black frame
                     writer.write(black_frame)
-            else:
-                # The status is 'Black Frame', so write a black frame
-                writer.write(black_frame)
 
-        except KeyError:
-            # If frame_idx is not in the ROI data, write a black frame.
-            # This ensures the output video has the same number of frames as the input.
-            writer.write(black_frame)
+        # 5. Atomic Move: This line is only reached if the 'with' block completes.
+        # The temp file is guaranteed to be closed and finalized at this point.
+        shutil.move(str(temp_output_path), output_video_path)
+        print(f"✅ File successfully created at '{output_video_path}'")
 
-    # 6. Release resources
-    writer.release()
-    print(f"✅ Finished. Video saved to '{output_video_path}'")
+        # Step 5: ✨ NEW - VERIFICATION STEP ✨
+        if not success_video_file_quality_check(output_video_path):
+            # If verification fails, clean up and raise an error.
+            print(f"🗑️ Deleting corrupted file: '{output_video_path}'")
+            Path(output_video_path).unlink()
+            raise IOError(f"💥 Failed to create a valid video file at '{output_video_path}'. The output was corrupted.")
+        
+        print(f"🎉 Successfully created and verified video: '{output_video_path}'")
+
+    except Exception as e:
+        print(f"❌ An error occurred during video creation: {e}. Cleaning up...")
+        # If anything fails, delete the temporary file if it exists
+        if temp_output_path.exists():
+            temp_output_path.unlink()
+        # Re-raise the exception so the calling code knows something went wrong
+        raise
 
 
 def create_standardized_roi_videos(
@@ -117,53 +170,38 @@ def create_standardized_roi_videos(
     video_path: str,
     output_video_base_path: str,
     *,
-    force_processing: bool = False
+    force_processing: bool = False,
 ):
     """
-    Main orchestrator to generate a windowed video for each object from preloaded frames.
+    Main orchestrator to generate a windowed video for each object.
 
-    Args:
-        roi_file_path: Path to the CSV file with unified ROI data.
-        video_frames: A list of video frames, where each frame is a NumPy array.
-        fps: The frames per second of the source video.
-        output_video_base_path: The base path for output files. The object name
-                                and extension will be appended. E.g., 'results/run1'
-                                becomes 'results/run1_objectA.mp4'.
+    Processes frames on-the-fly to minimize memory usage.
     """
-    # Load all ROI data from the file
-    rois_df_dict: Dict = ROITrackedFileHandler(roi_file_path).load_all_data()
-    
-    # Use pathlib for robust path manipulation
+    rois_df_dict: dict = ROITrackedFileHandler(roi_file_path).load_all_data()
+
     output_path = Path(output_video_base_path)
     output_dir = output_path.parent
     base_name = output_path.stem
-    
-    # Ensure output directory exists
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    # Reuse manager for each object without reloading the video data.
     video_manager = VideoMP4Manager(video_path)
     video_manager.color_format = ColorFormat.BGR
-    frames = None
-    
-    # Process each object
+
     for obj_name, roi_df in rois_df_dict.items():
-        # Create a unique output path for this object's video
         output_video_path = output_dir / f"{base_name}_{obj_name}.mp4"
 
         if not should_process_task(
             output_paths=output_video_path,
             input_paths=[roi_file_path, video_path],
-            force=force_processing
+            force=force_processing,
         ):
-            print(f"Video {output_video_path} has been already processed. Skipping...")
+            print(f"Video {output_video_path} has already been processed. Skipping...")
             continue
 
-        if not frames:
-            video_manager.preload()
-            frames = video_manager.get_frames()
-
+        # Corrected function call to match the robust version defined above
         create_windowed_video(
-            video_frames=frames,
+            video_manager=video_manager,
             roi_df=roi_df,
-            output_video_path=str(output_video_path)
+            output_video_path=str(output_video_path),
         )
