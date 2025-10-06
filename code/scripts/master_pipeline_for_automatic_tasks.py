@@ -51,6 +51,10 @@ from _3_preprocessing._5_led_tracking import (
     validate_and_correct_led_timing_from_stimuli
 )
 
+from _3_preprocessing._6_unification import (
+    unify_contact_caracteristics_and_ttl
+)
+
 
 
 # --- 3. Sub-Flows (Formerly Tasks) ---
@@ -95,14 +99,6 @@ def track_led_blinking(video_path: Path, stimulus_metadata: Path, output_dir: Pa
     validate_and_correct_led_timing_from_stimuli(csv_led_path, stimulus_metadata, csv_led_path_corrected, force_processing=force_processing)
 
     return csv_led_path_corrected
-
-@flow(name="4. Generate TTL Signal")
-def generate_ttl_signal(led_tracking_path: Path, output_dir: Path, *, force_processing: bool = False) -> Path:
-    print(f"[{output_dir.name}] Generating TTL signal...")
-    # This is a placeholder for your actual logic.
-    # If it had an implementation, you would pass `force_processing` to it.
-    print("✅ TTL extracted (placeholder).")
-    return True
 
 @flow(name="5. Validate Forearm Extraction")
 def validate_forearm_extraction(session_output_dir: Path) -> Path:
@@ -216,10 +212,14 @@ def generate_somatosensory_chars(
     force_processing: bool = False
 ) -> Path:
     print(f"[{output_dir.name}] Generating somatosensory characteristics...")
-    contact_characteristics_path = output_dir / "contact_characteristics.csv"
+    name_baseline = Path(current_video_filename).stem
+    # inputs
     forearm_pointcloud_dir = session_processed_dir / "forearm_pointclouds"
     metadata_filaname = session_id + "_arm_roi_metadata.json"
     metadata_path = forearm_pointcloud_dir / metadata_filaname
+
+    # output
+    contact_characteristics_path = output_dir / (name_baseline + "_contact_and_kinematic_data.csv")
     # Propagate the flag to the underlying implementation function
     compute_somatosensory_characteristics(
         hand_motion_glb_path, hand_metadata_path,
@@ -232,8 +232,11 @@ def generate_somatosensory_chars(
 @flow(name="9. Unify Dataset")
 def unify_dataset(contact_chars_path: Path, ttl_path: Path, output_dir: Path, *, force_processing: bool = False) -> Path:
     print(f"[{output_dir.name}] Generating unified dataset...")
-    unified_path = output_dir / "unified_dataset.csv"
-    # Placeholder for actual implementation. If it existed, it would receive `force_processing`.
+    name_baseline = Path(contact_chars_path).stem
+    unified_path = output_dir / (name_baseline + "_somatosensory_data_withTTL.csv")
+    
+    unify_contact_caracteristics_and_ttl(contact_chars_path, ttl_path, unified_path)
+
     return unified_path
 
 
@@ -253,7 +256,6 @@ def run_single_session_pipeline(
     # --- Result placeholders ---
     rgb_video_path = None
     led_tracking_path = None
-    ttl_signal_path = None
     sticker_2d_tracking_path = None
     sticker_3d_tracking_path = None
     hand_motion_glb_path = None
@@ -308,16 +310,6 @@ def run_single_session_pipeline(
                 force_processing=force
             )
             dag_handler.mark_completed('track_led_blinking')
-
-        if dag_handler.can_run('generate_ttl_signal'):
-            print(f"[{block_name}] ==> Running task: generate_ttl_signal")
-            force = dag_handler.get_task_options('generate_ttl_signal').get('force_processing', False)
-            ttl_signal_path = generate_ttl_signal(
-                led_tracking_path=led_tracking_path,
-                output_dir=config.video_processed_output_dir,
-                force_processing=force
-            )
-            dag_handler.mark_completed('generate_ttl_signal')
     except Exception as e:
         print(f"❌ Pipeline failed during Stage 2: LED & TTL. Error: {e}")
         return {"status": "failed", "stage": 2, "error": str(e)}
@@ -411,7 +403,7 @@ def run_single_session_pipeline(
             force = dag_handler.get_task_options('unify_dataset').get('force_processing', False)
             unify_dataset(
                 contact_chars_path=somatosensory_chars_path,
-                ttl_path=ttl_signal_path,
+                ttl_path=led_tracking_path,
                 output_dir=config.video_processed_output_dir,
                 force_processing=force
             )
