@@ -39,6 +39,7 @@ class TrackerReviewOrchestrator:
                                                                  and values are pandas DataFrames containing
                                                                  the tracking history for that object.
                                                                  The DataFrame index should be the frame number.
+                                                                 During initialization, values can be empty.
                                                                  Defaults to None.
         """
         self.model = model
@@ -73,34 +74,18 @@ class TrackerReviewOrchestrator:
         self.view.setup_ui()
         self.update_view_full()
         self.view.start_mainloop()
-            
-        # Case 1: tracking_history IS NOT present. Return simple lists of frame numbers.
-        if not self.tracking_history:
-            frames_for_labeling = []
-            frames_for_deleting = []
-            for frame_num, mark in self.marked_frames.items():
-                if mark.action == FrameAction.LABEL:
-                    frames_for_labeling.append(frame_num)
-                elif mark.action == FrameAction.DELETE:
-                    frames_for_deleting.append(frame_num)
-
-            return (self.status, 
-                    sorted(frames_for_labeling), 
-                    sorted(frames_for_deleting))
-
-        # Case 2: tracking_history IS present. Return dicts with object IDs.
-        else:
-            frames_for_labeling = {}
-            frames_for_deleting = {}
-            for frame_num, mark in self.marked_frames.items():
-                if mark.action == FrameAction.LABEL:
-                    frames_for_labeling[frame_num] = mark.object_ids
-                elif mark.action == FrameAction.DELETE:
-                    frames_for_deleting[frame_num] = mark.object_ids
-            
-            return (self.status, 
-                    dict(sorted(frames_for_labeling.items())), 
-                    dict(sorted(frames_for_deleting.items())))
+        
+        frames_for_labeling = {}
+        frames_for_deleting = {}
+        for frame_num, mark in self.marked_frames.items():
+            if mark.action == FrameAction.LABEL:
+                frames_for_labeling[frame_num] = mark.object_ids
+            elif mark.action == FrameAction.DELETE:
+                frames_for_deleting[frame_num] = mark.object_ids
+        
+        return (self.status, 
+                dict(sorted(frames_for_labeling.items())), 
+                dict(sorted(frames_for_deleting.items())))
         
 
     def toggle_play_pause(self):
@@ -206,10 +191,27 @@ class TrackerReviewOrchestrator:
         Gets the current frame and draws tracking data for all objects.
         """
         frame = self.model[self.current_frame_num].copy()
+        
+        # If there's no tracking history at all, just return the raw frame.
+        if not self.tracking_history:
+            return frame
+
         for obj_id, df_history in self.tracking_history.items():
+            # --- MODIFICATION START ---
+            # Gracefully handle cases where a tracking history for an object exists as a key
+            # but has no data (e.g., it's None or an empty DataFrame/list). This prevents
+            # crashes during initialization before any tracking data is generated.
+            # getattr is used for safe access to the '.empty' attribute, defaulting to
+            # True if the attribute doesn't exist (e.g., for a list or None).
+            if df_history is None or getattr(df_history, 'empty', True):
+                continue  # Skip to the next object if there's no data to draw.
+
+            # Original logic now only proceeds if df_history is valid and non-empty.
             if self.current_frame_num in df_history.index:
                 object_data_at_frame = df_history.loc[self.current_frame_num]
                 self._draw_overlay(frame, object_data_at_frame.to_dict())
+            # --- MODIFICATION END ---
+            
         return frame
         
     def _draw_overlay(self, frame, obj_result: Dict[str, Any]):

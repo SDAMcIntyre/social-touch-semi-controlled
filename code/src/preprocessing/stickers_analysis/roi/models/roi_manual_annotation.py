@@ -39,9 +39,16 @@ class AnnotationData:
 
 class ROIAnnotationManager:
     """Manages annotation data in memory using a structured data model."""
-    def __init__(self, data: AnnotationData):
-        self._data = data
-    
+
+    def __init__(self, data: Optional[AnnotationData] = None):
+        """
+        Initializes the manager.
+
+        If `data` is None, a new AnnotationData instance is created.
+        Otherwise, the provided instance is used.
+        """
+        self._data = data or AnnotationData()
+
     @property
     def data(self) -> AnnotationData:
         return self._data
@@ -58,7 +65,8 @@ class ROIAnnotationManager:
         obj = self._data.objects_to_track.get(obj_name)
         if obj is None:
             raise KeyError(f"Object '{obj_name}' not found.")
-        
+
+        # Check if the frame_id already exists in the DataFrame
         if frame_id in obj.rois['frame_id'].values:
             # Update the columns for the existing frame_id
             roi_columns = ['roi_x', 'roi_y', 'roi_width', 'roi_height']
@@ -76,12 +84,12 @@ class ROIAnnotationManager:
         """Retrieves ROI components and returns them in a dictionary."""
         obj = self.get_object(obj_name)
         if obj is None: return None
-        
+
         result = obj.rois[obj.rois['frame_id'] == frame_id]
         if not result.empty:
             # Select the ROI columns, get the first row, and convert to a dictionary
             roi_data = result[['roi_x', 'roi_y', 'roi_width', 'roi_height']].iloc[0].to_dict()
-            return roi_data
+            return {k: int(v) for k, v in roi_data.items()} # Ensure values are int
         return None
 
     def get_object_names(self) -> List[str]:
@@ -99,18 +107,11 @@ class ROIAnnotationManager:
             raise KeyError(f"Object '{obj_name}' not found.")
 
         try:
-            # 1. Normalize the input to an Enum member.
-            #    This handles both cases:
-            #    - If 'status' is ROIProcessingStatus.COMPLETED, it returns that member.
-            #    - If 'status' is "completed", it finds the corresponding member.
             valid_status_member = ROIProcessingStatus(status)
-
-            # 2. Assign the canonical string value.
             self._data.objects_to_track[obj_name].status = valid_status_member.value
         except ValueError:
-            # This block catches invalid string values.
             raise ValueError(f"'{status}' is not a valid processing status.")
-        
+
     def update_all_status(self, status: ROIProcessingStatus):
         for object_name in self.get_object_names():
             self.update_status(object_name, status)
@@ -125,59 +126,32 @@ class ROIAnnotationManager:
     def remove_roi(self, obj_name: str, frame_id: int):
         obj = self._data.objects_to_track.get(obj_name)
         if obj is None: raise KeyError(f"Object '{obj_name}' not found.")
-        
+
         initial_len = len(obj.rois)
         obj.rois = obj.rois[obj.rois['frame_id'] != frame_id].reset_index(drop=True)
-        
+
         if len(obj.rois) == initial_len:
             raise KeyError(f"Frame ID '{frame_id}' not found for object '{obj_name}'.")
-        
-    def remove_roi_ifexists(self, obj_name: str, frame_id: int):
+
+    def remove_roi_if_exists(self, obj_name: str, frame_id: int):
+        # Corrected: Use remove_roi_ifexists to match method name
         if self.get_roi(obj_name, frame_id) is not None:
             self.remove_roi(obj_name, frame_id)
 
     def are_all_objects_with_status(self, status: ROIProcessingStatus) -> bool:
         """
         Checks if all tracked objects have a specific status.
-
-        Args:
-            status (ROIProcessingStatus): The status to check for.
-
-        Returns:
-            bool: True if all objects have the given status, False otherwise.
-                  Returns False for an empty collection of objects.
+        Returns False for an empty collection of objects.
         """
         objects = self._data.objects_to_track.values()
         if not objects:
-            # The all() function returns True for an empty iterable.
-            # We explicitly return False to indicate that not "all" objects
-            # are in this state, because there are no objects.
-            # This can be changed to True depending on business logic.
             return False
-            
         return all(obj.status == status.value for obj in objects)
 
     def is_any_object_with_status(self, status: ROIProcessingStatus) -> bool:
-        """
-        Checks if at least one tracked object has a specific status.
-
-        Args:
-            status (ROIProcessingStatus): The status to check for.
-
-        Returns:
-            bool: True if any object has the given status, False otherwise.
-        """
+        """Checks if at least one tracked object has a specific status."""
         return any(obj.status == status.value for obj in self._data.objects_to_track.values())
 
     def are_no_objects_with_status(self, status: ROIProcessingStatus) -> bool:
-        """
-        Checks if no tracked objects have a specific status.
-
-        Args:
-            status (ROIProcessingStatus): The status to check for.
-
-        Returns:
-            bool: True if no objects have the given status, False otherwise.
-        """
-        # This is more efficient than iterating again. It reuses the 'any' check.
+        """Checks if no tracked objects have a specific status."""
         return not self.is_any_object_with_status(status)

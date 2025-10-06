@@ -66,17 +66,17 @@ class ROITrackedFileHandler:
                                Example: {'car': DataFrame, 'person': DataFrame}
         """
         if not self.file_path.exists():
-            return {}
+            return None
 
         try:
             # Read the entire dataset from the single CSV
             long_df = pd.read_csv(self.file_path)
         except pd.errors.EmptyDataError:
-            return {}
+            return None
             
         if 'object_name' not in long_df.columns:
             print(f"Warning: File {self.file_path} is missing 'object_name' column. Cannot load data.")
-            return {}
+            return None
 
         # Use groupby to split the single DataFrame into a dictionary of DataFrames.
         # The keys of the dictionary will be the unique values from 'object_name' column.
