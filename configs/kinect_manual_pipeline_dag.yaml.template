@@ -1,19 +1,69 @@
-# A dependency-aware configuration for the MANUAL processing pipeline.
-# Use 'enabled: true' for the manual task you wish to perform for each session.
-# Unlike the automatic pipeline, these tasks are typically independent setup steps.
+# Configuration for the manual processing pipeline.
+# Set 'enabled: true' for each task you wish to run.
+# The 'depends_on' key establishes an execution order, ensuring prerequisite tasks are completed first.
 
 parameters:
   # Directory containing the session configs for which you want to run manual tasks.
-  kinect_configs_directory: "kinect_configs"
+  kinect_configs_directory: "kinect_configs/all_valid_configs_16_05"
 
 tasks:
   # --- Manual Task Definitions ---
-  review_stickers:
+  prepare_led_tracking:
     enabled: true
-    description: "Manually define/review the tracking ROI for stickers on the hand."
+    options:
+      force_processing: false
+    description: "Manually select the led roi."
     depends_on: []
 
   prepare_hand_model:
-    enabled: false
-    description: "Manually select reference points on the hand and 3D hand model."
+    enabled: true
+    options:
+      force_processing: false
+    description: "Manually select the hand and 3D hand model."
     depends_on: []
+
+  review_2d_stickers:
+    enabled: true
+    options:
+      force_processing: false
+    description: "Manually define/review the tracking ROI for stickers on the hand."
+    depends_on: []
+
+  prepare_stickers_colorspace:
+    enabled: true
+    options:
+      force_processing: false
+    description: "Manually define the colorspace of stickers on the hand."
+    depends_on: [review_2d_stickers]
+
+  review_handstickers_color_threshold:
+    enabled: true
+    options:
+      force_processing: false
+    description: "Manually define the correlation videos threshold."
+    depends_on: [review_2d_stickers]
+
+  view_ellipse_tracking:
+    enabled: false
+    description: "Manually view the ellipses fit of the stickers on the hand."
+    depends_on: [review_2d_stickers]
+
+  view_ellipse_tracking_adjusted:
+    enabled: false
+    description: "Manually view the ellipses fit of the stickers on the hand."
+    depends_on: [review_2d_stickers]
+
+  view_consolidated_2d_tracking_data:
+    enabled: false
+    description: "Manually view the XY estimation of the stickers on the hand."
+    depends_on: [review_2d_stickers]
+
+  view_xyz_stickers:
+    enabled: false
+    description: "Manually view the XYZ estimation of the stickers on the hand."
+    depends_on: [review_2d_stickers]
+
+  view_somatosensory_assessement:
+    enabled: false
+    description: "Manually view the somatosensory assessment results."
+    depends_on: [prepare_hand_model, review_2d_stickers, prepare_stickers_colorspace]

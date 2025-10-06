@@ -5,30 +5,34 @@
 parameters:
   # Set to true to run different sessions in parallel, false to run them one by one.
   parallel_execution: false
-  kinect_configs_directory: "kinect_configs"
+  kinect_configs_directory: "kinect_configs/all_valid_configs_16_05"
 
 tasks:
   # --- Stage 1: Primary video processing ---
   validate_mkv_video:
     enabled: true
+    options:
+      force_processing: false
     depends_on: [] # This is a root task, it has no dependencies
 
   generate_rgb_video:
     enabled: true
+    options:
+      force_processing: false
     depends_on: [validate_mkv_video]
 
   generate_depth_images:
     enabled: false # Disabled by default as it can generate very large files
+    options:
+      force_processing: false
     depends_on: [validate_mkv_video]
 
   # --- Stage 2: LED Tracking for TTL signal ---
   track_led_blinking:
     enabled: true
+    options:
+      force_processing: false
     depends_on: [generate_rgb_video]
-
-  generate_ttl_signal:
-    enabled: true
-    depends_on: [track_led_blinking]
 
   # --- Stage 3: Hand and Forearm Validation ---
   validate_forearm_extraction:
@@ -42,22 +46,34 @@ tasks:
   # --- Stage 4: Hand/Sticker Tracking and 3D reconstruction ---
   track_stickers:
     enabled: true
+    options:
+      force_processing: false
     depends_on: [generate_rgb_video]
 
   generate_xyz_stickers:
     enabled: true
+    options:
+      monitor: false
+      force_processing: false
     depends_on: [track_stickers]
 
   generate_3d_hand_motion:
     enabled: true
+    options:
+      force_processing: false
     depends_on: [validate_hand_extraction, generate_xyz_stickers]
 
   generate_somatosensory_chars:
     enabled: true
+    options: 
+      monitor: false
+      force_processing: false
     depends_on: [validate_forearm_extraction, generate_3d_hand_motion]
 
   # --- Stage 5: Final data integration ---
   unify_dataset:
     enabled: true
+    options:
+      force_processing: false
     # This task depends on outputs from two different branches of the graph
-    depends_on: [generate_somatosensory_chars, generate_ttl_signal]
+    depends_on: [generate_somatosensory_chars, track_led_blinking]
