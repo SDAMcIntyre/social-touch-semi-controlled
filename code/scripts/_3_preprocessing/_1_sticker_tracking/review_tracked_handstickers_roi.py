@@ -2,6 +2,7 @@
 import os
 from typing import Optional, List, Dict, Tuple
 import pandas as pd
+from pathlib import Path
 
 from preprocessing.common.gui.frame_roi_square import FrameROISquare
 
@@ -155,7 +156,10 @@ def review_tracking(
         A tuple containing the original video path and a sorted list of unique
         frame indices that require manual review.
     """
-    annotated_frame_ids = get_unique_frame_ids(annotation_manager.data)
+    if annotation_manager.data:
+        annotated_frame_ids = get_unique_frame_ids(annotation_manager.data)
+    else:
+        annotated_frame_ids = None
 
     print("\nLaunching Tkinter Video Player...")
     view = TrackerReviewGUI(title=title, landmarks=annotated_frame_ids, windowState='maximized')
@@ -170,26 +174,37 @@ def review_tracking(
 
 
 def review_tracked_objects_in_video(
-    video_path: str, 
-    metadata_path: str,
-    tracked_data_path: str,
+    video_path: Path, 
+    objects_to_track: list[str],
+    metadata_path: Path,
+    tracked_data_path: Path,
     *,
     force_processing: bool = False
-) -> Optional[str]:
+) -> Optional[Path]:
     """
     Main pipeline to review tracking, validate, or trigger re-annotation.
     """
-    annotation_data_iohandler = ROIAnnotationFileHandler.load(metadata_path)
-    annotation_manager = ROIAnnotationManager(annotation_data_iohandler)
+    if metadata_path.exists():
+        annotation_data_iohandler = ROIAnnotationFileHandler.load(metadata_path)
+        annotation_manager = ROIAnnotationManager(annotation_data_iohandler)
 
-    if not force_processing and annotation_manager.are_no_objects_with_status(ROIProcessingStatus.TO_BE_REVIEWED):
-        print(f"No object has been assigned to be reviewed: either ✅ Tracking is completed or automatic algorithm has to process it.")
-        return tracked_data_path
-    
-    tracked_data_iohandler = ROITrackedFileHandler(tracked_data_path)
-    tracked_data = tracked_data_iohandler.load_all_data()
+        if not force_processing and annotation_data_iohandler is not None and annotation_manager.are_no_objects_with_status(ROIProcessingStatus.TO_BE_REVIEWED):
+            print(f"No object has been assigned to be reviewed: either ✅ Tracking is completed or automatic algorithm has to process it.")
+            return tracked_data_path
+    else:
+        annotation_manager = ROIAnnotationManager()
+        for object_name in objects_to_track:
+            annotation_manager.add_object(object_name)
 
-    video_manager = VideoReviewManager(video_path, tracking_history=tracked_data)
+    if tracked_data_path.exists():
+        tracked_data_iohandler = ROITrackedFileHandler(tracked_data_path)
+        tracked_data: ROITrackedObjects = tracked_data_iohandler.load_all_data()
+        video_manager = VideoReviewManager(video_path, tracking_history=tracked_data)
+    else:
+        # if there is no file, the data will be empty.
+        # This means it is the first time we are seeing the video
+        tracked_data = dict.fromkeys(objects_to_track)
+        video_manager = VideoReviewManager(video_path)
     
     final_status, frames_for_labeling, frames_for_deleting = review_tracking(video_manager, annotation_manager, tracked_data, title=os.path.basename(video_path))
     

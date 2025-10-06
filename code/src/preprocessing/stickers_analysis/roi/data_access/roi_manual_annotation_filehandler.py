@@ -2,6 +2,7 @@ import json
 import os
 import logging
 from dataclasses import asdict
+from typing import Optional
 
 # Import pandas
 import pandas as pd
@@ -27,7 +28,7 @@ class ROIAnnotationFileHandler:
             data_dict = asdict(data)
             if data_dict is None:
                 raise
-            # 💡 MODIFIED: Reconstruct the nested ROI dictionary format for JSON serialization.
+            # Reconstruct the nested ROI dictionary format for JSON serialization.
             for obj_data in data_dict.get("objects_to_track", {}).values():
                 if "rois" in obj_data and isinstance(obj_data["rois"], pd.DataFrame):
                     df = obj_data["rois"]
@@ -50,21 +51,29 @@ class ROIAnnotationFileHandler:
             raise
 
     @staticmethod
-    def load(filepath: str, create_if_not_exists: bool = True) -> AnnotationData:
-        """Loads and constructs an AnnotationData object from a JSON file."""
+    def load(filepath: str) -> Optional[AnnotationData]:
+        """
+        Loads and constructs an AnnotationData object from a JSON file.
+        Returns None if the file doesn't exist, is empty, or contains invalid JSON.
+        """
         if not os.path.exists(filepath):
-            if create_if_not_exists:
-                logger.info("File '%s' not found. Creating a new data structure.", filepath)
-                return AnnotationData()
-            else:
-                raise FileNotFoundError(f"File not found at '{filepath}'")
+            logger.info("Annotation file not found: '%s'. Returning None.", filepath)
+            return None
 
         try:
             with open(filepath, 'r') as f:
-                raw_data = json.load(f)
+                content = f.read()
+                if not content.strip():
+                    logger.info("Annotation file is empty: '%s'. Returning None.", filepath)
+                    return None
+                raw_data = json.loads(content)
+
+            if raw_data is None:
+                logger.info("Annotation file contains null content: '%s'. Returning None.", filepath)
+                return None
             
             objects = {}
-            for name, obj_data in raw_data.get("objects_to_track").items():
+            for name, obj_data in raw_data.get("objects_to_track", {}).items():
                 rois_list = []
                 # In the JSON, `rois` is a dictionary where keys are frame_ids.
                 # We iterate through its items.
@@ -93,9 +102,8 @@ class ROIAnnotationFileHandler:
             return AnnotationData(objects_to_track=objects)
 
         except (json.JSONDecodeError, IOError) as e:
-            logger.error("Critical error loading or parsing '%s': %s. Returning an empty structure.", filepath, e)
-            return AnnotationData()
-
+            logger.error("Critical error loading or parsing '%s': %s. Returning None.", filepath, e)
+            return None
 
 
 # ======================= Example Usage =======================
@@ -105,13 +113,19 @@ if __name__ == '__main__':
 
     FILEPATH = "annotations_refactored.json"
     annotation_data = ROIAnnotationFileHandler.load(FILEPATH)
+
+    # 💡 MODIFIED: If loading fails (returns None), start with a new, empty data object.
+    if annotation_data is None:
+        print(f"Could not load from '{FILEPATH}'. Starting with a new annotation session.")
+        annotation_data = AnnotationData()
+        
     manager = ROIAnnotationManager(annotation_data)
 
     try:
         if "car_01" not in manager.get_object_names():
             manager.add_object("car_01")
         
-        # 💡 MODIFIED: Call set_roi with individual integer arguments.
+        # Call set_roi with individual integer arguments.
         manager.set_roi("car_01", frame_id=100, x=10, y=20, width=30, height=40)
         manager.set_roi("car_01", frame_id=101, x=12, y=22, width=30, height=40)
         

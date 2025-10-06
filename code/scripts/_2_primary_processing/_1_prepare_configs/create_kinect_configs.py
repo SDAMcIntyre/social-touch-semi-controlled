@@ -47,9 +47,10 @@ def generate_yaml_config(source_video_abs_path: Path, project_config: dict, proj
     session_processed_output_dir_str = templates['session_processed_output_dir'].format(**context)
     
     # --- MODIFIED SECTION ---
-    # Add 'session_id' from the extracted path parts to the config data.
+    # Add 'session_id' and 'objects_to_track' to the config data.
     config_data = {
         'session_id': extracted_parts['session_id'],
+        'objects_to_track': project_config['parameters']['objects_to_track'],
         'source_video': source_video_rel_path.as_posix(),
         'stimulus_metadata': Path(stimulus_path_str).as_posix(),
         'hand_models_dir': Path(hand_models_dir_str).as_posix(),
