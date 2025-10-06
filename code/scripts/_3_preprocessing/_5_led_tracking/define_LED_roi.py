@@ -9,7 +9,7 @@ from utils.should_process_task import should_process_task  # noqa: E402
 
 from preprocessing.led_analysis import (
     ROIManager,
-    LEDFilesHandler
+    LEDROIFilesHandler
 )
 
 
@@ -48,7 +48,7 @@ def define_led_roi(
         led_roi = ROIManager(video_path)
         led_roi.choose_parameters()
         
-        fileHandler = LEDFilesHandler()
+        fileHandler = LEDROIFilesHandler()
         fileHandler.save_metadata(output_metadata_path, led_roi.metadata)
         return True
 
