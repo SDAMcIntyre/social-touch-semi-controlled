@@ -5,17 +5,19 @@
 
 # --- Core Scientific Computing & Data Analysis ---
 h5py==3.14.0
-matplotlib==3.10.5
-numpy
-pandas==2.3.1
+matplotlib==3.10.6
+numpy==2.3.3
+pandas==2.3.3
 scikit-image==0.25.2
-scikit-learn==1.7.1
-scipy==1.15.3
+scikit-learn==1.7.2
+scipy==1.16.2
 
 # --- 3D, Visualization & Geometry ---
 chumpy==0.70
 open3d==0.19.0
+plyfile==1.1.2
 pygltflib==1.16.5
+pyvista==0.46.1
 pyvistaqt==0.11.3
 transforms3d==0.4.2
 trimesh==4.7.4
@@ -23,10 +25,10 @@ vtk==9.4.2
 
 # --- Image & Computer Vision ---
 opencv-contrib-python==4.12.0.88
-pillow
+Pillow==11.3.0
 
 # --- Pydantic & Data Validation ---
-pydantic==2.11.7
+pydantic==2.11.10
 pydantic-core==2.33.2
 pydantic-extra-types==2.10.5
 pydantic-settings==2.10.1
@@ -40,12 +42,27 @@ PyQt5_sip==12.17.0
 # Option 2: PyQt6 (Commented out by default)
 # PyQt6==6.9.1
 # PyQt6-Qt6==6.9.1
-# PyQt6_sip==13.10.2
+# pyqt6_sip==13.10.2
 
 # --- Workflow Orchestration ---
-prefect==3.4.13
+prefect==3.4.22
+
+# --- Machine Learning ---
+tensorflow==2.20.0
+torch==2.8.0
 
 # --- Miscellaneous ---
+keyboard==0.13.5
+library==3.0.126
+modules==1.0.0
+psutil==7.0.0
+psychopy==2025.1.1
 pygame==2.6.1
 pyk4a==1.5.0; platform_system != "Darwin" # Python wrapper for Azure Kinect SDK
-pyyaml
+pynput==1.8.1
+pyserial==3.5
+pywin32==311
+PyYAML==6.0.3
+QtPy==2.4.3
+tifffile==2025.5.10
+tqdm==4.67.1
