@@ -1,9 +1,20 @@
 import os
+import logging
 from pathlib import Path
-from prefect import flow
+from datetime import datetime
+import shutil
+import time
+import traceback
+from multiprocessing import Queue, freeze_support
+
+from prefect import flow, get_run_logger
+
+# Setup a basic logger
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 import utils.path_tools as path_tools
 from utils.pipeline_config_manager import DagConfigHandler
+from utils.pipeline_monitoring.pipeline_monitor import PipelineMonitor
 
 from primary_processing import (
     KinectConfigFileHandler,
@@ -56,6 +67,42 @@ from _3_preprocessing._6_unification import (
 )
 
 
+class TaskExecutor:
+    """A context manager to handle the boilerplate of running a pipeline task."""
+    def __init__(self, task_name, block_name, dag_handler, monitor):
+        self.task_name: str = task_name
+        self.block_name: str = block_name
+        self.dag_handler: DagConfigHandler = dag_handler
+        self.monitor: PipelineMonitor = monitor
+        self.can_run: bool = False
+        self.error_msg: str = None
+
+    def __enter__(self):
+        """Called when entering the 'with' block. Prepares and starts the task."""
+        if self.dag_handler.can_run(self.task_name):
+            self.can_run = True
+            print(f"[{self.block_name}] ==> Running task: {self.task_name}")
+            if self.monitor is not None:
+                self.monitor.update(self.block_name, self.task_name, "RUNNING")
+        return self # Returns the executor instance itself
+
+    def __exit__(self, exc_type, exc_value, tb):
+        """Called when exiting the 'with' block. Handles success or failure."""
+        if not self.can_run:
+            return # Task was skipped by the DAG handler
+
+        if exc_type: # An exception occurred
+            self.error_msg = f"Task '{self.task_name}' failed: {exc_value}"
+            print(f"❌ {self.error_msg}\n{traceback.format_exc()}")
+            if self.monitor is not None:
+                self.monitor.update(self.block_name, self.task_name, "FAILURE", self.error_msg)
+            # Suppress the exception to allow the main loop to handle failure
+            return True
+        else: # Success
+            self.dag_handler.mark_completed(self.task_name)
+            if self.monitor is not None:
+                self.monitor.update(self.block_name, self.task_name, "SUCCESS")
+        return False
 
 # --- 3. Sub-Flows (Formerly Tasks) ---
 @flow(name="0. Analyse MKV video")
@@ -89,8 +136,8 @@ def track_led_blinking(video_path: Path, stimulus_metadata: Path, output_dir: Pa
     
     roi_metadata_path = output_dir / (name_baseline + "_roi_metadata.json")
     roi_video_path = output_dir / (name_baseline + "_roi.mp4")
-    generate_led_roi(video_path, roi_metadata_path, roi_video_path, force_processing=force_processing)
-
+    success = generate_led_roi(video_path, roi_metadata_path, roi_video_path, force_processing=force_processing)
+    
     csv_led_path = output_dir / (name_baseline + ".csv")
     metadata_led_state_path = output_dir / (name_baseline + "_metadata.json")
     track_led_states_changes(roi_video_path, csv_led_path, metadata_led_state_path, force_processing=force_processing)
@@ -240,250 +287,261 @@ def unify_dataset(contact_chars_path: Path, ttl_path: Path, output_dir: Path, *,
 
 
 # --- 4. The "Worker" Flow ---
-@flow(name="Run Single Session Pipeline")
+# @flow(name="Run Single Session Pipeline")
 def run_single_session_pipeline(
     config: KinectConfig,
-    dag_handler: DagConfigHandler
+    dag_handler: DagConfigHandler,
+    monitor_queue: Queue = None,
+    report_file_path: Path = None
 ):
     """
-    Processes a single dataset by explicitly calling processing functions
-    based on a DAG configuration.
+    Processes a single dataset ("block") using a data-driven approach
+    to eliminate code repetition and improve maintainability.
     """
-    block_name = config.source_video.name
+    block_name = config.source_video.stem
     print(f"🚀 Starting pipeline for block: {block_name}")
 
-    # --- Result placeholders ---
-    rgb_video_path = None
-    led_tracking_path = None
-    sticker_2d_tracking_path = None
-    sticker_3d_tracking_path = None
-    hand_motion_glb_path = None
-    somatosensory_chars_path = None
+    if monitor_queue is not None:
+        monitor = PipelineMonitor(
+            report_path=report_file_path, stages=list(dag_handler.tasks.keys()), data_queue=monitor_queue
+        )
+    else:
+        monitor = None
 
-    # --- Stage 1: Primary Video Processing ---
-    try:
-        if dag_handler.can_run('validate_mkv_video'):
-            print(f"[{block_name}] ==> Running task: validate_mkv_video")
-            # Get `force_processing` flag from DAG config for the specific task
-            force = dag_handler.get_task_options('validate_mkv_video').get('force_processing', False)
-            validate_mkv_video(
-                source_video=config.source_video,
-                output_dir=config.video_primary_output_dir,
-                force_processing=force
-            )
-            dag_handler.mark_completed('validate_mkv_video')
+    # A dictionary to hold the results from tasks (e.g., file paths)
+    context = {}
 
-        if dag_handler.can_run('generate_rgb_video'):
-            print(f"[{block_name}] ==> Running task: generate_rgb_video")
-            force = dag_handler.get_task_options('generate_rgb_video').get('force_processing', False)
-            rgb_video_path = generate_rgb_video(
-                source_video=config.source_video,
-                output_dir=config.video_primary_output_dir,
-                force_processing=force
-            )
-            dag_handler.mark_completed('generate_rgb_video')
+    # --- Define the entire pipeline as a data structure ---
+    pipeline_stages = [
+        # --- Stage 1: Primary Video Processing ---
+        {"name": "validate_mkv_video", 
+         "func": validate_mkv_video, 
+         "params": lambda: {"source_video": config.source_video, 
+                            "output_dir": config.video_primary_output_dir}},
+        {"name": "generate_rgb_video", 
+         "func": generate_rgb_video, 
+         "params": lambda: {"source_video": config.source_video, 
+                            "output_dir": config.video_primary_output_dir}, 
+         "outputs": ["rgb_video_path"]},
+        {"name": "generate_depth_images", 
+         "func": generate_depth_images, 
+         "params": lambda: {"source_video": config.source_video, 
+                            "output_dir": config.video_primary_output_dir}},
 
-        if dag_handler.can_run('generate_depth_images'):
-            print(f"[{block_name}] ==> Running task: generate_depth_images")
-            force = dag_handler.get_task_options('generate_depth_images').get('force_processing', False)
-            generate_depth_images(
-                source_video=config.source_video,
-                output_dir=config.video_primary_output_dir,
-                force_processing=force
-            )
-            dag_handler.mark_completed('generate_depth_images')
-    except Exception as e:
-        print(f"❌ Pipeline failed during Stage 1: Primary Processing. Error: {e}")
-        return {"status": "failed", "stage": 1, "error": str(e)}
+        # --- Stage 2: LED Tracking ---
+        {"name": "track_led_blinking", 
+         "func": track_led_blinking, 
+         "params": lambda: {"video_path": context.get("rgb_video_path"), 
+                            "stimulus_metadata": config.stimulus_metadata, 
+                            "output_dir": config.video_processed_output_dir / "LED"}, 
+         "outputs": ["led_tracking_path"]},
 
-    # --- Stage 2: LED Tracking for TTL signal ---
-    try:
-        led_dir = config.video_processed_output_dir / "LED"
-        if dag_handler.can_run('track_led_blinking'):
-            print(f"[{block_name}] ==> Running task: track_led_blinking")
-            force = dag_handler.get_task_options('track_led_blinking').get('force_processing', False)
-            led_tracking_path = track_led_blinking(
-                video_path=rgb_video_path,
-                stimulus_metadata=config.stimulus_metadata,
-                output_dir=led_dir,
-                force_processing=force
-            )
-            dag_handler.mark_completed('track_led_blinking')
-    except Exception as e:
-        print(f"❌ Pipeline failed during Stage 2: LED & TTL. Error: {e}")
-        return {"status": "failed", "stage": 2, "error": str(e)}
-    
-    # --- Stage 3: Hand and Forearm Validation ---
-    try:
-        if dag_handler.can_run('validate_forearm_extraction'):
-            print(f"[{block_name}] ==> Running task: validate_forearm_extraction")
-            valid_data = validate_forearm_extraction(
-                config.session_processed_output_dir
-            )
-            if valid_data:
-                dag_handler.mark_completed('validate_forearm_extraction')
+        # --- Stage 3: Validation ---
+        {"name": "validate_forearm_extraction", 
+         "func": validate_forearm_extraction, 
+         "params": lambda: {"session_output_dir": config.session_processed_output_dir}},
+        {"name": "validate_hand_extraction", 
+         "func": validate_hand_extraction, 
+         "params": lambda: {"rgb_video_path": context.get("rgb_video_path"), 
+                            "hand_models_dir": config.hand_models_dir,
+                            "expected_labels": config.objects_to_track, 
+                            "output_dir": config.video_processed_output_dir}},
 
-        if dag_handler.can_run('validate_hand_extraction'):
-            print(f"[{block_name}] ==> Running task: validate_hand_extraction")
-            valid_data = validate_hand_extraction(
-                rgb_video_path=rgb_video_path,
-                hand_models_dir=config.hand_models_dir,
-                expected_labels=config.objects_to_track,
-                output_dir=config.video_processed_output_dir
-            )
-            if valid_data:
-                dag_handler.mark_completed('validate_hand_extraction')
-    except Exception as e:
-        print(f"❌ Pipeline failed during Stage 3: Validation. Error: {e}")
-        return {"status": "failed", "stage": 3, "error": str(e)}
+        # --- Stage 4: 3D Tracking & Reconstruction ---
+        {"name": "track_stickers", 
+         "func": track_stickers, 
+         "params": lambda: {"rgb_video_path": context.get("rgb_video_path"), 
+                            "output_dir": config.video_processed_output_dir / "handstickers"}, 
+         "outputs": ["sticker_2d_tracking_path", None]}, # Use None for unused return values
+        {"name": "generate_xyz_stickers", 
+         "func": generate_xyz_stickers, 
+         "params": lambda: {"stickers_2d_path": context.get("sticker_2d_tracking_path"), 
+                            "source_video": config.source_video, 
+                            "output_dir": config.video_processed_output_dir / "handstickers"}, 
+         "outputs": ["sticker_3d_tracking_path"]},
+        {"name": "generate_3d_hand_motion", 
+         "func": generate_3d_hand_motion, 
+         "params": lambda: {"rgb_video_path": context.get("rgb_video_path"), 
+                            "stickers_xyz_path": context.get("sticker_3d_tracking_path"), 
+                            "hand_models_dir": config.hand_models_dir, 
+                            "output_dir": config.video_processed_output_dir}, 
+         "outputs": ["hand_motion_glb_path", "hand_metadata_path"]},
+        {"name": "generate_somatosensory_chars", 
+         "func": generate_somatosensory_chars, 
+         "params": lambda: {"hand_motion_glb_path": context.get("hand_motion_glb_path"), 
+                            "hand_metadata_path": context.get("hand_metadata_path"), 
+                            "session_processed_dir": config.session_processed_output_dir, 
+                            "session_id": config.session_id, 
+                            "current_video_filename": context.get("rgb_video_path").name, 
+                            "output_dir": config.video_processed_output_dir},
+         "outputs": ["somatosensory_chars_path"]},
 
-    # --- Stage 4: Hand/Sticker Tracking and 3D reconstruction ---
-    try:
-        handstickers_dir = config.video_processed_output_dir / "handstickers"
-        if dag_handler.can_run('track_stickers'):
-            print(f"[{block_name}] ==> Running task: track_stickers")
-            force = dag_handler.get_task_options('track_stickers').get('force_processing', False)
-            sticker_2d_tracking_path, was_valid = track_stickers(
-                rgb_video_path=rgb_video_path,
-                output_dir=handstickers_dir,
-                force_processing=force
-            )
-            if was_valid and not force:
-                dag_handler.mark_completed('track_stickers')
+        # --- Stage 5: Final Data Integration ---
+        {"name": "unify_dataset", 
+         "func": unify_dataset, 
+         "params": lambda: {"contact_chars_path": context.get("somatosensory_chars_path"), 
+                            "ttl_path": context.get("led_tracking_path"), 
+                            "output_dir": config.video_processed_output_dir}},
+    ]
 
-        if dag_handler.can_run('generate_xyz_stickers'):
-            print(f"[{block_name}] ==> Running task: generate_xyz_stickers")
-            options = dag_handler.get_task_options('generate_xyz_stickers')
-            force = options.get('force_processing', False)
-            sticker_3d_tracking_path = generate_xyz_stickers(
-                stickers_2d_path=sticker_2d_tracking_path,
-                source_video=config.source_video,
-                output_dir=handstickers_dir,
-                force_processing=force
-            )
-            dag_handler.mark_completed('generate_xyz_stickers')
+    # --- Pipeline Execution Engine ---
+    for stage_idx, stage in enumerate(pipeline_stages):
+        task_name = stage["name"]
+        executor = TaskExecutor(task_name, block_name, dag_handler, monitor)
 
-        if dag_handler.can_run('generate_3d_hand_motion'):
-            print(f"[{block_name}] ==> Running task: generate_3d_hand_motion")
-            force = dag_handler.get_task_options('generate_3d_hand_motion').get('force_processing', False)
-            hand_motion_glb_path, hand_metadata_path = generate_3d_hand_motion(
-                rgb_video_path=rgb_video_path,
-                stickers_xyz_path=sticker_3d_tracking_path,
-                hand_models_dir=config.hand_models_dir,
-                output_dir=config.video_processed_output_dir,
-                force_processing=force
-            )
-            dag_handler.mark_completed('generate_3d_hand_motion')
+        with executor:
+            if not executor.can_run:
+                continue
 
-        if dag_handler.can_run('generate_somatosensory_chars'):
-            print(f"[{block_name}] ==> Running task: generate_somatosensory_chars")
-            options = dag_handler.get_task_options('generate_somatosensory_chars')
-            force = options.get('force_processing', False)
-            use_monitor = options.get('monitor', False)
+            # Prepare task arguments
+            options = dag_handler.get_task_options(task_name)
+            params = stage["params"]()
+            force = options.get('force_processing')
+            if force is not None:
+                params['force_processing'] = force
 
-            somatosensory_chars_path = generate_somatosensory_chars(
-                hand_motion_glb_path=hand_motion_glb_path,
-                hand_metadata_path=hand_metadata_path,
-                session_processed_dir=config.session_processed_output_dir,
-                session_id=config.session_id,
-                current_video_filename=rgb_video_path.name,
-                output_dir=config.video_processed_output_dir,
-                monitor=use_monitor,
-                force_processing=force
-            )
-            dag_handler.mark_completed('generate_somatosensory_chars')
-    except Exception as e:
-        print(f"❌ Pipeline failed during Stage 4: 3D Reconstruction. Error: {e}")
-        return {"status": "failed", "stage": 4, "error": str(e)}
+            # Execute the task
+            result = stage["func"](**params)
 
-    # --- Stage 5: Final data integration ---
-    try:
-        if dag_handler.can_run('unify_dataset'):
-            print(f"[{block_name}] ==> Running task: unify_dataset")
-            force = dag_handler.get_task_options('unify_dataset').get('force_processing', False)
-            unify_dataset(
-                contact_chars_path=somatosensory_chars_path,
-                ttl_path=led_tracking_path,
-                output_dir=config.video_processed_output_dir,
-                force_processing=force
-            )
-            dag_handler.mark_completed('unify_dataset')
-    except Exception as e:
-        print(f"❌ Pipeline failed during Stage 5: Data Integration. Error: {e}")
-        return {"status": "failed", "stage": 5, "error": str(e)}
+            # Store outputs in the context dictionary for subsequent tasks
+            if "outputs" in stage:
+                outputs = stage["outputs"]
+                if not isinstance(result, tuple):
+                    result = (result,) # Ensure result is always a tuple
+                for i, key in enumerate(outputs):
+                    if key: # Skip if the key is None
+                        context[key] = result[i]
+
+        # If the task failed, stop the pipeline
+        if executor.error_msg:
+            # The 'mark_remaining_tasks_as_skipped' logic can now be simplified
+            all_tasks = list(dag_handler.tasks.keys())
+            current_task_index = all_tasks.index(task_name)
+            for skipped_task in all_tasks[current_task_index + 1:]:
+                monitor.update(block_name, skipped_task, "SKIPPED", "Skipped due to prior failure.")
+            return {"status": "failed", "stage": stage_idx, "error": executor.error_msg}
 
     print(f"✅ Pipeline finished successfully for session: {block_name}")
     return {"status": "success", "completed_tasks": list(dag_handler.completed_tasks)}
 
 
-# --- 5. The "Dispatcher" Flows ---
-@flow(name="Batch Process All Sessions", log_prints=True)
-def run_batch_in_parallel(kinect_configs_dir: Path, project_data_root: Path, dag_config_path: Path):
-    """Finds all session YAML files and triggers a pipeline run for each one in parallel."""
-    dag_handler = DagConfigHandler(dag_config_path)
+# @flow(name="Batch Process All Sessions", log_prints=True)
+def run_batch_processing(
+    kinect_configs_dir: Path,
+    project_data_root: Path,
+    dag_config_path: Path,
+    monitor_queue: Queue,
+    report_file_path: Path,
+    parallel: bool,
+):
+    """
+    Dispatches pipeline runs for all session configs found in a directory.
 
-    block_files = get_block_files(kinect_configs_dir)
-    for block_file in block_files:
-        print(f"Dispatching run for {block_file.name}...")
-        config_data = KinectConfigFileHandler.load_and_resolve_config(block_file)
-        validated_config = KinectConfig(config_data=config_data, database_path=project_data_root)
-        dag_handler_copy = dag_handler.copy() # Use copy to ensure isolated state
-        run_single_session_pipeline.submit(
-            config=validated_config,
-            dag_handler=dag_handler_copy,
-            flow_run_name=f"session-{validated_config.session_id}"
-        )
-    print(f"All {len(block_files)} session flows have been submitted.")
-
-@flow(name="Run Batch Sequentially", log_prints=True)
-def run_batch_sequentially(kinect_configs_dir: Path, project_data_root: Path, dag_config_path: Path):
-    """Runs all session pipelines one by one, waiting for each to complete."""
+    This single flow handles both parallel and sequential execution based on the
+    `parallel` flag, removing code duplication.
+    """
+    # logger = get_run_logger()
     dag_handler_template = DagConfigHandler(dag_config_path)
-
     block_files = get_block_files(kinect_configs_dir)
+    
+    mode = "PARALLEL" if parallel else "SEQUENTIAL"
+    logging.info(f"🚀 Starting batch processing for {len(block_files)} sessions in {mode} mode.")
+
+    submitted_runs = []
     for block_file in block_files:
-        print(f"--- Running session: {block_file.name} ---")
+        logging.info(f"Preparing session: {block_file.stem}")
         config_data = KinectConfigFileHandler.load_and_resolve_config(block_file)
         validated_config = KinectConfig(config_data=config_data, database_path=project_data_root)
-        dag_handler_instance = dag_handler_template.copy() # Use copy for a fresh run state
-        result = run_single_session_pipeline(
-            config=validated_config,
-            dag_handler=dag_handler_instance
-        )
-        print(f"--- Completed session: {block_file.name} | Status: {result.get('status', 'unknown')} ---")
-    print("✅ All sequential runs have completed.")
+        dag_handler_instance = dag_handler_template.copy()
 
+        if parallel:
+            # .submit() creates a new flow run that executes asynchronously
+            run = run_single_session_pipeline.submit(
+                config=validated_config,
+                dag_handler=dag_handler_instance,
+                monitor_queue=monitor_queue,
+                report_file_path=report_file_path,
+                flow_run_name=f"session-{validated_config.session_id}",
+            )
+            submitted_runs.append(run)
+        else:
+            # A direct call executes the flow and blocks until completion
+            run_single_session_pipeline(
+                config=validated_config,
+                dag_handler=dag_handler_instance,
+                monitor_queue=monitor_queue,
+                report_file_path=report_file_path
+            )
+            logging.info(f"--- Completed session: {block_file.stem} ---")
 
-# --- 6. Main execution block ---
-if __name__ == "__main__":
-    print("🛠️ Setting up files for processing...")
+    # If in parallel mode, robustly wait for all submitted runs to finish
+    if parallel:
+        logging.info("All flows submitted. Waiting for parallel runs to complete...")
+        for i, run in enumerate(submitted_runs):
+            run.wait()
+            logging.info(f"({i+1}/{len(submitted_runs)}) Completed flow run: {run.name}")
+    
+    logging.info("✅ All batch processing tasks have finished.")
 
+###
+### 2. MODULAR MAIN EXECUTION BLOCK
+###
+def setup_environment():
+    """Handles filesystem setup, cleaning up old reports."""
     project_data_root = path_tools.get_project_data_root()
 
     configs_dir = Path("configs")
     dag_config_path = Path(configs_dir / "kinect_automatic_pipeline_dag.yaml")
 
+    print("🛠️  Setting up environment...")
+    reports_dir = Path("reports")
+    reports_dir.mkdir(exist_ok=True)
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
+    report_file_path = reports_dir / f"{timestamp}_automatic_pipeline_status.xlsx"
+    if report_file_path.exists():
+        shutil.rmtree(report_file_path)
+        print("🧹 File with the same name found, removing it.")
+    return project_data_root, configs_dir, dag_config_path, report_file_path
+
+def main():
+    """Main execution function to orchestrate the pipeline."""
+    freeze_support() # Essential for multiprocessing on Windows
+    project_data_root, configs_dir, dag_config_path, report_file_path = setup_environment()
+
+    # --- Configuration Loading ---
     try:
         main_dag_handler = DagConfigHandler(dag_config_path)
         is_parallel = main_dag_handler.get_parameter('parallel_execution', False)
-        kinect_dir = main_dag_handler.get_parameter('kinect_configs_directory')
-        kinect_configs_dir = configs_dir / kinect_dir
+        kinect_dir_name = main_dag_handler.get_parameter('kinect_configs_directory')
+        kinect_configs_dir = configs_dir / kinect_dir_name
     except FileNotFoundError:
-        print(f"❌ Error: '{dag_config_path}' not found.")
-        print("Please create it using the example provided and run the script again.")
+        print(f"❌ Error: Configuration file '{dag_config_path}' not found.")
         exit(1)
 
-    if is_parallel:
-        print("🚀 Launching batch processing in PARALLEL.")
-        run_batch_in_parallel(
-            kinect_configs_dir=kinect_configs_dir,
-            project_data_root=project_data_root,
-            dag_config_path=dag_config_path
-        )
-    else:
-        print("🚀 Launching batch processing SEQUENTIALLY.")
-        run_batch_sequentially(
-            kinect_configs_dir=kinect_configs_dir,
-            project_data_root=project_data_root,
-            dag_config_path=dag_config_path
-        )
+    # --- Monitoring Setup ---
+    print("📊 Initializing pipeline monitor...")
+    pipeline_stages = list(main_dag_handler.tasks.keys())
+    main_monitor = PipelineMonitor(report_path=str(report_file_path), stages=pipeline_stages, live_plotting=True)
+    main_monitor.show_dashboard()
+
+    # --- Flow Execution ---
+    # The main logic is now encapsulated in the single dispatcher flow
+    run_batch_processing(
+        kinect_configs_dir=kinect_configs_dir,
+        project_data_root=project_data_root,
+        dag_config_path=dag_config_path,
+        monitor_queue=main_monitor.queue,
+        report_file_path=report_file_path,
+        parallel=is_parallel,
+    )
+
+    # --- Graceful Shutdown ---
+    print("\n🏁 All pipeline tasks have completed.")
+    print("✨ Dashboard will close automatically in 10 seconds...")
+    time.sleep(10)
+    
+    main_monitor.close_dashboard(block=True)
+    print(f"👋 Processing finished. Final report saved to {report_file_path}")
+
+if __name__ == "__main__":
+    main()
