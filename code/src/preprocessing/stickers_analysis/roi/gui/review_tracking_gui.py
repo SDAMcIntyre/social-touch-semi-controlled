@@ -22,13 +22,15 @@ class TrackerReviewGUI:
     provided by the Controller. All user actions (e.g., button clicks, 
     slider drags) are forwarded directly to the Controller to handle the logic.
     """
-    def __init__(self, 
-                 *, 
-                 title: str = "Loaded Frames Review", 
-                 landmarks = None, 
+    def __init__(self,
+                 *,
+                 title: str = "Loaded Frames Review",
+                 landmarks = None,
                  landmark_properties = None,
                  controller: 'TrackerReviewOrchestrator' = None,
-                 windowState: str = 'normal'):
+                 windowState: str = 'normal',
+                 show_valid_button: bool = True,
+                 show_rerun_button: bool = True):
         """
         Initializes the View.
         
@@ -37,11 +39,16 @@ class TrackerReviewGUI:
             title (str): The title for the main window.
             landmarks (list[int], optional): Frame IDs to mark on the timeline.
             landmark_properties (dict, optional): Properties for the landmark marks.
+            windowState (str): The initial state of the window, e.g., 'normal' or 'maximized'.
+            show_valid_button (bool): If True, the 'Finish as Valid' button is created and shown.
+            show_rerun_button (bool): If True, the 'Rerun Auto-Processing' button is created and shown.
         """
         self.controller = controller
         self.title = title
         self.windowState = windowState
         self.landmarks = landmarks if landmarks is not None else []
+        self.show_valid_button = show_valid_button
+        self.show_rerun_button = show_rerun_button
         
         # Set default landmark properties and override with user-provided ones
         default_props = {'color': 'blue', 'thickness': 2, 'height': 10}
@@ -221,16 +228,18 @@ class TrackerReviewGUI:
         self.proceed_button = ttk.Button(finish_controls_frame, text="➡️ Proceed with Marked", command=self.controller.finish_and_proceed, style="Finish.TButton")
         self.proceed_button.pack(side=tk.LEFT, padx=5, pady=5)
         
-        self.valid_button = ttk.Button(finish_controls_frame, text="✅ Finish as Valid", command=self.controller.finish_as_valid, style="Valid.TButton")
-        self.valid_button.pack(side=tk.LEFT, padx=5, pady=5)
+        if self.show_valid_button:
+            self.valid_button = ttk.Button(finish_controls_frame, text="✅ Finish as Valid", command=self.controller.finish_as_valid, style="Valid.TButton")
+            self.valid_button.pack(side=tk.LEFT, padx=5, pady=5)
         
-        self.rerun_button = ttk.Button(
-            finish_controls_frame, 
-            text="🔄 Rerun Auto-Processing", 
-            command=self._on_rerun_button_click, 
-            style="Rerun.TButton"
-        )
-        self.rerun_button.pack(side=tk.LEFT, padx=5, pady=5)
+        if self.show_rerun_button:
+            self.rerun_button = ttk.Button(
+                finish_controls_frame, 
+                text="🔄 Rerun Auto-Processing", 
+                command=self._on_rerun_button_click, 
+                style="Rerun.TButton"
+            )
+            self.rerun_button.pack(side=tk.LEFT, padx=5, pady=5)
 
         # --- Marked Frames List Pane ---
         list_pane.rowconfigure(1, weight=1)
