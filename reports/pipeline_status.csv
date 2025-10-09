@@ -1,0 +1,8 @@
+dataset,Data Ingestion,Preprocessing,Feature Engineering,Model Training,Evaluation
+Dataset_01,SUCCESS: Completed successfully.,SUCCESS: Completed successfully.,SUCCESS: Completed successfully.,SUCCESS: Completed successfully.,FAILURE: A critical error occurred.
+Dataset_02,FAILURE: A critical error occurred.,,,,
+Dataset_03,SUCCESS: Completed successfully.,SUCCESS: Completed successfully.,SUCCESS: Completed successfully.,SUCCESS: Completed successfully.,SUCCESS: Completed successfully.
+Dataset_04,FAILURE: A critical error occurred.,,,,
+Dataset_05,SUCCESS: Completed successfully.,SUCCESS: Completed successfully.,SUCCESS: Completed successfully.,SUCCESS: Completed successfully.,SUCCESS: Completed successfully.
+Dataset_06,SUCCESS: Completed successfully.,FAILURE: A critical error occurred.,,,
+Dataset_07,SUCCESS: Completed successfully.,SUCCESS: Completed successfully.,SUCCESS: Completed successfully.,SUCCESS: Completed successfully.,SUCCESS: Completed successfully.
