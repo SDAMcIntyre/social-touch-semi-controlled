@@ -144,6 +144,7 @@ source/2_primary_processing/0_kinect_segmentation/createRGBvideo/createRGBvideo.
 # user config file with project path
 /configs/**/*.yaml
 semi_controlled_project_data_config.json
+/reports
 
 # sandbox scripts
 /code/scripts/misc
