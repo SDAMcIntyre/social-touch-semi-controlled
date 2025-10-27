@@ -64,6 +64,6 @@ tasks:
     depends_on: [review_2d_stickers]
 
   view_somatosensory_assessement:
-    enabled: false
+    enabled: true
     description: "Manually view the somatosensory assessment results."
     depends_on: [prepare_hand_model, review_2d_stickers, prepare_stickers_colorspace]

@@ -185,7 +185,8 @@ def define_handstickers_colorspaces_from_roi(
     roi_metadata_path: Path,
     dest_metadata_path: Path,
     *,
-    force_processing: bool = False
+    force_processing: bool = False,
+    merge: bool = False
 ) -> None:
     """Orchestrates the colorspace definition for tracked objects in a video.
 
@@ -258,9 +259,18 @@ def define_handstickers_colorspaces_from_roi(
         print("   - Waiting for user to select representative frames...")
         try:
             landmarks = current_colorspace.get_frame_ids()
-            view = TrackerReviewGUI(title=object_video_path.name, landmarks=landmarks, windowState='maximized')
+            view = TrackerReviewGUI(
+                title=object_video_path.name, 
+                landmarks=landmarks,
+                show_valid_button=False,
+                show_rerun_button=False,
+                windowState='maximized')
         except:
-            view = TrackerReviewGUI(title=object_video_path.name, windowState='maximized')
+            view = TrackerReviewGUI(
+                title=object_video_path.name,
+                show_valid_button=False,
+                show_rerun_button=False,
+                windowState='maximized')
         controller = TrackerReviewOrchestrator(model=video_manager, view=view)
         _, selected_frame_indices, _ = controller.run()
 
@@ -289,7 +299,8 @@ def define_handstickers_colorspaces_from_roi(
                 object_name, 
                 selected_frame_indices, 
                 colorspace_from_gui,
-                status=ColorSpaceStatus.TO_BE_PROCESSED)
+                status=ColorSpaceStatus.TO_BE_PROCESSED,
+                merge=merge)
         colorspace_modified = True
     
     # Step 3e: Update the destination JSON file

@@ -11,7 +11,7 @@ class ColorSpaceStatus(Enum):
 
 class ColorSpaceDefault(Enum):
     """Provides default values for colorspace properties."""
-    Threshold = 240
+    Threshold = 250
     Status = ColorSpaceStatus.TO_BE_PROCESSED.value
 
 
