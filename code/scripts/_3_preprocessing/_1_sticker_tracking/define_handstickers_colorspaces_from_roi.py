@@ -185,7 +185,8 @@ def define_handstickers_colorspaces_from_roi(
     roi_metadata_path: Path,
     dest_metadata_path: Path,
     *,
-    force_processing: bool = False
+    force_processing: bool = False,
+    merge: bool = False
 ) -> None:
     """Orchestrates the colorspace definition for tracked objects in a video.
 
@@ -298,7 +299,8 @@ def define_handstickers_colorspaces_from_roi(
                 object_name, 
                 selected_frame_indices, 
                 colorspace_from_gui,
-                status=ColorSpaceStatus.TO_BE_PROCESSED)
+                status=ColorSpaceStatus.TO_BE_PROCESSED,
+                merge=merge)
         colorspace_modified = True
     
     # Step 3e: Update the destination JSON file

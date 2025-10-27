@@ -151,6 +151,8 @@ def track_led_blinking(video_path: Path, stimulus_metadata: Path, output_dir: Pa
 def validate_forearm_extraction(session_output_dir: Path) -> Path:
     print(f"[{session_output_dir.name}] Validating forearm extraction...")
     is_valid = is_forearm_valid(session_output_dir / "forearm_pointclouds", verbose=True)
+    if not is_valid:
+        raise ValueError("Forearm needs to be manually extracted first.")
     return is_valid
 
 @flow(name="5. Validate Hand Extraction")
@@ -159,6 +161,8 @@ def validate_hand_extraction(rgb_video_path: Path, hand_models_dir: Path, expect
     name_baseline = rgb_video_path.stem + "_handmodel"
     metadata_path = output_dir / (name_baseline + "_metadata.json")
     is_valid, errors = is_hand_model_valid(metadata_path, hand_models_dir, expected_labels, verbose=True)
+    if not is_valid:
+        raise ValueError("Hand model needs to be manually extracted first.")
     return is_valid
 
 @flow(name="6. Track Stickers (2D)")
@@ -171,8 +175,7 @@ def track_stickers(rgb_video_path: Path, output_dir: Path, *, force_processing: 
     track_objects_in_video(rgb_video_path, metadata_roi_path, output_path=stickers_roi_csv_path, force_processing=force_processing)
     
     if not is_2d_stickers_tracking_valid(metadata_roi_path):
-        print("❌ --> 2D sticker tracking has not been manually validated. Cannot continue the pipeline.")
-        return stickers_roi_csv_path, False
+        raise ValueError("❌ --> 2D sticker tracking has not been manually validated. Cannot continue the pipeline.")
     
     roi_unified_csv_path = output_dir / (name_baseline + "_roi_standard_size.csv")
     generate_standard_roi_size_dataset(stickers_roi_csv_path, roi_unified_csv_path)
@@ -185,8 +188,7 @@ def track_stickers(rgb_video_path: Path, output_dir: Path, *, force_processing: 
     create_color_correlation_videos(corrmap_video_base_path, metadata_colorspace_path, binary_video_base_path, force_processing=force_processing)
     
     if not is_correlation_videos_threshold_defined(metadata_colorspace_path):
-        print("❌ --> correlation videos threshold has not been manually validated. Cannot continue the pipeline.Execute the corresponding manual task. ")
-        return binary_video_base_path, False
+        raise ValueError("❌ --> correlation videos threshold has not been manually validated. Cannot continue the pipeline.Execute the corresponding manual task. ")
     
     fit_ellipses_path = output_dir / (name_baseline + "_ellipses.csv")
     fit_ellipses_on_correlation_videos(
