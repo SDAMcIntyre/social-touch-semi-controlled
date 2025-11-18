@@ -281,7 +281,7 @@ def generate_somatosensory_chars(
 def unify_dataset(contact_chars_path: Path, ttl_path: Path, output_dir: Path, *, force_processing: bool = False) -> Path:
     print(f"[{output_dir.name}] Generating unified dataset...")
     name_baseline = Path(contact_chars_path).stem
-    unified_path = output_dir / (name_baseline + "_somatosensory_data_withTTL.csv")
+    unified_path = output_dir / (name_baseline + "_withTTL.csv")
     
     unify_contact_caracteristics_and_ttl(contact_chars_path, ttl_path, unified_path)
 
