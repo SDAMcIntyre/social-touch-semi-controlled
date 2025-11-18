@@ -425,7 +425,7 @@ if __name__ == "__main__":
     project_data_root = path_tools.get_project_data_root()
 
     configs_dir = Path("configs")
-    dag_config_path = configs_dir / "kinect_manual_pipeline_dag.yaml"
+    dag_config_path = configs_dir / "preprocess_workflow_kinect_manual_dag.yaml"
 
     try:
         main_dag_handler = DagConfigHandler(dag_config_path)

@@ -493,13 +493,13 @@ def setup_environment():
     project_data_root = path_tools.get_project_data_root()
 
     configs_dir = Path("configs")
-    dag_config_path = Path(configs_dir / "kinect_automatic_pipeline_dag.yaml")
+    dag_config_path = Path(configs_dir / "preprocess_workflow_kinect_auto_dag.yaml")
 
     print("🛠️  Setting up environment...")
     reports_dir = Path("reports")
     reports_dir.mkdir(exist_ok=True)
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
-    report_file_path = reports_dir / f"{timestamp}_automatic_pipeline_status.xlsx"
+    report_file_path = reports_dir / f"{timestamp}_preprocess_workflow_kinect_auto_status.xlsx"
     if report_file_path.exists():
         shutil.rmtree(report_file_path)
         print("🧹 File with the same name found, removing it.")
