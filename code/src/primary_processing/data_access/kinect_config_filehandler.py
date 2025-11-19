@@ -102,7 +102,6 @@ class KinectConfigFileHandler:
             raise UnresolvedVariableError(f"Could not resolve variables: {set(final_unresolved)}")
 
         return KinectConfigFileHandler._recursive_substitute(config_data, variables)
-    
 
 def get_block_files(kinect_configs_dir: Path):
     """Helper to find and validate session configuration files."""
