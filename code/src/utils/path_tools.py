@@ -115,10 +115,8 @@ def get_project_data_root():
         initialdir=default_path if default_path else "/"
     )
 
-    # --- MODIFICATION START ---
     # Destroy the root window to free up resources
     root.destroy()
-    # --- MODIFICATION END ---
 
     if not selected_path:  # Handles the case where the user closes the dialog
         print("❌ No folder selected. Exiting program.")
@@ -162,19 +160,19 @@ def get_team_path_abs(cloud_location="Teams"):
 def get_database_path(cloud_location="Teams"):
     # path to database root folder
     team_path_abs = get_team_path_abs(cloud_location=cloud_location)
-    return os.path.join(team_path_abs, 'data')
+    return os.path.join(team_path_abs, '02_data')
 
 
 def get_metadata_path(cloud_location="Teams"):
     # path to database root folder
     team_path_abs = get_team_path_abs(cloud_location=cloud_location)
-    return os.path.join(team_path_abs, 'metadata')
+    return os.path.join(team_path_abs, '03_metadata')
 
 
 def get_result_path(cloud_location="Teams"):
     # path to database root folder
     team_path_abs = get_team_path_abs(cloud_location=cloud_location)
-    return os.path.join(team_path_abs, 'figures')
+    return os.path.join(team_path_abs, '02_data/figures')
 
 
 def get_path_abs(input_dir, output_dir):
