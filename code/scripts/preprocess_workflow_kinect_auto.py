@@ -63,7 +63,8 @@ from _3_preprocessing._5_led_tracking import (
 )
 
 from _3_preprocessing._6_unification import (
-    unify_contact_caracteristics_and_ttl
+    unify_contact_caracteristics_and_ttl,
+    add_trial_id
 )
 
 
@@ -277,15 +278,29 @@ def generate_somatosensory_chars(
     )
     return contact_characteristics_path
 
-@flow(name="9. Unify Dataset")
-def unify_dataset(contact_chars_path: Path, ttl_path: Path, output_dir: Path, *, force_processing: bool = False) -> Path:
+@flow(name="9. Unify TTL and Contact Dataset")
+def unify_ttl_and_contact(contact_chars_path: Path, ttl_path: Path, output_dir: Path, *, force_processing: bool = False) -> Path:
     print(f"[{output_dir.name}] Generating unified dataset...")
     name_baseline = Path(contact_chars_path).stem
     unified_path = output_dir / (name_baseline + "_withTTL.csv")
     
-    unify_contact_caracteristics_and_ttl(contact_chars_path, ttl_path, unified_path)
+    unify_contact_caracteristics_and_ttl(contact_chars_path, ttl_path, unified_path, force_processing=force_processing)
 
     return unified_path
+
+@flow(name="10. Define Trial IDs")
+def define_trial_ids_flow(unified_data_path: Path, output_dir: Path, *, force_processing: bool = False) -> Path:
+    print(f"[{output_dir.name}] Defining Trial IDs...")
+    name_baseline = Path(unified_data_path).stem
+    final_path = output_dir / (name_baseline + "_withTrialID.csv")
+    
+    add_trial_id(
+        input_path=unified_data_path, 
+        output_path=final_path, 
+        force_processing=force_processing
+    )
+
+    return final_path
 
 
 # --- 4. The "Worker" Flow ---
@@ -379,11 +394,17 @@ def run_single_session_pipeline(
          "outputs": ["somatosensory_chars_path"]},
 
         # --- Stage 5: Final Data Integration ---
-        {"name": "unify_dataset", 
-         "func": unify_dataset, 
+        {"name": "unify_ttl_and_contact", 
+         "func": unify_ttl_and_contact,
          "params": lambda: {"contact_chars_path": context.get("somatosensory_chars_path"), 
                             "ttl_path": context.get("led_tracking_path"), 
-                            "output_dir": config.video_processed_output_dir}},
+                            "output_dir": config.video_processed_output_dir},
+         "outputs": ["unified_data_path"]}, # Add output key for the next step
+        {"name": "add_trial_id", 
+         "func": define_trial_ids_flow, # Call the new flow
+         "params": lambda: {"unified_data_path": context.get("unified_data_path"),
+                            "output_dir": config.video_processed_output_dir},
+         "outputs": ["final_data_path"]},
     ]
 
     # --- Pipeline Execution Engine ---
