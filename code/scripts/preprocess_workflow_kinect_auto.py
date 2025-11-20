@@ -64,11 +64,14 @@ from _3_preprocessing._5_led_tracking import (
 
 from _3_preprocessing._6_unification import (
     unify_contact_caracteristics_and_ttl,
-    add_trial_id
+    add_trial_id,
+    add_stimuli_metadata_to_data 
 )
 
+# -------------------------------
 
 class TaskExecutor:
+# ... (TaskExecutor class remains unchanged) ...
     """A context manager to handle the boilerplate of running a pipeline task."""
     def __init__(self, task_name, block_name, dag_handler, monitor):
         self.task_name: str = task_name
@@ -106,6 +109,8 @@ class TaskExecutor:
         return False
 
 # --- 3. Sub-Flows (Formerly Tasks) ---
+# ... (Existing flows 0. to 9. remain unchanged) ...
+
 @flow(name="0. Analyse MKV video")
 def validate_mkv_video(source_video: Path, output_dir: Path, *, force_processing: bool = False) -> Path:
     print(f"[{output_dir.name}] Analysing MKV video...")
@@ -301,6 +306,21 @@ def define_trial_ids_flow(unified_data_path: Path, output_dir: Path, *, force_pr
     )
 
     return final_path
+    
+@flow(name="11. Add Stimuli Metadata")
+def add_stimuli_metadata_flow(unified_data_path: Path, stimulus_metadata: Path, output_dir: Path, *, force_processing: bool = False) -> Path:
+    print(f"[{output_dir.name}] Adding Stimuli Metadata...")
+    name_baseline = Path(unified_data_path).stem
+    final_path = output_dir / (name_baseline + "_withStimuliData.csv")
+    
+    add_stimuli_metadata_to_data(
+        data_path=unified_data_path,
+        stimuli_path=stimulus_metadata,
+        output_path=final_path,
+        force_processing=force_processing
+    )
+
+    return final_path
 
 
 # --- 4. The "Worker" Flow ---
@@ -330,6 +350,7 @@ def run_single_session_pipeline(
 
     # --- Define the entire pipeline as a data structure ---
     pipeline_stages = [
+        # ... (Existing stages 1-8 remain unchanged) ...
         # --- Stage 1: Primary Video Processing ---
         {"name": "validate_mkv_video", 
          "func": validate_mkv_video, 
@@ -399,12 +420,20 @@ def run_single_session_pipeline(
          "params": lambda: {"contact_chars_path": context.get("somatosensory_chars_path"), 
                             "ttl_path": context.get("led_tracking_path"), 
                             "output_dir": config.video_processed_output_dir},
-         "outputs": ["unified_data_path"]}, # Add output key for the next step
+         "outputs": ["unified_data_path"]},
         {"name": "add_trial_id", 
-         "func": define_trial_ids_flow, # Call the new flow
+         "func": define_trial_ids_flow,
          "params": lambda: {"unified_data_path": context.get("unified_data_path"),
                             "output_dir": config.video_processed_output_dir},
          "outputs": ["final_data_path"]},
+
+        # --- NEW STAGE 6: Stimuli Metadata Integration ---
+        {"name": "add_stimuli_metadata", 
+         "func": add_stimuli_metadata_flow, # New flow
+         "params": lambda: {"unified_data_path": context.get("final_data_path"), # Input is output of previous step
+                            "stimulus_metadata": config.stimulus_metadata, # Use config for stimuli path
+                            "output_dir": config.video_processed_output_dir},
+         "outputs": ["final_data_with_stimuli_path"]}, # New final output key
     ]
 
     # --- Pipeline Execution Engine ---
@@ -457,6 +486,7 @@ def run_batch_processing(
     report_file_path: Path,
     parallel: bool,
 ):
+# ... (run_batch_processing remains unchanged) ...
     """
     Dispatches pipeline runs for all session configs found in a directory.
 
@@ -510,6 +540,7 @@ def run_batch_processing(
 ### 2. MODULAR MAIN EXECUTION BLOCK
 ###
 def setup_environment():
+# ... (setup_environment remains unchanged) ...
     """Handles filesystem setup, cleaning up old reports."""
     project_data_root = path_tools.get_project_data_root()
 
@@ -527,6 +558,7 @@ def setup_environment():
     return project_data_root, configs_dir, dag_config_path, report_file_path
 
 def main():
+# ... (main remains unchanged) ...
     """Main execution function to orchestrate the pipeline."""
     freeze_support() # Essential for multiprocessing on Windows
     project_data_root, configs_dir, dag_config_path, report_file_path = setup_environment()
