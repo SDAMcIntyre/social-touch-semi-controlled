@@ -294,13 +294,15 @@ def unify_ttl_and_contact(contact_chars_path: Path, ttl_path: Path, output_dir: 
     return unified_path
 
 @flow(name="10. Define Trial IDs")
-def define_trial_ids_flow(unified_data_path: Path, output_dir: Path, *, force_processing: bool = False) -> Path:
+def define_trial_ids_flow(rgb_video_path: Path, unified_data_path: Path, output_dir: Path, *, force_processing: bool = False) -> Path:
     print(f"[{output_dir.name}] Defining Trial IDs...")
     name_baseline = Path(unified_data_path).stem
     final_path = output_dir / (name_baseline + "_withTrialID.csv")
     
+    trial_chunk_path: Path = output_dir / (Path(rgb_video_path).stem + "_trial-chunks.csv")
     add_trial_id(
-        input_path=unified_data_path, 
+        trial_chunk_path=trial_chunk_path,
+        unified_data_path=unified_data_path, 
         output_path=final_path, 
         force_processing=force_processing
     )
@@ -423,7 +425,8 @@ def run_single_session_pipeline(
          "outputs": ["unified_data_path"]},
         {"name": "add_trial_id", 
          "func": define_trial_ids_flow,
-         "params": lambda: {"unified_data_path": context.get("unified_data_path"),
+         "params": lambda: {"rgb_video_path": context.get("rgb_video_path"), 
+                            "unified_data_path": context.get("unified_data_path"),
                             "output_dir": config.video_processed_output_dir},
          "outputs": ["final_data_path"]},
 
