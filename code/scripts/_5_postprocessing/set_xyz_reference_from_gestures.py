@@ -5,7 +5,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from pathlib import Path
 from typing import List, Tuple, Dict, Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from sklearn.decomposition import PCA
 
 # Import the idempotency check utility
@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class CalibrationConfig:
     """Immutable configuration for gesture calibration."""
+    # Primary columns used for calculating the calibration (PCA)
     col_x: str = 'sticker_blue_position_x'
     col_y: str = 'sticker_blue_position_y'
     col_z: str = 'sticker_blue_position_z'
@@ -37,6 +38,9 @@ class CalibrationConfig:
     
     output_json_name: str = "pca-xyz_transformation-matrices.json"
     output_csv_suffix: str = "_pca-xyz.csv"
+
+    # Colors to apply the transformation to in the final step
+    target_colors: Tuple[str, ...] = ('blue', 'yellow', 'green')
 
 # --- 2. Data Ingestion Layer ---
 
@@ -56,15 +60,32 @@ class GestureDataLoader:
             return None
             
         try:
-            usecols = [
+            # dynamically build columns for all target colors + metadata
+            data_cols = []
+            for color in self.config.target_colors:
+                data_cols.append(f"sticker_{color}_position_x")
+                data_cols.append(f"sticker_{color}_position_y")
+                data_cols.append(f"sticker_{color}_position_z")
+
+            meta_cols = [
+                self.config.col_type, 
+                self.config.col_contact, 
+                self.config.col_trial
+            ]
+            
+            usecols = data_cols + meta_cols
+            
+            df = pd.read_csv(file_path, usecols=usecols)
+            
+            # Drop NaNs only in CRITICAL columns used for calibration (Blue/Primary)
+            # If we drop based on all columns, a flicker in Yellow might delete a valid Blue calibration row.
+            critical_cols = [
                 self.config.col_x, self.config.col_y, self.config.col_z,
                 self.config.col_type, self.config.col_contact, self.config.col_trial
             ]
-            df = pd.read_csv(file_path, usecols=usecols)
             
-            # Drop NaNs only in critical columns
             # Note: This preserves the original index, which is crucial for merging back later.
-            df_clean = df.dropna(subset=usecols)
+            df_clean = df.dropna(subset=critical_cols)
             
             if df_clean.empty:
                 return None
@@ -160,8 +181,8 @@ def set_xyz_reference_from_gestures(
             stroke_seg = loader.extract_active_segments(df_stroke)
             
             # Store raw segments individually before grouping
+            # Note: We strictly use the Primary columns (Blue) for calculating the Calibration Matrix
             if not tap_seg.empty:
-                # Group by trial to get individual arrays for sequential visualization
                 for _, group in tap_seg.groupby(config.col_trial):
                     tapping_segments.append(group[[config.col_x, config.col_y, config.col_z]].values)
             
@@ -192,69 +213,71 @@ def set_xyz_reference_from_gestures(
             logger.info("Close the visualization window to proceed to the next segment.")
 
             # --- Visualize Tapping Segments (Step 1 Aligned) ---
-            # Tapping segments are used to flatten the Z-plane. We visualize them after Step 1 
-            # transform to verify they are "flat".
             logger.info(">>> Visualizing Tapping Segments (Step 1: Z-Aligned)")
             for i, seg in enumerate(tapping_segments):
-                # Transform raw segment using Step 1 (Z alignment)
                 transformed_seg = PCACalibrationEngine.apply_step1_transform(seg, calib_result)
-                
                 logger.info(f"Displaying Tapping Segment {i+1}/{len(tapping_segments)}")
                 viz = Trajectory3DVisualizer(transformed_seg)
-                # Optionally, we could set a specific title if the Visualizer supported it publicly,
-                # but the default window title is handled internally.
                 viz.show()
 
             # --- Visualize Stroking Segments (Full Aligned) ---
-            # Stroking segments are used to align X/Y. We visualize them after Full transform.
             logger.info(">>> Visualizing Stroking Segments (Final: XY-Aligned)")
             for i, seg in enumerate(stroking_segments):
-                # Transform raw segment using Full Transform
                 transformed_seg = PCACalibrationEngine.apply_full_transform(seg, calib_result)
-                
                 logger.info(f"Displaying Stroking Segment {i+1}/{len(stroking_segments)}")
                 viz = Trajectory3DVisualizer(transformed_seg)
                 viz.show()
         except Exception as e:
             logger.error(f"Visualization failed: {e}")
-            # Ensure pipeline continues even if viz fails
             pass
 
     if monitor:
         try:
-            # Visualize Aggregate Summary (Original implementation retained for global view)
             logger.info("Displaying Global Aggregate Summary...")
             CalibrationVisualizer.visualize(all_tapping, all_stroking, calib_result, output_dir.name)
         except Exception as e:
             logger.error(f"Visualization failed: {e}")
-            # Ensure pipeline continues even if viz fails
             pass
 
     # 5. Apply Transformation to loaded data and Save
-    logger.info("Phase 2: Applying transformation and saving files...")
+    logger.info("Phase 2: Applying transformation to [Blue, Yellow, Green] and saving files...")
     generated_files = []
     
     for input_path, df in loaded_data.items():
         output_path = output_dir / f"{input_path.stem}{config.output_csv_suffix}"
         
         try:
-            # Extract coords from the cleaned DataFrame (df)
-            # df matches the row count of transformed_coords
-            coords = df[[config.col_x, config.col_y, config.col_z]].values
-            
-            # Apply Full Transform
-            transformed_coords = PCACalibrationEngine.apply_full_transform(coords, calib_result)
-            
-            # Update DataFrame
             # 1. Read the full original file to preserve original structure (and NaNs)
             df_out = pd.read_csv(input_path) 
             
-            # 2. Use index-based assignment (.loc).
-            # 'df.index' contains the indices of rows that survived the dropna() in load_and_segment.
-            # We map the transformed coordinates exactly to those rows in the output DataFrame.
-            df_out.loc[df.index, config.col_x] = transformed_coords[:, 0]
-            df_out.loc[df.index, config.col_y] = transformed_coords[:, 1]
-            df_out.loc[df.index, config.col_z] = transformed_coords[:, 2]
+            # 2. Apply transformation to each color defined in config
+            for color in config.target_colors:
+                c_x = f"sticker_{color}_position_x"
+                c_y = f"sticker_{color}_position_y"
+                c_z = f"sticker_{color}_position_z"
+
+                # Check if columns exist in the loaded dataframe
+                if not all(col in df.columns for col in [c_x, c_y, c_z]):
+                    logger.warning(f"Skipping color '{color}' for {input_path.name}: Columns missing.")
+                    continue
+
+                # Extract coords for this specific color
+                # df matches the row count of transformed_coords (aligned by index)
+                coords = df[[c_x, c_y, c_z]].values
+                
+                # Handle NaNs in secondary colors (Yellow/Green might have drops where Blue doesn't)
+                # If the input row has NaNs, the transform result will be NaN, which is fine.
+                # However, to prevent PCA engine errors, we can check or fill. 
+                # Assuming PCACalibrationEngine handles or propagates NaNs gracefully via numpy.
+                # If not, we would need to mask NaNs. Assuming standard Matmul behavior here.
+                
+                # Apply Full Transform (Using the same calibration matrix for all colors)
+                transformed_coords = PCACalibrationEngine.apply_full_transform(coords, calib_result)
+                
+                # Update DataFrame using index-based assignment
+                df_out.loc[df.index, c_x] = transformed_coords[:, 0]
+                df_out.loc[df.index, c_y] = transformed_coords[:, 1]
+                df_out.loc[df.index, c_z] = transformed_coords[:, 2]
             
             df_out.to_csv(output_path, index=False)
             generated_files.append(output_path)

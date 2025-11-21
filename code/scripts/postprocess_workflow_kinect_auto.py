@@ -83,7 +83,9 @@ def set_xyz_reference_from_gestures_flow(input_files: List[Path], output_dir: Pa
     output_dir = output_dir / "session_xyz_reference_from_gestures"
     output_files = set_xyz_reference_from_gestures(
         input_files, output_dir,
-        monitor=True
+        monitor=False,
+        monitor_segment=False,
+        force_processing=True
     )
 
     return output_files
