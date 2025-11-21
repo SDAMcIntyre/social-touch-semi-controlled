@@ -13,17 +13,27 @@ class TrialSegmenterGUI:
     """
     A GUI for reviewing video and recording 'trial' (contiguous frame ranges).
     
-    Modified from ConsolidatedTracksReviewGUI to focus on boolean labeling
-    rather than object tracking visualization.
+    Modified to prevent overlapping chunks, support deletion, and visualize tracking data
+    (ROIs and Ellipses) identical to the ConsolidatedTracksReviewGUI.
     
     Attributes:
         chunks (List[Tuple[int, int]]): The list of recorded frame ranges.
     """
 
+    # Map color names to BGR tuples for OpenCV drawing
+    BGR_COLOR_MAP = {
+        "blue": (255, 0, 0), "green": (0, 255, 0), "red": (0, 0, 255),
+        "yellow": (0, 255, 255), "orange": (0, 165, 255), "purple": (128, 0, 128),
+        "pink": (203, 192, 255), "cyan": (255, 255, 0), "magenta": (255, 0, 255),
+        "white": (255, 255, 255), "black": (0, 0, 0), "gray": (128, 128, 128),
+        "grey": (128, 128, 128), "brown": (42, 42, 165), "violet": (226, 43, 138)
+    }
+
     def __init__(self,
                  *,
                  video_manager: 'VideoMP4Manager',
                  tracks_manager: 'ConsolidatedTracksManager',
+                 object_colors: Dict[str, str],
                  initial_chunks: Optional[List[Tuple[int, int]]] = None,
                  title: str = "Chunk Recording Interface",
                  windowState: str = 'normal'):
@@ -32,7 +42,8 @@ class TrialSegmenterGUI:
 
         Args:
             video_manager: Manager for accessing video frames.
-            tracks_manager: Included for architectural consistency.
+            tracks_manager: Manager for accessing tracking data.
+            object_colors: A mapping from object names to color strings.
             initial_chunks: Optional list of (start, end) tuples to preload.
             title: Window title.
             windowState: 'normal' or 'maximized'.
@@ -42,6 +53,10 @@ class TrialSegmenterGUI:
         self.title = title
         self.windowState = windowState
 
+        # --- Color Setup ---
+        self.object_colors = {name: self.BGR_COLOR_MAP.get(color.lower(), (255, 255, 255))
+                              for name, color in object_colors.items()}
+
         # --- Chunk Data State ---
         self.chunks: List[Tuple[int, int]] = initial_chunks if initial_chunks else []
         self._is_recording = False
@@ -50,8 +65,11 @@ class TrialSegmenterGUI:
         # --- Playback State ---
         self._is_playing = False
         self._update_job = None
-        # Fixed framerate delay, speed controls removed per requirements
-        self._playback_delay_ms = int(1000 / self.video_manager.fps)
+        # Fixed framerate delay
+        try:
+            self._playback_delay_ms = int(1000 / self.video_manager.fps)
+        except AttributeError:
+            self._playback_delay_ms = 33  # Default to ~30fps if undefined
 
         # --- UI Elements ---
         self.root = None
@@ -61,6 +79,8 @@ class TrialSegmenterGUI:
         self.record_button = None
         self.chunk_listbox = None
         self.current_frame_label = None
+        self.scale_var = None
+        self.play_button = None
 
     def setup_ui(self):
         """Creates and arranges the Tkinter widgets."""
@@ -104,7 +124,6 @@ class TrialSegmenterGUI:
         self.timeline_scale.grid(row=1, column=0, sticky="ew", pady=(5, 0))
 
         # 3. Chunk Visualization Canvas
-        # Located physically below the navigation slider
         self.chunk_canvas = tk.Canvas(main_frame, height=30, bg="#e0e0e0", highlightthickness=0)
         self.chunk_canvas.grid(row=2, column=0, sticky="ew", pady=(0, 10))
         self.chunk_canvas.bind("<Configure>", self._on_canvas_resize)
@@ -118,16 +137,16 @@ class TrialSegmenterGUI:
         left_controls = ttk.Frame(controls_container)
         left_controls.grid(row=0, column=0, sticky="w")
 
-        # Play Button (Functionality retained for navigation, separated from recording toggle)
+        # Play Button
         self.play_button = ttk.Button(left_controls, text="▶ Play Video", command=self.toggle_video_playback)
         self.play_button.pack(side=tk.LEFT, padx=5)
 
         # Record Toggle Button
         self.record_button = tk.Button(
-            left_controls, text="● Start Recording (Space)", 
+            left_controls, text="● Start Recording (Space/Enter)", 
             bg="lightgrey", fg="black",
             command=self.toggle_recording_state,
-            width=25, relief=tk.RAISED
+            width=30, relief=tk.RAISED
         )
         self.record_button.pack(side=tk.LEFT, padx=15)
 
@@ -154,6 +173,18 @@ class TrialSegmenterGUI:
         delete_btn = ttk.Button(right_controls, text="Delete Selected Chunk", command=self.delete_selected_chunk)
         delete_btn.pack(side=tk.TOP, pady=5, fill=tk.X)
 
+        # --- NEW: OK Button to Finish and Return Data ---
+        # We use a bold font or distinct styling to indicate this is the primary exit action.
+        ok_btn = tk.Button(
+            right_controls, 
+            text="OK (Finish)", 
+            command=self.quit,
+            bg="#4CAF50", fg="white", 
+            font=("Arial", 10, "bold"),
+            relief=tk.RAISED
+        )
+        ok_btn.pack(side=tk.TOP, pady=(10, 5), fill=tk.X)
+
         # Initialize visual state
         self._bind_keys()
         self._refresh_chunk_list()
@@ -161,45 +192,141 @@ class TrialSegmenterGUI:
 
     def _bind_keys(self):
         """Binds keyboard shortcuts."""
-        # Navigation
-        self.root.bind('<Left>', lambda e: self.seek_to_frame(self.scale_var.get() - 1))
-        self.root.bind('<Right>', lambda e: self.seek_to_frame(self.scale_var.get() + 1))
+        total_frames = len(self.video_manager)
+
+        # Standard Navigation (1 Frame)
+        # We clamp these to ensure safety, although seek_to_frame checks bounds too.
+        self.root.bind('<Left>', lambda e: self.seek_to_frame(max(0, self.scale_var.get() - 1)))
+        self.root.bind('<Right>', lambda e: self.seek_to_frame(min(total_frames - 1, self.scale_var.get() + 1)))
         
-        # Space Bar acts as Toggle for Recording (Overrides Play/Pause)
+        # Fast Navigation (5 Frames) via Control + Arrows
+        self.root.bind('<Control-Left>', lambda e: self.seek_to_frame(max(0, self.scale_var.get() - 5)))
+        self.root.bind('<Control-Right>', lambda e: self.seek_to_frame(min(total_frames - 1, self.scale_var.get() + 5)))
+
+        # Space Bar AND Enter Key act as Toggle for Recording (Overrides Play/Pause)
         self.root.bind('<space>', lambda e: self.toggle_recording_state())
+        self.root.bind('<Return>', lambda e: self.toggle_recording_state())
 
     def start(self):
+        """
+        Starts the GUI loop.
+        
+        Returns:
+            List[Tuple[int, int]]: The final list of chunks when the window is closed.
+        """
         self.setup_ui()
         self.root.mainloop()
+        # Only reached after root.destroy() in self.quit()
+        return self.chunks
 
     def quit(self):
+        """Closes the window and stops the loop."""
         if self._update_job:
             self.root.after_cancel(self._update_job)
         self.root.destroy()
+        # Note: The return value here is used by the event handler but not the start() caller.
+        # The start() method returns self.chunks after mainloop exits.
         return self.chunks
 
-    # --- Logic: Chunk Recording ---
+    # --- Logic: Chunk Recording & Overlap Prevention ---
+
+    def _check_overlap(self, start_f: int, end_f: int) -> bool:
+        """
+        Checks if the range [start_f, end_f] overlaps with any existing chunk.
+        """
+        s = min(start_f, end_f)
+        e = max(start_f, end_f)
+        
+        for (cs, ce) in self.chunks:
+            # Check for intersection
+            if max(s, cs) <= min(e, ce):
+                return True
+        return False
+
+    def _update_record_button_state(self):
+        """
+        Updates the record button's state and color based on overlap logic.
+        """
+        if not self.root: return
+        
+        current_frame = self.scale_var.get()
+        
+        if not self._is_recording:
+            # IDLE STATE: Check if current frame is inside an existing chunk
+            in_existing_chunk = False
+            for (cs, ce) in self.chunks:
+                if cs <= current_frame <= ce:
+                    in_existing_chunk = True
+                    break
+            
+            if in_existing_chunk:
+                # Cannot start recording here
+                self.record_button.config(
+                    state=tk.DISABLED, 
+                    text="Overlap Detected", 
+                    bg="#cccccc", 
+                    fg="#666666"
+                )
+            else:
+                # Ready to record
+                self.record_button.config(
+                    state=tk.NORMAL, 
+                    text="● Start Recording (Space/Enter)", 
+                    bg="lightgrey", 
+                    fg="black",
+                    relief=tk.RAISED
+                )
+        else:
+            # RECORDING STATE: Check if the segment formed so far overlaps anything
+            rec_start = self._recording_start_frame
+            
+            if self._check_overlap(rec_start, current_frame):
+                # Overlap occurring - Disable saving (Force user to move back)
+                self.record_button.config(
+                    state=tk.DISABLED, 
+                    text="Overlap Detected", 
+                    bg="#cccccc", 
+                    fg="#666666"
+                )
+            else:
+                # Valid recording segment
+                self.record_button.config(
+                    state=tk.NORMAL, 
+                    text="■ Stop Recording (Space/Enter)", 
+                    bg="#ffcccc", 
+                    fg="red",
+                    relief=tk.SUNKEN
+                )
 
     def toggle_recording_state(self):
         """Toggles between Idle and Recording states."""
+        
+        # If button is disabled due to overlap, ignore shortcut keys
+        if self.record_button['state'] == tk.DISABLED:
+            return
+
         current_frame = self.scale_var.get()
 
         if not self._is_recording:
             # Start Trigger
             self._is_recording = True
             self._recording_start_frame = current_frame
+            self._update_record_button_state()
             
-            # UI Feedback: Button becomes Red/Rec pressed
-            self.record_button.config(text="■ Stop Recording (Space)", bg="#ffcccc", fg="red", relief=tk.SUNKEN)
         else:
             # End Trigger
             start = self._recording_start_frame
             end = current_frame
             
-            # Normalize range (handle reverse playback recording)
+            # Normalize range
             actual_start = min(start, end)
             actual_end = max(start, end)
             
+            # Double check overlap before saving
+            if self._check_overlap(actual_start, actual_end):
+                messagebox.showwarning("Invalid Chunk", "The selected range overlaps with an existing chunk.")
+                return
+
             # Commit chunk
             self.chunks.append((actual_start, actual_end))
             # Sort chunks by start frame
@@ -209,12 +336,10 @@ class TrialSegmenterGUI:
             self._is_recording = False
             self._recording_start_frame = None
             
-            # UI Feedback: Button becomes normal
-            self.record_button.config(text="● Start Recording (Space)", bg="lightgrey", fg="black", relief=tk.RAISED)
-            
             # Update Visuals
             self._refresh_chunk_list()
             self._draw_chunks_on_timeline()
+            self._update_record_button_state()
 
     def delete_selected_chunk(self):
         """Deletes the selected range from the listbox and data."""
@@ -223,11 +348,16 @@ class TrialSegmenterGUI:
             return
             
         index = selection[0]
+        # Delete from data
         removed = self.chunks.pop(index)
         print(f"Deleted chunk: {removed}")
         
+        # Refresh UI
         self._refresh_chunk_list()
         self._draw_chunks_on_timeline()
+        
+        # Re-evaluate button state (current frame might now be free)
+        self._update_record_button_state()
 
     def _refresh_chunk_list(self):
         """Updates the listbox with current chunks."""
@@ -259,7 +389,7 @@ class TrialSegmenterGUI:
         self.chunk_canvas.create_line(0, canvas_height/2, canvas_width, canvas_height/2, fill="gray")
 
         # Draw chunks
-        for (start, end) in self.chunks:
+        for idx, (start, end) in enumerate(self.chunks):
             x1 = (start / total_frames) * canvas_width
             x2 = (end / total_frames) * canvas_width
             
@@ -271,37 +401,142 @@ class TrialSegmenterGUI:
                 x1, 2, x2, canvas_height - 2,
                 fill="#4CAF50", outline="#388E3C" # Green color scheme
             )
+            
+            # Draw Chunk Number
+            center_x = (x1 + x2) / 2
+            center_y = canvas_height / 2
+            
+            self.chunk_canvas.create_text(
+                center_x, center_y,
+                text=str(idx + 1),
+                fill="white",
+                font=("Arial", 8, "bold")
+            )
 
-    # --- Logic: Playback & Video (Simplified from Original) ---
+    # --- Logic: Playback & Video ---
 
     def toggle_video_playback(self):
-        """Toggles video playback (distinct from recording state)."""
+        """Toggles video playback."""
         self._is_playing = not self._is_playing
         self.play_button.config(text="❚❚ Pause Video" if self._is_playing else "▶ Play Video")
         if self._is_playing:
             self._update_playback_loop()
 
     def seek_to_frame(self, frame_val):
+        """
+        Seeks to a specific frame and renders overlays. 
+        Includes robust error handling for missing frames or corrupt tracking data.
+        """
+        frame_bgr = None
+        tracking_failure_msg = None
+
+        # --- 1. Frame Validation and Retrieval ---
         try:
             frame_num = int(float(frame_val))
             total = len(self.video_manager)
-            if not (0 <= frame_num < total): return
+            if not (0 <= frame_num < total): 
+                return
             
             self.scale_var.set(frame_num)
             self.current_frame_label.config(text=f"Frame: {frame_num} / {total - 1}")
-            
-            # Display Frame
-            frame_bgr = self.video_manager[frame_num]
-            
-            # Visual Feedback for "Active Recording" overlay
-            if self._is_recording:
-                cv2.circle(frame_bgr, (30, 30), 15, (0, 0, 255), -1) # Red recording dot on video
-            
-            # Resize and Show
-            self._display_frame(frame_bgr)
 
-        except (ValueError, IndexError):
-            pass
+            try:
+                # Attempt to fetch the actual frame
+                frame_bgr = self.video_manager[frame_num]
+                if frame_bgr is None:
+                    raise ValueError("Returned frame is None")
+            except Exception as e:
+                print(f"Error fetching frame {frame_num}: {e}")
+                # Warn user via console or simple print as requested
+                print(f"Warning: Could not load frame {frame_num}. Using black fallback.")
+                
+                # Create fallback black image
+                # Try to deduce dimensions from video manager attributes or use defaults
+                w = getattr(self.video_manager, 'width', 1280)
+                h = getattr(self.video_manager, 'height', 720)
+                frame_bgr = np.zeros((h, w, 3), dtype=np.uint8)
+                
+                # Burn error message into the black frame
+                cv2.putText(frame_bgr, "FRAME LOAD FAILED", (50, h // 2), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2)
+
+            # --- 2. Tracking Data Visualization ---
+            try:
+                # Only attempt tracking visualization if we have a valid image container
+                tracked_items = self.tracks_manager.get_items_for_frame(frame_num)
+                
+                for object_name, data in tracked_items:
+                    try:
+                        # Check for explicit 'Ignored' status
+                        if str(data.get('status', '')).lower() == 'ignored':
+                            tracking_failure_msg = "Status: Ignored"
+                            continue
+
+                        color = self.object_colors.get(object_name, (255, 255, 255))
+
+                        # --- Draw ROI Rectangle ---
+                        if all(k in data for k in ['roi_x', 'roi_y', 'roi_width', 'roi_height']):
+                            # Check for NaN values which crash int() conversion
+                            roi_vals = [data['roi_x'], data['roi_y'], data['roi_width'], data['roi_height']]
+                            if any(np.isnan(v) for v in roi_vals if isinstance(v, (int, float))):
+                                tracking_failure_msg = "Invalid ROI (NaN)"
+                                continue
+
+                            x1, y1 = int(data['roi_x']), int(data['roi_y'])
+                            x2, y2 = x1 + int(data['roi_width']), y1 + int(data['roi_height'])
+                            cv2.rectangle(frame_bgr, (x1, y1), (x2, y2), color, 2)
+                            cv2.putText(frame_bgr, object_name, (x1, y1 - 10), 
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+
+                        # --- Draw Ellipse ---
+                        if all(k in data for k in ['ellipse_center_x', 'ellipse_center_y', 'axes_major', 'axes_minor', 'angle']):
+                            # Check for NaN values
+                            ell_vals = [data['ellipse_center_x'], data['ellipse_center_y'], 
+                                        data['axes_major'], data['axes_minor'], data['angle']]
+                            if any(np.isnan(v) for v in ell_vals if isinstance(v, (int, float))):
+                                tracking_failure_msg = "Invalid Ellipse (NaN)"
+                                continue
+
+                            center = (int(data['ellipse_center_x']), int(data['ellipse_center_y']))
+                            axes = (int(data['axes_major'] / 2), int(data['axes_minor'] / 2))
+                            angle = int(data['angle'])
+                            cv2.ellipse(frame_bgr, center, axes, angle, 0, 360, color, 2)
+
+                    except (ValueError, OverflowError) as ve:
+                        # Catch specific conversion errors per item
+                        print(f"Error drawing item {object_name}: {ve}")
+                        tracking_failure_msg = "Tracking Data Error"
+
+            except Exception as e:
+                # Catch errors in getting items or general tracking logic
+                print(f"Tracking system failure on frame {frame_num}: {e}")
+                tracking_failure_msg = "Tracking System Failed"
+
+            # --- 3. Overlays & Feedback ---
+            
+            # Visual Feedback for "Active Recording"
+            if self._is_recording:
+                cv2.circle(frame_bgr, (30, 30), 15, (0, 0, 255), -1)
+
+            # Visual Feedback for Tracking Failures
+            if tracking_failure_msg:
+                cv2.putText(frame_bgr, f"Tracking Warning: {tracking_failure_msg}", (50, 80), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 165, 255), 2)
+
+            # --- 4. Display ---
+            self._display_frame(frame_bgr)
+            
+            # Update Button State
+            self._update_record_button_state()
+
+        except Exception as e:
+            print(f"Critical error in seek_to_frame: {e}")
+            # If everything failed (including the first fallback), try one last desperate fallback
+            if frame_bgr is None:
+                 frame_bgr = np.zeros((720, 1280, 3), dtype=np.uint8)
+                 cv2.putText(frame_bgr, "CRITICAL RENDER ERROR", (50, 360), 
+                             cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
+            self._display_frame(frame_bgr)
 
     def _update_playback_loop(self):
         if not self._is_playing: return
@@ -315,6 +550,8 @@ class TrialSegmenterGUI:
             self.play_button.config(text="▶ Play Video")
 
     def _display_frame(self, frame_bgr):
+        if frame_bgr is None: return
+        
         container_w = self.image_label.winfo_width()
         container_h = self.image_label.winfo_height()
         
@@ -324,8 +561,11 @@ class TrialSegmenterGUI:
         scale = min(container_w / w, container_h / h)
         new_w, new_h = int(w * scale), int(h * scale)
         
-        resized = cv2.resize(frame_bgr, (new_w, new_h), interpolation=cv2.INTER_AREA)
-        img = ImageTk.PhotoImage(image=Image.fromarray(cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)))
-        
-        self.image_label.imgtk = img
-        self.image_label.config(image=img)
+        try:
+            resized = cv2.resize(frame_bgr, (new_w, new_h), interpolation=cv2.INTER_AREA)
+            img = ImageTk.PhotoImage(image=Image.fromarray(cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)))
+            
+            self.image_label.imgtk = img
+            self.image_label.config(image=img)
+        except Exception as e:
+            print(f"Error displaying frame buffer: {e}")
