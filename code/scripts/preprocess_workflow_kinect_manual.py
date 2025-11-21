@@ -39,6 +39,9 @@ from _3_preprocessing._5_led_tracking import (
     define_led_roi
 )
 
+from _3_preprocessing._6_unification import (
+    define_trial_chunks
+)
 
 # --- Sub-Flows (Manual Tasks) ---
 @flow(name="3. Track LED Blinking")
@@ -149,6 +152,31 @@ def review_handstickers_color_threshold(
     )
 
     return
+
+
+@flow(name="Manual: Define trial chunks.")
+def define_trial_chunks_flow(
+    rgb_video_path: Path,
+    sticker_dir: Path,
+    output_dir: Path,
+    *,
+    force_processing: bool = False
+) -> Path:
+    """Visualize the 3D sticker data on the depth point cloud."""
+    print(f"[{rgb_video_path.name}] Viewing xy stickers tracking data...")
+    # Base name derived from the 2D tracking file for consistency
+    xy_csv_path = sticker_dir / (rgb_video_path.stem + "_handstickers_summary_2d_coordinates.csv")
+    
+    output_path = output_dir / (rgb_video_path.stem + '_trial-chunks.csv')
+    
+    define_trial_chunks(
+        xy_csv_path,
+        rgb_video_path,
+        output_csv_path=output_path,
+        force_processing=force_processing
+    )
+    return True
+
 
 def view_ellipse_tracking_flow(
     rgb_video_path: Path,
@@ -331,6 +359,18 @@ def run_single_session_pipeline(
                 force_processing=force
             )
             dag_handler.mark_completed('review_handstickers_color_threshold')
+
+        if dag_handler.can_run('define_trial_chunks'):
+            print(f"[{block_name}] ==> Running task: define_trial_chunks")
+            force = dag_handler.get_task_options('define_trial_chunks').get('force_processing', False)
+            define_trial_chunks_flow(
+                rgb_video_path=rgb_video_path,
+                sticker_dir=config.video_processed_output_dir / "handstickers",
+                output_dir=config.video_processed_output_dir,
+                force_processing=force
+            )
+            dag_handler.mark_completed('review_handstickers_color_threshold')
+        
         
         if dag_handler.can_run('view_ellipse_tracking'):
             print(f"[{block_name}] ==> Running task: view_ellipse_tracking")

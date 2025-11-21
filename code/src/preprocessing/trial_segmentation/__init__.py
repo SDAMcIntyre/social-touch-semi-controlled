@@ -1,0 +1,1 @@
+from .trial_segmenter import TrialSegmenterGUI
