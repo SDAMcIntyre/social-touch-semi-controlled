@@ -130,7 +130,27 @@ def remove_frames_from_metadata(
 ):  
     for frame_id, object_names in frames_for_deleting.items():
         for object_name in object_names:
-            annotation_manager.remove_roi_ifexists(object_name, frame_id)
+            annotation_manager.remove_roi_if_exists(object_name, frame_id)
+
+def update_ignore_frames_in_metadata(
+    annotation_manager: ROIAnnotationManager,
+    ignore_starts: Dict[int, List[str]],
+    ignore_stops: Dict[int, List[str]]
+):
+    """
+    Updates the annotation manager with ignore start and stop events.
+    """
+    # Process Ignore Start
+    for frame_id, object_names in ignore_starts.items():
+        for object_name in object_names:
+            annotation_manager.set_ignore_start(object_name, frame_id)
+            print(f"--- 🚫 Ignore START set for '{object_name}' at frame {frame_id}")
+
+    # Process Ignore Stop
+    for frame_id, object_names in ignore_stops.items():
+        for object_name in object_names:
+            annotation_manager.set_ignore_stop(object_name, frame_id)
+            print(f"--- 🟢 Ignore STOP set for '{object_name}' at frame {frame_id}")
 
 
 def review_tracking(
@@ -138,23 +158,17 @@ def review_tracking(
         annotation_manager: ROIAnnotationManager, 
         tracked_objs: ROITrackedObjects, 
         title: str
-) -> tuple[str, Dict[int, List[str]], Dict[int, List[str]]]:
+) -> tuple[str, Dict[int, List[str]], Dict[int, List[str]], Dict[int, List[str]], Dict[int, List[str]]]:
     """
     Identifies frames that require manual review based on object tracking status.
 
-    This function processes a dictionary of pandas DataFrames, where each DataFrame
-    contains the tracking history for a specific object. It finds all unique frames
-    where any object was manually labeled ('labeled' or 'initial_roi').
-
-    Args:
-        video_path: The path to the video file being analyzed.
-        tracked_objs: A dictionary where keys are unique object names (str) and
-                      values are pandas DataFrames. Each DataFrame must contain
-                      at least a 'frame_id' and a 'status' column.
-
     Returns:
-        A tuple containing the original video path and a sorted list of unique
-        frame indices that require manual review.
+        A tuple containing:
+        1. Final Status (str)
+        2. Frames for labeling (Dict)
+        3. Frames for deleting (Dict)
+        4. Frames for ignore start (Dict)
+        5. Frames for ignore stop (Dict)
     """
     if annotation_manager.data:
         annotated_frame_ids = get_unique_frame_ids(annotation_manager.data)
@@ -164,13 +178,18 @@ def review_tracking(
     print("\nLaunching Tkinter Video Player...")
     view = TrackerReviewGUI(title=title, landmarks=annotated_frame_ids, windowState='maximized')
     controller = TrackerReviewOrchestrator(model=video_manager, view=view, tracking_history=tracked_objs)
-    final_status, frames_for_labeling, frames_for_deleting = controller.run()
+    
+    # Updated unpacking to handle 5 return values
+    final_status, frames_for_labeling, frames_for_deleting, frames_for_ignore_start, frames_for_ignore_stop = controller.run()
 
     print("\n--- Results from player session ---")
     print(f"Final Status: {final_status}")
     print(f"Frames marked for labeling: {frames_for_labeling}")
+    print(f"Frames marked for deletion: {frames_for_deleting}")
+    print(f"Frames marked for ignore start: {frames_for_ignore_start}")
+    print(f"Frames marked for ignore stop: {frames_for_ignore_stop}")
     
-    return final_status, frames_for_labeling, frames_for_deleting
+    return final_status, frames_for_labeling, frames_for_deleting, frames_for_ignore_start, frames_for_ignore_stop
 
 
 def review_tracked_objects_in_video(
@@ -206,7 +225,10 @@ def review_tracked_objects_in_video(
         tracked_data = dict.fromkeys(objects_to_track)
         video_manager = VideoReviewManager(video_path)
     
-    final_status, frames_for_labeling, frames_for_deleting = review_tracking(video_manager, annotation_manager, tracked_data, title=os.path.basename(video_path))
+    # Call the updated review_tracking function which returns 5 values
+    final_status, frames_for_labeling, frames_for_deleting, frames_for_ignore_start, frames_for_ignore_stop = review_tracking(
+        video_manager, annotation_manager, tracked_data, title=os.path.basename(video_path)
+    )
     
     if final_status == TrackerReviewStatus.UNDEFINED or final_status == TrackerReviewStatus.UNPERFECT:
         print("Review session ended without validation or marking new frames.")
@@ -217,8 +239,16 @@ def review_tracked_objects_in_video(
 
     elif final_status == TrackerReviewStatus.PROCEED:
         print(f"⚠️ User marked {len(frames_for_labeling)} frames for re-annotation. Launching interactive tool.")
+        
+        # 1. Handle Deletions
         remove_frames_from_metadata(annotation_manager, frames_for_deleting)
+        
+        # 2. Handle Ignore Events (New)
+        update_ignore_frames_in_metadata(annotation_manager, frames_for_ignore_start, frames_for_ignore_stop)
+        
+        # 3. Handle Interactive Labeling
         annotate_rois_interactively(video_manager, annotation_manager, frames_for_labeling)
+        
         annotation_manager.update_all_status(ROIProcessingStatus.TO_BE_PROCESSED)
         print("\nRe-annotation complete. The process may need to be run again to verify the new tracking.")
     
