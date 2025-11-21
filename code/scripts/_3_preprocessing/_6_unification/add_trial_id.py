@@ -9,79 +9,86 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 from utils.should_process_task import should_process_task
 
 def add_trial_id(
-        input_path: Path,
+        trial_chunk_path: Path,
+        unified_data_path: Path,
         output_path: Path,
         *,
-        min_duration: int = 60,
         force_processing: bool = False
 ) -> bool:
     """
-    Generates a 'trial_id' column based on 'led_on' signal transitions.
+    Generates a 'trial_id' column based on 'trial_on' signal transitions from an external chunk file.
+    The 'trial_id' is restricted to regions where 'trial_on' is 1.
 
     Logic:
-    1. Filters 'led_on' high states (1) that are shorter than min_duration.
-    2. Increments 'trial_id' on every rising edge (0 -> 1) of the filtered signal.
+    1. Loads 'trial_on' from trial_chunk_path and merges it into the main dataset.
+    2. Increments 'trial_id' on every rising edge (0 -> 1) of the 'trial_on' signal.
+    3. Restricts 'trial_id' to be non-zero only when 'trial_on' is 1.
 
     Args:
-        input_path: Path to the input CSV containing 'led_on' column.
-        output_path: Path for the output CSV file with added 'trial_id'.
-        min_duration: Minimum number of consecutive samples for a '1' state to be considered valid.
+        trial_chunk_path: Path to the CSV containing the 'trial_on' column.
+        unified_data_path: Path to the input CSV containing the main data.
+        output_path: Path for the output CSV file with added 'trial_id' and 'trial_on'.
         force_processing: If True, overwrites the output file even if it exists.
 
     Returns:
         True if the operation was successful (or skipped correctly), False otherwise.
     """
     if not should_process_task(
-        input_paths=[input_path],
+        input_paths=[unified_data_path, trial_chunk_path],
         output_paths=[output_path],
         force=force_processing
     ):
         logging.info(f"✅ Skipping task: Output file '{output_path}' already exists.")
-        return True # Task is successfully skipped, so we return True.
+        return True 
 
     try:
-        # Load data
-        contact_chars_df = pd.read_csv(input_path)
+        # Load main data
+        contact_chars_df = pd.read_csv(unified_data_path)
+        
+        # Load trial chunk data
+        if not trial_chunk_path.exists():
+            logging.error(f"❌ Trial chunk file not found: {trial_chunk_path}")
+            return False
+            
+        chunk_df = pd.read_csv(trial_chunk_path)
 
-        if "led_on" not in contact_chars_df.columns:
-            logging.error(f"❌ Column 'led_on' missing in {input_path}")
+        if "trial_on" not in chunk_df.columns:
+            logging.error(f"❌ Column 'trial_on' missing in {trial_chunk_path}")
             return False
 
-        # Ensure led_on is integer/boolean and handle potential NaNs (assume 0)
-        led_signal = contact_chars_df["led_on"].fillna(0).astype(int)
+        # Validate length alignment
+        if len(contact_chars_df) != len(chunk_df):
+            logging.warning(
+                f"⚠️ Row count mismatch: Unified Data ({len(contact_chars_df)}) vs "
+                f"Chunk Data ({len(chunk_df)}). 'trial_on' assignment may be misaligned."
+            )
 
-        # --- Step 1: Filter short pulses ---
-        # Identify contiguous groups of values
-        # (signal != signal.shift()) is True at transition points
-        # .cumsum() creates a unique ID for each contiguous group
-        groups = (led_signal != led_signal.shift()).cumsum()
+        # Merge trial_on into the main dataframe
+        contact_chars_df["trial_on"] = chunk_df["trial_on"]
 
-        # Calculate the size of each group
-        group_sizes = led_signal.groupby(groups).transform('count')
+        # Ensure trial_on is integer (0/1)
+        trial_signal = contact_chars_df["trial_on"].fillna(0).astype(int)
+        
+        # Update the dataframe to ensure the column is clean integer type
+        contact_chars_df["trial_on"] = trial_signal
 
-        # Create mask: True where signal is 1 BUT the group is shorter than threshold
-        mask_short_pulses = (led_signal == 1) & (group_sizes < min_duration)
+        # --- Generate Trial ID ---
+        # Detect rising edges: Current is 1, Previous was 0
+        rising_edges = (trial_signal == 1) & (trial_signal.shift(1).fillna(0) == 0)
 
-        # Apply mask: Set short pulses to 0
-        # We use a copy to avoid SettingWithCopy warnings if applicable, though here it's a Series
-        led_signal_filtered = led_signal.mask(mask_short_pulses, 0)
+        # Cumulative sum creates the ID (1, 2, 3...)
+        cumulative_ids = rising_edges.cumsum()
 
-        # --- Step 2: Generate Trial ID ---
-        # Detect rising edges on the FILTERED signal
-        # Rising edge: Current is 1, Previous was 0
-        # shift(1) gets previous value. fillna(0) ensures first sample is treated correctly if it's 1
-        rising_edges = (led_signal_filtered == 1) & (led_signal_filtered.shift(1).fillna(0) == 0)
+        # --- Restrict to Trial Chunk ---
+        # Apply mask: trial_id should be 0 if trial_on is 0. 
+        # Otherwise, it takes the value of the cumulative ID.
+        contact_chars_df["trial_id"] = cumulative_ids * trial_signal
 
-        # Cumulative sum of rising edges creates the ID
-        # 0 0 1 1 0 0 1 1 -> Rising edges at idx 2 and 6 -> Cumsum: 0 0 1 1 1 1 2 2
-        contact_chars_df["trial_id"] = rising_edges.cumsum()
-
-        # --- Step 3: Save Output ---
-        # Ensure parent directory exists
+        # --- Save Output ---
         output_path.parent.mkdir(parents=True, exist_ok=True)
         
         contact_chars_df.to_csv(output_path, index=False)
-        logging.info(f"✅ Successfully created trial_ids in '{output_path}'")
+        logging.info(f"✅ Successfully created trial_ids in '{output_path}' based on '{trial_chunk_path}'")
         
         return True
 
