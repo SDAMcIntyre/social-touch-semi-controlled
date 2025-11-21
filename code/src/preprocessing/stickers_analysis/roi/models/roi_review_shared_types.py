@@ -12,7 +12,8 @@ class FrameAction(Enum):
     """Defines the types of actions that can be marked on a frame."""
     LABEL = "Re-label"
     DELETE = "Delete"
-
+    IGNORE_START = "Start ignoring"
+    IGNORE_STOP = "Stop ignoring"
 
 @dataclass
 class FrameMark:

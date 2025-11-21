@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Optional
 
 from utils.should_process_task import should_process_task
+from preprocessing.common.data_access.video_mp4_manager import VideoMP4Manager
 from preprocessing.stickers_analysis import (
     ROIProcessingStatus,
     ROIAnnotationFileHandler,
@@ -49,6 +50,17 @@ def track_objects_in_video(
     
     print(f"--- Starting processing for: {os.path.basename(video_path)} ---")
 
+    # Need to fetch total frames to calculate the processable mask
+    try:
+        # Open video temporarily to get total_frames
+        temp_vm = VideoMP4Manager(video_path)
+        total_frames = temp_vm.total_frames
+        # VideoMP4Manager often relies on __del__ or context managers, but explicit close is better if available.
+        # Assuming generic python garbage collection or internal handling here as per provided snippets.
+    except Exception as e:
+        print(f"Error reading video info: {e}")
+        return None
+
     orchestrator = TrackingOrchestrator(video_path=video_path, use_gui=show_gui)
 
     results = {}
@@ -57,7 +69,14 @@ def track_objects_in_video(
         tracked_object = annotation_manager.get_object(object_name)
 
         if need_to_process or tracked_object.status == ROIProcessingStatus.TO_BE_PROCESSED.value:
-            tracked_roi = orchestrator.run(labeled_rois=tracked_object.rois)
+            
+            # Calculate which frames should be processed and which ignored
+            frames_to_process = annotation_manager.get_frames_to_process(object_name, total_frames)
+            
+            tracked_roi = orchestrator.run(
+                labeled_rois=tracked_object.rois,
+                valid_frames=frames_to_process
+            )
 
             # 1. Track the object
             results[object_name] = tracked_roi
