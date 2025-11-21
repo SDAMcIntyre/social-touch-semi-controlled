@@ -236,7 +236,7 @@ class ObjectsInteractionProcessor:
             position_xyz = np.mean(v_transformed[np.atleast_1d(indices), :], axis=0)
             current_positions[label] = position_xyz
             proprio_data[f"{label}_position_x"], proprio_data[f"{label}_position_y"], proprio_data[f"{label}_position_z"] = position_xyz
-        primary_label = self.tracked_points_groups_labels[0]
+        primary_label = self.tracked_points_groups_labels[0]  # 0 = which is the yellow sticker
         primary_position = current_positions[primary_label]
         primary_pos_prev = self._previous_tracked_points_pos.get(primary_label)
         velocity = np.zeros(3) if primary_pos_prev is None else (primary_position - primary_pos_prev) / self.dt
