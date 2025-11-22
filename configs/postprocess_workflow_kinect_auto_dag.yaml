@@ -1,0 +1,39 @@
+# A dependency-aware configuration representing a task graph (DAG) for Postprocessing.
+# 'depends_on' specifies which tasks must be completed before this one can run.
+# Set 'enabled: false' to skip a task and all tasks that depend on it.
+# UPDATED: Task keys now correspond directly to Python function names.
+
+parameters:
+  # Set to true to run different sessions in parallel, false to run them one by one.
+  parallel_execution: false
+  kinect_configs_directory: "kinect_configs/all_valid_configs_ST16-05"
+
+tasks:
+
+  # --- Stage 1: Kinematic Analysis ---
+  set_xyz_reference_from_gestures:
+    enabled: true
+    options:
+      force_processing: false
+    depends_on: []
+
+  # --- Stage 2: Temporal Segmentation ---
+  segment_single_touches:
+    enabled: true
+    options:
+      force_processing: false
+    depends_on: [set_xyz_reference_from_gestures]
+
+  # --- Stage 3: Spatial Analysis ---
+  determine_receptive_field:
+    enabled: true
+    options:
+      force_processing: false
+    depends_on: [segment_single_touches]
+
+  # --- Stage 4: Data Cleaning ---
+  filter_by_receptive_field:
+    enabled: true
+    options:
+      force_processing: false
+    depends_on: [determine_receptive_field]

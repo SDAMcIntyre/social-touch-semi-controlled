@@ -1,0 +1,28 @@
+# =============================================================================
+# PIPELINE CONFIGURATION: PRIMARY PROCESSING
+# =============================================================================
+# Stage 1: Base video ingestion and conversion.
+# =============================================================================
+
+parameters:
+  parallel_execution: false
+  kinect_configs_directory: "kinect_configs/"
+
+tasks:
+  validate_mkv_video:
+    enabled: true
+    options:
+      force_processing: false
+    depends_on: []
+
+  generate_rgb_video:
+    enabled: true
+    options:
+      force_processing: false
+    depends_on: [validate_mkv_video]
+
+  generate_depth_images:
+    enabled: false
+    options:
+      force_processing: false
+    depends_on: [validate_mkv_video]
