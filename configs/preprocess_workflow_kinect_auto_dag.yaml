@@ -1,0 +1,109 @@
+# =============================================================================
+# PIPELINE CONFIGURATION & TASK GRAPH (DAG)
+# =============================================================================
+# This file defines the execution order and parameters for the processing pipeline.
+#
+# GUIDELINES FOR MODIFICATION:
+# 1. Enabled Status: Set 'enabled: true' to run a task, 'enabled: false' to skip it.
+#    - Disabling a task also skips any subsequent tasks that depend on it.
+# 2. Force Processing: Set 'force_processing: true' to overwrite existing output files.
+# 3. Dependencies: 'depends_on' lists tasks that must complete before the current task starts.
+# =============================================================================
+# =============================================================================
+# PIPELINE CONFIGURATION & TASK GRAPH (DAG)
+# =============================================================================
+# Structured to isolate signal extraction and group trial-level analysis.
+# =============================================================================
+
+parameters:
+  parallel_execution: false
+  kinect_configs_directory: "kinect_configs/all_valid_configs_ST16-05"
+
+tasks:
+  # ---------------------------------------------------------------------------
+  # STAGE 2: LED Signal Extraction
+  # Isolated processing for TTL/Synchronization LED.
+  # ---------------------------------------------------------------------------
+  track_led_blinking:
+    enabled: true
+    options:
+      force_processing: false
+    depends_on: []
+
+  # ---------------------------------------------------------------------------
+  # STAGE 3: Tracking & Feature Extraction
+  # Hands, Stickers, and Forearm analysis.
+  # ---------------------------------------------------------------------------
+  validate_forearm_extraction:
+    enabled: true
+    depends_on: [validate_mkv_video]
+
+  validate_hand_extraction:
+    enabled: true
+    depends_on: [validate_mkv_video]
+
+  track_stickers:
+    enabled: true
+    options:
+      force_processing: false
+    depends_on: []
+
+  generate_xyz_stickers:
+    enabled: true
+    options:
+      monitor: false
+      force_processing: false
+    depends_on: [track_stickers]
+
+  generate_3d_hand_motion:
+    enabled: true
+    options:
+      force_processing: false
+    depends_on: [validate_hand_extraction, generate_xyz_stickers]
+
+  generate_somatosensory_chars:
+    enabled: true
+    options:
+      monitor: false
+      force_processing: false
+    depends_on: [validate_forearm_extraction, generate_3d_hand_motion]
+
+  # ---------------------------------------------------------------------------
+  # STAGE 4: Trial Definition & Analysis
+  # Grouped: Trial ID generation followed by specific trial analytics.
+  # ---------------------------------------------------------------------------
+  add_trial_id:
+    enabled: true
+    options:
+      force_processing: false
+    # Synchronizes LED, Contact, and Sticker data to define trial boundaries.
+    depends_on: [track_stickers]
+
+  find_single_touches:
+    enabled: true
+    options:
+      force_processing: false
+    # Analyzes contact behavior within the defined trial IDs.
+    depends_on: [generate_3d_hand_motion, add_trial_id]
+
+  add_stimuli_metadata:
+    enabled: true
+    options:
+      force_processing: false
+    # Injects experimental metadata into the trial structure.
+    depends_on: [add_trial_id]
+
+  # ---------------------------------------------------------------------------
+  # STAGE 5: Final Unification
+  # ---------------------------------------------------------------------------
+  unify_processed_data:
+    enabled: true
+    options:
+      force_processing: false
+    # Aggregates all processed streams into the final dataset.
+    depends_on: 
+      - track_led_blinking            # LED Signal
+      - generate_somatosensory_chars  # Contact Data
+      - add_trial_id                  # Trial Definitions
+      - find_single_touches           # Single Touch Definition
+      - add_stimuli_metadata          # Metadata

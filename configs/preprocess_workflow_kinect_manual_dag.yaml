@@ -1,0 +1,107 @@
+# ==============================================================================
+# MANUAL PROCESSING PIPELINE CONFIGURATION
+# ==============================================================================
+# Logic:
+#   - Set 'enabled: true' to activate a task.
+#   - 'depends_on' defines the DAG execution order.
+# ==============================================================================
+
+parameters:
+  # Directory containing the session configs for manual tasks.
+  kinect_configs_directory: "kinect_configs/all_valid_configs_ST16-05"
+  # Alternate path: "kinect_configs/ST16-05_block08"
+
+tasks:
+  # ============================================================================
+  # PHASE 1: INITIALIZATION & PREPARATION
+  # Root tasks with no dependencies.
+  # ============================================================================
+
+  prepare_led_tracking:
+    enabled: true
+    description: "Manually select the led roi."
+    depends_on: []
+    options:
+      force_processing: false
+
+  prepare_hand_model:
+    enabled: true
+    description: "Manually select the hand and 3D hand model."
+    depends_on: []
+    options:
+      force_processing: false
+
+  review_2d_stickers:
+    enabled: true
+    description: "Manually define/review the tracking ROI for stickers on the hand."
+    depends_on: []
+    options:
+      force_processing: false
+
+  # ============================================================================
+  # PHASE 2: REFINEMENT & DEFINITION
+  # Tasks dependent on the initial review of 2D stickers.
+  # ============================================================================
+
+  prepare_stickers_colorspace:
+    enabled: true
+    description: "Manually define the colorspace of stickers on the hand."
+    depends_on: [review_2d_stickers]
+    options:
+      force_processing: false
+
+  review_handstickers_color_threshold:
+    enabled: true
+    description: "Manually define the correlation videos threshold."
+    depends_on: [review_2d_stickers]
+    options:
+      force_processing: false
+
+  define_trial_chunks:
+    enabled: true
+    description: "Define the trial chunks."
+    depends_on: [review_handstickers_color_threshold]
+    options:
+      force_processing: false
+
+  # ============================================================================
+  # PHASE 3: VISUALIZATION & VERIFICATION
+  # Tasks for viewing results (Ellipses, Coordinates).
+  # ============================================================================
+
+  view_ellipse_tracking:
+    enabled: false
+    description: "Manually view the ellipses fit of the stickers on the hand."
+    depends_on:
+      - review_2d_stickers
+
+  view_ellipse_tracking_adjusted:
+    enabled: false
+    description: "Manually view the ellipses fit of the stickers on the hand."
+    depends_on:
+      - review_2d_stickers
+
+  view_consolidated_2d_tracking_data:
+    enabled: false
+    description: "Manually view the XY estimation of the stickers on the hand."
+    depends_on:
+      - review_2d_stickers
+
+  view_xyz_stickers:
+    enabled: false
+    description: "Manually view the XYZ estimation of the stickers on the hand."
+    depends_on:
+      - review_2d_stickers
+
+  # ============================================================================
+  # PHASE 4: COMPLEX ASSESSMENTS
+  # Tasks requiring multiple prior inputs.
+  # ============================================================================
+
+  view_somatosensory_assessement:
+    enabled: false
+    description: "Manually view the somatosensory assessment results."
+    depends_on:
+      - prepare_hand_model
+      - review_2d_stickers
+      - prepare_stickers_colorspace
