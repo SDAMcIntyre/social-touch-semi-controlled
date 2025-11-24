@@ -156,7 +156,7 @@ def run_batch_primary(
 def setup_environment():
     project_data_root = path_tools.get_project_data_root()
     configs_dir = Path("configs")
-    dag_config_path = Path(configs_dir / "primary_dag.yaml") # Pointing to primary yaml
+    dag_config_path = Path(configs_dir / "primary_workflow_kinect_auto_dag.yaml") # Pointing to primary yaml
     
     reports_dir = Path("reports")
     reports_dir.mkdir(exist_ok=True)

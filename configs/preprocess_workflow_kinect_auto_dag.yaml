@@ -72,7 +72,7 @@ tasks:
   # STAGE 4: Trial Definition & Analysis
   # Grouped: Trial ID generation followed by specific trial analytics.
   # ---------------------------------------------------------------------------
-  add_trial_id:
+  define_trial_id:
     enabled: true
     options:
       force_processing: false
@@ -84,14 +84,14 @@ tasks:
     options:
       force_processing: false
     # Analyzes contact behavior within the defined trial IDs.
-    depends_on: [generate_3d_hand_motion, add_trial_id]
+    depends_on: [generate_3d_hand_motion, define_trial_id]
 
-  add_stimuli_metadata:
+  generate_stimuli_metadata:
     enabled: true
     options:
       force_processing: false
     # Injects experimental metadata into the trial structure.
-    depends_on: [add_trial_id]
+    depends_on: [define_trial_id]
 
   # ---------------------------------------------------------------------------
   # STAGE 5: Final Unification
@@ -102,8 +102,8 @@ tasks:
       force_processing: false
     # Aggregates all processed streams into the final dataset.
     depends_on: 
-      - track_led_blinking            # LED Signal
       - generate_somatosensory_chars  # Contact Data
-      - add_trial_id                  # Trial Definitions
+      - track_led_blinking            # LED Signal
+      - define_trial_id               # Trial Definitions
       - find_single_touches           # Single Touch Definition
-      - add_stimuli_metadata          # Metadata
+      - generate_stimuli_metadata     # Metadata

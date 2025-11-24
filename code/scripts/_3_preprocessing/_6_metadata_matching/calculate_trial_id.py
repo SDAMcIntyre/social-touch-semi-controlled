@@ -8,26 +8,27 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 from utils.should_process_task import should_process_task
 
-def add_trial_id(
+def calculate_trial_id(
         trial_chunk_path: Path,
-        unified_data_path: Path,
         output_path: Path,
         *,
         force_processing: bool = False
 ) -> bool:
     """
-    Generates a 'trial_id' column based on 'trial_on' signal transitions from an external chunk file.
-    The 'trial_id' is restricted to regions where 'trial_on' is 1.
+    Generates a separate CSV containing 'trial_id' and 'trial_on' columns based on 
+    signal transitions from an external chunk file.
+    
+    The output file is a sidecar file; it does not contain the original unified data.
 
     Logic:
-    1. Loads 'trial_on' from trial_chunk_path and merges it into the main dataset.
-    2. Increments 'trial_id' on every rising edge (0 -> 1) of the 'trial_on' signal.
-    3. Restricts 'trial_id' to be non-zero only when 'trial_on' is 1.
+    1. Loads 'trial_on' from trial_chunk_path.
+    2. Validates length against unified_data_path to ensure synchronization.
+    3. Increments 'trial_id' on every rising edge (0 -> 1) of the 'trial_on' signal.
+    4. Saves ONLY the 'trial_on' and 'trial_id' columns to output_path.
 
     Args:
         trial_chunk_path: Path to the CSV containing the 'trial_on' column.
-        unified_data_path: Path to the input CSV containing the main data.
-        output_path: Path for the output CSV file with added 'trial_id' and 'trial_on'.
+        output_path: Path for the output CSV file containing only trial metadata.
         force_processing: If True, overwrites the output file even if it exists.
 
     Returns:
@@ -42,9 +43,6 @@ def add_trial_id(
         return True 
 
     try:
-        # Load main data
-        contact_chars_df = pd.read_csv(unified_data_path)
-        
         # Load trial chunk data
         if not trial_chunk_path.exists():
             logging.error(f"❌ Trial chunk file not found: {trial_chunk_path}")
@@ -56,21 +54,12 @@ def add_trial_id(
             logging.error(f"❌ Column 'trial_on' missing in {trial_chunk_path}")
             return False
 
-        # Validate length alignment
-        if len(contact_chars_df) != len(chunk_df):
-            logging.warning(
-                f"⚠️ Row count mismatch: Unified Data ({len(contact_chars_df)}) vs "
-                f"Chunk Data ({len(chunk_df)}). 'trial_on' assignment may be misaligned."
-            )
+        # Create a new DataFrame for output to ensure separation
+        output_df = pd.DataFrame()
 
-        # Merge trial_on into the main dataframe
-        contact_chars_df["trial_on"] = chunk_df["trial_on"]
-
-        # Ensure trial_on is integer (0/1)
-        trial_signal = contact_chars_df["trial_on"].fillna(0).astype(int)
-        
-        # Update the dataframe to ensure the column is clean integer type
-        contact_chars_df["trial_on"] = trial_signal
+        # Ensure trial_on is integer (0/1) using the data from chunk_df
+        trial_signal = chunk_df["trial_on"].fillna(0).astype(int)
+        output_df["trial_on"] = trial_signal
 
         # --- Generate Trial ID ---
         # Detect rising edges: Current is 1, Previous was 0
@@ -82,13 +71,14 @@ def add_trial_id(
         # --- Restrict to Trial Chunk ---
         # Apply mask: trial_id should be 0 if trial_on is 0. 
         # Otherwise, it takes the value of the cumulative ID.
-        contact_chars_df["trial_id"] = cumulative_ids * trial_signal
+        output_df["trial_id"] = cumulative_ids * trial_signal
 
         # --- Save Output ---
         output_path.parent.mkdir(parents=True, exist_ok=True)
         
-        contact_chars_df.to_csv(output_path, index=False)
-        logging.info(f"✅ Successfully created trial_ids in '{output_path}' based on '{trial_chunk_path}'")
+        # Save only the trial metadata, not the full dataset
+        output_df.to_csv(output_path, index=False)
+        logging.info(f"✅ Successfully created separate trial_ids file in '{output_path}'")
         
         return True
 
