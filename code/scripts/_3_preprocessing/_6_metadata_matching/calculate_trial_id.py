@@ -35,7 +35,7 @@ def calculate_trial_id(
         True if the operation was successful (or skipped correctly), False otherwise.
     """
     if not should_process_task(
-        input_paths=[unified_data_path, trial_chunk_path],
+        input_paths=[trial_chunk_path],
         output_paths=[output_path],
         force=force_processing
     ):
