@@ -9,7 +9,8 @@ from prefect import flow, get_run_logger, task
 from prefect.futures import PrefectFuture
 
 import utils.path_tools as path_tools
-from utils.pipeline_config_manager import DagConfigHandler
+from utils import DagConfigHandler
+
 from primary_processing import (
     KinectConfigFileHandler,
     KinectConfig,
