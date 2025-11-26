@@ -1,0 +1,41 @@
+# ==============================================================================
+# MANUAL PROCESSING PIPELINE CONFIGURATION
+# ==============================================================================
+# Logic:
+#   - Set 'enabled: true' to activate a task.
+#   - 'depends_on' defines the DAG execution order.
+# ==============================================================================
+# ==============================================================================
+# VISUALIZATION PIPELINE CONFIGURATION
+# ==============================================================================
+
+parameters:
+  kinect_configs_directory: "kinect_configs/all_valid_configs_ST16-05"
+
+tasks:
+  # PHASE 3: VISUALIZATION & VERIFICATION
+  view_ellipse_tracking:
+    enabled: false
+    description: "Manually view the ellipses fit of the stickers on the hand."
+    depends_on: []
+
+  view_ellipse_tracking_adjusted:
+    enabled: false
+    description: "Manually view the adjusted ellipses fit."
+    depends_on: []
+
+  view_consolidated_2d_tracking_data:
+    enabled: false
+    description: "Manually view the XY estimation of the stickers on the hand."
+    depends_on: []
+
+  view_xyz_stickers:
+    enabled: false
+    description: "Manually view the XYZ estimation of the stickers on the hand."
+    depends_on: []
+
+  # PHASE 4: COMPLEX ASSESSMENTS
+  view_somatosensory_assessement:
+    enabled: true
+    description: "Manually view the somatosensory assessment results."
+    depends_on: []

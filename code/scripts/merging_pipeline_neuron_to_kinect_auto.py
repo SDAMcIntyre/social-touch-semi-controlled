@@ -47,7 +47,7 @@ def resolve_filenames(config: KinectConfig) -> Dict[str, Path]:
     nerve_name = f"{config.session_id}_semicontrolled_{config.block_id}_nerve.csv"
     
     # Input: Kinect Data
-    kinect_name = f"{config.source_video.stem}_contact_and_kinematic_data_withTTL_withTrialID_withStimuliData.csv"
+    kinect_name = f"{config.source_video.stem}_unified.csv"
     
     # Output: Merged Block Data
     output_name = f"{config.session_id}_semicontrolled_{config.block_id}_merged_data.csv"

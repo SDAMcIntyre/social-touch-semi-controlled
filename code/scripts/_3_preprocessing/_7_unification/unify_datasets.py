@@ -73,13 +73,14 @@ def _validate_alignment(dataframes: Dict[str, pd.DataFrame]) -> None:
 
 def _merge_dataframes(dataframes: Dict[str, pd.DataFrame]) -> pd.DataFrame:
     """
-    Concatenates dataframes horizontally (axis=1).
+    Concatenates dataframes horizontally (axis=1) and removes duplicate columns.
     
     Args:
         dataframes: Dictionary of DataFrames to merge.
         
     Returns:
-        A single DataFrame containing all columns from inputs, horizontally concatenated.
+        A single DataFrame containing all columns from inputs, horizontally concatenated,
+        with duplicate column names removed (keeping the first occurrence).
     """
     # Convert dict values to a list for concatenation
     df_list = list(dataframes.values())
@@ -89,6 +90,15 @@ def _merge_dataframes(dataframes: Dict[str, pd.DataFrame]) -> pd.DataFrame:
     df_list_reset = [df.reset_index(drop=True) for df in df_list]
     
     merged_df = pd.concat(df_list_reset, axis=1)
+    
+    # Identify duplicate column names
+    # duplicated() returns True for duplicates (mark='first' is default, checking from left)
+    is_duplicate = merged_df.columns.duplicated()
+    
+    if is_duplicate.any():
+        logger.info(f"Removing {is_duplicate.sum()} duplicate columns found during merge.")
+        # retain only columns that are NOT duplicates
+        merged_df = merged_df.loc[:, ~is_duplicate]
     
     return merged_df
 
@@ -126,14 +136,12 @@ def unify_datasets(
         'contact_path': contact_path, # Primary kinematics usually in contact path
         'led_path': led_path,
         'trial_path': trial_path,
-        #'single_touch_path': single_touch_path,
+        'single_touch_path': single_touch_path,
         'stimuli_path': stimuli_path
     }
     
-    input_paths_list = list(inputs.values())
-    
     # Check cache/existence logic using the utility function
-    if not should_process_task(input_paths_list, [output_path], force=force_processing):
+    if not should_process_task([output_path], [contact_path, led_path, trial_path, single_touch_path, stimuli_path], force=force_processing):
         logger.info(f"Skipping task: Output '{output_path}' exists.")
         return True
 
