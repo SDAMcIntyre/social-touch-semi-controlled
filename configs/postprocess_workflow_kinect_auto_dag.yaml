@@ -10,30 +10,23 @@ parameters:
 
 tasks:
 
-  # --- Stage 1: Kinematic Analysis ---
-  set_xyz_reference_from_gestures:
+  # --- Spatial Analysis ---
+  determine_receptive_field:
     enabled: true
     options:
       force_processing: false
     depends_on: []
 
-  # --- Stage 2: Temporal Segmentation ---
-  segment_single_touches:
-    enabled: true
-    options:
-      force_processing: false
-    depends_on: [set_xyz_reference_from_gestures]
-
-  # --- Stage 3: Spatial Analysis ---
-  determine_receptive_field:
-    enabled: true
-    options:
-      force_processing: false
-    depends_on: [segment_single_touches]
-
-  # --- Stage 4: Data Cleaning ---
+  # --- Data Cleaning ---
   filter_by_receptive_field:
     enabled: true
     options:
       force_processing: false
     depends_on: [determine_receptive_field]
+
+  # --- Kinematic Analysis ---
+  set_xyz_reference_from_gestures:
+    enabled: false
+    options:
+      force_processing: false
+    depends_on: []

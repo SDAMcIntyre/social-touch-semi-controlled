@@ -6,7 +6,7 @@ import shutil
 import time
 import traceback
 from multiprocessing import Queue, freeze_support
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Any
 from collections import defaultdict
 
 import pandas as pd
@@ -21,8 +21,16 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 # Mocking utils for template completeness - Replace with actual imports
 from utils import path_tools
-from utils.pipeline.pipeline_config_manager import DagConfigHandler
+<<<<<<< Updated upstream
+from utils.pipeline_config_manager import DagConfigHandler
 from utils.pipeline_monitoring.pipeline_monitor import PipelineMonitor
+=======
+from utils import (
+    DagConfigHandler,
+    PipelineMonitor,
+    TaskExecutor
+)
+>>>>>>> Stashed changes
 from primary_processing import (
     KinectConfigFileHandler, 
     KinectConfig, 
@@ -30,50 +38,14 @@ from primary_processing import (
 )
 
 from _5_postprocessing import (
+    determine_receptive_field,
     set_xyz_reference_from_gestures
 )
-
-
-# --- Reused TaskExecutor ---
-class TaskExecutor:
-    """A context manager to handle the boilerplate of running a pipeline task."""
-    def __init__(self, task_name, block_name, dag_handler, monitor):
-        self.task_name: str = task_name
-        self.block_name: str = block_name
-        self.dag_handler = dag_handler
-        self.monitor = monitor
-        self.can_run: bool = False
-        self.error_msg: str = None
-
-    def __enter__(self):
-        if self.dag_handler.can_run(self.task_name):
-            self.can_run = True
-            print(f"[{self.block_name}] ==> Running task: {self.task_name}")
-            if self.monitor is not None:
-                self.monitor.update(self.block_name, self.task_name, "RUNNING")
-        return self
-    
-    def __exit__(self, exc_type, exc_value, tb):
-        if not self.can_run:
-            return
-
-        if exc_type:
-            self.error_msg = f"Task '{self.task_name}' failed: {exc_value}"
-            print(f"❌ {self.error_msg}\n{traceback.format_exc()}")
-            if self.monitor is not None:
-                self.monitor.update(self.block_name, self.task_name, "FAILURE", self.error_msg)
-            return True
-        else:
-            self.dag_handler.mark_completed(self.task_name)
-            if self.monitor is not None:
-                self.monitor.update(self.block_name, self.task_name, "SUCCESS")
-        return False
-
 
 # --- Post-Processing Sub-Flows ---
 
 @flow(name="analyze_pca_components")
-def set_xyz_reference_from_gestures_flow(input_files: List[Path], output_dir: Path) -> Tuple[List[Path], Path]:
+def set_xyz_reference_from_gestures_flow(input_files: List[Path], output_dir: Path, force_processing: bool = False) -> Tuple[List[Path], Path]:
     """
     Analyse the principal component of the XYZ position for stroke and tapping.
     Iterates over a list of files and produces a distinct output for each.
@@ -85,81 +57,32 @@ def set_xyz_reference_from_gestures_flow(input_files: List[Path], output_dir: Pa
         input_files, output_dir,
         monitor=False,
         monitor_segment=False,
-        force_processing=True
+        force_processing=force_processing
     )
 
     return output_files
 
-@flow(name="segment_single_touches")
-def segment_single_touches(input_files: List[Path], output_dir: Path) -> List[Path]:
-    """
-    Segment the data into single touches for each file in the list.
-    """
-    print(f"[{output_dir.name}] Segmenting single touches for {len(input_files)} files...")
-    return False
-
-    output_files = []
-    
-    for input_path in input_files:
-        if not input_path.exists():
-            continue
-
-        df = pd.read_csv(input_path)
-        
-        # Implementation required: Define logic for segmentation
-        # Mock segmentation logic
-        if 'touch_id' not in df.columns:
-            df['touch_id'] = (df.index // 100) 
-        
-        output_filename = f"{input_path.stem}_segmented.csv"
-        segmented_path = output_dir / output_filename
-        df.to_csv(segmented_path, index=False)
-        output_files.append(segmented_path)
-    
-    return output_files
-
 @flow(name="determine_receptive_field")
-def determine_receptive_field(input_files: List[Path], output_dir: Path) -> List[Path]:
+def determine_receptive_field_flow(input_files: List[Path], output_dir: Path, force_processing: bool = False) -> Tuple[List[Path], List[Path]]:
     """
     Determine the receptive field based on touch locations for each file.
     Returns a list of metadata CSV paths corresponding to the input data files.
     """
     print(f"[{output_dir.name}] Calculating receptive field for {len(input_files)} files...")
-    return False
-    rf_files = []
-    
-    for input_path in input_files:
-        if not input_path.exists():
-            continue
 
-        df = pd.read_csv(input_path)
-        
-        # Logic: Calculate Convex Hull or Bounding Box of touch points per file
-        receptive_field_stats = {
-            "source_file": input_path.name,
-            "min_x": df['x'].min(),
-            "max_x": df['x'].max(),
-            "min_y": df['y'].min(),
-            "max_y": df['y'].max(),
-            "center_x": df['x'].mean(),
-            "center_y": df['y'].mean()
-        }
-        
-        output_filename = f"{input_path.stem}_rf_metadata.csv"
-        rf_path = output_dir / output_filename
-        pd.DataFrame([receptive_field_stats]).to_csv(rf_path, index=False)
-        rf_files.append(rf_path)
-    
-    return rf_files
+    output_files, rf_pc_file = determine_receptive_field(input_files, output_dir, force_processing=force_processing)
+
+    return output_files, rf_pc_file
 
 @flow(name="filter_by_receptive_field")
-def filter_by_receptive_field(data_files: List[Path], rf_files: List[Path], output_dir: Path) -> List[Path]:
+def filter_by_receptive_field(data_files: List[Path], rf_files: List[Path], output_dir: Path, force_processing: bool = False) -> List[Path]:
     """
     Filter the data based on the receptive field.
     Matches data files to RF files by index (assumes strictly ordered 1-to-1 flow).
     """
     print(f"[{output_dir.name}] Filtering data for {len(data_files)} files...")
-    return False
+    return
+    output_dir.mkdir(parents=True, exist_ok=True)
     output_files = []
     
     # Ensure we have matching lists
@@ -175,9 +98,13 @@ def filter_by_receptive_field(data_files: List[Path], rf_files: List[Path], outp
         rf = pd.read_csv(rf_path).iloc[0]
         
         # Logic: remove points outside the defined receptive field
+        # Using .get for safety if columns miss
+        x_col = df.get('x', pd.Series(dtype=float))
+        y_col = df.get('y', pd.Series(dtype=float))
+        
         mask = (
-            (df['x'] >= rf['min_x']) & (df['x'] <= rf['max_x']) &
-            (df['y'] >= rf['min_y']) & (df['y'] <= rf['max_y'])
+            (x_col >= rf['min_x']) & (x_col <= rf['max_x']) &
+            (y_col >= rf['min_y']) & (y_col <= rf['max_y'])
         )
         
         filtered_df = df[mask]
@@ -201,6 +128,7 @@ def run_single_session_postprocessing(
     report_file_path: Path = None
 ):
     print(f"🚀 Starting postprocessing for session: {session_id}")
+    # Assuming all configs in a session share the same merged output dir root
     session_output_dir = session_configs[0].session_merged_output_dir
 
     # Resolve input files from Configs
@@ -209,6 +137,7 @@ def run_single_session_postprocessing(
     for config in session_configs:
         input_dir = config.session_merged_output_dir / "sessions"
         input_path = input_dir / f"{config.session_id}_semicontrolled_{config.block_id}_merged_data.csv"
+        # Only add if it vaguely looks like a path, validation happens in tasks
         session_input_files.append(input_path)
 
     if monitor_queue is not None:
@@ -223,39 +152,19 @@ def run_single_session_postprocessing(
         "source_files": session_input_files
     }
 
-    # UPDATED: Pipeline stages now handle List[Path]
+    # UPDATED: Pipeline stages using the architecture of function_of_reference
     pipeline_stages = [
-        # 1. PCA Analysis
-        {
-            "name": "set_xyz_reference_from_gestures",
-            "func": set_xyz_reference_from_gestures_flow,
-            "params": lambda: {
-                "input_files": context.get("source_files"),
-                "output_dir": session_output_dir
-            },
-            "outputs": ["pca_data_files", "pca_report"]
-        },
-        # 2. Segmentation
-        {
-            "name": "segment_single_touches",
-            "func": segment_single_touches,
-            "params": lambda: {
-                "input_files": context.get("pca_data_files"),
-                "output_dir": session_output_dir
-            },
-            "outputs": ["segmented_data_files"]
-        },
-        # 3. Receptive Field
+        # Receptive Field
         {
             "name": "determine_receptive_field",
-            "func": determine_receptive_field,
+            "func": determine_receptive_field_flow,
             "params": lambda: {
-                "input_files": context.get("segmented_data_files"),
-                "output_dir": session_output_dir
+                "input_files": context.get("source_files"),
+                "output_dir": session_output_dir / "sessions_receptive-field"
             },
-            "outputs": ["rf_metadata_files"]
+            "outputs": ["segmented_data_files", "rf_metadata_files"]
         },
-        # 4. Filtering
+        # Filtering
         {
             "name": "filter_by_receptive_field",
             "func": filter_by_receptive_field,
@@ -265,23 +174,44 @@ def run_single_session_postprocessing(
                 "output_dir": session_output_dir
             },
             "outputs": ["final_data_files"]
+        },
+        
+        # PCA Analysis
+        {
+            "name": "set_xyz_reference_from_gestures",
+            "func": set_xyz_reference_from_gestures_flow,
+            "params": lambda: {
+                "input_files": context.get("source_files"),
+                "output_dir": session_output_dir  / "session_xyz_reference_from_gestures"
+            },
+            "outputs": ["pca_data_files", "pca_report"]
         }
     ]
 
-    for stage_idx, stage in enumerate(pipeline_stages):
+    for stage in pipeline_stages:
         task_name = stage["name"]
+        # Use session_id as block_name equivalent here for the executor
         executor = TaskExecutor(task_name, session_id, dag_handler, monitor)
 
         with executor:
-            if not executor.can_run:
-                continue
-
+            if not executor.can_run: continue
+            
+            # Retrieve options from DAG handler (e.g. force_processing)
+            options = dag_handler.get_task_options(task_name)
+            
+            # Resolve parameters lazily from context
             try:
                 params = stage["params"]()
             except KeyError as e:
-                executor.error_msg = f"Missing dependency in context: {e}"
-                print(f"❌ {executor.error_msg}")
-                return {"status": "failed", "error": executor.error_msg}
+                 executor.error_msg = f"Missing dependency in context: {e}"
+                 print(f"❌ {executor.error_msg}")
+                 # Logic for failure inside executor context usually requires setting the error 
+                 # and allowing the __exit__ to handle logging
+                 continue
+
+            # Inject force_processing if defined in options
+            if 'force_processing' in options:
+                params['force_processing'] = options['force_processing']
             
             # Validation: Check if list inputs are empty
             input_lists = [v for v in params.values() if isinstance(v, list)]
@@ -293,14 +223,17 @@ def run_single_session_postprocessing(
 
             if "outputs" in stage:
                 outputs = stage["outputs"]
-                if not isinstance(result, tuple):
+                # Ensure result is iterable/tuple for unpacking
+                if not isinstance(result, tuple): 
                     result = (result,)
+                
                 for i, key in enumerate(outputs):
-                    if key and i < len(result):
+                    if key and i < len(result): 
                         context[key] = result[i]
 
         if executor.error_msg:
-            return {"status": "failed", "stage": stage_idx, "error": executor.error_msg}
+            print(f"🛑 Failure in {task_name}. Aborting session.")
+            return {"status": "failed", "error": executor.error_msg}
 
     print(f"✅ Postprocessing finished for: {session_id}")
     return {"status": "success", "completed_tasks": list(dag_handler.completed_tasks)}
