@@ -2,11 +2,15 @@ import logging
 from pathlib import Path
 import pandas as pd
 import numpy as np
-from typing import Optional, List, Tuple, Dict, Union
+from typing import Optional, List, Tuple, Dict, Union, Literal
 from sklearn.decomposition import PCA
 import matplotlib.pyplot as plt
-from scipy.signal import find_peaks, savgol_filter
+from scipy.signal import find_peaks, savgol_filter, windows
 from utils.should_process_task import should_process_task
+
+# 
+from utils.should_process_task import should_process_task
+from utils import get_pca1_signal_configurable
 
 # Configure basic logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -42,41 +46,6 @@ def _load_and_validate_data(
         logging.warning("⚠️ 'speed_metadata' column missing. Defaulting to 'normal' for all trials.")
 
     return source_df, trial_df, gesture_type_map, speed_metadata_map
-
-def _normalize_signal(sig: np.ndarray) -> np.ndarray:
-    """Min-Max normalization to [0, 1] range."""
-    denom = np.max(sig) - np.min(sig)
-    if denom == 0:
-        return np.zeros_like(sig)
-    return (sig - np.min(sig)) / denom
-
-def _get_pca_signal(chunk_xyz: pd.DataFrame) -> np.ndarray:
-    """
-    Computes 1D projection of 3D data using PCA. 
-    Acts as a proxy for 'pos_1D' or 'depth'.
-    """
-    if len(chunk_xyz) < 5:
-        return np.zeros(len(chunk_xyz))
-
-    # Interpolate missing values
-    chunk_clean = chunk_xyz.interpolate(method='linear').ffill().bfill()
-    if chunk_clean.isnull().values.any():
-        return np.zeros(len(chunk_xyz))
-
-    pca = PCA(n_components=1)
-    # Fit transform
-    transformed = pca.fit_transform(chunk_clean)
-    sig = transformed[:, 0]
-    
-    # Smooth signal (blind smoothing approximation)
-    window_len = max(5, int(len(sig) * 0.05))
-    if window_len % 2 == 0: window_len += 1
-    if window_len < 3: window_len = 3
-    
-    sig_smooth = savgol_filter(sig, window_length=window_len, polyorder=2)
-    sig_norm = _normalize_signal(sig_smooth)
-    
-    return sig_norm
 
 def _correct_segments(
     segments: List[Tuple[int, int]], 
@@ -147,33 +116,138 @@ def _correct_segments(
             
     return current_segments
 
-def _split_strokes_reference(
+def _apply_edge_dampening(signal_arr: np.ndarray, edge_ratio: float = 0.1) -> np.ndarray:
+    """
+    Applies a Gaussian window to the first and last 'edge_ratio' percentage of the signal.
+    The dampening is applied 'around the mean', meaning the signal is pulled towards its mean value.
+    """
+    nsample = len(signal_arr)
+    edge_len = int(nsample * edge_ratio)
+    
+    if edge_len < 1:
+        return signal_arr.copy()
+
+
+    # Create Gaussian Taper
+    # We want a half-gaussian that goes from 0 (at index 0) to 1 (at index edge_len).
+    # Standard gaussian std dev (sigma). 3 sigma covers 99.7%. 
+    # So if we set 3*sigma = edge_len, index 0 will be ~0.01 (relative to peak).
+    sigma = edge_len / 3.0
+    
+    # Generate full gaussian and take the left half
+    # A window of length 2*edge_len + 1, peak at middle.
+    gauss_window = windows.gaussian(2 * edge_len + 1, std=sigma)
+    # Taking the rising edge (0 to peak)
+    rise_edge = gauss_window[:edge_len]
+    
+    # Construct the full mask: [Rise] + [Ones] + [Fall]
+    mask = np.ones(nsample)
+    
+    # Apply Rise to start
+    mask[:edge_len] = rise_edge
+    
+    # Apply Fall to end (reverse of rise)
+    # Ensure we don't overflow if 2*edge_len > nsample, though logical 20% limit prevents this.
+    end_start_idx = nsample - edge_len
+    mask[end_start_idx:] = rise_edge[::-1]
+    
+    # Calculate Mean
+    sig_mean = np.mean(signal_arr)
+    centered_sig = signal_arr - sig_mean
+    
+    # Apply mask to centered signal and add mean back
+    dampened_sig = (centered_sig * mask) + sig_mean
+    
+    return dampened_sig
+
+def _signal_segmentation(
     signal_arr: np.ndarray, 
     global_offset: int,
-    expected_nsample_per_segment: int = 1
+    strategy: Literal['strokes', 'taps'],
+    expected_nsample_per_segment: int = 1,
+    max_diff_ratio: float = 0.3,
+    edge_dampening_ratio: float = 0.1,
+    retries_remaining: int = 3,
+    low_bound: float = 0.3,
+    plot_results: bool = False
 ) -> List[Tuple[int, int]]:
     """
-    Replicates 'get_single_strokes' logic.
-    Defines segments based on intervals between extrema (peaks and valleys).
+    Unified kernel for splitting signals based on strokes or taps strategies.
+    Handles peak detection, plotting, adaptive recursion, and boundary generation.
     """
     nsample = len(signal_arr)
     # Reference: min_dist_peaks = .5 * scd.md.nsample/nb_period_expected
-    # Use max(1, ...) to avoid division by zero
-    min_dist_peaks = max(10, int(0.5 * expected_nsample_per_segment))
+    min_dist_peaks = max(5, int(0.5 * expected_nsample_per_segment))
+    
+    # --- Strategy Execution ---
+    peaks = np.array([], dtype=int)
+    actual_segments = 0
+    
+    if strategy == 'stroke':
+        # Find peaks (Participant's hand)
+        pos_peaks_a, _ = find_peaks(signal_arr, distance=min_dist_peaks, prominence=(low_bound, None))
+        # Find valleys (Participant's elbow / return motion)
+        pos_peaks_b, _ = find_peaks(-1 * signal_arr, distance=min_dist_peaks, prominence=(low_bound, None))
+        # Merge and sort
+        peaks = np.sort(np.concatenate((pos_peaks_a, pos_peaks_b)))
+        # Peaks define boundaries roughly 1:1 with segments in this logic
+        actual_segments = len(peaks)
+    
+    elif strategy == 'tap':
+        # Find peaks with prominence
+        peaks, _ = find_peaks(signal_arr, distance=min_dist_peaks, prominence=(low_bound, None))
+        # Taps logic usually results in N+1 segments for N peaks
+        actual_segments = len(peaks) + 1
 
-    # Find peaks (Participant's hand)
-    pos_peaks_a, _ = find_peaks(signal_arr, distance=min_dist_peaks)
-    # Find valleys (Participant's elbow / return motion)
-    pos_peaks_b, _ = find_peaks(-1 * signal_arr, distance=min_dist_peaks)
-    
-    # Merge and sort
-    pos_peaks = np.sort(np.concatenate((pos_peaks_a, pos_peaks_b)))
-    
+    # --- Visualization ---
+    if plot_results:
+        plt.figure(figsize=(12, 6))
+        plt.plot(signal_arr, label='Signal', color='blue')
+        
+        # Plot peaks overlay
+        if len(peaks) > 0:
+            plt.plot(peaks, signal_arr[peaks], "x", label='Detected Peaks', color='red', markersize=10)
+            
+        plt.title(f"Signal Analysis ({strategy.capitalize()}): {len(peaks)} Peaks Detected")
+        plt.xlabel("Sample Index")
+        plt.ylabel("Amplitude")
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        plt.show(block=True)
+
+    # --- Adaptive Check Logic ---
+    if retries_remaining > 0 and expected_nsample_per_segment > 0:
+        expected_n_segments = nsample / expected_nsample_per_segment
+        
+        # Avoid division by zero
+        if expected_n_segments > 0:
+            diff = abs(expected_n_segments - actual_segments) / expected_n_segments
+            
+            if diff > max_diff_ratio:
+                logging.debug(f"{strategy.capitalize()}: Mismatch detected (Diff: {diff:.2f}). Retrying with Gaussian dampening. Retries left: {retries_remaining - 1}")
+                
+                # Apply dampening (Assumed to exist in scope)
+                dampened_signal = _apply_edge_dampening(signal_arr, edge_ratio=edge_dampening_ratio)
+                
+                # Recursive retry calling this core function
+                return _signal_segmentation(
+                    signal_arr=dampened_signal, 
+                    global_offset=global_offset,
+                    strategy=strategy,
+                    expected_nsample_per_segment=expected_nsample_per_segment, 
+                    max_diff_ratio=max_diff_ratio, 
+                    edge_dampening_ratio=edge_dampening_ratio, 
+                    retries_remaining=retries_remaining - 1,
+                    low_bound=low_bound/2,
+                    plot_results=plot_results
+                )
+
+    # --- Boundary Construction ---
     all_boundaries = [
         np.array([element]) if isinstance(element, int) else element 
-        for element in [0, pos_peaks, nsample]
+        for element in [0, peaks, nsample]
     ]
-    all_boundaries=  np.concatenate(all_boundaries)
+    all_boundaries = np.concatenate(all_boundaries)
 
     endpoints_list = []
     for i in range(len(all_boundaries) - 1):
@@ -184,35 +258,6 @@ def _split_strokes_reference(
         
     return endpoints_list
 
-def _split_taps_reference(
-    signal_arr: np.ndarray, 
-    global_offset: int,
-    expected_nsample_per_segment: int = 1
-) -> List[Tuple[int, int]]:
-    """
-    Replicates 'get_single_taps' logic.
-    Defines segments based on midpoints between peaks.
-    """
-    nsample = len(signal_arr)
-    min_dist_peaks = max(10, int(0.5 *expected_nsample_per_segment))
-    
-    # Find peaks with prominence (as per reference)
-    peaks, _ = find_peaks(signal_arr, distance=min_dist_peaks, prominence=(0.3, None))
-    
-
-    all_boundaries = [
-        np.array([element]) if isinstance(element, int) else element 
-        for element in [0, peaks, nsample]
-    ]
-    all_boundaries=  np.concatenate(all_boundaries)
-    
-    endpoints_list = []
-    for i in range(len(all_boundaries) - 1):
-        start = all_boundaries[i]
-        end = all_boundaries[i+1] - 1
-        endpoints_list.append((start + global_offset, end + global_offset))
-        
-    return endpoints_list
 
 def find_single_touches(
         stickers_xyz_path: Path,
@@ -248,6 +293,7 @@ def find_single_touches(
     # 2. Identify Coarse Regions (Trial ON)
     # We use the original 'coarse' logic just to find the windows where data is valid.
     trial_signal = trial_df[trial_col].fillna(0).astype(int)
+    #plt.plot(trial_signal); plt.show(block=True)
     # Find contiguous regions of 1s
     trial_signal_diff = np.diff(np.concatenate(([0], trial_signal.values, [0])))
     starts = np.where(trial_signal_diff == 1)[0]
@@ -260,7 +306,6 @@ def find_single_touches(
     
     # 3. Iterate over coarse regions and split them internally
     for i, (start_idx, end_idx) in enumerate(zip(starts, ends)):
-        
         # Get Gesture Type for this region
         # Map coarse region index to gesture type index (approximate if metadata isn't 1:1)
         meta_idx = min(i, len(gesture_type_map) - 1)
@@ -270,28 +315,28 @@ def find_single_touches(
         logging.debug(f"Processing Trial {i}: gesture={gesture_type}, speed={speed_cm_s} cm/s")
         
         # Extract Signal (PCA of XYZ) and Data Chunk
-        chunk_xyz = source_df.loc[start_idx:end_idx, xyz_cols]
-        pc1_signal = _get_pca_signal(chunk_xyz)
+        chunk_xyz = source_df.loc[start_idx:end_idx, xyz_cols].values
         
+        # --- MODIFICATION: Use standardized generic_signal_processing logic ---
+        # The generic function handles interpolation, robust fitting, z-correction, and smoothing.
+        # It expects a numpy array.
+        pc1_signal = get_pca1_signal_configurable(chunk_xyz, enable_z_correction=True, z_correction_mode='negative')
         # Determine Splitting Strategy
         segments = []
         
         if "stroke" in gesture_type:
             expected_nsample_per_segment = int(Fs*(path_length/speed_cm_s))
-            segments = _split_strokes_reference(pc1_signal, start_idx, expected_nsample_per_segment)
         else:
-            # Default to Tap logic for taps or unknown
+            # Default to Tap logic for taps
             expected_nsample_per_segment = int(2.0 * Fs*(path_length/speed_cm_s))
-            
-            # it is important to split taps from where the hand is at the highest
-            # Low risk hypothesis here is made, where the xyz position of the hand is 
-            # at the highest at t=0. If the normalised pc1 as its first value closer 
-            # to 0, we flip it (mimick the hand being higher than the skin)
-            if pc1_signal[0] < 0.5:
-                pc1_signal = np.abs(1-pc1_signal)
-            
-            segments = _split_taps_reference(pc1_signal, start_idx, expected_nsample_per_segment)
-            
+                
+        segments = _signal_segmentation(
+            signal_arr=pc1_signal, 
+            global_offset=start_idx, 
+            strategy=gesture_type,
+            expected_nsample_per_segment=expected_nsample_per_segment,
+            plot_results=enable_visualization)
+
         # Correction Phase (Merge short segments)
         # Dynamic HP duration: 25% of the expected single period duration
         hp_limit = int(expected_nsample_per_segment * 0.25)
@@ -309,7 +354,7 @@ def find_single_touches(
 
         # Debug Visualization (Aggregated per Trial UID)
         # Limit to the first 5 trials to prevent flooding
-        if enable_visualization and i < 5:
+        if enable_visualization:
             plt.figure(figsize=(10, 3))
             plt.plot(pc1_signal, label='PCA Signal')
             
@@ -325,6 +370,8 @@ def find_single_touches(
             plt.ylabel("Normalized Amplitude")
             plt.legend()
             plt.show(block=True)
+
+        pass
 
     # 5. Save
     output_path.parent.mkdir(parents=True, exist_ok=True)
