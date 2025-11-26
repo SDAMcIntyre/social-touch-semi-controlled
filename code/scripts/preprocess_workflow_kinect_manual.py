@@ -1,7 +1,7 @@
 from pathlib import Path
 from prefect import flow
 import utils.path_tools as path_tools
-from utils.pipeline_config_manager import DagConfigHandler
+from utils import DagConfigHandler
 
 from primary_processing import (
     KinectConfigFileHandler,
@@ -23,17 +23,11 @@ from _3_preprocessing._5_led_tracking import (
     define_led_roi
 )
 
-<<<<<<< Updated upstream
-from _3_preprocessing._6_unification import (
-    define_trial_chunks
-)
-=======
 from _3_preprocessing._6_metadata_matching import (
     define_trial_chunks,
     review_single_touches
 )
 
->>>>>>> Stashed changes
 
 # --- Sub-Flows (Manual Tasks) ---
 @flow(name="3. Track LED Blinking")

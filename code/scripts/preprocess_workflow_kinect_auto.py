@@ -13,9 +13,9 @@ from prefect import flow, get_run_logger
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 import utils.path_tools as path_tools
-from utils.pipeline_config_manager import DagConfigHandler
-from utils.pipeline_monitoring.pipeline_monitor import PipelineMonitor
+from utils import DagConfigHandler, PipelineMonitor, TaskExecutor
 
+# Importing primary processing modules
 from primary_processing import (
     KinectConfigFileHandler,
     KinectConfig,
@@ -62,60 +62,20 @@ from _3_preprocessing._5_led_tracking import (
     validate_and_correct_led_timing_from_stimuli
 )
 
-from _3_preprocessing._6_unification import (
-    unify_contact_caracteristics_and_ttl,
-    add_trial_id,
-    add_stimuli_metadata_to_data 
+from _3_preprocessing._6_metadata_matching import (
+    calculate_trial_id,
+    generate_stimuli_metadata_to_data,
+    find_single_touches
 )
 
-# -------------------------------
-
-class TaskExecutor:
-# ... (TaskExecutor class remains unchanged) ...
-    """A context manager to handle the boilerplate of running a pipeline task."""
-    def __init__(self, task_name, block_name, dag_handler, monitor):
-        self.task_name: str = task_name
-        self.block_name: str = block_name
-        self.dag_handler: DagConfigHandler = dag_handler
-        self.monitor: PipelineMonitor = monitor
-        self.can_run: bool = False
-        self.error_msg: str = None
-
-    def __enter__(self):
-        """Called when entering the 'with' block. Prepares and starts the task."""
-        if self.dag_handler.can_run(self.task_name):
-            self.can_run = True
-            print(f"[{self.block_name}] ==> Running task: {self.task_name}")
-            if self.monitor is not None:
-                self.monitor.update(self.block_name, self.task_name, "RUNNING")
-        return self # Returns the executor instance itself
-
-    def __exit__(self, exc_type, exc_value, tb):
-        """Called when exiting the 'with' block. Handles success or failure."""
-        if not self.can_run:
-            return # Task was skipped by the DAG handler
-
-        if exc_type: # An exception occurred
-            self.error_msg = f"Task '{self.task_name}' failed: {exc_value}"
-            print(f"❌ {self.error_msg}\n{traceback.format_exc()}")
-            if self.monitor is not None:
-                self.monitor.update(self.block_name, self.task_name, "FAILURE", self.error_msg)
-            # Suppress the exception to allow the main loop to handle failure
-            return True
-        else: # Success
-            self.dag_handler.mark_completed(self.task_name)
-            if self.monitor is not None:
-                self.monitor.update(self.block_name, self.task_name, "SUCCESS")
-        return False
+from _3_preprocessing._7_unification import unify_datasets
 
 # --- 3. Sub-Flows (Formerly Tasks) ---
-# ... (Existing flows 0. to 9. remain unchanged) ...
 
 @flow(name="0. Analyse MKV video")
 def validate_mkv_video(source_video: Path, output_dir: Path, *, force_processing: bool = False) -> Path:
     print(f"[{output_dir.name}] Analysing MKV video...")
     analysis_csv_path = output_dir / "mkv_analysis_report.csv"
-    # Propagate the flag to the underlying implementation function
     return generate_mkv_stream_analysis(source_video, analysis_csv_path, force_processing=force_processing)
 
 @flow(name="1. Generate RGB Video")
@@ -123,7 +83,6 @@ def generate_rgb_video(source_video: Path, output_dir: Path, *, force_processing
     print(f"[{output_dir.name}] Generating RGB video...")
     base_filename = os.path.splitext(os.path.basename(source_video))[0]
     rgb_path = output_dir / f"{base_filename}.mp4"
-    # Propagate the flag to the underlying implementation function
     rgb_video_path = extract_color_to_mp4(source_video, rgb_path, force_processing=force_processing)
     return Path(rgb_video_path) if not isinstance(rgb_video_path, Path) else rgb_video_path
 
@@ -131,7 +90,6 @@ def generate_rgb_video(source_video: Path, output_dir: Path, *, force_processing
 def generate_depth_images(source_video: Path, output_dir: Path, *, force_processing: bool = False) -> Path:
     print(f"[{output_dir.name}] Generating depth images...")
     depth_dir = output_dir / source_video.name.replace(".mkv", "_depth")
-    # Propagate the flag to the underlying implementation function
     extract_depth_to_tiff(source_video, depth_dir, force_processing=force_processing)
     return depth_dir
 
@@ -142,7 +100,8 @@ def track_led_blinking(video_path: Path, stimulus_metadata: Path, output_dir: Pa
     
     roi_metadata_path = output_dir / (name_baseline + "_roi_metadata.json")
     roi_video_path = output_dir / (name_baseline + "_roi.mp4")
-    success = generate_led_roi(video_path, roi_metadata_path, roi_video_path, force_processing=force_processing)
+    # Function usage
+    generate_led_roi(video_path, roi_metadata_path, roi_video_path, force_processing=force_processing)
     
     csv_led_path = output_dir / (name_baseline + ".csv")
     metadata_led_state_path = output_dir / (name_baseline + "_metadata.json")
@@ -186,15 +145,14 @@ def track_stickers(rgb_video_path: Path, output_dir: Path, *, force_processing: 
     roi_unified_csv_path = output_dir / (name_baseline + "_roi_standard_size.csv")
     generate_standard_roi_size_dataset(stickers_roi_csv_path, roi_unified_csv_path)
     corrmap_video_base_path = output_dir / (name_baseline + "_roi_unified.mp4")
-    create_standardized_roi_videos(roi_unified_csv_path, rgb_video_path, corrmap_video_base_path, force_processing=force_processing) # force_processing)
+    create_standardized_roi_videos(roi_unified_csv_path, rgb_video_path, corrmap_video_base_path, force_processing=force_processing)
     
-    # defined by manual tasks pipeline
     metadata_colorspace_path = output_dir / (name_baseline + "_colorspace_metadata.json")
     binary_video_base_path = output_dir / (name_baseline + "_corrmap.mp4")
     create_color_correlation_videos(corrmap_video_base_path, metadata_colorspace_path, binary_video_base_path, force_processing=force_processing)
     
     if not is_correlation_videos_threshold_defined(metadata_colorspace_path):
-        raise ValueError("❌ --> correlation videos threshold has not been manually validated. Cannot continue the pipeline.Execute the corresponding manual task. ")
+        raise ValueError("❌ --> correlation videos threshold has not been manually validated.")
     
     fit_ellipses_path = output_dir / (name_baseline + "_ellipses.csv")
     fit_ellipses_on_correlation_videos(
@@ -225,13 +183,11 @@ def track_stickers(rgb_video_path: Path, output_dir: Path, *, force_processing: 
 @flow(name="6. Generate XYZ Sticker Positions (3D)")
 def generate_xyz_stickers(stickers_2d_path: Path, source_video: Path, output_dir: Path, *, force_processing: bool = False) -> Path:
     print(f"[{output_dir.name}] Generating XYZ sticker positions (3D)...")
-    # Base name derived from the 2D tracking file for consistency
     name_baseline = stickers_2d_path.stem.replace('_summary_2d_coordinates', '')
     result_csv_path = output_dir / (name_baseline + "_xyz_tracked.csv")
     result_md_path = output_dir / (name_baseline + "_xyz_tracked_metadata.json")
     method = "centroid"
 
-    # Propagate the flag to the underlying implementation function
     extract_stickers_xyz_positions(
         source_video, 
         stickers_2d_path,
@@ -249,7 +205,6 @@ def generate_3d_hand_motion(rgb_video_path: Path, stickers_xyz_path: Path, hand_
     metadata_path = output_dir / (name_baseline + "_metadata.json")
     hand_motion_glb_path = output_dir / (name_baseline + "_motion.glb")
     hand_motion_csv_path = output_dir / (name_baseline + "_motion.csv")
-    # Propagate the flag to the underlying implementation function
     generate_hand_motion(stickers_xyz_path, hand_models_dir, metadata_path, hand_motion_glb_path, hand_motion_csv_path, force_processing=force_processing)
     return hand_motion_glb_path, metadata_path
 
@@ -267,14 +222,11 @@ def generate_somatosensory_chars(
 ) -> Path:
     print(f"[{output_dir.name}] Generating somatosensory characteristics...")
     name_baseline = Path(current_video_filename).stem
-    # inputs
     forearm_pointcloud_dir = session_processed_dir / "forearm_pointclouds"
     metadata_filaname = session_id + "_arm_roi_metadata.json"
     metadata_path = forearm_pointcloud_dir / metadata_filaname
 
-    # output
     contact_characteristics_path = output_dir / (name_baseline + "_contact_and_kinematic_data.csv")
-    # Propagate the flag to the underlying implementation function
     compute_somatosensory_characteristics(
         hand_motion_glb_path, hand_metadata_path,
         metadata_path, forearm_pointcloud_dir,
@@ -283,49 +235,21 @@ def generate_somatosensory_chars(
     )
     return contact_characteristics_path
 
-@flow(name="9. Unify TTL and Contact Dataset")
-def unify_ttl_and_contact(contact_chars_path: Path, ttl_path: Path, output_dir: Path, *, force_processing: bool = False) -> Path:
-    print(f"[{output_dir.name}] Generating unified dataset...")
-    name_baseline = Path(contact_chars_path).stem
-    unified_path = output_dir / (name_baseline + "_withTTL.csv")
-    
-    unify_contact_caracteristics_and_ttl(contact_chars_path, ttl_path, unified_path, force_processing=force_processing)
-
-    return unified_path
-
 @flow(name="10. Define Trial IDs")
-def define_trial_ids_flow(rgb_video_path: Path, unified_data_path: Path, output_dir: Path, *, force_processing: bool = False) -> Path:
+def define_trial_ids_flow(rgb_video_path: Path, output_dir: Path, *, force_processing: bool = False) -> Path:
     print(f"[{output_dir.name}] Defining Trial IDs...")
-    name_baseline = Path(unified_data_path).stem
-    final_path = output_dir / (name_baseline + "_withTrialID.csv")
+    name_baseline = Path(rgb_video_path).stem
+    trial_chunk_path: Path = output_dir / (name_baseline + "_trial-chunks.csv")
+    output_path = output_dir / (name_baseline + "_trial-ids.csv")
     
-    trial_chunk_path: Path = output_dir / (Path(rgb_video_path).stem + "_trial-chunks.csv")
-    add_trial_id(
+    calculate_trial_id(
         trial_chunk_path=trial_chunk_path,
-        unified_data_path=unified_data_path, 
-        output_path=final_path, 
+        output_path=output_path, 
         force_processing=force_processing
     )
-
-<<<<<<< Updated upstream
-    return final_path
     
-@flow(name="11. Add Stimuli Metadata")
-def add_stimuli_metadata_flow(unified_data_path: Path, stimulus_metadata: Path, output_dir: Path, *, force_processing: bool = False) -> Path:
-    print(f"[{output_dir.name}] Adding Stimuli Metadata...")
-    name_baseline = Path(unified_data_path).stem
-    final_path = output_dir / (name_baseline + "_withStimuliData.csv")
-    
-    add_stimuli_metadata_to_data(
-        data_path=unified_data_path,
-        stimuli_path=stimulus_metadata,
-        output_path=final_path,
-        force_processing=force_processing
-    )
+    return output_path
 
-    return final_path
-
-=======
 @flow(name="11. Add Stimuli Metadata")
 def generate_stimuli_metadata_flow(trial_data_path: Path, stimulus_metadata: Path, output_dir: Path, *, force_processing: bool = False) -> Path:
     print(f"[{output_dir.name}] Adding Stimuli Metadata...")
@@ -353,6 +277,7 @@ def find_single_touches_flow(trial_data_path: Path, stickers_xyz_path: Path, sti
     
     final_path = output_dir / (name_baseline + "_single-touches-corrected.csv")
     if not final_path.exists():
+        # NOTE: This assumes a manual step exists. If purely automated, this logic flaw persists from original.
         raise ValueError("❌ --> Automatic single touches has not been manually validated yet.")
     
     return final_path
@@ -366,11 +291,9 @@ def unify_processed_data_flow(led_path: Path,
                               rgb_video_path: Path,
                               output_dir: Path, *, force_processing: bool = False) -> Path:
     print(f"[{output_dir.name}] Unifying all processed data...")
-    # Note: trial_path here now refers to the separate CSV file
     final_path = output_dir / (Path(rgb_video_path).stem + "_unified.csv")
     unify_datasets(led_path=led_path, contact_path=contact_path, trial_path=trial_path, single_touch_path=single_touch_path, stimuli_path=stimuli_path, output_path=final_path, force_processing=force_processing)
     return final_path
->>>>>>> Stashed changes
 
 # --- 4. The "Worker" Flow ---
 # @flow(name="Run Single Session Pipeline")
@@ -380,10 +303,6 @@ def run_single_session_pipeline(
     monitor_queue: Queue = None,
     report_file_path: Path = None
 ):
-    """
-    Processes a single dataset ("block") using a data-driven approach
-    to eliminate code repetition and improve maintainability.
-    """
     block_name = config.source_video.stem
     print(f"🚀 Starting pipeline for block: {block_name}")
 
@@ -394,36 +313,21 @@ def run_single_session_pipeline(
     else:
         monitor = None
 
-    # A dictionary to hold the results from tasks (e.g., file paths)
-    context = {}
+    context = {
+        "rgb_video_path": config.video_primary_output_dir / f"{config.source_video.stem}.mp4"
+    }
 
-    # --- Define the entire pipeline as a data structure ---
+    
     pipeline_stages = [
-        # ... (Existing stages 1-8 remain unchanged) ...
-        # --- Stage 1: Primary Video Processing ---
-        {"name": "validate_mkv_video", 
-         "func": validate_mkv_video, 
-         "params": lambda: {"source_video": config.source_video, 
-                            "output_dir": config.video_primary_output_dir}},
-        {"name": "generate_rgb_video", 
-         "func": generate_rgb_video, 
-         "params": lambda: {"source_video": config.source_video, 
-                            "output_dir": config.video_primary_output_dir}, 
-         "outputs": ["rgb_video_path"]},
-        {"name": "generate_depth_images", 
-         "func": generate_depth_images, 
-         "params": lambda: {"source_video": config.source_video, 
-                            "output_dir": config.video_primary_output_dir}},
-
-        # --- Stage 2: LED Tracking ---
+        # --- Stage 1: LED Tracking ---
         {"name": "track_led_blinking", 
          "func": track_led_blinking, 
          "params": lambda: {"video_path": context.get("rgb_video_path"), 
                             "stimulus_metadata": config.stimulus_metadata, 
-                            "output_dir": config.video_processed_output_dir / "LED"}, 
+                            "output_dir": config.video_processed_output_dir / "temporal_segmentation/LED"}, 
          "outputs": ["led_tracking_path"]},
 
-        # --- Stage 3: Validation ---
+        # --- Stage 2: Validation ---
         {"name": "validate_forearm_extraction", 
          "func": validate_forearm_extraction, 
          "params": lambda: {"session_output_dir": config.session_processed_output_dir}},
@@ -432,14 +336,14 @@ def run_single_session_pipeline(
          "params": lambda: {"rgb_video_path": context.get("rgb_video_path"), 
                             "hand_models_dir": config.hand_models_dir,
                             "expected_labels": config.objects_to_track, 
-                            "output_dir": config.video_processed_output_dir}},
+                            "output_dir": config.video_processed_output_dir / "kinematics_analysis"}},
 
-        # --- Stage 4: 3D Tracking & Reconstruction ---
+        # --- Stage 3: 3D Tracking & Reconstruction ---
         {"name": "track_stickers", 
          "func": track_stickers, 
          "params": lambda: {"rgb_video_path": context.get("rgb_video_path"), 
                             "output_dir": config.video_processed_output_dir / "handstickers"}, 
-         "outputs": ["sticker_2d_tracking_path", None]}, # Use None for unused return values
+         "outputs": ["sticker_2d_tracking_path", None]},
         {"name": "generate_xyz_stickers", 
          "func": generate_xyz_stickers, 
          "params": lambda: {"stickers_2d_path": context.get("sticker_2d_tracking_path"), 
@@ -451,7 +355,7 @@ def run_single_session_pipeline(
          "params": lambda: {"rgb_video_path": context.get("rgb_video_path"), 
                             "stickers_xyz_path": context.get("sticker_3d_tracking_path"), 
                             "hand_models_dir": config.hand_models_dir, 
-                            "output_dir": config.video_processed_output_dir}, 
+                            "output_dir": config.video_processed_output_dir / "kinematics_analysis"}, 
          "outputs": ["hand_motion_glb_path", "hand_metadata_path"]},
         {"name": "generate_somatosensory_chars", 
          "func": generate_somatosensory_chars, 
@@ -460,22 +364,14 @@ def run_single_session_pipeline(
                             "session_processed_dir": config.session_processed_output_dir, 
                             "session_id": config.session_id, 
                             "current_video_filename": context.get("rgb_video_path").name, 
-                            "output_dir": config.video_processed_output_dir},
+                            "output_dir": config.video_processed_output_dir / "kinematics_analysis"},
          "outputs": ["somatosensory_chars_path"]},
 
-        # --- Stage 5: Final Data Integration ---
-        {"name": "unify_ttl_and_contact", 
-         "func": unify_ttl_and_contact,
-         "params": lambda: {"contact_chars_path": context.get("somatosensory_chars_path"), 
-                            "ttl_path": context.get("led_tracking_path"), 
-                            "output_dir": config.video_processed_output_dir},
-         "outputs": ["unified_data_path"]},
-        {"name": "add_trial_id", 
+        # --- Stage 4: Final Data Integration ---
+        {"name": "define_trial_id", 
          "func": define_trial_ids_flow,
          "params": lambda: {"rgb_video_path": context.get("rgb_video_path"), 
-<<<<<<< Updated upstream
-                            "unified_data_path": context.get("unified_data_path"),
-=======
+                            #"unified_data_path": context.get("somatosensory_chars_path"),
                             "output_dir": config.video_processed_output_dir / "temporal_segmentation"},
          "outputs": ["trial_data_path"]},
 
@@ -502,61 +398,44 @@ def run_single_session_pipeline(
                             "single_touch_path": context.get("single_touches_path"),
                             "stimuli_path": context.get("stimuli_metadata_aligned_path"),
                             "rgb_video_path": context.get("rgb_video_path"), 
->>>>>>> Stashed changes
                             "output_dir": config.video_processed_output_dir},
-         "outputs": ["final_data_path"]},
-
-        # --- NEW STAGE 6: Stimuli Metadata Integration ---
-        {"name": "add_stimuli_metadata", 
-         "func": add_stimuli_metadata_flow, # New flow
-         "params": lambda: {"unified_data_path": context.get("final_data_path"), # Input is output of previous step
-                            "stimulus_metadata": config.stimulus_metadata, # Use config for stimuli path
-                            "output_dir": config.video_processed_output_dir},
-         "outputs": ["final_data_with_stimuli_path"]}, # New final output key
+         "outputs": ["final_data_path"]}
     ]
 
-    # --- Pipeline Execution Engine ---
     for stage_idx, stage in enumerate(pipeline_stages):
         task_name = stage["name"]
+    
         executor = TaskExecutor(task_name, block_name, dag_handler, monitor)
-
         with executor:
             if not executor.can_run:
                 continue
-
-            # Prepare task arguments
             options = dag_handler.get_task_options(task_name)
             params = stage["params"]()
             force = options.get('force_processing')
             if force is not None:
                 params['force_processing'] = force
-
-            # Execute the task
             result = stage["func"](**params)
 
-            # Store outputs in the context dictionary for subsequent tasks
-            if "outputs" in stage:
-                outputs = stage["outputs"]
-                if not isinstance(result, tuple):
-                    result = (result,) # Ensure result is always a tuple
-                for i, key in enumerate(outputs):
-                    if key: # Skip if the key is None
-                        context[key] = result[i]
-
-        # If the task failed, stop the pipeline
-        if executor.error_msg:
-            # The 'mark_remaining_tasks_as_skipped' logic can now be simplified
-            all_tasks = list(dag_handler.tasks.keys())
-            current_task_index = all_tasks.index(task_name)
-            for skipped_task in all_tasks[current_task_index + 1:]:
-                monitor.update(block_name, skipped_task, "SKIPPED", "Skipped due to prior failure.")
-            return {"status": "failed", "stage": stage_idx, "error": executor.error_msg}
+        # Store outputs
+        if "outputs" in stage:
+            outputs = stage["outputs"]
+            if not isinstance(result, tuple):
+                result = (result,)
+            for i, key in enumerate(outputs):
+                if key:
+                    context[key] = result[i]
+        
+        if task_name in dag_handler.tasks and executor.error_msg:
+             all_tasks = list(dag_handler.tasks.keys())
+             current_task_index = all_tasks.index(task_name)
+             for skipped_task in all_tasks[current_task_index + 1:]:
+                 monitor.update(block_name, skipped_task, "SKIPPED", "Skipped due to prior failure.")
+             return {"status": "failed", "stage": stage_idx, "error": executor.error_msg}
 
     print(f"✅ Pipeline finished successfully for session: {block_name}")
     return {"status": "success", "completed_tasks": list(dag_handler.completed_tasks)}
 
 
-# @flow(name="Batch Process All Sessions", log_prints=True)
 def run_batch_processing(
     kinect_configs_dir: Path,
     project_data_root: Path,
@@ -565,14 +444,6 @@ def run_batch_processing(
     report_file_path: Path,
     parallel: bool,
 ):
-# ... (run_batch_processing remains unchanged) ...
-    """
-    Dispatches pipeline runs for all session configs found in a directory.
-
-    This single flow handles both parallel and sequential execution based on the
-    `parallel` flag, removing code duplication.
-    """
-    # logger = get_run_logger()
     dag_handler_template = DagConfigHandler(dag_config_path)
     block_files = get_block_files(kinect_configs_dir)
     
@@ -587,7 +458,6 @@ def run_batch_processing(
         dag_handler_instance = dag_handler_template.copy()
 
         if parallel:
-            # .submit() creates a new flow run that executes asynchronously
             run = run_single_session_pipeline.submit(
                 config=validated_config,
                 dag_handler=dag_handler_instance,
@@ -597,7 +467,6 @@ def run_batch_processing(
             )
             submitted_runs.append(run)
         else:
-            # A direct call executes the flow and blocks until completion
             run_single_session_pipeline(
                 config=validated_config,
                 dag_handler=dag_handler_instance,
@@ -606,7 +475,6 @@ def run_batch_processing(
             )
             logging.info(f"--- Completed session: {block_file.stem} ---")
 
-    # If in parallel mode, robustly wait for all submitted runs to finish
     if parallel:
         logging.info("All flows submitted. Waiting for parallel runs to complete...")
         for i, run in enumerate(submitted_runs):
@@ -615,14 +483,9 @@ def run_batch_processing(
     
     logging.info("✅ All batch processing tasks have finished.")
 
-###
-### 2. MODULAR MAIN EXECUTION BLOCK
-###
-def setup_environment():
-# ... (setup_environment remains unchanged) ...
-    """Handles filesystem setup, cleaning up old reports."""
-    project_data_root = path_tools.get_project_data_root()
 
+def setup_environment():
+    project_data_root = path_tools.get_project_data_root()
     configs_dir = Path("configs")
     dag_config_path = Path(configs_dir / "preprocess_workflow_kinect_auto_dag.yaml")
 
@@ -637,12 +500,9 @@ def setup_environment():
     return project_data_root, configs_dir, dag_config_path, report_file_path
 
 def main():
-# ... (main remains unchanged) ...
-    """Main execution function to orchestrate the pipeline."""
-    freeze_support() # Essential for multiprocessing on Windows
+    freeze_support()
     project_data_root, configs_dir, dag_config_path, report_file_path = setup_environment()
 
-    # --- Configuration Loading ---
     try:
         main_dag_handler = DagConfigHandler(dag_config_path)
         is_parallel = main_dag_handler.get_parameter('parallel_execution', False)
@@ -652,14 +512,11 @@ def main():
         print(f"❌ Error: Configuration file '{dag_config_path}' not found.")
         exit(1)
 
-    # --- Monitoring Setup ---
     print("📊 Initializing pipeline monitor...")
     pipeline_stages = list(main_dag_handler.tasks.keys())
     main_monitor = PipelineMonitor(report_path=str(report_file_path), stages=pipeline_stages, live_plotting=True)
     main_monitor.show_dashboard()
 
-    # --- Flow Execution ---
-    # The main logic is now encapsulated in the single dispatcher flow
     run_batch_processing(
         kinect_configs_dir=kinect_configs_dir,
         project_data_root=project_data_root,
@@ -669,7 +526,6 @@ def main():
         parallel=is_parallel,
     )
 
-    # --- Graceful Shutdown ---
     print("\n🏁 All pipeline tasks have completed.")
     print("✨ Dashboard will close automatically in 10 seconds...")
     time.sleep(10)

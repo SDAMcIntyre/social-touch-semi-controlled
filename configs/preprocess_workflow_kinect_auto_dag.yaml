@@ -76,21 +76,18 @@ tasks:
     enabled: true
     options:
       force_processing: false
-    # Synchronizes LED, Contact, and Sticker data to define trial boundaries.
     depends_on: [track_stickers]
 
   generate_stimuli_metadata:
     enabled: true
     options:
       force_processing: false
-    # Injects experimental metadata into the trial structure.
     depends_on: [define_trial_id]
 
   find_single_touches:
     enabled: true
     options:
       force_processing: false
-    # Analyzes contact behavior within the defined trial IDs.
     depends_on: [generate_3d_hand_motion, define_trial_id, generate_stimuli_metadata]
 
   # ---------------------------------------------------------------------------
