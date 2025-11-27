@@ -3,8 +3,9 @@ import numpy as np
 import tkinter as tk
 import os
 from collections import defaultdict
+from typing import Optional
 
-
+# Imports from the provided file structure
 from preprocessing.common import (
     VideoMP4Manager,
     FrameROISquare
@@ -35,6 +36,24 @@ def _get_or_create_tk_root():
         _tk_root_instance = tk.Tk()
         _tk_root_instance.withdraw()  # Hide the root window
     return _tk_root_instance
+
+def _retrieve_fourcc(video_path: str) -> str:
+    """
+    Helper function to extract the FourCC string from a video file.
+    Required because VideoMP4Manager does not currently expose this property.
+    """
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        return "unknown"
+    
+    try:
+        fourcc_code = int(cap.get(cv2.CAP_PROP_FOURCC))
+        # Convert integer representation to string (e.g., 'mp4v')
+        return "".join([chr((fourcc_code >> 8 * i) & 0xFF) for i in range(4)]).lower()
+    except Exception:
+        return "unknown"
+    finally:
+        cap.release()
 
 # ----------------------------------------------------------------------------
 # MAIN FUNCTION
@@ -101,11 +120,15 @@ def define_forearm_extraction_parameters(rgb_video_paths: list[str], metadata_pa
             print(f"❌ Error loading video: {e}. Skipping this video.")
             continue
         
+        # Calculate FourCC once per video
+        fourcc_str = _retrieve_fourcc(video_path)
         video_filename = os.path.basename(video_path)
+        
         # Iterate through each frame selected for the current video
         for frame_idx in frame_indices:
             print(f"  - Defining ROI for frame {frame_idx}...")
-            selected_frame = video_manager.get_frame(frame_idx)
+            # VideoMP4Manager supports index access
+            selected_frame = video_manager[frame_idx]
 
             if parameters_list:
                 # Find the specific parameter object that matches the video filename and frame index
@@ -153,15 +176,17 @@ def define_forearm_extraction_parameters(rgb_video_paths: list[str], metadata_pa
             bottom_right = Point(x=x + w, y=y + h)
             roi = RegionOfInterest(top_left_corner=top_left, bottom_right_corner=bottom_right)
 
+            # CORRECTED: Uses .width, .height properties from VideoMP4Manager
+            # CORRECTED: Uses calculated fourcc_str
             metadata = ForearmParameters(
                 video_filename=os.path.basename(video_path),
                 frame_id=frame_idx,
                 region_of_interest=roi,
-                frame_width=video_manager.frame_width,
-                frame_height=video_manager.frame_height,
+                frame_width=video_manager.width,  
+                frame_height=video_manager.height,
                 fps=video_manager.fps,
                 nframes=video_manager.total_frames,
-                fourcc_str=video_manager.fourcc_str
+                fourcc_str=fourcc_str
             )
             all_forearm_parameters.append(metadata)
 
