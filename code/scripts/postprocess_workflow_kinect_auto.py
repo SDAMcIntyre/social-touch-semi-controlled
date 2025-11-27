@@ -21,16 +21,11 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 # Mocking utils for template completeness - Replace with actual imports
 from utils import path_tools
-<<<<<<< Updated upstream
-from utils.pipeline_config_manager import DagConfigHandler
-from utils.pipeline_monitoring.pipeline_monitor import PipelineMonitor
-=======
 from utils import (
     DagConfigHandler,
     PipelineMonitor,
     TaskExecutor
 )
->>>>>>> Stashed changes
 from primary_processing import (
     KinectConfigFileHandler, 
     KinectConfig, 
