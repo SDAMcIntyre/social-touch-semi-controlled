@@ -24,12 +24,15 @@ def visualize_point_cloud_comparison(
         right_label: Label for the right geometry.
     """
     print(f"👀 Interactive Mode: Launching Split-Screen Synchronized View.")
-
+    
     # Initialize the Application
-    if not gui.Application.instance:
-        gui.Application.instance.initialize()
-    else:
-        pass
+    app = gui.Application.instance
+    try:
+        app.initialize()
+    except Exception as e:
+        # If running in a persistent environment (like Jupyter) or loop, 
+        # it might already be initialized. We log and proceed.
+        print(f"Open3D Application initialization notice: {e}")
 
     # Create the window
     window = gui.Application.instance.create_window(title, 1280, 768) # Increased height slightly for controls

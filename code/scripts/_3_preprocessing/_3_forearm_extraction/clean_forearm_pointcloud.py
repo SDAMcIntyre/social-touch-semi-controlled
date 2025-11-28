@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 from typing import Optional, Union
 
-from .visualize_point_cloud_comparison import visualize_point_cloud_comparison
+from utils.gui.visualize_point_cloud_comparison import visualize_point_cloud_comparison
 
 # --- Main Processing Function ---
 
