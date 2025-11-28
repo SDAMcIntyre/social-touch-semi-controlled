@@ -209,7 +209,7 @@ def generate_3d_hand_motion(rgb_video_path: Path, stickers_xyz_path: Path, hand_
     return hand_motion_glb_path, metadata_path
 
 @flow(name="8. Generate Somatosensory Characteristics")
-def generate_somatosensory_chars(
+def compute_somatosensory_characteristics_flow(
     hand_motion_glb_path: Path,
     hand_metadata_path: Path,
     session_processed_dir: Path,
@@ -223,14 +223,16 @@ def generate_somatosensory_chars(
     print(f"[{output_dir.name}] Generating somatosensory characteristics...")
     name_baseline = Path(current_video_filename).stem
     forearm_pointcloud_dir = session_processed_dir / "forearm_pointclouds"
-    metadata_filaname = session_id + "_arm_roi_metadata.json"
-    metadata_path = forearm_pointcloud_dir / metadata_filaname
-
+    forearm_metadata_path = forearm_pointcloud_dir / (session_id + "_arm_roi_metadata.json")
+    
     contact_characteristics_path = output_dir / (name_baseline + "_contact_and_kinematic_data.csv")
     compute_somatosensory_characteristics(
-        hand_motion_glb_path, hand_metadata_path,
-        metadata_path, forearm_pointcloud_dir,
-        current_video_filename, contact_characteristics_path, 
+        hand_motion_glb_path, 
+        hand_metadata_path,
+        forearm_metadata_path, 
+        forearm_pointcloud_dir,
+        current_video_filename, 
+        contact_characteristics_path, 
         monitor=monitor, force_processing=force_processing
     )
     return contact_characteristics_path
@@ -357,8 +359,8 @@ def run_single_session_pipeline(
                             "hand_models_dir": config.hand_models_dir, 
                             "output_dir": config.video_processed_output_dir / "kinematics_analysis"}, 
          "outputs": ["hand_motion_glb_path", "hand_metadata_path"]},
-        {"name": "generate_somatosensory_chars", 
-         "func": generate_somatosensory_chars, 
+        {"name": "compute_somatosensory_characteristics", 
+         "func": compute_somatosensory_characteristics_flow, 
          "params": lambda: {"hand_motion_glb_path": context.get("hand_motion_glb_path"), 
                             "hand_metadata_path": context.get("hand_metadata_path"), 
                             "session_processed_dir": config.session_processed_output_dir, 
