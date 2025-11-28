@@ -224,7 +224,7 @@ def compute_somatosensory_characteristics_flow(
     name_baseline = Path(current_video_filename).stem
     forearm_pointcloud_dir = session_processed_dir / "forearm_pointclouds"
     forearm_metadata_path = forearm_pointcloud_dir / (session_id + "_arm_roi_metadata.json")
-    
+
     contact_characteristics_path = output_dir / (name_baseline + "_contact_and_kinematic_data.csv")
     compute_somatosensory_characteristics(
         hand_motion_glb_path, 
@@ -414,8 +414,11 @@ def run_single_session_pipeline(
             options = dag_handler.get_task_options(task_name)
             params = stage["params"]()
             force = options.get('force_processing')
+            monitor = options.get('monitor')
             if force is not None:
                 params['force_processing'] = force
+            if monitor is not None:
+                params['monitor'] = monitor
             result = stage["func"](**params)
 
         # Store outputs
