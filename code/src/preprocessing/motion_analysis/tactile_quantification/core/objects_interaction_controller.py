@@ -33,8 +33,8 @@ class ObjectsInteractionController:
         self.processor = ObjectsInteractionProcessor(
             references_pcd=references_pcd,
             base_vertices=hand_motion_data['vertices'],
-            tracked_points_groups_indices=selected_points.values(),
-            tracked_points_groups_labels=list(selected_points.keys()),
+            tracked_points_groups_indices=selected_points.values() if selected_points else [],
+            tracked_points_groups_labels=list(selected_points.keys()) if selected_points else [],
             fps=fps
         )
         self.trajectory_data = {
@@ -56,7 +56,7 @@ class ObjectsInteractionController:
         self.visualize = visualize
         self.view = None
         self.hand_motion_data = hand_motion_data  
-        self.view_width_in_frame = visualizer_width_sec * fps      
+        self.view_width_in_frame = visualizer_width_sec * fps       
 
     def run(self) -> pd.DataFrame:
         """
@@ -140,52 +140,47 @@ class ObjectsInteractionController:
         final_order = new_order_start + remaining_cols
         
         return df[final_order]
-
+    
     def interactive_view(self, visualization_frames, results):
         print("Starting interactive monitoring session...")
         if QApplication.instance() is None:
             app = QApplication(sys.argv)
         
-        self.view = ObjectsInteractionVisualizer(width=self.view_width_in_frame)
-        self.view.add_geometry('object', self.processor.ref_pcd)
-        self.view.add_geometry('hand', self.base_mesh)
+        # We create an empty PointCloud with the desired red color.
         contact_pcd = o3d.geometry.PointCloud()
-        contact_pcd.paint_uniform_color([1.0, 0.0, 0.0]) # Red 
-        self.view.add_geometry('contacts', contact_pcd)
+        contact_pcd.points = o3d.utility.Vector3dVector([[0, 0, -9999]])
+        contact_pcd.paint_uniform_color([1.0, 0.0, 0.0]) # Red
 
-        # 4a. Load frame data into the visualizer
+        self.view = ObjectsInteractionVisualizer(width=self.view_width_in_frame)
+        self.view.add_geometry('forearm', self.processor.ref_pcd)
+        self.view.add_geometry('hand', self.base_mesh)
+        self.view.add_geometry('contacts', contact_pcd, point_size=10.0)
         self.view.set_frame_data(visualization_frames)
 
-        # 4b. Extract metric data and add plots
-        avg_depth_data = [r.get('depth', 0) for r in results]
-        contact_area_data = [r.get('area', 0) for r in results]
-
+        # --- DATA PROCESSING START ---
+        # Extract metric data
+        contact_depth_data = [r.get('contact_depth', 0) for r in results]
+        contact_area_data = [r.get('contact_area', 0) for r in results]
         self.view.add_plot(
             title="Contact Properties",
-            data_vector=avg_depth_data,
+            data_vector=contact_depth_data,
             color='g',
             y_label='Depth (NA)'
         )
         self.view.add_plot(
-            title="Contact Properties", # This title is ignored, only the first one is used
+            title="Contact Properties",
             data_vector=contact_area_data,
             color='m',
             y_label='Contact Area (cm^2)'
         )
 
-        # To recenter the view on a reference object (like a point cloud or mesh),
-        # you first calculate its center point. The .get_center() method from
-        # Open3D can be used on most geometry types.
         center_point = self.processor.ref_pcd.get_center()
         self.view.recenter_view_on_point(center_point)
 
-        # 4c. Run the visualizer and the Qt app
         self.view.run()
 
-        # The event loop is started here, blocking until the visualizer window is closed.
-        # We get the global instance rather than relying on a locally stored one.
         app = QApplication.instance()
-        sys.exit(app.exec())
+        app.exec()
 
 def create_mock_data(num_frames=200, fps=30):
     """
@@ -269,7 +264,8 @@ if __name__ == '__main__':
     # The controller will manage the simulation logic and the UI.
     controller = ObjectsInteractionController(
         hand_motion_data=mock_hand_data,
-        reference_pcd=mock_static_object,
+        references_pcd={0: mock_static_object}, # Updated to match Dict type hint
+        selected_points=None,
         visualize=True,
         fps=30,
         visualizer_width_sec=5 # The plot will show a 5-second window
