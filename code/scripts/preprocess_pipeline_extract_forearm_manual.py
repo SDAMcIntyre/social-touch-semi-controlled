@@ -24,6 +24,7 @@ from _3_preprocessing._3_forearm_extraction import (
     extract_forearm,
     clean_forearm_pointcloud,
     define_normals,
+    define_forearm_mesh
 )
 
 
@@ -143,7 +144,7 @@ def _process_single_forearm_frame(
     )
     print(f"💾 Raw forearm point cloud saved to: {forearm_ply_path.name}")
 
-    # --- Step 2: Clean the forearm point cloud (NEW STEP) ---
+    # --- Step 2: Clean the forearm point cloud ---
     cleaned_forearm_ply_path = pointclouds_output_dir / f"{base_filename}_cleaned.ply"
     
     # Optional: Define metadata path for cleaning stats if the function supports it
@@ -165,6 +166,18 @@ def _process_single_forearm_frame(
     print("🧠 Calculating normals for the point cloud...")
     define_normals(cleaned_forearm_ply_path, forearm_ply_normals_path, forearm_metadata_normals_path)
     print(f"💾 Point cloud with normals saved to: {forearm_ply_normals_path.name}")
+
+    # --- Step 4: Define Forearm Mesh (NEW STEP) ---
+    # NOTE: Uses the point cloud with normals as input
+    forearm_mesh_path = pointclouds_output_dir / f"{base_filename}_mesh.obj"
+
+    print("🕸️ Generating mesh from oriented point cloud...")
+    define_forearm_mesh(
+        source=forearm_ply_normals_path,
+        output_path=forearm_mesh_path,
+        show=True
+    )
+    print(f"💾 Forearm mesh saved to: {forearm_mesh_path.name}")
 
     return forearm_ply_normals_path, forearm_metadata_normals_path
 
