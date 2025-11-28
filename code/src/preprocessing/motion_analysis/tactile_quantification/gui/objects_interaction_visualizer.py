@@ -399,6 +399,8 @@ class ObjectsInteractionVisualizer(QMainWindow):
 
                 is_visible = new_points.shape[0] > 0
                 if is_visible:
+                    # For meshes where topology (triangles) is constant,
+                    # directly updating points is performant and correct.
                     hand_actor.mapper.dataset.points = new_points
                 hand_actor.SetVisibility(is_visible)
 
@@ -420,15 +422,25 @@ class ObjectsInteractionVisualizer(QMainWindow):
                 # 2. Determine if we have data to show
                 has_contacts = points_data.size > 0
                 
-                # 3. PyVista crashes if you assign empty points to an existing mesh.
-                #    We use a "dummy" point hidden far away if the array is empty.
+                # 3. Handle the data update
                 if has_contacts:
                     render_points = points_data
                 else:
+                    # PyVista/VTK prevents empty datasets in some contexts,
+                    # so we use a dummy point hidden far away.
                     render_points = np.array([[0, 0, -9999]])
 
-                # 4. Update the actor
-                contacts_actor.mapper.dataset.points = render_points
+                # 4. Update the actor using shallow_copy
+                # PROBLEM FIX: Previously, we only updated .points. If the number of points changed,
+                # the 'verts' (topology) array in PolyData was not updated, causing only the 
+                # first N vertices (where N is the old count) to be rendered.
+                # creating a new PolyData object automatically generates the correct 'verts' topology.
+                new_mesh = pv.PolyData(render_points)
+                
+                # shallow_copy updates the geometry AND topology pointers of the existing dataset
+                # efficiently without breaking the actor/mapper pipeline.
+                contacts_actor.mapper.dataset.shallow_copy(new_mesh)
+                
                 contacts_actor.SetVisibility(has_contacts)
     
     def set_frame_data(self, all_frames_data: list):
