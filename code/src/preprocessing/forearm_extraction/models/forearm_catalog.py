@@ -17,7 +17,6 @@ from preprocessing.common import (
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
 
-
 @dataclass(frozen=True)
 class VideoIdentifier:
     """A structured representation of a video filename with a block number."""
@@ -91,6 +90,26 @@ class ForearmCatalog:
                 pointclouds[params.frame_id] = pc
         
         return pointclouds
+
+    def get_first_pointcloud(self) -> Optional[o3d.geometry.PointCloud]:
+        """
+        Retrieves the first available point cloud from the entire catalog.
+        
+        This method requires no parameters. It iterates through the catalog 
+        and returns the first point cloud that can be successfully loaded 
+        from disk.
+        """
+        # Iterate over all video entries in the catalog
+        for params_list in self._params_by_video.values():
+            # Iterate over the parameters for each video
+            for params in params_list:
+                pc = self._load_pointcloud(params)
+                if pc:
+                    logging.info(f"Fetched first available point cloud: {params.video_filename} (Frame {params.frame_id})")
+                    return pc
+        
+        logging.warning("Catalog is empty or no point cloud files could be loaded.")
+        return None
 
     def find_closest_reference(self, video_filename: str) -> Optional[Tuple[int, o3d.geometry.PointCloud]]:
         """
@@ -171,4 +190,3 @@ def get_forearms_with_fallback(
     # 4. If nothing was found, return an empty dictionary.
     logging.warning(f"Could not find any data or suitable reference for '{current_video_filename}'.")
     return {}
-
