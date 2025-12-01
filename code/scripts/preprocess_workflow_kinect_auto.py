@@ -238,7 +238,8 @@ def compute_somatosensory_characteristics_flow(
         forearm_pointcloud_dir,
         current_video_filename, 
         contact_characteristics_path, 
-        monitor=monitor, force_processing=force_processing
+        monitor=monitor, 
+        force_processing=force_processing
     )
     return contact_characteristics_path
 
