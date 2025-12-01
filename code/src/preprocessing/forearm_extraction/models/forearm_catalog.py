@@ -1,7 +1,7 @@
 import re
 import logging
 from pathlib import Path
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional, Tuple, Union
 from dataclasses import dataclass
 
 import open3d as o3d
@@ -37,7 +37,7 @@ class VideoIdentifier:
 
 class ForearmCatalog:
     """
-    Manages and provides access to a collection of forearm point clouds.
+    Manages and provides access to a collection of forearm point clouds and meshes.
 
     This class preprocesses forearm metadata to allow for efficient lookups
     of both specific video data and fallback references.
@@ -73,11 +73,29 @@ class ForearmCatalog:
         path = self._pointcloud_dir / pointcloud_filename
         return PointCloudDataHandler.load(path)
 
+    def _load_mesh(self, params: ForearmParameters) -> Optional[o3d.geometry.TriangleMesh]:
+        """Loads a single mesh, handling file existence and errors."""
+        video_stem = Path(params.video_filename).stem
+        mesh_filename = f"{video_stem}_frame_{params.frame_id:04}_mesh.obj"
+        path = self._pointcloud_dir / mesh_filename
+        
+        if not path.exists():
+            return None
+            
+        try:
+            # Use Open3D standard mesh loader
+            mesh = o3d.io.read_triangle_mesh(str(path))
+            # Basic validation to ensure the mesh isn't empty
+            if mesh.is_empty():
+                return None
+            return mesh
+        except Exception as e:
+            logging.error(f"Failed to load mesh {path}: {e}")
+            return None
+
     def get_pointclouds_for_video(self, video_filename: str) -> Dict[int, o3d.geometry.PointCloud]:
         """
         Finds and loads all forearm point clouds for the specified video.
-
-        This method performs an exact match on the video filename.
         """
         params_for_video = self._params_by_video.get(video_filename, [])
         if not params_for_video:
@@ -91,17 +109,27 @@ class ForearmCatalog:
         
         return pointclouds
 
+    def get_meshes_for_video(self, video_filename: str) -> Dict[int, o3d.geometry.TriangleMesh]:
+        """
+        Finds and loads all forearm meshes for the specified video.
+        """
+        params_for_video = self._params_by_video.get(video_filename, [])
+        if not params_for_video:
+            return {}
+            
+        meshes = {}
+        for params in params_for_video:
+            mesh = self._load_mesh(params)
+            if mesh:
+                meshes[params.frame_id] = mesh
+        
+        return meshes
+
     def get_first_pointcloud(self) -> Optional[o3d.geometry.PointCloud]:
         """
         Retrieves the first available point cloud from the entire catalog.
-        
-        This method requires no parameters. It iterates through the catalog 
-        and returns the first point cloud that can be successfully loaded 
-        from disk.
         """
-        # Iterate over all video entries in the catalog
         for params_list in self._params_by_video.values():
-            # Iterate over the parameters for each video
             for params in params_list:
                 pc = self._load_pointcloud(params)
                 if pc:
@@ -111,12 +139,31 @@ class ForearmCatalog:
         logging.warning("Catalog is empty or no point cloud files could be loaded.")
         return None
 
-    def find_closest_reference(self, video_filename: str) -> Optional[Tuple[int, o3d.geometry.PointCloud]]:
+    def get_first_mesh(self) -> Optional[o3d.geometry.TriangleMesh]:
         """
-        Finds a single reference forearm by looking for the closest block number.
+        Retrieves the first available mesh from the entire catalog.
+        """
+        for params_list in self._params_by_video.values():
+            for params in params_list:
+                mesh = self._load_mesh(params)
+                if mesh:
+                    logging.info(f"Fetched first available mesh: {params.video_filename} (Frame {params.frame_id})")
+                    return mesh
+        
+        logging.warning("Catalog is empty or no mesh files could be loaded.")
+        return None
 
-        This is the explicit fallback logic. It returns None if no suitable
-        reference can be found.
+    def find_closest_reference(
+        self, 
+        video_filename: str, 
+        use_mesh: bool = False
+    ) -> Optional[Tuple[int, Union[o3d.geometry.PointCloud, o3d.geometry.TriangleMesh]]]:
+        """
+        Finds a single reference forearm (PC or Mesh) by looking for the closest block number.
+
+        Args:
+            video_filename: The target video filename.
+            use_mesh: If True, returns a TriangleMesh; otherwise, returns a PointCloud.
         """
         identifier = VideoIdentifier.from_filename(video_filename)
         if not identifier:
@@ -138,21 +185,27 @@ class ForearmCatalog:
         diff = abs(closest_block_num - identifier.block_number)
         logging.info(f"Found closest reference: '{closest_params.video_filename}' (Block difference: {diff}).")
         
-        pc = self._load_pointcloud(closest_params)
-        if pc:
-            return closest_params.frame_id, pc
+        if use_mesh:
+            geometry = self._load_mesh(closest_params)
+        else:
+            geometry = self._load_pointcloud(closest_params)
+            
+        if geometry:
+            return closest_params.frame_id, geometry
         
         return None
     
     
 def get_forearms_with_fallback(
     catalog: ForearmCatalog, 
-    current_video_filename: str
-) -> Dict[int, o3d.geometry.PointCloud]:
+    current_video_filename: str,
+    *,
+    use_mesh: bool = False
+) -> Dict[int, Union[o3d.geometry.PointCloud, o3d.geometry.TriangleMesh]]:
     """
-    Gets forearm point clouds for a video, with intelligent fallback.
+    Gets forearm point clouds or meshes for a video, with intelligent fallback.
 
-    This function first attempts to find all forearms that exactly match the
+    This function first attempts to find all geometry that exactly matches the
     video filename. If none are found, it uses the catalog's reference-finding
     logic to locate and load the single closest forearm from another video
     based on the 'block-order' number.
@@ -160,26 +213,31 @@ def get_forearms_with_fallback(
     Args:
         catalog: An initialized ForearmCatalog instance.
         current_video_filename: The filename of the video to process.
+        use_mesh: If True, loads '_mesh.obj' meshes. If False (default), loads point clouds.
 
     Returns:
-        A dictionary mapping frame IDs to o3d.geometry.PointCloud objects. This will
-        contain all forearms for the video, a single reference forearm,
-        or be empty if no data can be found.
+        A dictionary mapping frame IDs to open3d geometry objects.
     """
     # 1. Attempt the primary, explicit search first.
-    forearms = catalog.get_pointclouds_for_video(current_video_filename)
+    if use_mesh:
+        forearms = catalog.get_meshes_for_video(current_video_filename)
+    else:
+        forearms = catalog.get_pointclouds_for_video(current_video_filename)
+
     if not forearms:
         # 2. If the primary search returned nothing, trigger the fallback.
+        type_str = "mesh" if use_mesh else "point cloud"
         logging.info(
-            f"No direct forearm match for '{current_video_filename}'. "
+            f"No direct forearm {type_str} match for '{current_video_filename}'. "
             "Attempting to find a fallback reference."
         )
-        reference_data = catalog.find_closest_reference(current_video_filename)
+        # Pass the use_mesh flag to the reference finder
+        reference_data = catalog.find_closest_reference(current_video_filename, use_mesh=use_mesh)
 
         # 3. If a reference was found, format it.
         if reference_data:
-            frame_id, pointcloud = reference_data
-            forearms = {frame_id: pointcloud}
+            frame_id, geometry = reference_data
+            forearms = {frame_id: geometry}
 
     if forearms:
         # Find the lowest key and rebuild the dict, replacing that key with 0.
