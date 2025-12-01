@@ -1,48 +1,44 @@
 import numpy as np
 import open3d as o3d
-from scipy.spatial import KDTree
-from typing import Optional, Dict, Union, Tuple
-
-from ..gui.debug_visualiser import DebugVisualizer
+from typing import Optional, Dict, Union, Tuple, Any
 
 class ObjectsInteractionProcessor:
     """
-    Processes the interaction between a provided set of vertices (current state) 
-    and a specific reference geometry (PointCloud or Mesh).
+    Processes the interaction between a static 2.5D terrain mesh and a dynamic 3D object.
     
-    Refactored:
-    - No internal dictionary handling.
-    - No velocity/proprioceptive tracking.
-    - Operates on pre-transformed vertices.
+    Refactored Architecture for Non-Watertight Support:
+    - Broad Phase: Axis-Aligned Bounding Box (AABB) cropping.
+    - Narrow Phase: Signed Distance check using Open3D Tensor Raycasting.
+      (allows interaction detection on open shells/non-manifold geometry).
+    - Metric: Surface area accumulation of penetrating terrain triangles.
     """
     def __init__(self,
-                 reference_geometry: Union[o3d.geometry.PointCloud, o3d.geometry.TriangleMesh],
+                 reference_geometry: Union[o3d.geometry.TriangleMesh, o3d.geometry.PointCloud],
                  *,
                  use_debug: bool = False
         ):
         """
-        Initializes the processor with a single reference geometry.
+        Initializes the processor.
         
         Args:
-            reference_geometry: The static environment object to check collisions against.
+            reference_geometry: The static 2.5D terrain environment. 
+                                MUST be a TriangleMesh for area calculations.
             use_debug (bool): Enable debug visualizer.
         """
-        self.ref_pcd: Optional[o3d.geometry.PointCloud] = None
-        self.ref_points: Optional[np.ndarray] = None
-        self.ref_normals: Optional[np.ndarray] = None
-        self.ref_colors: Optional[np.ndarray] = None
-        self.kdtree: Optional[KDTree] = None
-        self.point_area: Optional[float] = None
+        self.ref_mesh: Optional[o3d.geometry.TriangleMesh] = None
+        self.ref_triangle_areas: Optional[np.ndarray] = None
+        self.ref_vertices: Optional[np.ndarray] = None
         
         self._debug = use_debug
         
         # Initialize with the provided reference
         self.update_reference(reference_geometry)
-        self.visualizer = DebugVisualizer(self.ref_pcd) if self._debug else None
+        
+        self.visualizer = None 
 
     def update_reference(self, geometry: Union[o3d.geometry.PointCloud, o3d.geometry.TriangleMesh]) -> None:
         """
-        Updates the reference geometry and rebuilds the KDTree.
+        Updates the reference geometry (Terrain). Pre-calculates triangle areas for O(1) lookup.
         
         Args:
             geometry: The new reference geometry.
@@ -50,99 +46,147 @@ class ObjectsInteractionProcessor:
         if geometry is None:
             raise ValueError("Reference geometry cannot be None.")
             
-        # Ensure we have a point cloud
-        if isinstance(geometry, o3d.geometry.TriangleMesh):
-            pcd = geometry.sample_points_poisson_disk(number_of_points=len(geometry.vertices))
-        else:
-            pcd = geometry
+        # Architecture Requirement: Reference must be a Mesh to have "Surface Area"
+        if isinstance(geometry, o3d.geometry.PointCloud):
+            raise TypeError("Reference geometry must be o3d.geometry.TriangleMesh for 2.5D Area Estimation.")
+        
+        self.ref_mesh = geometry
+        
+        # Ensure normals for visualization and correct orientation checks
+        if not self.ref_mesh.has_vertex_normals():
+            self.ref_mesh.compute_vertex_normals()
 
-        if not pcd.has_points() or not pcd.has_normals():
-            # Attempt to compute normals if missing
-            if pcd.has_points():
-                 pcd.estimate_normals()
-            else:
-                raise ValueError("Reference point cloud must contain points.")
+        # Pre-compute Surface Areas
+        # We calculate area of all triangles using cross product of edges.
+        vertices = np.asarray(self.ref_mesh.vertices)
+        triangles = np.asarray(self.ref_mesh.triangles)
         
-        self.ref_pcd = pcd
-        self.ref_points = np.asarray(pcd.points)
-        self.ref_normals = np.asarray(pcd.normals)
-        self.ref_colors = np.asarray(pcd.colors) if pcd.has_colors() else None
+        # Vectors for edges
+        v0 = vertices[triangles[:, 0]]
+        v1 = vertices[triangles[:, 1]]
+        v2 = vertices[triangles[:, 2]]
         
-        # Rebuild Spatial Index
-        self.kdtree = KDTree(self.ref_points)
-        
-        # Estimate resolution for area calculation
-        # We catch potential errors if point cloud is too sparse or single point
-        if len(self.ref_points) > 1:
-            ref_pcd_neighbor_dist = pcd.compute_nearest_neighbor_distance()
-            point_cloud_resolution = np.mean(ref_pcd_neighbor_dist)
-            self.point_area = point_cloud_resolution**2
-        else:
-            self.point_area = 0.0
+        # Area = 0.5 * |(v1 - v0) x (v2 - v0)|
+        cross_product = np.cross(v1 - v0, v2 - v0)
+        self.ref_triangle_areas = 0.5 * np.linalg.norm(cross_product, axis=1)
+        self.ref_vertices = vertices
 
-    def _calculate_tactile_data(self, v_transformed: np.ndarray) -> tuple[dict, dict]:
-        """Calculates contact-related metrics for a single frame using provided vertices."""
-        # Query KDTree for nearest neighbors
-        distances, min_indices = self.kdtree.query(v_transformed)
+    def _calculate_intersection_volume(self, input_mesh: o3d.geometry.TriangleMesh) -> tuple[dict, dict]:
+        """
+        Executes Broad Phase (Cropping) and Narrow Phase (Signed Distance Check).
         
-        # Calculate vectors from reference points to transformed vertices
-        hand_arm_vectors = v_transformed - self.ref_points[min_indices]
-        normals_at_closest_points = self.ref_normals[min_indices]
-        
-        # Dot product to check if inside/contacting (vector opposes normal)
-        dot_products = np.einsum('ij,ij->i', hand_arm_vectors, normals_at_closest_points)
-        inside_mask = dot_products <= 0
-
-        # Filter by color if available (assuming specific color logic from original requirement)
-        if self.ref_colors is not None and len(self.ref_colors) > 0:
-            colors_at_closest_points = self.ref_colors[min_indices]
-            # Keeping original threshold logic
-            color_mask = np.all(colors_at_closest_points < 0.9, axis=1)
-            inside_mask &= color_mask
+        Args:
+            input_mesh: The dynamic object mesh.
             
-        if not np.any(inside_mask):
-            contact_quantities = {
-                "contact_detected": 0, 
-                "contact_depth": 0.0, 
-                "contact_area": 0.0, 
-                "contact_location_x": np.nan, 
-                "contact_location_y": np.nan, 
-                "contact_location_z": np.nan
-            }
-            contact_info = {"contact_points": np.array([]), "contact_normals": np.array([])}
-            return contact_quantities, contact_info
-
-        # Extract contact data
-        unique_contact_indices = np.unique(min_indices[inside_mask])
-        arm_intersect_unique = self.ref_points[unique_contact_indices]
+        Returns:
+            Tuple containing contact metrics and visualization data.
+        """
+        # 1. Broad Phase: 2.5D Projection / AABB Crop
+        # We perform an AABB crop on the Reference Terrain using the Object's bounding box.
+        # This acts as a spatial hash to limit the number of vertices we check.
+        aabb = input_mesh.get_axis_aligned_bounding_box()
         
+        # Crop the terrain. Returns a NEW mesh containing only potentially intersecting triangles.
+        cropped_terrain = self.ref_mesh.crop(aabb)
+        
+        if len(cropped_terrain.triangles) == 0:
+            return self.empty_structure()
+
+        # 2. Narrow Phase: Signed Distance Check (Watertight Independent)
+        # Instead of Occupancy (Inside/Outside volume), we use Signed Distance.
+        # Negative distance implies the point is behind the surface normal (penetration).
+        
+        # Convert dynamic object to Tensor Geometry for RaycastingScene
+        # Using legacy-to-tensor conversion. 
+        # Note: We do NOT compute convex hull here, preserving open-mesh geometry.
+        try:
+            t_object = o3d.t.geometry.TriangleMesh.from_legacy(input_mesh)
+        except Exception as e:
+            # Fallback for empty or malformed meshes that passed the None check
+            return self.empty_structure()
+
+        # Initialize Scene
+        scene = o3d.t.geometry.RaycastingScene()
+        # Add the dynamic object to the scene
+        scene.add_triangles(t_object)
+        
+        # Prepare Query Points: Vertices of the cropped terrain
+        # Float32 is standard for Open3D Tensor ops
+        cropped_vertices_np = np.asarray(cropped_terrain.vertices)
+        t_terrain_verts = o3d.core.Tensor.from_numpy(cropped_vertices_np.astype(np.float32))
+        
+        # Compute Signed Distance
+        # Returns a tensor of distances. Negative = Penetration (assuming consistent normals).
+        signed_distances = scene.compute_signed_distance(t_terrain_verts)
+        distances_np = signed_distances.numpy()
+        
+        # 3. Determine Interaction
+        # We identify triangles where vertices are penetrating (Distance < 0).
+        # Tolerance epsilon can be adjusted if grazing contact is needed.
+        EPSILON = 1e-5
+        
+        # Map vertex state to triangles
+        # cropped_terrain has re-indexed triangles specific to this crop
+        cropped_triangles = np.asarray(cropped_terrain.triangles)
+        
+        # Get distance for each vertex of the triangle
+        # shape: (N_triangles, 3)
+        tri_distances = distances_np[cropped_triangles]
+        
+        # Heuristic: A triangle is interacting if ALL vertices are penetrating (Strict)
+        # or ANY vertex is penetrating (Lenient).
+        # For non-watertight meshes (e.g. sheets), normals define the "underside".
+        # We use a strict check here for robust area calculation, or a centroid check.
+        # Let's use: If the Centroid is penetrating (approximated by mean of vertex distances < 0).
+        
+        # Check: Are all vertices of the triangle below the surface?
+        inside_mask = np.all(tri_distances < EPSILON, axis=1)
+        
+        if not np.any(inside_mask):
+            return self.empty_structure()
+
+        # 4. Area Accumulation & Metrics
+        active_tris = cropped_triangles[inside_mask]
+        
+        # Recalculate areas for the active subset
+        # We use the cropped_vertices_np array we extracted earlier
+        v0 = cropped_vertices_np[active_tris[:, 0]]
+        v1 = cropped_vertices_np[active_tris[:, 1]]
+        v2 = cropped_vertices_np[active_tris[:, 2]]
+        
+        cross_prod = np.cross(v1 - v0, v2 - v0)
+        active_areas = 0.5 * np.linalg.norm(cross_prod, axis=1)
+        
+        total_contact_area = np.sum(active_areas)
+        
+        # Calculate centroids of contacting triangles for location data
+        centroids = (v0 + v1 + v2) / 3.0
+        mean_location = np.mean(centroids, axis=0)
+        
+        # Depth Estimation:
+        # For open meshes, "Depth" is the magnitude of the negative signed distance.
+        # We take the max of the absolute distances of the active vertices.
+        active_vertex_distances = tri_distances[inside_mask]
+        contact_depth = np.max(np.abs(active_vertex_distances))
+
+        # Visualization Data
+        unique_contact_indices = np.unique(active_tris)
+        contact_points = cropped_vertices_np[unique_contact_indices]
+
         contact_quantities = {
             "contact_detected": 1,
-            "contact_depth": np.mean(distances[inside_mask]),
-            "contact_area": len(unique_contact_indices) * self.point_area,
-            "contact_location_x": np.mean(arm_intersect_unique[:, 0]),
-            "contact_location_y": np.mean(arm_intersect_unique[:, 1]),
-            "contact_location_z": np.mean(arm_intersect_unique[:, 2]),
+            "contact_points": contact_points,
+            "contact_depth": float(contact_depth),
+            "contact_area": float(total_contact_area),
+            "contact_location_x": float(mean_location[0]),
+            "contact_location_y": float(mean_location[1]),
+            "contact_location_z": float(mean_location[2]),
         }
         
         contact_info = {
-            "contact_points": arm_intersect_unique, 
-            "contact_normals": self.ref_normals[unique_contact_indices]
+            "contact_points": contact_points,
+            "contact_normals": np.asarray(cropped_terrain.vertex_normals)[unique_contact_indices] if cropped_terrain.has_vertex_normals() else np.array([])
         }
-        
-        if self._debug and self.visualizer:
-             # Logic implies showing visualizer when NOT in mask in original code? 
-             # Or generally updating. Adjusted to be safe.
-            if not np.any(inside_mask): 
-                self.visualizer.show(
-                    transformed_vertices=v_transformed,
-                    contact_points=contact_info["contact_points"],
-                    min_indices=min_indices,
-                    dot_products=dot_products,
-                    inside_mask=inside_mask,
-                    normals_at_closest_points=normals_at_closest_points,
-                    unique_contact_indices=unique_contact_indices
-                )
         
         return contact_quantities, contact_info
 
@@ -150,37 +194,37 @@ class ObjectsInteractionProcessor:
             self, 
             current_mesh: o3d.geometry.TriangleMesh,
             _debug: bool = False
-        ) -> dict:
+        ) -> tuple[dict, dict]:
         """
-        Processes a single frame of interaction against the active point cloud using
-        the provided mesh.
+        Processes a single frame of interaction.
 
         Args:
-            current_mesh (o3d.geometry.TriangleMesh): The mesh object for the current frame
-                                                      already transformed to world space.
+            current_mesh (o3d.geometry.TriangleMesh): The dynamic object mesh in world space.
             _debug (bool): Enable debug visualization for this frame.
 
         Returns:
-            A dictionary containing calculated metrics and data for visualization.
+            Tuple[dict, dict]: contact_data, visualization_data
         """
         self._debug = _debug
         
-        # Extract vertices from the mesh for calculation
-        current_vertices = np.asarray(current_mesh.vertices)
-        
-        contact_data, contact_info = self._calculate_tactile_data(current_vertices)
-
-        viz = {"contact_points": contact_info["contact_points"]}
-        return contact_data, viz
+        if current_mesh is None:
+            return self.empty_structure()
+            
+        return self._calculate_intersection_volume(current_mesh)
     
-    
-    def empty_structure(self) -> dict:
-        # If data is invalid (e.g., zero quaternion in source), return NaNs.
+    def empty_structure(self) -> tuple[dict, dict]:
+        """Returns standard empty data structure."""
         contact_keys = [
             "contact_detected", "contact_depth", "contact_area", 
             "contact_location_x", "contact_location_y", "contact_location_z"
         ]
-        contact_data = {key: np.nan for key in contact_keys}
-        visualization = {"contact_points": np.array([])}
+        contact_data = {key: 0.0 if key == "contact_detected" else np.nan for key in contact_keys}
+        contact_data["contact_detected"] = 0
+        contact_data["contact_area"] = 0.0
+        contact_data["contact_depth"] = 0.0
+        
+        visualization = {
+            "contact_points": np.array([]),
+            "contact_normals": np.array([])
+        }
         return contact_data, visualization
-    

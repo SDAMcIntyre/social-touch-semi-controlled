@@ -64,7 +64,7 @@ tasks:
     enabled: true
     options:
       force_processing: true
-      monitor: true
+      monitor: false
     depends_on: [validate_forearm_extraction, generate_3d_hand_motion]
 
   # ---------------------------------------------------------------------------
@@ -98,8 +98,8 @@ tasks:
       force_processing: false
     # Aggregates all processed streams into the final dataset.
     depends_on: 
-      - generate_somatosensory_chars  # Contact Data
-      - track_led_blinking            # LED Signal
-      - define_trial_id               # Trial Definitions
-      - find_single_touches           # Single Touch Definition
-      - generate_stimuli_metadata     # Metadata
+      - compute_somatosensory_characteristics  # Contact Data
+      - track_led_blinking                     # LED Signal
+      - define_trial_id                        # Trial Definitions
+      - find_single_touches                    # Single Touch Definition
+      - generate_stimuli_metadata              # Metadata

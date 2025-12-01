@@ -1,8 +1,3 @@
-import matplotlib
-# [Architectural Fix] Force 'Agg' backend to decouple simulation from UI event loops.
-# This prevents WinError 10038/QSocketNotifier errors by disabling Qt hooks in Matplotlib.
-matplotlib.use('Agg')
-
 import pandas as pd
 import open3d as o3d
 import numpy as np
@@ -22,25 +17,25 @@ class ObjectsInteractionController:
     """
     def __init__(self,
                  hand_motion_data: dict,
-                 references_pcd: Dict[int, Union[o3d.geometry.PointCloud, o3d.geometry.TriangleMesh]],
+                 references_mesh: o3d.geometry.TriangleMesh,
                  selected_points: dict = None,
                  *,
                  fps: int = 30,
                  visualizer_width_sec: int = 3
     ):
         self.fps = fps
-        self.references_pcd = references_pcd
+        self.references_mesh = references_mesh
         
         # Initialize Processor with the first available reference in the dict
         # We assume the dict is not empty based on typical flow
-        if not references_pcd:
+        if not references_mesh:
             raise ValueError("References dictionary cannot be empty.")
             
-        initial_key = next(iter(references_pcd))
+        initial_key = next(iter(references_mesh))
         
         # Processor initialized with a SINGLE reference geometry. 
         # No indices or tracking passed to processor.
-        self.processor = ObjectsInteractionProcessor(reference_geometry=references_pcd[initial_key])
+        self.contact_processor = ObjectsInteractionProcessor(reference_geometry=references_mesh[initial_key])
         
         self.trajectory_data = {
             'time_points': hand_motion_data['time_points'], 
@@ -145,12 +140,14 @@ class ObjectsInteractionController:
         visualization_frames = []
 
         for frame_id, time in enumerate(self.trajectory_data['time_points']):
+            if frame_id == 59:
+                pass
             
             # --- Reference Management (Controller Logic) ---
             # If there is a specific reference point cloud defined for this frame ID,
             # update the processor's reference.
-            if frame_id in self.references_pcd:
-                self.processor.update_reference(self.references_pcd[frame_id])
+            if frame_id in self.references_mesh:
+                self.contact_processor.update_reference(self.references_mesh[frame_id])
             
             # --- Hand Mesh Calculation (Controller Logic) ---
             # Fetch the transformed mesh via the private method
@@ -160,9 +157,9 @@ class ObjectsInteractionController:
             proprio_data = self._calculate_proprioceptive_data(np.asarray(current_mesh.vertices))
             # Pass transformed mesh to processor.
             if is_valid_frame:
-                contact_data, viz = self.processor.process_single_frame(current_mesh=current_mesh, _debug=False)
+                contact_data, viz = self.contact_processor.process_single_frame(current_mesh=current_mesh, _debug=False)
             else:
-                contact_data, viz = self.processor.empty_structure()
+                contact_data, viz = self.contact_processor.empty_structure()
 
             # Store metrics
             merged_data = {**proprio_data, **contact_data}
@@ -207,9 +204,7 @@ class ObjectsInteractionController:
         # Bundle visualization artifacts
         vis_artifacts = {
             "frames": visualization_frames,
-            # Note: We return the current ref_pcd of the processor. 
-            # If visualizer needs per-frame reference updates, that logic would reside in the visualizer.
-            "reference_pcd": self.processor.ref_pcd,
+            "reference_mesh": self.references_mesh[next(iter(self.references_mesh))],
             "base_mesh": self.base_mesh,
             "view_width": self.view_width_in_frame
         }
