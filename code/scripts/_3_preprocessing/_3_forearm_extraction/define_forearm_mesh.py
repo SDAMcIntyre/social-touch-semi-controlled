@@ -174,6 +174,6 @@ if __name__ == "__main__":
 
     print(f"Processing file: {data_ply_path}")
     # Call function with output_path parameter
-    terrain_mesh = point_cloud_to_terrain_mesh(data_ply_path, output_path=output_mesh_path, show=True)
+    terrain_mesh = define_forearm_mesh(data_ply_path, output_path=output_mesh_path, show=True)
     
     print(f"Final Mesh Stats: {len(terrain_mesh.vertices)} vertices, {len(terrain_mesh.faces)} faces.")
