@@ -2,20 +2,21 @@ import numpy as np
 import pandas as pd
 import open3d as o3d
 from scipy.spatial import KDTree
-from scipy.spatial.transform import Rotation # <-- Essential for quaternion handling
+from scipy.spatial.transform import Rotation 
 from typing import List, Optional, Dict, Union
 
 from ..gui.debug_visualiser import DebugVisualizer
 
 class ObjectsInteractionProcessor:
     """
-    Processes the interaction between a moving set of vertices and a static,
-    selectable reference point cloud from a dictionary. This class contains
-    only the core numerical logic.
+    Processes the interaction between a provided set of vertices (current state) 
+    and a static, selectable reference point cloud. 
+    
+    Refactored to exclude transformation logic; it now operates on pre-transformed vertices
+    derived from the provided Mesh.
     """
     def __init__(self,
-                 references_pcd: Dict[int, o3d.geometry.PointCloud],
-                 base_vertices: np.ndarray,
+                 references_dict: Dict[int, Union[o3d.geometry.PointCloud, o3d.geometry.TriangleMesh]],
                  tracked_points_groups_indices: Optional[Union[List[int], List[List[int]]]] = None,
                  tracked_points_groups_labels: Optional[List[str]] = None,
                  *,
@@ -26,26 +27,23 @@ class ObjectsInteractionProcessor:
         Initializes the processor with a dictionary of reference point clouds.
         
         Args:
-            references_pcd (Dict[int, o3d.geometry.PointCloud]): A dictionary
+            references_dict (Dict[int, o3d.geometry.PointCloud]): A dictionary
                 mapping integer keys to reference point clouds.
-            base_vertices (np.ndarray): The base vertices of the moving object.
             tracked_points_groups_indices (Optional[Union[List[int], List[List[int]]]]):
-                Indices of vertices to track from `base_vertices`. This can be a
-                **flat list** of integers for individual vertices, or a **nested list**
-                where each sublist groups vertex indices to be **averaged** into a
-                single, more stable tracked point.
+                Indices of vertices to track. 
             tracked_points_groups_labels (Optional[List[str]]): Labels for
                 the tracked point groups.
             fps (int): Frames per second for velocity calculations.
+            use_debug (bool): Enable debug visualizer.
         """
-        if not references_pcd:
-            raise ValueError("references_pcd dictionary cannot be empty.")
+        if not references_dict:
+            raise ValueError("references_dict dictionary cannot be empty.")
         
-        for key, pcd in references_pcd.items():
+        for key, pcd in references_dict.items():
             if not pcd.has_points() or not pcd.has_normals():
                 raise ValueError(f"Point cloud with key {key} must contain both points and normals.")
         
-        self.references_pcd = references_pcd
+        self.references_dict = references_dict
         
         # Initialize attributes that will be set by `set_current_pcd`
         self.current_pcd_key: Optional[int] = None
@@ -57,7 +55,7 @@ class ObjectsInteractionProcessor:
         self.point_area: Optional[float] = None
 
         # Set the initial active point cloud (defaults to the first one)
-        initial_key = next(iter(self.references_pcd))
+        initial_key = next(iter(self.references_dict))
         self.set_current_pcd(initial_key)
         
         if tracked_points_groups_indices and tracked_points_groups_labels:
@@ -69,14 +67,12 @@ class ObjectsInteractionProcessor:
             self.tracked_points_groups_indices = []
             self.tracked_points_groups_labels = []
 
-        self.base_vertices = base_vertices
         self._previous_tracked_points_pos: Dict[str, np.ndarray] = {}
         self.fps = fps
         self.dt = 1.0 / fps
         
         self._debug = use_debug
 
-          # Or set based on some config
         if self._debug:
             self.visualizer = DebugVisualizer(self.ref_pcd)
         else:
@@ -85,9 +81,6 @@ class ObjectsInteractionProcessor:
     def set_current_pcd(self, key: int) -> None:
         """
         Sets the active reference point cloud for all subsequent processing.
-
-        This method updates all internal references (points, normals, KDTree, etc.)
-        to correspond to the point cloud associated with the given key.
 
         Args:
             key (int): The key of the point cloud to set as active.
@@ -99,7 +92,7 @@ class ObjectsInteractionProcessor:
             raise KeyError(f"Key {key} not found in the provided point cloud dictionary.")
         
         self.current_pcd_key = key
-        pcd = self.references_pcd[key]
+        pcd = self.references_dict[key]
         
         self.ref_pcd = pcd
         self.ref_points = np.asarray(pcd.points)
@@ -115,14 +108,8 @@ class ObjectsInteractionProcessor:
     def is_valid_pcd_key(self, key: int) -> bool:
         """
         Checks if the given integer is a valid key in the point cloud dictionary.
-        
-        Args:
-            key (int): The key to check.
-            
-        Returns:
-            bool: True if the key exists, False otherwise.
         """
-        return key in self.references_pcd
+        return key in self.references_dict
 
     @staticmethod
     def _calculate_rotation_from_planes(source_points: np.ndarray, target_points: np.ndarray) -> np.ndarray:
@@ -165,21 +152,8 @@ class ObjectsInteractionProcessor:
         transform_matrix[0:3, 3] = translation
         return transform_matrix
     
-    def _transform_vertices(self, translation: np.ndarray, rotation_quat: np.ndarray) -> np.ndarray:
-        """
-        Applies rotation (from quaternion) and translation to the base vertices.
-        
-        Args:
-            translation (np.ndarray): The (3,) translation vector.
-            rotation_quat (np.ndarray): The (4,) quaternion [x, y, z, w].
-        """
-        rot = Rotation.from_quat(rotation_quat)
-        transformed_vertices = rot.apply(self.base_vertices) + translation
-        return transformed_vertices
-
     def _calculate_tactile_data(self, v_transformed: np.ndarray) -> tuple[dict, dict]:
-        """Calculates contact-related metrics for a single frame."""
-        # --- All the calculation logic remains exactly the same ---
+        """Calculates contact-related metrics for a single frame using provided vertices."""
         distances, min_indices = self.kdtree.query(v_transformed)
         hand_arm_vectors = v_transformed - self.ref_points[min_indices]
         normals_at_closest_points = self.ref_normals[min_indices]
@@ -228,7 +202,7 @@ class ObjectsInteractionProcessor:
             self,
             v_transformed: np.ndarray,
             contact_info: dict) -> tuple[dict, dict]:
-        """Calculates motion-related metrics for a single frame."""
+        """Calculates motion-related metrics for a single frame using provided vertices."""
         if not self.tracked_points_groups_labels:
             return {}, {}
         proprio_data, current_positions = {}, {}
@@ -256,25 +230,28 @@ class ObjectsInteractionProcessor:
     
     def process_single_frame(
             self, 
-            translation: np.ndarray, 
-            rotation_quat: np.ndarray,
+            current_mesh: o3d.geometry.TriangleMesh,
+            data_valid: bool = True,
             _debug: bool = False
         ) -> dict:
         """
-        Processes a single frame of interaction against the active point cloud.
+        Processes a single frame of interaction against the active point cloud using
+        the provided mesh.
 
         Args:
-            translation (np.ndarray): The (3,) translation vector for the current frame.
-            rotation_quat (np.ndarray): The (4,) rotation quaternion [x, y, z, w]
-                                        for the current frame.
+            current_mesh (o3d.geometry.TriangleMesh): The mesh object for the current frame
+                                                      already transformed to world space.
+            data_valid (bool): Flag indicating if the input data for this frame was valid.
+                               If False, returns NaN metrics.
+            _debug (bool): Enable debug visualization for this frame.
 
         Returns:
             A dictionary containing calculated metrics and data for visualization.
         """
         self._debug = _debug
 
-        # Check for zero transformation input. If so, return a dictionary of NaNs.
-        if np.all(rotation_quat == 0) or np.all(translation == 0):
+        # If data is invalid (e.g., zero quaternion in source), return NaNs.
+        if not data_valid:
             contact_keys = [
                 "contact_detected", "contact_depth", "contact_area", "contact_location_x",
                 "contact_location_y", "contact_location_z"
@@ -295,15 +272,17 @@ class ObjectsInteractionProcessor:
             return {
                 "metrics": nan_metrics,
                 "visualization": {
-                    "transformed_vertices": np.copy(self.base_vertices), 
+                    "transformed_mesh": current_mesh, 
                     "contact_points": np.array([])
                 }
             }
             
-        v_transformed = self._transform_vertices(translation, rotation_quat)
-        contact_quantities, contact_info = self._calculate_tactile_data(v_transformed)
+        # Extract vertices from the mesh for calculation
+        current_vertices = np.asarray(current_mesh.vertices)
+        
+        contact_quantities, contact_info = self._calculate_tactile_data(current_vertices)
         proprio_quantities, current_tracked_points_pos = self._calculate_proprioceptive_data(
-            v_transformed, 
+            current_vertices, 
             contact_info
         )
         if proprio_quantities:
@@ -312,7 +291,7 @@ class ObjectsInteractionProcessor:
         return {
             "metrics": {**contact_quantities, **proprio_quantities},
             "visualization": {
-                "transformed_vertices": v_transformed,
+                "transformed_mesh": current_mesh,
                 "contact_points": contact_info["contact_points"]
             }
         }
