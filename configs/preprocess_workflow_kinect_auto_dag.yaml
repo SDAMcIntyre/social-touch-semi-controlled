@@ -51,7 +51,6 @@ tasks:
   generate_xyz_stickers:
     enabled: true
     options:
-      monitor: false
       force_processing: false
     depends_on: [track_stickers]
 
@@ -61,11 +60,11 @@ tasks:
       force_processing: false
     depends_on: [validate_hand_extraction, generate_xyz_stickers]
 
-  generate_somatosensory_chars:
+  compute_somatosensory_characteristics:
     enabled: true
     options:
-      monitor: false
-      force_processing: false
+      force_processing: true
+      monitor: true
     depends_on: [validate_forearm_extraction, generate_3d_hand_motion]
 
   # ---------------------------------------------------------------------------
