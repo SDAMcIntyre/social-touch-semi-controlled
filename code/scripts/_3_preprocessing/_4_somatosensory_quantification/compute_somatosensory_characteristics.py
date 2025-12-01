@@ -63,7 +63,7 @@ def compute_somatosensory_characteristics(
     # Collect the forearms pointclouds for the specific video
     forearm_params: List[ForearmParameters] = ForearmFrameParametersFileHandler.load(forearm_metadata_path)
     catalog = ForearmCatalog(forearm_params, forearm_pointcloud_dir)
-    forearms_dict = get_forearms_with_fallback(catalog, current_video_filename, use_mesh=False)
+    forearms_dict = get_forearms_with_fallback(catalog, current_video_filename, use_mesh=True)
 
     # 3. INITIALIZE AND RUN THE ORCHESTRATOR
     controller = ObjectsInteractionController(
@@ -93,7 +93,7 @@ def compute_somatosensory_characteristics(
         view = ObjectsInteractionVisualizer(width=vis_artifacts['view_width'])
         
         # Add geometries from the returned artifacts
-        view.add_geometry('forearm', vis_artifacts['reference_pcd'])
+        view.add_geometry('forearm', vis_artifacts['reference_mesh'])
         view.add_geometry('hand', vis_artifacts['base_mesh'])
         view.add_geometry('contacts', contact_pcd, point_size=10.0)
         
@@ -118,7 +118,7 @@ def compute_somatosensory_characteristics(
             y_label='Contact Area (cm^2)'
         )
 
-        center_point = vis_artifacts['reference_pcd'].get_center()
+        center_point = vis_artifacts['reference_mesh'].get_center()
         view.recenter_view_on_point(center_point)
 
         view.run()
