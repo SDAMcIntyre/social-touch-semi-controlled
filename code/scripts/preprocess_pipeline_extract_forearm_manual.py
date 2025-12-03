@@ -22,9 +22,10 @@ from preprocessing.forearm_extraction import (
 from _3_preprocessing._3_forearm_extraction import (
     define_forearm_extraction_parameters,
     extract_forearm,
+    clean_forearm_pointcloud,
     define_normals,
+    define_forearm_mesh
 )
-
 
 
 # --- CHOOSE YOUR EXECUTION MODE HERE ---
@@ -56,7 +57,6 @@ def create_confirmation_flag():
 
     # Act based on the user's response
     return response
-
 
 
 # --- 2. Helper Functions for the Main Pipeline ---
@@ -144,13 +144,40 @@ def _process_single_forearm_frame(
     )
     print(f"💾 Raw forearm point cloud saved to: {forearm_ply_path.name}")
 
-    # --- Step 2: Calculate and save normals for the extracted point cloud ---
+    # --- Step 2: Clean the forearm point cloud ---
+    cleaned_forearm_ply_path = pointclouds_output_dir / f"{base_filename}_cleaned.ply"
+    
+    # Optional: Define metadata path for cleaning stats if the function supports it
+    cleaned_metadata_path = pointclouds_output_dir / f"{base_filename}_cleaning_stats.json"
+
+    print("🧹 Cleaning the extracted forearm point cloud...")
+    clean_forearm_pointcloud(
+        input_ply_path=forearm_ply_path,
+        output_ply_path=cleaned_forearm_ply_path,
+        output_metadata_path=cleaned_metadata_path
+    )
+    print(f"💾 Cleaned point cloud saved to: {cleaned_forearm_ply_path.name}")
+
+    # --- Step 3: Calculate and save normals for the extracted point cloud ---
+    # NOTE: Now using the CLEANED point cloud as input
     forearm_ply_normals_path = pointclouds_output_dir / f"{base_filename}_with_normals.ply"
     forearm_metadata_normals_path = pointclouds_output_dir / f"{base_filename}_with_normals_metadata.json"
 
     print("🧠 Calculating normals for the point cloud...")
-    define_normals(forearm_ply_path, forearm_ply_normals_path, forearm_metadata_normals_path)
+    define_normals(cleaned_forearm_ply_path, forearm_ply_normals_path, forearm_metadata_normals_path)
     print(f"💾 Point cloud with normals saved to: {forearm_ply_normals_path.name}")
+
+    # --- Step 4: Define Forearm Mesh (NEW STEP) ---
+    # NOTE: Uses the point cloud with normals as input
+    forearm_mesh_path = pointclouds_output_dir / f"{base_filename}_mesh.obj"
+
+    print("🕸️ Generating mesh from oriented point cloud...")
+    define_forearm_mesh(
+        source=forearm_ply_normals_path,
+        output_path=forearm_mesh_path,
+        show=True
+    )
+    print(f"💾 Forearm mesh saved to: {forearm_mesh_path.name}")
 
     return forearm_ply_normals_path, forearm_metadata_normals_path
 

@@ -61,15 +61,17 @@ class TrackerReviewOrchestrator:
         self.status = TrackerReviewStatus.UNDEFINED
         self._update_job = None
 
-    def run(self) -> tuple[str, Dict[int, List[str]], Dict[int, List[str]]]:
+    def run(self) -> tuple[str, Dict[int, List[str]], Dict[int, List[str]], Dict[int, List[str]], Dict[int, List[str]]]:
         """
         Starts the application's main loop.
 
         Returns:
-            A tuple containing the final status (str) and two dictionaries:
-            one for marked frames for labeling and one for marked frames for deletion.
-            NOTE: The internal architecture is refactored, but this public method's
-                  return signature is preserved for backward compatibility.
+            A tuple containing:
+            1. The final status (str).
+            2. Dictionary of frames marked for LABELING.
+            3. Dictionary of frames marked for DELETION.
+            4. Dictionary of frames marked for IGNORE_START.
+            5. Dictionary of frames marked for IGNORE_STOP.
         """
         self.view.setup_ui()
         self.update_view_full()
@@ -77,16 +79,28 @@ class TrackerReviewOrchestrator:
         
         frames_for_labeling = {}
         frames_for_deleting = {}
+        frames_for_ignore_start = {}
+        frames_for_ignore_stop = {}
+
         for frame_num, mark in self.marked_frames.items():
             if mark.action == FrameAction.LABEL:
                 frames_for_labeling[frame_num] = mark.object_ids
             elif mark.action == FrameAction.DELETE:
                 frames_for_deleting[frame_num] = mark.object_ids
+            elif mark.action == FrameAction.IGNORE_START:
+                frames_for_ignore_start[frame_num] = mark.object_ids
+            elif mark.action == FrameAction.IGNORE_STOP:
+                frames_for_ignore_stop[frame_num] = mark.object_ids
         
-        return (self.status, 
-                dict(sorted(frames_for_labeling.items())), 
-                dict(sorted(frames_for_deleting.items())))
+        return_values = (
+            self.status, 
+            dict(sorted(frames_for_labeling.items())), 
+            dict(sorted(frames_for_deleting.items())),
+            dict(sorted(frames_for_ignore_start.items())),
+            dict(sorted(frames_for_ignore_stop.items()))
+        )
         
+        return return_values
 
     def toggle_play_pause(self):
         """Toggles the playback state."""

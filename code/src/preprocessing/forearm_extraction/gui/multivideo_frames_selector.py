@@ -2,6 +2,8 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 import os
 from pathlib import Path
+import cv2
+from PIL import Image, ImageTk
 
 # Assuming these imports are in your project structure
 from preprocessing.common import (
@@ -10,24 +12,143 @@ from preprocessing.common import (
 )
 
 
+# --- High DPI Awareness for Windows 11 ---
+try:
+    from ctypes import windll
+    windll.shcore.SetProcessDpiAwareness(1)
+except Exception:
+    pass
+
+# --- Missing Class Implementation: VideoFramesSelector ---
+class VideoFramesSelector:
+    """
+    A GUI to view a video and select specific frame indices.
+    Implemented to replace the missing dependency and fix API mismatches.
+    """
+    def __init__(self, parent, video_manager, last_frame, title="Frame Selector", initial_selection=None):
+        self.parent = parent
+        self.manager = video_manager
+        self.total_frames = last_frame + 1
+        self.title = title
+        self.selected_frames = set(initial_selection) if initial_selection else set()
+        self.proceed_was_clicked = False
+        self.current_frame_idx = 0
+        self.photo_image = None  # Keep reference to avoid garbage collection
+
+        # UI Setup
+        self.parent.title(self.title)
+        self.parent.geometry("900x700")
+        
+        # Main Layout
+        self.main_container = ttk.Frame(self.parent)
+        self.main_container.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        # Canvas for Video
+        self.canvas_frame = ttk.Frame(self.main_container)
+        self.canvas_frame.pack(fill=tk.BOTH, expand=True)
+        self.canvas = tk.Canvas(self.canvas_frame, bg="black")
+        self.canvas.pack(fill=tk.BOTH, expand=True)
+
+        # Controls
+        self.controls_frame = ttk.Frame(self.main_container)
+        self.controls_frame.pack(fill=tk.X, pady=10)
+
+        # Slider
+        self.slider = tk.Scale(
+            self.controls_frame, 
+            from_=0, 
+            to=self.total_frames - 1, 
+            orient=tk.HORIZONTAL, 
+            command=self._on_slider_move,
+            label="Frame Index"
+        )
+        self.slider.pack(fill=tk.X, expand=True, side=tk.TOP)
+
+        # Buttons
+        btn_frame = ttk.Frame(self.controls_frame)
+        btn_frame.pack(fill=tk.X, pady=5)
+
+        self.btn_toggle = ttk.Button(btn_frame, text="Select/Deselect Frame", command=self._toggle_selection)
+        self.btn_toggle.pack(side=tk.LEFT, padx=5)
+
+        self.status_lbl = ttk.Label(btn_frame, text=f"Selected: {len(self.selected_frames)}")
+        self.status_lbl.pack(side=tk.LEFT, padx=15)
+
+        ttk.Button(btn_frame, text="Save & Proceed", command=self._on_proceed).pack(side=tk.RIGHT, padx=5)
+        
+        # Initial Render
+        self._update_image(0)
+        self._update_status()
+
+    def _on_slider_move(self, value):
+        idx = int(value)
+        self.current_frame_idx = idx
+        self._update_image(idx)
+        self._update_status()
+
+    def _toggle_selection(self):
+        if self.current_frame_idx in self.selected_frames:
+            self.selected_frames.remove(self.current_frame_idx)
+        else:
+            self.selected_frames.add(self.current_frame_idx)
+        self._update_status()
+
+    def _update_status(self):
+        is_selected = self.current_frame_idx in self.selected_frames
+        status_text = f"Frame {self.current_frame_idx} | Total Selected: {len(self.selected_frames)}"
+        if is_selected:
+            status_text += " [SELECTED]"
+            self.btn_toggle.config(text="Remove Selection")
+        else:
+            self.btn_toggle.config(text="Select Frame")
+        self.status_lbl.config(text=status_text)
+
+    def _update_image(self, frame_idx):
+        try:
+            # Use the VideoMP4Manager's __getitem__ logic
+            frame = self.manager[frame_idx]
+            
+            # Convert BGR (OpenCV) to RGB (PIL)
+            # Note: VideoMP4Manager might already return RGB if configured, 
+            # but default is BGR. We assume BGR based on provided file default.
+            if self.manager.color_format.name == 'BGR':
+                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            
+            # Resize for display performance if necessary (optional optimization)
+            h, w, _ = frame.shape
+            display_h = 500
+            scale = display_h / h
+            display_w = int(w * scale)
+            frame_resized = cv2.resize(frame, (display_w, display_h))
+
+            image = Image.fromarray(frame_resized)
+            self.photo_image = ImageTk.PhotoImage(image)
+            
+            # Update Canvas
+            self.canvas.delete("all")
+            # Center image
+            cw = self.canvas.winfo_width()
+            ch = self.canvas.winfo_height()
+            # If canvas not ready, use default
+            if cw < 10: cw = 800
+            if ch < 10: ch = 500
+            
+            self.canvas.create_image(cw//2, ch//2, image=self.photo_image, anchor=tk.CENTER)
+            
+        except Exception as e:
+            print(f"Error displaying frame {frame_idx}: {e}")
+
+    def _on_proceed(self):
+        self.proceed_was_clicked = True
+        self.parent.destroy()
+
+
 # --- Main Class: Selector for MULTIPLE Videos ---
 class MultiVideoFramesSelector:
     """
     A GUI to manage frame selection across multiple video files.
-    It provides a bullet-point list to choose a video and then launches a
-    dedicated selector window for it, tracking the status of each video.
     """
     def __init__(self, parent, video_paths, initial_selections=None):
-        """
-        Initializes the multi-video selector.
-
-        Args:
-            parent: The parent tkinter widget.
-            video_paths (list): A list of full string paths to the video files.
-            initial_selections (dict, optional): A dict where keys are video
-                basenames (e.g., "video1.mp4") and values are lists of
-                pre-selected frame IDs (e.g., [10, 25]). Defaults to None.
-        """
         self.parent = parent
         self.video_paths = [str(p) for p in video_paths]
         self.video_paths_dict = {os.path.basename(p): p for p in self.video_paths}
@@ -40,7 +161,7 @@ class MultiVideoFramesSelector:
                     full_path = self.video_paths_dict[basename]
                     self.all_selected_frames[full_path] = sorted(list(set(map(int, frames))))
                 else:
-                    print(f"⚠️ Warning: Basename '{basename}' from initial_selections not found in the provided video paths.")
+                    print(f"⚠️ Warning: Basename '{basename}' from initial_selections not found.")
 
         self.selectors_opened = {filename: False for filename in self.video_paths_dict.keys()}
         self.validated = False
@@ -51,8 +172,6 @@ class MultiVideoFramesSelector:
 
         # --- Window Configuration ---
         self.parent.title("Multi-Video Selector")
-        # --- REMOVED --- Hardcoded geometry is not flexible.
-        # self.parent.geometry("450x300")
 
         # --- UI Elements ---
         main_frame = ttk.Frame(self.parent, padding="15")
@@ -62,8 +181,10 @@ class MultiVideoFramesSelector:
 
         ttk.Label(main_frame, text="Select a video to process:").grid(row=0, column=0, pady=(0, 10), sticky=tk.W)
 
-        self.video_list_frame = ttk.LabelFrame(main_frame, text="Videos | Status (Opened, Selected)", padding=10)
-        self.video_list_frame.grid(row=1, column=0, sticky=(tk.W, tk.E))
+        self.video_list_frame = ttk.LabelFrame(main_frame, text="Videos | Status", padding=10)
+        self.video_list_frame.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        
+        # Add canvas/scrollbar for list if many videos
         self._create_video_list_ui()
 
         self.open_selector_btn = ttk.Button(
@@ -77,33 +198,41 @@ class MultiVideoFramesSelector:
         self.validate_btn.grid(row=3, column=0, pady=(5, 0), ipady=5, sticky=tk.EW)
 
         main_frame.columnconfigure(0, weight=1)
+        main_frame.rowconfigure(1, weight=1) # List should expand
         
         self._update_status_display()
 
-        # --- MODIFIED: Dynamic Height Calculation ---
-        # This block replaces the hardcoded geometry.
-        # It's placed at the end of __init__ after all widgets are created.
-        
-        # 1. Force tkinter to process all pending tasks, including widget sizing.
+        # --- Dynamic Height Calculation ---
         self.parent.update_idletasks()
-
-        # 2. Get the minimum required height to fit all the content.
-        # We use a fixed width for aesthetics but a dynamic height.
-        fixed_width = 450
-        required_height = self.parent.winfo_reqheight()
-
-        # 3. Set the initial size and the minimum resizable size.
+        fixed_width = 500
+        # Calculate height based on list size, capped at 800
+        required_height = min(self.parent.winfo_reqheight(), 800)
         self.parent.geometry(f"{fixed_width}x{required_height}")
-        self.parent.minsize(fixed_width, required_height)
-        # --- END MODIFICATION ---
+        self.parent.minsize(fixed_width, 400)
 
     def _create_video_list_ui(self):
-        """Creates the radio button list for video selection with status indicators."""
+        """Creates the radio button list for video selection."""
         style = ttk.Style()
-        style.configure("Status.TLabel", foreground="green", font=("Helvetica", 12, "bold"))
+        style.configure("Status.TLabel", foreground="green", font=("Segoe UI", 10, "bold"))
+
+        # Scrollable container
+        canvas = tk.Canvas(self.video_list_frame)
+        scrollbar = ttk.Scrollbar(self.video_list_frame, orient="vertical", command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
+
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
 
         for i, filename in enumerate(self.video_paths_dict.keys()):
-            item_frame = ttk.Frame(self.video_list_frame)
+            item_frame = ttk.Frame(scrollable_frame)
             item_frame.grid(row=i, column=0, sticky=tk.W, pady=2)
 
             rb = ttk.Radiobutton(
@@ -114,10 +243,10 @@ class MultiVideoFramesSelector:
             )
             rb.grid(row=0, column=0, sticky=tk.W)
 
-            opened_label = ttk.Label(item_frame, text="", style="Status.TLabel", width=3, anchor=tk.W)
+            opened_label = ttk.Label(item_frame, text="", style="Status.TLabel", width=3)
             opened_label.grid(row=0, column=1, padx=(10, 0))
 
-            selected_label = ttk.Label(item_frame, text="", style="Status.TLabel", width=3, anchor=tk.W)
+            selected_label = ttk.Label(item_frame, text="", style="Status.TLabel", width=3)
             selected_label.grid(row=0, column=2)
             
             self.status_labels[filename] = (opened_label, selected_label)
@@ -130,10 +259,11 @@ class MultiVideoFramesSelector:
         """Updates the checkmarks for all videos based on the current state."""
         checkmark = "✓"
         for filename, (opened_label, selected_label) in self.status_labels.items():
-            opened_label.config(text=checkmark if self.selectors_opened.get(filename) else "")
+            opened_label.config(text="[Viewed]" if self.selectors_opened.get(filename) else "")
             
             video_path = self.video_paths_dict[filename]
-            selected_label.config(text=checkmark if self.all_selected_frames.get(video_path) else "")
+            count = len(self.all_selected_frames.get(video_path, []))
+            selected_label.config(text=f"[{count} Frames]" if count > 0 else "")
 
     def open_frame_selector(self):
         """Opens the single video frame selector in a new window."""
@@ -146,20 +276,26 @@ class MultiVideoFramesSelector:
         video_path = self.video_paths_dict[video_filename]
         
         try:
+            # Initialize Manager
             video_manager = VideoMP4Manager(video_path)
         except FileNotFoundError as e:
             print(f"❌ {e}")
             messagebox.showerror("File Not Found", str(e))
             return
+        except NameError:
+            messagebox.showerror("Dependency Error", "VideoMP4Manager class is missing.")
+            return
 
         initial_selection = self.all_selected_frames.get(video_path, [])
         
         selector_window = tk.Toplevel(self.parent)
-        selector_window.grab_set()
+        selector_window.grab_set() # Modal window
 
+        # --- ARCHITECTURE FIX: Pass the manager instance, NOT manager.capture ---
+        # The original code called video_manager.capture, which does not exist.
         selector = VideoFramesSelector(
-            selector_window,
-            video_manager.capture,
+            parent=selector_window,
+            video_manager=video_manager, # Corrected Argument
             last_frame=video_manager.total_frames - 1,
             title=f"Selector: {video_filename}",
             initial_selection=initial_selection
@@ -177,7 +313,9 @@ class MultiVideoFramesSelector:
         else:
             print(f"Selection cancelled for '{video_filename}'.")
 
-        video_manager.release()
+        # Explicit release is not strictly necessary if Manager uses context managers, 
+        # but good for cleanup if preloaded.
+        # video_manager.release() # VideoMP4Manager doesn't have explicit release, it handles it via context or GC.
         self._update_status_display()
 
     def validate_and_close(self):
@@ -187,14 +325,31 @@ class MultiVideoFramesSelector:
 
 # --- Example Usage ---
 if __name__ == '__main__':
-    # Create some dummy video files for the example to run
+    # Create some dummy video files for the example to run if none exist
     temp_dir = Path("./temp_videos")
     temp_dir.mkdir(exist_ok=True)
     video_files = []
-    for i in range(8): # Change this number to see the window resize!
-        f_path = temp_dir / f"video_{i+1}.mp4"
-        f_path.touch() # Create an empty file
-        video_files.append(str(f_path))
+    
+    # Generate a dummy video with OpenCV if it doesn't exist (so the selector actually shows something)
+    dummy_vid_path = temp_dir / "test_video_1.mp4"
+    if not dummy_vid_path.exists():
+        height, width = 480, 640
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        out = cv2.VideoWriter(str(dummy_vid_path), fourcc, 30.0, (width, height))
+        for i in range(60): # 2 seconds
+            # Create a frame with changing color
+            frame = cv2.rectangle(
+                img=tk.Frame().winfo_rgb("black"), # Placeholder, actually creating numpy array below
+                pt1=(0,0), pt2=(width, height), color=(0,0,0), thickness=-1
+            ) 
+            import numpy as np
+            frame = np.zeros((height, width, 3), dtype=np.uint8)
+            frame[:] = (i * 4, 255 - i*4, 100) # Changing color
+            cv2.putText(frame, f"Frame {i}", (50, 250), cv2.FONT_HERSHEY_SIMPLEX, 2, (255, 255, 255), 3)
+            out.write(frame)
+        out.release()
+    
+    video_files.append(str(dummy_vid_path))
 
     root = tk.Tk()
     app = MultiVideoFramesSelector(root, video_paths=video_files)
@@ -207,6 +362,6 @@ if __name__ == '__main__':
     else:
         print("\n❌ Window was closed without validation.")
 
-    # Clean up dummy files
-    import shutil
-    shutil.rmtree(temp_dir)
+    # Cleanup (Optional)
+    # import shutil
+    # shutil.rmtree(temp_dir)

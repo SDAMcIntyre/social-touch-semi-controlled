@@ -2,7 +2,7 @@
 import cv2
 import numpy as np
 import pandas as pd
-from typing import List, Dict, Any, Optional, Tuple, Iterable
+from typing import List, Dict, Any, Optional, Tuple, Iterable, Set
 
 ## FIX: Import ColorFormat to explicitly set the output color space.
 from preprocessing.common.data_access.video_mp4_manager import VideoMP4Manager, ColorFormat
@@ -31,7 +31,7 @@ class TrackingOrchestrator:
 
         self.tracking_results: Dict[int, Dict[str, Any]] = {}
 
-    def run(self, labeled_rois: pd.DataFrame, search_area_expansion: Optional[int] = None) -> pd.DataFrame:
+    def run(self, labeled_rois: pd.DataFrame, search_area_expansion: Optional[int] = None, valid_frames: Optional[Set[int]] = None) -> pd.DataFrame:
         """
         Starts the tracking process using an initial set of labeled ROIs
         provided as a DataFrame.
@@ -40,6 +40,8 @@ class TrackingOrchestrator:
             labeled_rois (pd.DataFrame): A DataFrame with columns 
                 ['frame_id', 'roi_x', 'roi_y', 'roi_width', 'roi_height'].
             search_area_expansion (Optional[int]): The pixel amount to expand the search area.
+            valid_frames (Optional[Set[int]]): A set of frame IDs to process. If a frame ID is not 
+                in this set, it will be marked as 'Ignored' with NaN coordinates.
 
         Returns:
             pd.DataFrame: A DataFrame containing the tracking results with columns
@@ -84,13 +86,13 @@ class TrackingOrchestrator:
             # --- Forward Pass ---
             print("\n--- Starting Forward Pass ---")
             forward_range = range(start_frame_num + 1, vm.total_frames)
-            self._track_pass(vm, start_frame_num, start_roi, labeled_rois_map, forward_range, search_area_expansion)
+            self._track_pass(vm, start_frame_num, start_roi, labeled_rois_map, forward_range, search_area_expansion, valid_frames)
 
             # --- Backward Pass ---
             if start_frame_num > 0:
                 print("\n--- Starting Backward Pass ---")
                 backward_range = range(start_frame_num - 1, -1, -1)
-                self._track_pass(vm, start_frame_num, start_roi, labeled_rois_map, backward_range, search_area_expansion)
+                self._track_pass(vm, start_frame_num, start_roi, labeled_rois_map, backward_range, search_area_expansion, valid_frames)
 
         except (SystemExit, KeyboardInterrupt) as e:
             print(f"Process exited: {e}")
@@ -115,7 +117,7 @@ class TrackingOrchestrator:
                 })
         return pd.DataFrame(results_list)
 
-    def _track_pass(self, vm: VideoMP4Manager, start_frame_num: int, start_roi: Tuple, labeled_rois: Dict, frame_range: Iterable[int], expansion: Optional[int]):
+    def _track_pass(self, vm: VideoMP4Manager, start_frame_num: int, start_roi: Tuple, labeled_rois: Dict, frame_range: Iterable[int], expansion: Optional[int], valid_frames: Optional[Set[int]]):
         """Performs a single tracking pass, delegating all UI to the handler."""
         tracker = TrackerWrapper()
         ## FIX: Use indexing `[]` to get the initial frame.
@@ -128,6 +130,12 @@ class TrackingOrchestrator:
         i = 0
         while i < len(frame_list):
             frame_num = frame_list[i]
+
+            # --- Check Ignore Status ---
+            if valid_frames is not None and frame_num not in valid_frames:
+                self.tracking_results[frame_num] = {'roi': None, 'status': 'Ignored'}
+                i += 1
+                continue
             
             ## FIX: Use indexing `[]` to get the current frame.
             current_frame_rgb = vm[frame_num]

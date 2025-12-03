@@ -56,7 +56,7 @@ def generate_hand_motion(
     output_glb_path: str,
     output_csv_path: str,
     *,
-    fps: int = 30,
+    fps: float = 30.0,
     force_processing: bool = False
 ):
     """

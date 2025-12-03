@@ -18,22 +18,24 @@ def should_process_task(
     outputs = [output_paths] if isinstance(output_paths, Path) else output_paths
     inputs = [input_paths] if isinstance(input_paths, Path) else input_paths
 
+    # 2. Check if any input files is missing
+    for path in inputs:
+        if not path.exists():
+            # If an input file is missing, we cannot proceed, so raise an error.
+            raise FileNotFoundError(f"Input file '{path}' is missing. Cannot process task.") # This will stop execution
+    
+    # 3. Check if force processing is asked
     if force:
         print(f"➡️ Forced processing for task generating: {[str(p) for p in outputs]}.")
         return True
 
-    # 2. Check if any output or input files are missing
+    # 4. Check if any output files is missing
     for path in outputs:
         if not path.exists():
             print(f"➡️ Output file '{path}' does not exist. Processing required.")
             return True
             
-    for path in inputs:
-        if not path.exists():
-            print(f"➡️ Input file '{path}' is missing. Processing required.")
-            return True
-
-    # 3. The Staleness Check: Compare the newest input to the OLDEST output
+    # 5. The Staleness Check: Compare the newest input to the OLDEST output
     # If even the oldest output is newer than all inputs, the task is valid.
     oldest_output_mod_time = min(p.stat().st_mtime for p in outputs)
     latest_input_mod_time = max(p.stat().st_mtime for p in inputs)

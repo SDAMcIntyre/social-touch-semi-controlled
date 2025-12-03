@@ -23,8 +23,8 @@ segmentation_params:
   color_skin_filter:
     enabled: true
     # HSV color space bounds. H is [0-360]. S and V are [0-1].
-    hsv_lower_bound: [0.0, 0.0, 0.0] 
-    hsv_upper_bound: [360.0, 1.0, 1.0]
+    hsv_lower_bound: [0.0, 0.0, 0.65] 
+    hsv_upper_bound: [360.0, 0.5, 1.0]
 
   # -- Region Growing Segmentation --
   region_growing:

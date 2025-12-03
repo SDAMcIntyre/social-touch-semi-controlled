@@ -14,7 +14,7 @@ from .hand_tracking.data_access.hand_metadata_filehandler import HandMetadataFil
 from .hand_tracking.gui.hand_model_selector import HandModelSelectorGUI
 
 from .tactile_quantification.core.objects_interaction_controller import ObjectsInteractionController
-
+from .tactile_quantification.gui.objects_interaction_visualizer import ObjectsInteractionVisualizer
 
 __all__ = [
     "ObjectsInteractionController",

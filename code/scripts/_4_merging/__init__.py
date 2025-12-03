@@ -1,3 +1,4 @@
 
 
 from .merge_neural_and_kinect_data import align_and_merge_neural_and_kinect
+from .aggregate_blocks_session import aggregate_session_blocks

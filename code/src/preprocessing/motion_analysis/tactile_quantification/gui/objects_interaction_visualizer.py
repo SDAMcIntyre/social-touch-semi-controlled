@@ -109,7 +109,7 @@ class ObjectsInteractionVisualizer(QMainWindow):
         main_layout.addWidget(left_panel, 1)
         main_layout.addWidget(right_panel)
 
-    def add_geometry(self, name: str, geometry: o3d.geometry.Geometry):
+    def add_geometry(self, name: str, geometry: o3d.geometry.Geometry, point_size: float = 4.0):
         if name in self.actors:
             print(f"Warning: Geometry with name '{name}' already exists. It will be replaced.")
             self.plotter.remove_actor(self.actors[name])
@@ -121,6 +121,8 @@ class ObjectsInteractionVisualizer(QMainWindow):
         
         is_empty = vertices.shape[0] == 0
 
+        # ROBUST COLOR EXTRACTION
+        # Defaults to lightgrey. Only attempts to access index [0] if the array has data.
         color = 'lightgrey'
         if hasattr(geometry, 'vertex_colors') and len(geometry.vertex_colors) > 0:
             color = np.asarray(geometry.vertex_colors)[0]
@@ -139,13 +141,22 @@ class ObjectsInteractionVisualizer(QMainWindow):
                 plot_faces = np.hstack((np.full((len(triangles), 1), 3), triangles)).flatten()
 
             pv_object = pv.PolyData(plot_verts, faces=plot_faces)
-            actor = self.plotter.add_mesh(pv_object, color=color, smooth_shading=True)
+            # Passed point_size, though it primarily affects vertices if style='points' is used.
+            actor = self.plotter.add_mesh(pv_object, color=color, style='wireframe', point_size=point_size)
             actor.SetVisibility(not is_empty)
+
         elif isinstance(geometry, o3d.geometry.PointCloud):
             # Create a placeholder if empty, so the actor exists for updates.
             plot_verts = vertices if not is_empty else np.array([[0, 0, -9999]])
             pv_object = pv.PolyData(plot_verts)
-            actor = self.plotter.add_mesh(pv_object, color=color, point_size=4.0, render_points_as_spheres=True)
+            
+            # MODIFICATION: explicitly using the passed point_size argument
+            actor = self.plotter.add_mesh(
+                pv_object, 
+                color=color, 
+                point_size=point_size, 
+                render_points_as_spheres=True
+            )
             # Visibility for dynamic point clouds like 'contacts' is managed
             # by the _update_pyvista_scene method. Set initial visibility here.
             actor.SetVisibility(not is_empty)
@@ -376,32 +387,61 @@ class ObjectsInteractionVisualizer(QMainWindow):
         self.frame_entry.clearFocus()
 
     def _update_pyvista_scene(self, frame_data: dict):
-        """Updates PyVista actors based on the current frame's data."""
-        # Update hand mesh
-        hand_actor = self.actors.get('hand')
-        hand_mesh_data = frame_data.get('transformed_hand_mesh')
-        if hand_actor and hand_mesh_data:
-            ### OPTIMIZED ### - Directly update points in-place, much faster
-            try:
-                new_points = np.asarray(hand_mesh_data.points)
-            except AttributeError:
-                new_points = np.asarray(hand_mesh_data.vertices)
+            """Updates PyVista actors based on the current frame's data."""
+            # Update hand mesh
+            hand_actor = self.actors.get('hand')
+            hand_mesh_data = frame_data.get('transformed_hand_mesh')
+            if hand_actor and hand_mesh_data:
+                try:
+                    new_points = np.asarray(hand_mesh_data.points)
+                except AttributeError:
+                    new_points = np.asarray(hand_mesh_data.vertices)
 
-            is_visible = new_points.shape[0] > 0
-            if is_visible:
-                # Only update points if there are any, to avoid errors.
-                hand_actor.mapper.dataset.points = new_points
-            hand_actor.SetVisibility(is_visible)
+                is_visible = new_points.shape[0] > 0
+                if is_visible:
+                    # For meshes where topology (triangles) is constant,
+                    # directly updating points is performant and correct.
+                    hand_actor.mapper.dataset.points = new_points
+                hand_actor.SetVisibility(is_visible)
 
-        # Update contact points
-        contacts_actor = self.actors.get('contacts')
-        contact_points_data = frame_data.get('contact_points')
-        if contacts_actor:
-            points = contact_points_data if contact_points_data is not None and contact_points_data.size > 0 else np.array([[0,0,-9999]])
-            ### OPTIMIZED ### - Directly update points in-place
-            contacts_actor.mapper.dataset.points = points
-            has_contacts = contact_points_data is not None and contact_points_data.size > 0
-            contacts_actor.SetVisibility(has_contacts)
+            # Update contact points with type safety for int(0)
+            contacts_actor = self.actors.get('contacts')
+            raw_contacts = frame_data.get('contact_points')
+
+            # 1. Sanitize the input to ensure we have a valid numpy array
+            if isinstance(raw_contacts, (int, float)) or raw_contacts is None:
+                # Handle the '0' case or None
+                points_data = np.array([])
+            elif isinstance(raw_contacts, np.ndarray):
+                points_data = raw_contacts
+            else:
+                # Fallback for unexpected types
+                points_data = np.array([])
+
+            if contacts_actor:
+                # 2. Determine if we have data to show
+                has_contacts = points_data.size > 0
+                
+                # 3. Handle the data update
+                if has_contacts:
+                    render_points = points_data
+                else:
+                    # PyVista/VTK prevents empty datasets in some contexts,
+                    # so we use a dummy point hidden far away.
+                    render_points = np.array([[0, 0, -9999]])
+
+                # 4. Update the actor using shallow_copy
+                # PROBLEM FIX: Previously, we only updated .points. If the number of points changed,
+                # the 'verts' (topology) array in PolyData was not updated, causing only the 
+                # first N vertices (where N is the old count) to be rendered.
+                # creating a new PolyData object automatically generates the correct 'verts' topology.
+                new_mesh = pv.PolyData(render_points)
+                
+                # shallow_copy updates the geometry AND topology pointers of the existing dataset
+                # efficiently without breaking the actor/mapper pipeline.
+                contacts_actor.mapper.dataset.shallow_copy(new_mesh)
+                
+                contacts_actor.SetVisibility(has_contacts)
     
     def set_frame_data(self, all_frames_data: list):
         """
@@ -507,7 +547,7 @@ if __name__ == "__main__":
         initial_contacts.points = o3d.utility.Vector3dVector(points)
     initial_contacts.paint_uniform_color([0.1, 0.9, 0.1])
 
-    visualizer.add_geometry(name="object", geometry=static_object)
+    visualizer.add_geometry(name="forearm", geometry=static_object)
     visualizer.add_geometry(name="hand", geometry=initial_hand)
     visualizer.add_geometry(name="contacts", geometry=initial_contacts)
 
