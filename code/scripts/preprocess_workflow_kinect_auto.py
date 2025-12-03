@@ -181,7 +181,12 @@ def track_stickers(rgb_video_path: Path, output_dir: Path, *, force_processing: 
     return final_csv_path, True
 
 @flow(name="6. Generate XYZ Sticker Positions (3D)")
-def generate_xyz_stickers(stickers_2d_path: Path, source_video: Path, output_dir: Path, *, force_processing: bool = False) -> Path:
+def generate_xyz_stickers(
+    stickers_2d_path: Path, 
+    source_video: Path, 
+    output_dir: Path, 
+    *, 
+    force_processing: bool = False) -> Path:
     print(f"[{output_dir.name}] Generating XYZ sticker positions (3D)...")
     name_baseline = stickers_2d_path.stem.replace('_summary_2d_coordinates', '')
     result_csv_path = output_dir / (name_baseline + "_xyz_tracked.csv")
@@ -233,7 +238,8 @@ def compute_somatosensory_characteristics_flow(
         forearm_pointcloud_dir,
         current_video_filename, 
         contact_characteristics_path, 
-        monitor=monitor, force_processing=force_processing
+        monitor=monitor, 
+        force_processing=force_processing
     )
     return contact_characteristics_path
 
@@ -414,11 +420,11 @@ def run_single_session_pipeline(
             options = dag_handler.get_task_options(task_name)
             params = stage["params"]()
             force = options.get('force_processing')
-            monitor = options.get('monitor')
+            monitor_opt = options.get('monitor')
             if force is not None:
                 params['force_processing'] = force
-            if monitor is not None:
-                params['monitor'] = monitor
+            if monitor_opt is not None:
+                params['monitor'] = monitor_opt
             result = stage["func"](**params)
 
         # Store outputs

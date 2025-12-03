@@ -37,7 +37,7 @@ class PointCloudController:
             
             # 2. Perform the initial normal computation
             self.recompute_normals()
-
+    
     def recompute_normals(self):
         """Triggers normal computation and tells the visualizer to update."""
         if not self.view: return
