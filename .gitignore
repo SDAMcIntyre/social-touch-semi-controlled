@@ -144,3 +144,5 @@ GEMINI.md
 # pipeline reports folder
 reports/
 /code/scripts/__misc
+/demo_out
+/example_data
