@@ -54,18 +54,35 @@ def set_xyz_reference_from_gestures_flow(input_files: List[Path], output_dir: Pa
         monitor_segment=False,
         force_processing=force_processing
     )
-
+    
     return output_files
 
 @flow(name="determine_receptive_field")
-def determine_receptive_field_flow(input_files: List[Path], output_dir: Path, force_processing: bool = False) -> Tuple[List[Path], List[Path]]:
+def determine_receptive_field_flow(
+    input_files: List[Path], 
+    configs: List[KinectConfig], 
+    output_dir: Path, 
+    force_processing: bool = False
+) -> Tuple[List[Path], List[Path]]:
     """
     Determine the receptive field based on touch locations for each file.
     Returns a list of metadata CSV paths corresponding to the input data files.
+    
+    Updated to accept configs.
     """
     print(f"[{output_dir.name}] Calculating receptive field for {len(input_files)} files...")
+    
+    kinect_config = configs[0]
+    forearm_pointcloud_dir = kinect_config.session_processed_output_dir / "forearm_pointclouds"
+    arm_roi_metadata_path = forearm_pointcloud_dir / (kinect_config.session_id + "_arm_roi_metadata.json")
 
-    output_files, rf_pc_file = determine_receptive_field(input_files, output_dir, force_processing=force_processing)
+    # Pass configs to the underlying function
+    output_files, rf_pc_file = determine_receptive_field(
+        input_files, 
+        arm_roi_metadata_path, 
+        output_dir, 
+        force_processing=force_processing
+    )
 
     return output_files, rf_pc_file
 
@@ -77,39 +94,7 @@ def filter_by_receptive_field(data_files: List[Path], rf_files: List[Path], outp
     """
     print(f"[{output_dir.name}] Filtering data for {len(data_files)} files...")
     return
-    output_dir.mkdir(parents=True, exist_ok=True)
-    output_files = []
-    
-    # Ensure we have matching lists
-    if len(data_files) != len(rf_files):
-        print("❌ Error: Mismatch in count of data files vs RF metadata files.")
-        return []
 
-    for data_path, rf_path in zip(data_files, rf_files):
-        if not data_path.exists() or not rf_path.exists():
-            continue
-            
-        df = pd.read_csv(data_path)
-        rf = pd.read_csv(rf_path).iloc[0]
-        
-        # Logic: remove points outside the defined receptive field
-        # Using .get for safety if columns miss
-        x_col = df.get('x', pd.Series(dtype=float))
-        y_col = df.get('y', pd.Series(dtype=float))
-        
-        mask = (
-            (x_col >= rf['min_x']) & (x_col <= rf['max_x']) &
-            (y_col >= rf['min_y']) & (y_col <= rf['max_y'])
-        )
-        
-        filtered_df = df[mask]
-        
-        output_filename = f"{data_path.stem}_filtered.csv"
-        final_output_path = output_dir / output_filename
-        filtered_df.to_csv(final_output_path, index=False)
-        output_files.append(final_output_path)
-    
-    return output_files
 
 # --- Worker Flow ---
 
@@ -142,9 +127,10 @@ def run_single_session_postprocessing(
     else:
         monitor = None
 
-    # Initialize context with the raw list of files
+    # Initialize context with the raw list of files AND the session configs
     context = {
-        "source_files": session_input_files
+        "source_files": session_input_files,
+        "session_configs": session_configs
     }
 
     # UPDATED: Pipeline stages using the architecture of function_of_reference
@@ -155,6 +141,7 @@ def run_single_session_postprocessing(
             "func": determine_receptive_field_flow,
             "params": lambda: {
                 "input_files": context.get("source_files"),
+                "configs": context.get("session_configs"),  # Configs propagated here
                 "output_dir": session_output_dir / "sessions_receptive-field"
             },
             "outputs": ["segmented_data_files", "rf_metadata_files"]
@@ -209,6 +196,8 @@ def run_single_session_postprocessing(
                 params['force_processing'] = options['force_processing']
             
             # Validation: Check if list inputs are empty
+            # Note: We must exclude 'configs' from this check if configs are not lists of files, 
+            # though in this architecture they are a List[KinectConfig], so len() check is valid.
             input_lists = [v for v in params.values() if isinstance(v, list)]
             if any(len(l) == 0 for l in input_lists):
                  print(f"⚠️ Warning: Empty input list for task {task_name}. Skipping execution.")
