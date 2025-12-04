@@ -44,6 +44,7 @@ from _3_preprocessing._1_sticker_tracking import (
 )
 
 from _3_preprocessing._2_hand_tracking import (
+    track_hands_on_video,
     generate_hand_motion,
     is_hand_model_valid
 )
@@ -118,6 +119,7 @@ def validate_forearm_extraction(session_output_dir: Path) -> Path:
     is_valid = is_forearm_valid(session_output_dir / "forearm_pointclouds", verbose=True)
     if not is_valid:
         raise ValueError("Forearm needs to be manually extracted first.")
+    # Returning the boolean status directly, as it does not produce a file path for downstream tasks.
     return is_valid
 
 @flow(name="5. Validate Hand Extraction")
@@ -127,7 +129,7 @@ def validate_hand_extraction(rgb_video_path: Path, hand_models_dir: Path, expect
     metadata_path = output_dir / (name_baseline + "_metadata.json")
     is_valid, errors = is_hand_model_valid(metadata_path, hand_models_dir, expected_labels, verbose=True)
     if not is_valid:
-        raise ValueError("Hand model needs to be manually extracted first.")
+        raise ValueError("Hand model needs to be manually extracted first (or generation failed).")
     return is_valid
 
 @flow(name="6. Track Stickers (2D)")
@@ -204,13 +206,21 @@ def generate_xyz_stickers(
     return result_csv_path
 
 @flow(name="7. Generate 3D Hand Position")
-def generate_3d_hand_motion(rgb_video_path: Path, stickers_xyz_path: Path, hand_models_dir: Path, output_dir: Path, *, force_processing: bool = False) -> Path:
+def generate_3d_hand_motion(rgb_video_path: Path, trial_id_path: Path, stickers_xyz_path: Path, output_dir: Path, *, force_processing: bool = False) -> tuple[Path, Path]:
     print(f"[{output_dir.name}] Generating 3D hand motion...")
     name_baseline = rgb_video_path.stem + "_handmodel"
+    
+    rgb_video_filtered_path = rgb_video_path.parent / f"{rgb_video_path.stem}_filtered{rgb_video_path.suffix}"
+
+    tracked_hands_path = output_dir / (name_baseline + "_tracked_hands.pkl")
+
+    track_hands_on_video(rgb_video_path, trial_id_path, tracked_hands_path, force_processing=force_processing)
+
+
     metadata_path = output_dir / (name_baseline + "_metadata.json")
     hand_motion_glb_path = output_dir / (name_baseline + "_motion.glb")
     hand_motion_csv_path = output_dir / (name_baseline + "_motion.csv")
-    generate_hand_motion(stickers_xyz_path, hand_models_dir, metadata_path, hand_motion_glb_path, hand_motion_csv_path, force_processing=force_processing)
+    #generate_hand_motion(stickers_xyz_path, hand_models_dir, metadata_path, hand_motion_glb_path, hand_motion_csv_path, force_processing=force_processing)
     return hand_motion_glb_path, metadata_path
 
 @flow(name="8. Generate Somatosensory Characteristics")
@@ -259,7 +269,7 @@ def define_trial_ids_flow(rgb_video_path: Path, output_dir: Path, *, force_proce
     return output_path
 
 @flow(name="11. Add Stimuli Metadata")
-def generate_stimuli_metadata_flow(trial_data_path: Path, stimulus_metadata: Path, output_dir: Path, *, force_processing: bool = False) -> Path:
+def generate_stimuli_metadata_flow(trial_data_path: Path, stimulus_metadata: Path, output_dir: Path, *, force_processing: bool = False) -> tuple[Path, Path]:
     print(f"[{output_dir.name}] Adding Stimuli Metadata...")
     name_baseline = Path(trial_data_path).stem.replace("_trial_ids_only", "")
     output_path = output_dir / (name_baseline + "_with-stimuli-data.csv")
@@ -325,9 +335,10 @@ def run_single_session_pipeline(
         "rgb_video_path": config.video_primary_output_dir / f"{config.source_video.stem}.mp4"
     }
 
-    
+    # REFACTORED PIPELINE STAGES
+    # Ordered Topologically according to preprocess_workflow_kinect_auto_dag.yaml
     pipeline_stages = [
-        # --- Stage 1: LED Tracking ---
+        # --- Stage 1: LED Signal Extraction ---
         {"name": "track_led_blinking", 
          "func": track_led_blinking, 
          "params": lambda: {"video_path": context.get("rgb_video_path"), 
@@ -335,51 +346,30 @@ def run_single_session_pipeline(
                             "output_dir": config.video_processed_output_dir / "temporal_segmentation/LED"}, 
          "outputs": ["led_tracking_path"]},
 
-        # --- Stage 2: Validation ---
+        # --- Stage 2: Tracking Extraction ---
         {"name": "validate_forearm_extraction", 
          "func": validate_forearm_extraction, 
-         "params": lambda: {"session_output_dir": config.session_processed_output_dir}},
-        {"name": "validate_hand_extraction", 
-         "func": validate_hand_extraction, 
-         "params": lambda: {"rgb_video_path": context.get("rgb_video_path"), 
-                            "hand_models_dir": config.hand_models_dir,
-                            "expected_labels": config.objects_to_track, 
-                            "output_dir": config.video_processed_output_dir / "kinematics_analysis"}},
+         "params": lambda: {"session_output_dir": config.session_processed_output_dir},
+         "outputs": []}, 
 
-        # --- Stage 3: 3D Tracking & Reconstruction ---
         {"name": "track_stickers", 
          "func": track_stickers, 
          "params": lambda: {"rgb_video_path": context.get("rgb_video_path"), 
                             "output_dir": config.video_processed_output_dir / "handstickers"}, 
          "outputs": ["sticker_2d_tracking_path", None]},
+         
         {"name": "generate_xyz_stickers", 
          "func": generate_xyz_stickers, 
          "params": lambda: {"stickers_2d_path": context.get("sticker_2d_tracking_path"), 
                             "source_video": config.source_video, 
                             "output_dir": config.video_processed_output_dir / "handstickers"}, 
          "outputs": ["sticker_3d_tracking_path"]},
-        {"name": "generate_3d_hand_motion", 
-         "func": generate_3d_hand_motion, 
-         "params": lambda: {"rgb_video_path": context.get("rgb_video_path"), 
-                            "stickers_xyz_path": context.get("sticker_3d_tracking_path"), 
-                            "hand_models_dir": config.hand_models_dir, 
-                            "output_dir": config.video_processed_output_dir / "kinematics_analysis"}, 
-         "outputs": ["hand_motion_glb_path", "hand_metadata_path"]},
-        {"name": "compute_somatosensory_characteristics", 
-         "func": compute_somatosensory_characteristics_flow, 
-         "params": lambda: {"hand_motion_glb_path": context.get("hand_motion_glb_path"), 
-                            "hand_metadata_path": context.get("hand_metadata_path"), 
-                            "session_processed_dir": config.session_processed_output_dir, 
-                            "session_id": config.session_id, 
-                            "current_video_filename": context.get("rgb_video_path").name, 
-                            "output_dir": config.video_processed_output_dir / "kinematics_analysis"},
-         "outputs": ["somatosensory_chars_path"]},
 
-        # --- Stage 4: Final Data Integration ---
+        # --- Stage 3: Trial Definition & Analysis ---
+        # Moving this UP before Stage 4 as per DAG dependencies
         {"name": "define_trial_id", 
          "func": define_trial_ids_flow,
          "params": lambda: {"rgb_video_path": context.get("rgb_video_path"), 
-                            #"unified_data_path": context.get("somatosensory_chars_path"),
                             "output_dir": config.video_processed_output_dir / "temporal_segmentation"},
          "outputs": ["trial_data_path"]},
 
@@ -390,6 +380,34 @@ def run_single_session_pipeline(
                             "output_dir": config.video_processed_output_dir / "temporal_segmentation"},
          "outputs": ["stimuli_metadata_path", "stimuli_metadata_aligned_path"]},
 
+        # --- Stage 4: Feature Extraction ---
+        # Note: validate_hand_extraction moved AFTER generate_3d_hand_motion
+        {"name": "generate_3d_hand_motion", 
+         "func": generate_3d_hand_motion, 
+         "params": lambda: {"rgb_video_path": context.get("rgb_video_path"), 
+                            "trial_id_path": context.get("trial_data_path"), 
+                            "stickers_xyz_path": context.get("sticker_3d_tracking_path"),
+                            "output_dir": config.video_processed_output_dir / "kinematics_analysis"}, 
+         "outputs": ["hand_motion_glb_path", "hand_metadata_path"]},
+         
+        {"name": "validate_hand_extraction", 
+         "func": validate_hand_extraction, 
+         "params": lambda: {"rgb_video_path": context.get("rgb_video_path"), 
+                            "hand_models_dir": config.hand_models_dir,
+                            "expected_labels": config.objects_to_track, 
+                            "output_dir": config.video_processed_output_dir / "kinematics_analysis"},
+         "outputs": []},
+
+        {"name": "compute_somatosensory_characteristics", 
+         "func": compute_somatosensory_characteristics_flow, 
+         "params": lambda: {"hand_motion_glb_path": context.get("hand_motion_glb_path"), 
+                            "hand_metadata_path": context.get("hand_metadata_path"), 
+                            "session_processed_dir": config.session_processed_output_dir, 
+                            "session_id": config.session_id, 
+                            "current_video_filename": context.get("rgb_video_path").name, 
+                            "output_dir": config.video_processed_output_dir / "kinematics_analysis"},
+         "outputs": ["somatosensory_chars_path"]},
+
         {"name": "find_single_touches", 
          "func": find_single_touches_flow,
          "params": lambda: {"stickers_xyz_path": context.get("sticker_3d_tracking_path"), 
@@ -398,6 +416,7 @@ def run_single_session_pipeline(
                             "output_dir": config.video_processed_output_dir / "temporal_segmentation"},
          "outputs": ["single_touches_path"]},
 
+        # --- Stage 5: Final Unification ---
         {"name": "unify_processed_data", 
          "func": unify_processed_data_flow,
          "params": lambda: {"led_path": context.get("led_tracking_path"),
@@ -431,9 +450,12 @@ def run_single_session_pipeline(
         if "outputs" in stage:
             outputs = stage["outputs"]
             if not isinstance(result, tuple):
+                # Ensure result is a tuple if there are outputs to map
                 result = (result,)
+            
+            # Map outputs to context
             for i, key in enumerate(outputs):
-                if key:
+                if key and i < len(result):
                     context[key] = result[i]
         
         if task_name in dag_handler.tasks and executor.error_msg:
