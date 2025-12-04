@@ -1,18 +1,8 @@
 # =============================================================================
 # PIPELINE CONFIGURATION & TASK GRAPH (DAG)
 # =============================================================================
-# This file defines the execution order and parameters for the processing pipeline.
-#
-# GUIDELINES FOR MODIFICATION:
-# 1. Enabled Status: Set 'enabled: true' to run a task, 'enabled: false' to skip it.
-#    - Disabling a task also skips any subsequent tasks that depend on it.
-# 2. Force Processing: Set 'force_processing: true' to overwrite existing output files.
-# 3. Dependencies: 'depends_on' lists tasks that must complete before the current task starts.
-# =============================================================================
-# =============================================================================
-# PIPELINE CONFIGURATION & TASK GRAPH (DAG)
-# =============================================================================
-# Structured to isolate signal extraction and group trial-level analysis.
+# Structured to isolate signal extraction and group analysis, now ordered 
+# topologically and by sequential STAGE numbering.
 # =============================================================================
 
 parameters:
@@ -21,7 +11,7 @@ parameters:
 
 tasks:
   # ---------------------------------------------------------------------------
-  # STAGE 2: LED Signal Extraction
+  # STAGE 1: LED Signal Extraction
   # Isolated processing for TTL/Synchronization LED.
   # ---------------------------------------------------------------------------
   track_led_blinking:
@@ -31,14 +21,10 @@ tasks:
     depends_on: []
 
   # ---------------------------------------------------------------------------
-  # STAGE 3: Tracking & Feature Extraction
-  # Hands, Stickers, and Forearm analysis.
+  # STAGE 2: Tracking Extraction
+  # Stickers and Forearm analysis (Initial data sources).
   # ---------------------------------------------------------------------------
   validate_forearm_extraction:
-    enabled: true
-    depends_on: []
-
-  validate_hand_extraction:
     enabled: true
     depends_on: []
 
@@ -54,22 +40,9 @@ tasks:
       force_processing: false
     depends_on: [track_stickers]
 
-  generate_3d_hand_motion:
-    enabled: true
-    options:
-      force_processing: false
-    depends_on: [validate_hand_extraction, generate_xyz_stickers]
-
-  compute_somatosensory_characteristics:
-    enabled: true
-    options:
-      force_processing: true
-      monitor: false
-    depends_on: [validate_forearm_extraction, generate_3d_hand_motion]
-
   # ---------------------------------------------------------------------------
-  # STAGE 4: Trial Definition & Analysis
-  # Grouped: Trial ID generation followed by specific trial analytics.
+  # STAGE 3: Trial Definition & Analysis
+  # Grouped: Trial ID generation and metadata synthesis. Depends on initial tracking.
   # ---------------------------------------------------------------------------
   define_trial_id:
     enabled: true
@@ -83,10 +56,34 @@ tasks:
       force_processing: false
     depends_on: [define_trial_id]
 
+  # ---------------------------------------------------------------------------
+  # STAGE 4: Feature Extraction
+  # Hands, touch characteristic analysis, and derived 3D motion.
+  # ---------------------------------------------------------------------------
+  generate_3d_hand_motion:
+    enabled: true
+    options:
+      force_processing: true
+    # Requires base tracking (stickers XYZ) and trial context (trial ID)
+    depends_on: [generate_xyz_stickers, define_trial_id]
+
+  validate_hand_extraction:
+    enabled: true
+    depends_on: [generate_3d_hand_motion]
+
+  compute_somatosensory_characteristics:
+    enabled: false
+    options:
+      force_processing: true
+      monitor: false
+    # Requires forearm validation and 3D hand data
+    depends_on: [validate_forearm_extraction, generate_3d_hand_motion]
+
   find_single_touches:
     enabled: true
     options:
       force_processing: false
+    # Requires 3D motion, trial context, and stimuli metadata
     depends_on: [generate_3d_hand_motion, define_trial_id, generate_stimuli_metadata]
 
   # ---------------------------------------------------------------------------
