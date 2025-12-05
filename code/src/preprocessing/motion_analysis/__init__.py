@@ -12,7 +12,12 @@ from .hand_tracking.models.hand_motion import HandMotion
 from .hand_tracking.models.hand_metadata import HandMetadataManager
 from .hand_tracking.data_access.hand_metadata_filehandler import HandMetadataFileHandler
 from .hand_tracking.gui.hand_model_selector import HandModelSelectorGUI
+
+
 from .hand_tracking.hamer_liu_client.hamer_client_api import HamerClientAPI
+from .hand_tracking.gui.handmeshes_selection_gui import HamerCheckupSelector
+from .hand_tracking.models.hand_data_manager import MeshSequenceLoader
+
 
 from .tactile_quantification.core.objects_interaction_controller import ObjectsInteractionController
 from .tactile_quantification.gui.objects_interaction_visualizer import ObjectsInteractionVisualizer

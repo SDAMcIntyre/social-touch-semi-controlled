@@ -16,7 +16,8 @@ from _3_preprocessing._1_sticker_tracking import (
 )
 
 from _3_preprocessing._2_hand_tracking import (
-    select_hand_model_characteristics
+    assign_stickers_location,
+    curate_hamer_hand_models
 )
 
 from _3_preprocessing._5_led_tracking import (
@@ -45,7 +46,7 @@ def prepare_led_tracking(
 
 
 @flow(name="Manual: Prepare Hand Model")
-def prepare_hand_model(
+def assign_stickers_location_flow(
     rgb_video_path: Path,
     hand_models_dir: Path,
     objects_to_track: list[str],
@@ -58,7 +59,7 @@ def prepare_hand_model(
     name_baseline = rgb_video_path.stem + "_handmodel"
     metadata_path = output_dir / (name_baseline + "_metadata.json")
 
-    select_hand_model_characteristics(
+    assign_stickers_location(
         rgb_video_path,
         hand_models_dir,
         objects_to_track,
@@ -157,6 +158,47 @@ def define_trial_chunks_flow(
     )
     return True
 
+@flow(name="Manual: Curate Hamer Models")
+def run_curate_hamer_hand_models(
+    rgb_video_path: Path,
+    kinematics_dir: Path,
+    temporal_dir: Path,
+    *,
+    force_processing: bool = False
+) -> Path:
+    """
+    Launch the GUI to curate/validate Hamer hand tracking models.
+    """
+    print(f"[{rgb_video_path.name}] Curating Hamer hand models...")
+    name_baseline = rgb_video_path.stem
+    
+    # Define paths based on naming conventions
+    data_path = kinematics_dir / (name_baseline + "_handmodel_tracked_hands.pkl")
+    csv_path = temporal_dir / (name_baseline + "_trial-chunks.csv")
+
+    output_file_path = kinematics_dir / (name_baseline + "_handmodel_tracked_hands_curated.pkl")
+    output_success_path = Path(str(output_file_path) + ".SUCCESS")
+    
+    # Verify Prerequisites
+    if not data_path.exists():
+        print(f"⚠️ Warning: Input tracking data not found: {data_path}")
+        print("   -> Ensure automatic Hamer tracking has run before this step.")
+        return False
+
+    if not csv_path.exists():
+        print(f"⚠️ Warning: Trial chunks not found: {csv_path}")
+        return False
+
+    curate_hamer_hand_models(
+        video_path=rgb_video_path,
+        data_path=data_path,
+        csv_path=csv_path,
+        output_file_path=output_file_path,
+        output_success_path=output_success_path,
+        force_processing=force_processing
+    )
+    return output_file_path
+
 @flow(name="Manual: Review Single Touches")
 def review_single_touches_flow(
     rgb_video_path: Path,
@@ -222,17 +264,17 @@ def run_single_session_pipeline(
             dag_handler.mark_completed('prepare_led_tracking')
 
         # 2. Hand Model
-        if dag_handler.can_run('prepare_hand_model'):
-            print(f"[{block_name}] ==> Running task: prepare_hand_model")
-            force = dag_handler.get_task_options('prepare_hand_model').get('force_processing', False)
-            prepare_hand_model(
+        if dag_handler.can_run('assign_stickers_location'):
+            print(f"[{block_name}] ==> Running task: assign_stickers_location")
+            force = dag_handler.get_task_options('assign_stickers_location').get('force_processing', False)
+            assign_stickers_location_flow(
                 rgb_video_path=rgb_video_path,
                 hand_models_dir=config.hand_models_dir,
                 objects_to_track=config.objects_to_track,
                 output_dir= kin_dir,
                 force_processing=force
             )
-            dag_handler.mark_completed('prepare_hand_model')
+            dag_handler.mark_completed('assign_stickers_location')
 
         # 3. Review Stickers (ROI)
         if dag_handler.can_run('review_2d_stickers'):
@@ -280,7 +322,19 @@ def run_single_session_pipeline(
             )
             dag_handler.mark_completed('define_trial_chunks')
 
-        # 7. Review Single Touches
+        # 7. Curate Hamer Models (NEW)
+        if dag_handler.can_run('curate_hamer_hand_models'):
+            print(f"[{block_name}] ==> Running task: curate_hamer_hand_models")
+            force = dag_handler.get_task_options('curate_hamer_hand_models').get('force_processing', False)
+            run_curate_hamer_hand_models(
+                rgb_video_path=rgb_video_path,
+                kinematics_dir=kin_dir,
+                temporal_dir=temp_seg_dir,
+                force_processing=force
+            )
+            dag_handler.mark_completed('curate_hamer_hand_models')
+
+        # 8. Review Single Touches
         if dag_handler.can_run('review_single_touches'):
             print(f"[{block_name}] ==> Running task: review_single_touches")
             force = dag_handler.get_task_options('review_single_touches').get('force_processing', False)

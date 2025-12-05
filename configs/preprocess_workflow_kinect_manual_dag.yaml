@@ -21,9 +21,9 @@ tasks:
     options:
       force_processing: false
 
-  prepare_hand_model:
+  assign_stickers_location:
     enabled: true
-    description: "Manually select the hand and 3D hand model."
+    description: "Manually select the position of the sticks on an arbitrary standard 3d model of hand."
     depends_on: []
     options:
       force_processing: false
@@ -54,6 +54,13 @@ tasks:
     enabled: true
     description: "Define the trial chunks."
     depends_on: [review_handstickers_color_threshold]
+    options:
+      force_processing: false
+
+  curate_hamer_hand_models:
+    enabled: true
+    description: "Validate and curate Hamer hand model tracking using GUI."
+    depends_on: [define_trial_chunks]
     options:
       force_processing: false
 
