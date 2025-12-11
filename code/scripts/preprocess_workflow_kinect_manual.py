@@ -17,6 +17,7 @@ from _3_preprocessing._1_sticker_tracking import (
 
 from _3_preprocessing._2_hand_tracking import (
     assign_stickers_location,
+    define_hand_mask,
     curate_hamer_hand_models
 )
 
@@ -46,7 +47,7 @@ def prepare_led_tracking(
 
 
 @flow(name="Manual: Prepare Hand Model")
-def assign_stickers_location_flow(
+def assign_hand_model_metadata_flow(
     rgb_video_path: Path,
     hand_models_dir: Path,
     objects_to_track: list[str],
@@ -57,15 +58,23 @@ def assign_stickers_location_flow(
     """Manually define landmarks for the 3D hand model."""
     print(f"[{output_dir.name}] Preparing hand tracking session...")
     name_baseline = rgb_video_path.stem + "_handmodel"
-    metadata_path = output_dir / (name_baseline + "_metadata.json")
-
+    stickers_loc_metadata_path = output_dir / (name_baseline + "_stickers_location.json")
     assign_stickers_location(
         rgb_video_path,
         hand_models_dir,
         objects_to_track,
+        stickers_loc_metadata_path,
+        force_processing=force_processing
+    )
+    
+    metadata_path = output_dir / (name_baseline + "_metadata.json")
+    define_hand_mask(
+        stickers_loc_metadata_path,
+        hand_models_dir,
         metadata_path,
         force_processing=force_processing
     )
+    
     return metadata_path
 
 @flow(name="Manual: Review Stickers")
@@ -264,17 +273,17 @@ def run_single_session_pipeline(
             dag_handler.mark_completed('prepare_led_tracking')
 
         # 2. Hand Model
-        if dag_handler.can_run('assign_stickers_location'):
-            print(f"[{block_name}] ==> Running task: assign_stickers_location")
-            force = dag_handler.get_task_options('assign_stickers_location').get('force_processing', False)
-            assign_stickers_location_flow(
+        if dag_handler.can_run('assign_hand_model_metadata'):
+            print(f"[{block_name}] ==> Running task: assign_hand_model_metadata")
+            force = dag_handler.get_task_options('assign_hand_model_metadata').get('force_processing', False)
+            assign_hand_model_metadata_flow(
                 rgb_video_path=rgb_video_path,
                 hand_models_dir=config.hand_models_dir,
                 objects_to_track=config.objects_to_track,
                 output_dir= kin_dir,
                 force_processing=force
             )
-            dag_handler.mark_completed('assign_stickers_location')
+            dag_handler.mark_completed('assign_hand_model_metadata')
 
         # 3. Review Stickers (ROI)
         if dag_handler.can_run('review_2d_stickers'):
