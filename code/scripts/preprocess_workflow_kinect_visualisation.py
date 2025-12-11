@@ -87,8 +87,7 @@ def view_xyz_stickers(
         print("Forearm data invalid.")
         return False
     
-    name = rgb_video_path.stem.replace('_roi_tracking', '_handstickers_xyz_tracked.csv')
-    xyz_csv_path = sticker_dir / name
+    xyz_csv_path = sticker_dir / (rgb_video_path.stem + '_handstickers_xyz_tracked.csv')
     
     view_xyz_stickers_on_depth_data(
         xyz_csv_path, 
