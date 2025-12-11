@@ -21,7 +21,7 @@ tasks:
     options:
       force_processing: false
 
-  assign_stickers_location:
+  assign_hand_model_metadata:
     enabled: true
     description: "Manually select the position of the sticks on an arbitrary standard 3d model of hand."
     depends_on: []
@@ -33,7 +33,7 @@ tasks:
     description: "Manually define/review the tracking ROI for stickers on the hand."
     depends_on: []
     options:
-      force_processing: false
+      force_processing: true
 
   # PHASE 2: REFINEMENT
   prepare_stickers_colorspace:
