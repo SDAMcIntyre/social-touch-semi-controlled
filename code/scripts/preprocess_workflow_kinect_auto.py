@@ -170,7 +170,7 @@ def track_stickers(rgb_video_path: Path, output_dir: Path, *, force_processing: 
         output_csv_path=adj_ellipses_path,
         force_processing=force_processing
     )
-    
+
     final_csv_path = output_dir / (name_baseline + "_summary_2d_coordinates.csv")
     consolidate_2d_tracking_data(
         roi_unified_csv_path,
@@ -226,7 +226,7 @@ def generate_3d_hand_in_motion_flow(rgb_video_path: Path, trial_id_path: Path, s
     
     force_processing = True
     
-    generate_hand_in_motion(
+    generate_3d_hand_in_motion(
         stickers_xyz_path, 
         hands_curated_path, 
         metadata_path, 
