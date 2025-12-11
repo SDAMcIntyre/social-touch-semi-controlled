@@ -5,7 +5,6 @@ related to 3D scenes, point clouds, and video data.
 
 # --- Data Access Layer ---
 # For handling and managing data sources like point clouds, videos, and Kinect captures.
-from .data_access.glb_data_handler import GLBDataHandler
 from .data_access.kinect_mkv_manager import KinectFrame, KinectMKV
 from .data_access.kinect_pointcloud_wrapper import KinectPointCloudView
 from .data_access.pc_data_handler import PointCloudDataHandler

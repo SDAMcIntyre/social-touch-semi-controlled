@@ -118,12 +118,8 @@ def view_somatosensory_assessement(
         print("Forearm data invalid.")
         return False
     
-    name_baseline = rgb_video_path.stem.replace('_roi_tracking', '')
-    xyz_csv_path = sticker_dir / (name_baseline + "_handstickers_xyz_tracked.csv")
-
-    name_baseline = rgb_video_path.stem + "_handmodel"
-    # UPDATED: Path now resolves to kinematics_analysis directory
-    hand_motion_glb_path = kinematics_dir / (name_baseline + "_motion.glb")
+    xyz_csv_path = sticker_dir / (rgb_video_path.stem + "_handstickers_xyz_tracked.csv")
+    hand_motion_path = kinematics_dir / (rgb_video_path.stem + "_handmodel_motion.npz")
     
     view_somatosensory_3d_scene(
         xyz_csv_path, 
@@ -131,7 +127,7 @@ def view_somatosensory_assessement(
         forearm_pointcloud_dir, 
         forearm_metadata_path, 
         rgb_video_path.name,
-        hand_motion_glb_path
+        hand_motion_path
     )
     return True
 
