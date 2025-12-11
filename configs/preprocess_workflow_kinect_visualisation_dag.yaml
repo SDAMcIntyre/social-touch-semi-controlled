@@ -15,27 +15,27 @@ parameters:
 tasks:
   # PHASE 3: VISUALIZATION & VERIFICATION
   view_ellipse_tracking:
-    enabled: false
+    enabled: False
     description: "Manually view the ellipses fit of the stickers on the hand."
     depends_on: []
 
   view_ellipse_tracking_adjusted:
-    enabled: false
+    enabled: False
     description: "Manually view the adjusted ellipses fit."
     depends_on: []
 
   view_consolidated_2d_tracking_data:
-    enabled: false
+    enabled: False
     description: "Manually view the XY estimation of the stickers on the hand."
     depends_on: []
 
   view_xyz_stickers:
-    enabled: false
+    enabled: True
     description: "Manually view the XYZ estimation of the stickers on the hand."
     depends_on: []
 
   # PHASE 4: COMPLEX ASSESSMENTS
   view_somatosensory_assessement:
-    enabled: true
+    enabled: False
     description: "Manually view the somatosensory assessment results."
     depends_on: []
