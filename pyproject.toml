@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "semi-controlled"
-version = "2.0.0"
+version = "2.0.1"
 authors = [
   { name="Basil Duvernoy", email="basil.duvernoy@liu.se" },
 ]
@@ -17,22 +17,21 @@ classifiers = [
     "Operating System :: OS Independent",
     "Topic :: Scientific/Engineering",
 ]
-# Add your project's dependencies here
+# Dependencies updated to include pygltflib
 dependencies = [
     "numpy",
     "pandas",
-    "scipy"
+    "scipy",
+    "pygltflib>=1.16.0"
 ]
 
 [project.urls]
 Homepage = "https://github.com/SDAMcIntyre/social-touch-semi-controlled"
 
-# --- Key Section for Package Discovery ---
 [tool.setuptools]
-# This line is crucial. It tells setuptools that the packages are not in the root,
-# but inside the 'src' directory.
-package-dir = {"" = "src"}
+# Map the root package to the nested directory structure
+package-dir = {"" = "code/src"}
 
 [tool.setuptools.packages.find]
-# This tells setuptools to automatically find all packages under the specified directory.
-where = ["src"]
+# Instruct setuptools to scan the nested src folder
+where = ["code/src"]
