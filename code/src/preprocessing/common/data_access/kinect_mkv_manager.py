@@ -1,7 +1,7 @@
 import csv
 import logging
 from pathlib import Path
-from typing import Iterator, Dict
+from typing import Iterator, Dict, Literal
 
 import cv2
 import numpy as np
@@ -17,19 +17,8 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 class KinectFrame:
     """
     A container for a single frame's data with lazy-loading capabilities.
-
-    The actual decoding and transformation of image data (e.g., color, depth)
-    is deferred until the corresponding attribute is accessed for the first time.
-    This optimizes performance when only a subset of the data is needed per frame.
     """
     def __init__(self, capture: PyK4ACapture, color_format: ImageFormat):
-        """
-        Initializes the frame with raw capture data.
-
-        Args:
-            capture: The raw PyK4ACapture object from the playback.
-            color_format: The color format needed for potential decoding.
-        """
         self._capture = capture
         self._color_format = color_format
 
@@ -73,12 +62,6 @@ class KinectFrame:
         return self._transformed_depth_point_cloud
 
     def generate_o3d_point_cloud(self) -> o3d.geometry.PointCloud | None:
-        """
-        Generates an Open3D PointCloud object from the frame data.
-
-        This method will trigger the lazy loading of `transformed_depth_point_cloud`
-        and `color` properties if they haven't been accessed yet.
-        """
         if self.transformed_depth_point_cloud is None or self.color is None:
             return None
         
@@ -96,44 +79,24 @@ class KinectFrame:
         return pcd
 
     def convert_xy_to_xyz(self, xy: tuple[int, int]) -> np.ndarray:
-        """
-        Looks up the 3D coordinate (in mm) for a given 2D pixel coordinate.
-
-        Args:
-            xy (tuple): The (x, y) pixel coordinate.
-
-        Returns:
-            np.ndarray: The [X, Y, Z] coordinate in millimeters, or [0,0,0] if invalid.
-        """
         x, y = xy
         point_cloud_map = self.transformed_depth_point_cloud
         if point_cloud_map is not None and 0 <= y < point_cloud_map.shape[0] and 0 <= x < point_cloud_map.shape[1]:
             xyz_point = point_cloud_map[y, x]
-            # Check for invalid points (often represented as NaNs or zeros)
             if np.any(np.isnan(xyz_point)) or np.all(xyz_point == 0):
                     return np.array([0.0, 0.0, 0.0], dtype=np.float32)
             return xyz_point
         return np.array([0.0, 0.0, 0.0], dtype=np.float32)
 
     def get_depth_for_viewing(self) -> np.ndarray | None:
-        """
-        Converts the raw depth map (in mm) to a visualizable 8-bit RGB image.
-        Clips depth values at 5 meters for better contrast.
-        """
         depth_map = self.depth
         if depth_map is None:
             return None
-        
-        # Clip depth to a practical range (e.g., 0 to 5000mm) for visualization
         depth_clipped = np.clip(depth_map, 0, 5000)
-        
-        # Normalize the clipped depth map to the 0-255 range
         norm_depth = cv2.normalize(depth_clipped, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
-        
-        # Apply a colormap for better visual distinction
         return cv2.applyColorMap(norm_depth, cv2.COLORMAP_JET)
 
-# --- Internal Implementation (The "Complex" Subsystem) ---
+# --- Internal Implementation ---
 
 class _KinectPlayback:
     """[Internal] A low-level context manager for a PyK4APlayback resource."""
@@ -160,8 +123,9 @@ class _KinectPlayback:
 
 class _KinectReader:
     """[Internal] Handles list-like reading and navigation."""
-    def __init__(self, playback: PyK4APlayback):
+    def __init__(self, playback: PyK4APlayback, seek_strategy: Literal['timestamp', 'sequential'] = 'timestamp'):
         self._playback = playback
+        self._seek_strategy = seek_strategy
         fps_map = {FPS.FPS_5: 5, FPS.FPS_15: 15, FPS.FPS_30: 30}
         self.fps = fps_map.get(self._playback.configuration['camera_fps'], 30)
         self.total_frames = int((self._playback.length / 1_000_000) * self.fps)
@@ -169,73 +133,125 @@ class _KinectReader:
         self._current_frame_index = -1
 
     def _get_frame_from_capture(self, capture: PyK4ACapture) -> KinectFrame | None:
-        """Creates a KinectFrame wrapper around the raw capture data."""
         if capture is None:
             return None
-        # The new KinectFrame handles the decoding/extraction internally on demand.
         return KinectFrame(capture, self._color_format)
 
     def seek(self, frame_index: int):
+        """
+        Moves the internal pointer to the position *before* the requested frame_index.
+        """
         if not (0 <= frame_index < self.total_frames):
-            raise IndexError(f"Frame index {frame_index} out of bounds.")
-        timestamp_usec = int(frame_index * (1_000_000 / self.fps))
-        self._playback.seek(timestamp_usec)
-        self._current_frame_index = frame_index - 1
+            raise IndexError(f"Frame index {frame_index} out of bounds (Total: {self.total_frames}).")
+
+        if self._seek_strategy == 'timestamp':
+            timestamp_usec = int(frame_index * (1_000_000 / self.fps))
+            self._playback.seek(timestamp_usec)
+            # We approximate the index; read_once will confirm logic by fetching the next frame
+            self._current_frame_index = frame_index - 1
+            
+        elif self._seek_strategy == 'sequential':
+            # Check if requested frame is behind current
+            if frame_index <= self._current_frame_index:
+                dist_back = self._current_frame_index - frame_index
+                dist_from_start = frame_index
+                
+                # OPTIMIZATION: Use get_previous_capture if target is closer to current than to 0.
+                if dist_back < dist_from_start:
+                    # Backward traversal:
+                    # We need to decrement until we are just before frame_index.
+                    # Since read_once() increments current_index, we need the state 
+                    # where current_index == frame_index - 1.
+                    while self._current_frame_index >= frame_index:
+                        try:
+                            self._playback.get_previous_capture()
+                            self._current_frame_index -= 1
+                        except EOFError:
+                            # Fallback if reverse seek hits limit unexpectedly
+                            self._playback.seek(0)
+                            self._current_frame_index = -1
+                            break
+                else:
+                    # Standard reset to beginning
+                    self._playback.seek(0)
+                    self._current_frame_index = -1
+            
+            # Fast forward (if necessary) by consuming captures until we are just before the target
+            while self._current_frame_index < frame_index - 1:
+                try:
+                    self._playback.get_next_capture()
+                    self._current_frame_index += 1
+                except EOFError:
+                    raise IndexError(f"Seek failed: End of stream reached at index {self._current_frame_index}")
+
+    def read_once(self) -> KinectFrame | None:
+        """
+        Reads exactly one capture from the stream.
+        Returns None if the capture is empty/invalid but stream continues.
+        Raises EOFError if stream ends.
+        """
+        # Let PyK4A raise EOFError if we hit the end
+        capture = self._playback.get_next_capture()
+        self._current_frame_index += 1
+        
+        frame_data = self._get_frame_from_capture(capture)
+        # Verify frame has data
+        if frame_data and (frame_data.color is not None or frame_data.depth is not None):
+            return frame_data
+        
+        return None
 
     def read(self) -> KinectFrame | None:
+        """
+        Reads the next *valid* frame, skipping empty captures.
+        """
         try:
             while True:
-                capture = self._playback.get_next_capture()
-                self._current_frame_index += 1
-                frame_data = self._get_frame_from_capture(capture)
-                if frame_data and (frame_data.color is not None or frame_data.depth is not None):
-                    return frame_data
+                # Requirement 1: Uses read_once
+                frame = self.read_once()
+                if frame is not None:
+                    return frame
         except EOFError:
             return None
-    
-    def read_once(self) -> KinectFrame | None:
+
+    def __getitem__(self, frame_index: int) -> KinectFrame:
+        # Requirement 2: Optimized getitem
+        # Only seek if we are NOT at the immediate predecessor
+        if frame_index != self._current_frame_index + 1:
+            self.seek(frame_index)
+        
         try:
-            capture = self._playback.get_next_capture()
-            self._current_frame_index += 1
-            frame_data = self._get_frame_from_capture(capture)
-            if frame_data and (frame_data.color is not None or frame_data.depth is not None):
-                return frame_data
+            frame = self.read_once()
+            if frame is None:
+                # We successfully grabbed a capture, but it was empty/invalid
+                raise ValueError(f"Frame at index {frame_index} contains no valid data.")
+            return frame
         except EOFError:
-            return None
-        return None
+            raise IndexError(f"Frame index {frame_index} is out of bounds (EOF).")
 
 # --- The Public Facade Class ---
 
 class KinectMKV:
     """
     A unified, high-level interface for interacting with Azure Kinect MKV recordings.
-
-    This class provides list-like access for interactive frame reading and
-    methods for batch analysis, acting as a simple entry point for all
-    related operations. Frame data is loaded lazily to improve performance.
-
-    Example:
-        with KinectMKV("path/to/video.mkv") as mkv:
-            print(f"Video has {len(mkv)} frames.")
-            
-            # Accessing '.depth' will only process the depth channel
-            first_frame_depth = mkv[0].depth
-            
-            # Accessing '.color' on the same frame will then process the color channel
-            first_frame_color = mkv[0].color
-
-            # generate_o3d_point_cloud will process the necessary channels
-            pcd = mkv[5].generate_o3d_point_cloud()
     """
-    def __init__(self, video_path: str | Path):
+    def __init__(self, video_path: str | Path, seek_strategy: Literal['timestamp', 'sequential'] = 'timestamp'):
+        """
+        Args:
+            video_path: Path to the MKV file.
+            seek_strategy: 'timestamp' (fast, default) or 'sequential' (slower, more accurate).
+                           Sequential mode resets to start if seeking backwards.
+        """
         self._playback_manager = _KinectPlayback(video_path)
         self._playback: PyK4APlayback | None = None
         self._reader: _KinectReader | None = None
+        self._seek_strategy = seek_strategy
         
     def __enter__(self) -> 'KinectMKV':
         self._playback = self._playback_manager.open()
-        self._reader = _KinectReader(self._playback)
-        logging.info(f"Opened '{self._playback_manager.video_path}'. Frames: ~{len(self)}, FPS: {self._reader.fps}")
+        # Initialize reader with the configured strategy
+        self._reader = _KinectReader(self._playback, seek_strategy=self._seek_strategy)
+        logging.info(f"Opened '{self._playback_manager.video_path}'. Frames: ~{len(self)}, FPS: {self._reader.fps}, Mode: {self._seek_strategy}")
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -244,7 +260,6 @@ class KinectMKV:
     
     @property
     def length(self) -> int:
-        """Returns the recording length in microseconds."""
         if not self._playback:
             raise RuntimeError("MKV not opened. Use within a 'with' block.")
         return self._playback.length
@@ -256,11 +271,8 @@ class KinectMKV:
 
     def __getitem__(self, frame_index: int) -> KinectFrame:
         if not self._reader: raise RuntimeError("MKV not opened. Use within a 'with' block.")
-        self._reader.seek(frame_index)
-        frame = self._reader.read_once()
-        if frame is None:
-              raise IndexError(f"Could not retrieve valid frame at index {frame_index}.")
-        return frame
+        # Requirement 2: Delegate to Reader's optimized getitem
+        return self._reader[frame_index]
         
     def __iter__(self) -> Iterator[KinectFrame]:
         if not self._reader: raise RuntimeError("MKV not opened. Use within a 'with' block.")
@@ -270,20 +282,15 @@ class KinectMKV:
 
     # --- High-Level Analysis Method ---
     def run_analysis_report(self, report_path: str | Path):
-        """
-        Analyzes the entire MKV for stream integrity and saves a CSV report.
-        """
         if not self._playback: raise RuntimeError("MKV not opened. Use within a 'with' block.")
         
         logging.info(f"Starting stream analysis for '{self._playback_manager.video_path}'...")
-        # Validator is created on-demand for this specific task
         validator = _KinectValidator(self._playback)
         report_generator = validator.analyze()
         self._save_report_to_csv(report_generator, report_path)
         logging.info(f"Analysis complete. Report saved to '{report_path}'.")
 
     def _save_report_to_csv(self, report_iterator: Iterator[Dict], output_path: str | Path):
-        """[Internal] Saves report data from an iterator to a CSV file."""
         try:
             first_item = next(report_iterator)
         except StopIteration:
@@ -304,7 +311,6 @@ class KinectMKV:
 class _KinectValidator:
     """[Internal] Analyzes an MKV file for stream integrity."""
     def __init__(self, playback: PyK4APlayback):
-        # Constants can be defined at module level or here
         CUSTOM_RESOLUTION_MAP = {
             ColorResolution.RES_720P: (1280, 720), ColorResolution.RES_1080P: (1920, 1080),
             ColorResolution.RES_1440P: (2560, 1440), ColorResolution.RES_1536P: (2048, 1536),
@@ -316,7 +322,7 @@ class _KinectValidator:
             DepthMode.PASSIVE_IR: (1024, 1024),
         }
         self._playback = playback
-        self._playback.seek(0) # Ensure analysis starts from the beginning
+        self._playback.seek(0)
         self._config = self._playback.configuration
         self.expected_color_shape = CUSTOM_RESOLUTION_MAP.get(self._config['color_resolution'], (0,0))
         self.expected_depth_shape = CUSTOM_DEPTH_MODE_MAP.get(self._config['depth_mode'], (0,0))[:2]
@@ -326,7 +332,7 @@ class _KinectValidator:
         while True:
             try:
                 capture = self._playback.get_next_capture()
-                if capture is None: continue # Skip empty captures if any
+                if capture is None: continue 
                 yield {
                     'frame_index': frame_index,
                     'has_rgb': self._validate_rgb(capture),
