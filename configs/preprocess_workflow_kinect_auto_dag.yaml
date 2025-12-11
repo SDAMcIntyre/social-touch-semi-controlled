@@ -60,31 +60,31 @@ tasks:
   # STAGE 4: Feature Extraction
   # Hands, touch characteristic analysis, and derived 3D motion.
   # ---------------------------------------------------------------------------
-  generate_3d_hand_motion:
+  generate_3d_hand_in_motion:
     enabled: true
     options:
-      force_processing: true
+      force_processing: false
     # Requires base tracking (stickers XYZ) and trial context (trial ID)
     depends_on: [generate_xyz_stickers, define_trial_id]
 
   validate_hand_extraction:
     enabled: true
-    depends_on: [generate_3d_hand_motion]
+    depends_on: [generate_3d_hand_in_motion]
 
   compute_somatosensory_characteristics:
-    enabled: false
+    enabled: true
     options:
       force_processing: true
-      monitor: false
+      monitor: true
     # Requires forearm validation and 3D hand data
-    depends_on: [validate_forearm_extraction, generate_3d_hand_motion]
+    depends_on: [validate_forearm_extraction, generate_3d_hand_in_motion]
 
   find_single_touches:
     enabled: true
     options:
       force_processing: false
     # Requires 3D motion, trial context, and stimuli metadata
-    depends_on: [generate_3d_hand_motion, define_trial_id, generate_stimuli_metadata]
+    depends_on: [generate_3d_hand_in_motion, define_trial_id, generate_stimuli_metadata]
 
   # ---------------------------------------------------------------------------
   # STAGE 5: Final Unification
