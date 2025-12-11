@@ -10,10 +10,10 @@ class HandMotionManager:
     Domain entity for 3D Hand Motion data.
 
     Roles:
-    1. Builder: Accumulates frames, calculates rigid alignment, and manages vertex history.
+    1. Builder: Accumulates frames, calculates alignment (Rigid or Scaled), and manages vertex history.
     2. Container: Stores motion data and allows indexed access to transformed meshes.
     3. Serializer: Handles Native NumPy (.npz) I/O for high-performance storage.
-    4. Debugger: Visualizes algorithmic alignment steps via Open3D.
+    4. Debugger: Visualizes algorithmic alignment steps via Open3D with mesh context.
     """
 
     def __init__(self, fps: float = 30.0):
@@ -26,6 +26,7 @@ class HandMotionManager:
         # Motion vectors
         self.translations: List[np.ndarray] = []  # [(3,), ...]
         self.rotations: List[np.ndarray] = []     # [(4,), ...] (x, y, z, w)
+        self.scales: List[float] = []             # [s, ...] Uniform scale factor
         self.timestamps: List[float] = []
         
         self.fps = fps
@@ -41,16 +42,25 @@ class HandMotionManager:
         target_sticker_coords: np.ndarray,
         sticker_vertex_indices: List[int],
         timestamp: float,
+        alignment_mode: str = "rigid_basis",
         debug: bool = False
     ) -> None:
         """
         Ingests a single frame of data:
         1. Stores mesh topology (if first frame).
-        2. Calculates rigid body transformation based on sticker alignment.
+        2. Calculates transformation based on sticker alignment using the selected strategy.
         3. Stores the deformed vertices and the calculated transform.
 
         Args:
-            debug (bool): If True, triggers a blocking GUI to visualize alignment steps.
+            mesh_vertices: (V, 3) array of source vertices.
+            mesh_faces: (F, 3) array of face indices.
+            target_sticker_coords: (K, 3) array of target points.
+            sticker_vertex_indices: List of K indices in mesh_vertices corresponding to stickers.
+            timestamp: float time in seconds.
+            alignment_mode: Strategy selector. 
+                            'rigid_basis' (default) - 3-point rigid alignment.
+                            'scaled_procrustes' - All-points least squares alignment with uniform scaling.
+            debug: If True, triggers a blocking GUI to visualize alignment steps.
         """ 
         # Store Topology
         if self.faces is None:
@@ -67,40 +77,64 @@ class HandMotionManager:
         # Calculate Alignment
         source_points = clean_verts[sticker_vertex_indices]
         
+        # Handle Missing Tracking
+        trans = np.zeros(3, dtype=np.float32)
+        rot_xyzw = np.array([0, 0, 0, 1], dtype=np.float32)
+        scale = 1.0
+
         if np.any(np.isnan(target_sticker_coords)):
-            # Handling missing tracking data: hold last known transform or identity
             if len(self.translations) > 0:
-                self.translations.append(self.translations[-1])
-                self.rotations.append(self.rotations[-1])
-            else:
-                self.translations.append(np.zeros(3, dtype=np.float32))
-                self.rotations.append(np.array([0, 0, 0, 1], dtype=np.float32))
+                trans = self.translations[-1]
+                rot_xyzw = self.rotations[-1]
+                scale = self.scales[-1]
+            # Else defaults remain
         else:
-            trans, rot_xyzw = self._calculate_alignment(source_points, target_sticker_coords, debug=debug)
-            self.translations.append(trans)
-            self.rotations.append(rot_xyzw)
+            # Dispatch Alignment Strategy
+            if alignment_mode == "scaled_procrustes":
+                trans, rot_xyzw, scale = self._calculate_alignment_procrustes(
+                    source_points, target_sticker_coords
+                )
+            else:
+                # Default to rigid basis
+                trans, rot_xyzw, scale = self._calculate_alignment_basis(
+                    source_points, target_sticker_coords
+                )
+
+        self.translations.append(trans)
+        self.rotations.append(rot_xyzw)
+        self.scales.append(scale)
+
+        if debug:
+            self._visualize_mesh_alignment(
+                source_verts=clean_verts,
+                target_points=target_sticker_coords,
+                anchor_indices=sticker_vertex_indices,
+                trans=trans,
+                rot_xyzw=rot_xyzw,
+                scale=scale,
+                mode_name=alignment_mode
+            )
 
     def save(self, output_path: str) -> None:
         """
         Serializes the internal state to a compressed NumPy archive (.npz).
-        This replaces the verbose GLB serialization.
         """
         if not self.vertices_sequence:
             raise ValueError("No data to save. Use process_frame first.")
         
         print(f"💾 Saving {len(self.vertices_sequence)} frames to {output_path}...")
         
-        # Convert lists to arrays for storage
-        # Optimization: Stack creates a contiguous memory block (Frames, Vertices, 3)
         vertices_arr = np.array(self.vertices_sequence, dtype=np.float32)
         trans_arr = np.array(self.translations, dtype=np.float32)
         rot_arr = np.array(self.rotations, dtype=np.float32)
+        scale_arr = np.array(self.scales, dtype=np.float32)
         time_arr = np.array(self.timestamps, dtype=np.float64)
         
         save_dict = {
             "vertices": vertices_arr,
             "translations": trans_arr,
             "rotations": rot_arr,
+            "scales": scale_arr,
             "timestamps": time_arr,
             "fps": self.fps
         }
@@ -108,7 +142,6 @@ class HandMotionManager:
         if self.faces is not None:
             save_dict["faces"] = self.faces.astype(np.uint32)
 
-        # compress=True significantly reduces file size for time-series vertex data
         np.savez_compressed(output_path, **save_dict)
         print(f"✅ Save complete.")
 
@@ -127,20 +160,23 @@ class HandMotionManager:
         
         try:
             with np.load(input_path) as data:
-                # Load topology
                 if "faces" in data:
                     self.faces = data["faces"]
                 else:
                     self.faces = None
 
-                # Load frame data
-                # Converting back to lists allows for further appending if the user desires
-                verts_packed = data["vertices"] # (T, V, 3)
+                verts_packed = data["vertices"]
                 self.vertices_sequence = [v for v in verts_packed]
                 
                 self.translations = [t for t in data["translations"]]
                 self.rotations = [r for r in data["rotations"]]
                 self.timestamps = data["timestamps"].tolist()
+                
+                # Load scales if present, else default to 1.0
+                if "scales" in data:
+                    self.scales = [s for s in data["scales"]]
+                else:
+                    self.scales = [1.0] * len(self.timestamps)
                 
                 if "fps" in data:
                     self.fps = float(data["fps"])
@@ -150,12 +186,13 @@ class HandMotionManager:
             n_times = len(self.timestamps)
             
             if n_verts != n_times:
-                print(f"⚠️  CRITICAL MISMATCH: {n_verts} mesh frames vs {n_times} timestamps.")
+                print(f"⚠️  CRITICAL MISMATCH: {n_verts} mesh vs {n_times} times.")
                 min_len = min(n_verts, n_times)
                 self.vertices_sequence = self.vertices_sequence[:min_len]
                 self.timestamps = self.timestamps[:min_len]
                 self.translations = self.translations[:min_len]
                 self.rotations = self.rotations[:min_len]
+                self.scales = self.scales[:min_len]
 
             print(f"✅ Successfully loaded {len(self.timestamps)} frames.")
 
@@ -175,12 +212,16 @@ class HandMotionManager:
         vertices = self.vertices_sequence[index]
         trans = np.array(self.translations[index])
         rot = np.array(self.rotations[index]) # x, y, z, w
+        scale = self.scales[index]
 
-        # Quaternions in trimesh/numpy are usually [w, x, y, z], 
-        # but common storage often uses [x, y, z, w].
-        # The original code rolled by 1 implying input was [x, y, z, w] 
-        # and trimesh expects [w, x, y, z].
-        matrix = trimesh.transformations.quaternion_matrix(np.roll(rot, 1))
+        # Construct Transform Matrix
+        # M = T * R * S
+        matrix = trimesh.transformations.quaternion_matrix(np.roll(rot, 1)) # to w, x, y, z
+        
+        # Inject Uniform Scale into the 3x3 rotation block
+        matrix[:3, :3] *= scale
+        
+        # Set Translation
         matrix[:3, 3] = trans
 
         mesh = o3d.geometry.TriangleMesh()
@@ -211,142 +252,289 @@ class HandMotionManager:
         y_axis = np.cross(z_axis, x_axis)
         return np.column_stack([x_axis, y_axis, z_axis])
 
-    def _calculate_alignment(self, source_points: np.ndarray, target_points: np.ndarray, debug: bool = False) -> Tuple[np.ndarray, np.ndarray]:
+    def _calculate_alignment_basis(self, source_points: np.ndarray, target_points: np.ndarray) -> Tuple[np.ndarray, np.ndarray, float]:
         """
-        Calculates the rigid transform to align source_points to target_points.
-        Includes optional debug visualization.
+        Original Strategy: Rigid alignment based on the first 3 points.
+        Returns: (Translation, Rotation_XYZW, Scale=1.0)
         """
         # 1. Basis Calculation
         source_basis = self._create_basis(*source_points[:3])
         target_basis = self._create_basis(*target_points[:3])
         
-        # 2. Rotation Calculation
+        # 2. Rotation
         rotation_mat = target_basis @ source_basis.T
         
-        # 3. Translation Calculation
+        # 3. Translation
         source_origin = source_points[0]
         target_origin = target_points[0]
         rotated_source_origin = rotation_mat @ source_origin
         translation_vec = target_origin - rotated_source_origin
         
-        # 4. Matrix Composition
+        # 4. Decompose to Quat
         transform_matrix = np.eye(4)
         transform_matrix[0:3, 0:3] = rotation_mat
         transform_matrix[0:3, 3] = translation_vec
         
-        # 5. Decomposition
         _, _, angles, trans, _ = trimesh.transformations.decompose_matrix(transform_matrix)
         quat_wxyz = trimesh.transformations.quaternion_from_euler(*angles)
         
-        if debug:
-            self._visualize_debug_alignment(
-                source_points, 
-                target_points, 
-                source_basis, 
-                target_basis, 
-                rotation_mat, 
-                translation_vec,
-                source_origin,
-                target_origin
-            )
+        return trans.astype(np.float32), np.roll(quat_wxyz, -1).astype(np.float32), 1.0
 
-        # Return translation and Quaternion (x, y, z, w)
-        return trans.astype(np.float32), np.roll(quat_wxyz, -1).astype(np.float32)
+    def _calculate_alignment_procrustes(self, source_points: np.ndarray, target_points: np.ndarray) -> Tuple[np.ndarray, np.ndarray, float]:
+        """
+        New Strategy: Scaled Procrustes (Least Squares) alignment using ALL points.
+        Constraint: Keeps source_origin (Index 0) mapped to target_origin (Index 0).
+        Returns: (Translation, Rotation_XYZW, Scale)
+        """
+        # 1. Shift to Origin (Fix Point 0)
+        s0 = source_points[0]
+        t0 = target_points[0]
+        
+        P = source_points - s0  # Source shifted
+        Q = target_points - t0  # Target shifted
+
+        # 2. Compute Rotation (Kabsch / SVD)
+        # H = Covariance matrix
+        H = P.T @ Q
+        U, S, Vt = np.linalg.svd(H)
+        
+        # R = V @ U.T
+        R = Vt.T @ U.T
+        
+        # Handle Reflection case (det < 0)
+        if np.linalg.det(R) < 0:
+            Vt[-1, :] *= -1
+            R = Vt.T @ U.T
+
+        # 3. Compute Uniform Scale
+        P_rotated = P @ R.T # (N, 3)
+        
+        numerator = np.sum(P_rotated * Q)
+        denominator = np.sum(P * P)
+        
+        scale = numerator / (denominator + 1e-8)
+        
+        # 4. Compute Translation
+        # t = T0 - s * R * S0
+        translation_vec = t0 - (scale * (R @ s0))
+
+        # 5. Convert to format
+        transform_matrix = np.eye(4)
+        transform_matrix[0:3, 0:3] = R
+        transform_matrix[0:3, 3] = translation_vec
+        
+        _, _, angles, _, _ = trimesh.transformations.decompose_matrix(transform_matrix)
+        quat_wxyz = trimesh.transformations.quaternion_from_euler(*angles)
+            
+        return translation_vec.astype(np.float32), np.roll(quat_wxyz, -1).astype(np.float32), float(scale)
     
-    def _visualize_debug_alignment(
+    def _visualize_mesh_alignment(
         self,
-        source: np.ndarray,
-        target: np.ndarray,
-        source_basis: np.ndarray,
-        target_basis: np.ndarray,
-        rotation_mat: np.ndarray,
-        translation_vec: np.ndarray,
-        source_origin: np.ndarray,
-        target_origin: np.ndarray
+        source_verts: np.ndarray,
+        target_points: np.ndarray,
+        anchor_indices: List[int],
+        trans: np.ndarray,
+        rot_xyzw: np.ndarray,
+        scale: float,
+        mode_name: str
     ) -> None:
         """
-        Helper method to create a blocking GUI window showing alignment steps.
-        Visualizes vertices connected as closed-loop polygons (triangles).
+        Advanced Visual Debugger using Mesh context.
+        Optimized for White Background visualization.
+
+        Architectural Changes:
+        1. Source/Target polygons rendered as volumetric cylinders for thickness control.
+        2. Displacement vectors removed.
+        3. Source Anchor spheres scaled 10x.
+        4. Result Anchor spheres and connectivity added (Red).
         """
-        # Define Legend Schema
-        legend_map = {
-            "Source": ([1, 0, 0], "Red"),
-            "Target": ([0, 1, 0], "Green"),
-            "Rotated": ([1, 1, 0], "Yellow"),
-            "Final": ([0, 0, 1], "Blue")
-        }
-
-        print("\n" + "="*40)
-        print("🛠️  DEBUG: ALIGNMENT VISUALIZATION")
-        print("="*40)
-        print(f"{'GROUP':<15} | {'COLOR':<10}")
-        print("-" * 28)
-        for name, (_, color_name) in legend_map.items():
-            print(f"{name:<15} | {color_name:<10}")
-        print("="*40 + "\n")
-
+        print(f"\n⚡ DEBUG: Visualizing '{mode_name}' | Scale: {scale:.3f}")
+        
         geoms = []
 
-        def _create_visual_group(points_array: np.ndarray, color: list) -> list:
-            """Factory to create both PointCloud and connecting LineSet (Triangle)."""
-            group_geoms = []
+        # --- Helper: Cylindrical Line Generation ---
+        # Generates a 3D cylinder to simulate a "thick line" between two points.
+        # Uses Trimesh for robust alignment math, then converts to Open3D.
+        def _create_thick_line(p1: np.ndarray, p2: np.ndarray, radius: float, color: list) -> o3d.geometry.TriangleMesh:
+            # 1. Validation: Check for degenerate segments (zero length)
+            vec = p2 - p1
+            length = np.linalg.norm(vec)
+            if length < 1e-5: # Skip if points are too close
+                return None
             
-            # 1. Point Cloud
-            pcd = o3d.geometry.PointCloud()
-            pcd.points = o3d.utility.Vector3dVector(points_array)
-            pcd.paint_uniform_color(color)
-            group_geoms.append(pcd)
-            
-            # 2. LineSet (Connect points to form a loop/triangle)
-            num_points = len(points_array)
-            if num_points >= 2:
-                # Create edges: (0,1), (1,2), ..., (N-1, 0)
-                lines_indices = [[i, (i + 1) % num_points] for i in range(num_points)]
+            try:
+                # 2. Generation: Create cylinder via trimesh
+                # segment=[p1, p2] creates a cylinder running from p1 to p2
+                t_cyl = trimesh.creation.cylinder(radius=radius, segment=[p1, p2])
                 
-                line_set = o3d.geometry.LineSet()
-                line_set.points = o3d.utility.Vector3dVector(points_array)
-                line_set.lines = o3d.utility.Vector2iVector(lines_indices)
-                line_set.paint_uniform_color(color)
-                group_geoms.append(line_set)
+                # 3. Conversion: Trimesh -> Open3D
+                o_cyl = o3d.geometry.TriangleMesh()
+                o_cyl.vertices = o3d.utility.Vector3dVector(t_cyl.vertices)
+                o_cyl.triangles = o3d.utility.Vector3iVector(t_cyl.faces)
+                o_cyl.compute_vertex_normals()
+                o_cyl.paint_uniform_color(color)
+                return o_cyl
                 
-            return group_geoms
+            except (ValueError, np.linalg.LinAlgError) as e:
+                # Swallow geometry errors to prevent debugger crash
+                # Common cause: Alignment matrix SVD failure on edge cases
+                return None
 
-        # 1. Source Points (RED)
-        geoms.extend(_create_visual_group(source, legend_map["Source"][0]))
+        # --- 1. Construct Transformation Matrix ---
+        # Assuming input rot_xyzw is [x, y, z, w], rolling 1 gives [w, x, y, z]
+        matrix = trimesh.transformations.quaternion_matrix(np.roll(rot_xyzw, 1)) 
+        matrix[:3, :3] *= scale
+        matrix[:3, 3] = trans
 
-        # 2. Target Points (GREEN)
-        geoms.extend(_create_visual_group(target, legend_map["Target"][0]))
+        # --- 2. Mesh Visualization (Wireframes) ---
+        # A. Source Mesh (Initial State)
+        src_mesh = o3d.geometry.TriangleMesh()
+        src_mesh.vertices = o3d.utility.Vector3dVector(source_verts.astype(np.float64))
+        if self.faces is not None:
+            src_mesh.triangles = o3d.utility.Vector3iVector(self.faces.astype(np.int32))
+        
+        # Wireframe: Dark Charcoal for visibility on White
+        src_lines = o3d.geometry.LineSet.create_from_triangle_mesh(src_mesh)
+        src_lines.paint_uniform_color([0.2, 0.2, 0.2]) 
+        geoms.append(src_lines)
 
-        # 3. Rotated Intermediate Source (YELLOW)
-        # Math: p_rot = R @ p
-        rotated_source_pts = (rotation_mat @ source.T).T
-        geoms.extend(_create_visual_group(rotated_source_pts, legend_map["Rotated"][0]))
+        # B. Transformed Mesh (Result State)
+        res_mesh = copy.deepcopy(src_mesh)
+        res_mesh.transform(matrix)
+        
+        # Wireframe: Deep Blue
+        res_lines = o3d.geometry.LineSet.create_from_triangle_mesh(res_mesh)
+        res_lines.paint_uniform_color([0.0, 0.3, 0.8]) 
+        geoms.append(res_lines)
 
-        # 4. Final Aligned Source (BLUE)
-        # Math: Final point = (R @ p) + T
-        final_source_pts = rotated_source_pts + translation_vec
-        geoms.extend(_create_visual_group(final_source_pts, legend_map["Final"][0]))
+        # Define visual properties for "Thick Lines"
+        # Cylinder radius: 0.02 * scale provides a distinct volumetric look compared to wireframe
+        thick_line_radius = 0.5 * scale 
 
-        # 5. Basis Visualizations (Coordinate Frames)
-        def create_basis_vis(origin, basis_mat, scale=0.05):
-            # Create a coordinate frame representing the basis at the specific origin
-            frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=scale, origin=[0, 0, 0])
-            tf = np.eye(4)
-            tf[:3, :3] = basis_mat
-            tf[:3, 3] = origin
-            frame.transform(tf)
-            return frame
+        # --- 3. Result Anchors Analysis (New) ---
+        # Extract transformed vertices to visualize anchors on the result mesh
+        res_verts = np.asarray(res_mesh.vertices)
+        result_anchors = res_verts[anchor_indices]
 
-        geoms.append(create_basis_vis(source_origin, source_basis, scale=0.1)) # Source Basis
-        geoms.append(create_basis_vis(target_origin, target_basis, scale=0.1)) # Target Basis
+        # A. Highlight Result Anchors (Red Spheres)
+        for ra in result_anchors:
+            sphere = o3d.geometry.TriangleMesh.create_sphere(radius=1.0 * scale)
+            sphere.paint_uniform_color([0.8, 0.0, 0.0]) # Deep Red
+            sphere.compute_vertex_normals()
+            sphere.translate(ra)
+            geoms.append(sphere)
 
-        # Render
-        # Note: draw_geometries is blocking. Window title serves as the GUI legend.
-        o3d.visualization.draw_geometries(
-            geoms, 
-            window_name="Legend: Red=Source | Grn=Target | Ylw=Rotated | Blu=Final", 
+        # B. Result Anchor Connectivity (Red Cylinders)
+        if len(result_anchors) > 1:
+            for i in range(len(result_anchors)):
+                p1 = result_anchors[i]
+                p2 = result_anchors[(i + 1) % len(result_anchors)] # Wrap around
+                
+                # Using Deep Red [0.8, 0.0, 0.0] as requested
+                cyl = _create_thick_line(p1, p2, radius=thick_line_radius, color=[0.8, 0.0, 0.0])
+                if cyl:
+                    geoms.append(cyl)
+
+        # --- 4. Target Visualization ---
+        # A. Target Points (Dark Green Spheres)
+        for tp in target_points:
+            sphere = o3d.geometry.TriangleMesh.create_sphere(radius=1.0 * scale)
+            sphere.paint_uniform_color([0.0, 0.6, 0.0]) 
+            sphere.compute_vertex_normals()
+            sphere.translate(tp)
+            geoms.append(sphere)
+
+        # B. Target Geometry (Polygon connection connecting targets)
+        # Requirement: 2x Thicker -> Implemented as Cylinders
+        if len(target_points) > 1:
+            for i in range(len(target_points)):
+                p1 = target_points[i]
+                p2 = target_points[(i + 1) % len(target_points)] # Wrap around to close loop
+                
+                cyl = _create_thick_line(p1, p2, radius=thick_line_radius, color=[0.0, 0.6, 0.0])
+                if cyl:
+                    geoms.append(cyl)
+
+        # --- 5. Source Anchor Analysis ---
+        source_anchors = source_verts[anchor_indices]
+        
+        # A. Highlight Source Anchors (Deep Red Spheres)
+        for sa in source_anchors:
+            sphere = o3d.geometry.TriangleMesh.create_sphere(radius=1.0 * scale) # Updated Radius
+            sphere.paint_uniform_color([0.8, 0.0, 0.0]) # Deep Red
+            sphere.compute_vertex_normals()
+            sphere.translate(sa)
+            geoms.append(sphere)
+
+        # B. Anchor Connectivity (Source Anchor Polygon)
+        # Requirement: Draw lines between anchor_indices instead of displacement lines
+        # Requirement: 2x Thicker -> Implemented as Cylinders
+        if len(source_anchors) > 1:
+            for i in range(len(source_anchors)):
+                p1 = source_anchors[i]
+                p2 = source_anchors[(i + 1) % len(source_anchors)] # Wrap around
+                
+                # Using Magenta [0.8, 0.0, 0.8] to distinguish from Result Anchors
+                cyl = _create_thick_line(p1, p2, radius=thick_line_radius, color=[0.8, 0.0, 0.8])
+                if cyl:
+                    geoms.append(cyl)
+
+        # --- 6. Render Configuration (White Background & Thicker Mesh Lines) ---
+        vis = o3d.visualization.Visualizer()
+        vis.create_window(
+            window_name=f"Debug: {mode_name}", 
             width=1024, 
-            height=768,
-            left=50,
+            height=768, 
+            left=50, 
             top=50
         )
+        
+        for geom in geoms:
+            vis.add_geometry(geom)
+            
+        # Access RenderOptions to modify global view settings
+        opt = vis.get_render_option()
+        opt.background_color = np.asarray([1.0, 1.0, 1.0]) # Pure White Background
+        opt.line_width = 3.0       # Base thickness for wireframes
+        opt.point_size = 5.0       # Larger points for better visibility
+        opt.show_coordinate_frame = True
+        
+        vis.run()
+        vis.destroy_window()
+
+if __name__ == "__main__":
+    print("🧪 Running HandMotionManager Integration Test...")
+    
+    # 1. Setup Mock Data
+    manager = HandMotionManager(fps=30.0)
+    
+    # Create a simple pyramid/triangle mesh
+    # Vertex 0 is at origin
+    initial_verts = np.array([
+        [0.0, 0.0, 0.0],  # V0 (Origin)
+        [1.0, 0.0, 0.0],  # V1
+        [0.0, 1.0, 0.0],  # V2
+        [0.0, 0.0, 1.0],  # V3 (Tip)
+    ], dtype=np.float32)
+    faces = np.array([[0, 1, 2], [0, 2, 3], [0, 1, 3], [1, 2, 3]])
+    
+    # Target: Translated by (5, 5, 5), Scaled by 2.0
+    target_stickers = np.array([
+        [5.0, 5.0, 5.0],  # V0 target
+        [7.0, 5.0, 5.0],  # V1 target (x+2)
+        [5.0, 7.0, 5.0],  # V2 target (y+2)
+    ], dtype=np.float32)
+    
+    indices = [0, 1, 2] # We only track the base triangle, V3 is untracked
+
+    # 2. Test Scaled Procrustes with Mesh Viz
+    print("\n--- Test: Scaled Procrustes Alignment ---")
+    print("Expectation: Gray wireframe at origin. Cyan wireframe at (5,5,5) scaled x2.")
+    print("Yellow lines connect origin->target.")
+    
+    manager.process_frame(
+        initial_verts, faces, target_stickers, indices, 
+        timestamp=0.033, alignment_mode="scaled_procrustes", debug=True
+    )
+    
+    print("\n✅ Integration Test Complete.")

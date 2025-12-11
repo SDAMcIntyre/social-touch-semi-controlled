@@ -30,15 +30,17 @@ def parse_coordinates_from_dataframe(
 
     return np.stack(all_coords, axis=1)
 
+
 def generate_3d_hand_in_motion(
     stickers_path: Path,
     hands_curated_path: Path,
     metadata_path: Path,
-    output_glb_path: Path,
+    output_npz_path: Path,
     output_csv_path: Path,
     *,
     fps: float = 30.0,
-    force_processing: bool = False
+    force_processing: bool = False,
+    monitor: bool = False
 ):
     """
     Generates and stores a moving 3D hand model.
@@ -46,7 +48,7 @@ def generate_3d_hand_in_motion(
     """
     if not should_process_task(
         input_paths=[stickers_path, hands_curated_path, metadata_path], 
-        output_paths=[output_csv_path, output_glb_path], 
+        output_paths=[output_csv_path, output_npz_path], 
         force=force_processing):
         print(f"✅ Output files already exist. Use --force to overwrite.")
         return
@@ -104,13 +106,15 @@ def generate_3d_hand_in_motion(
             mesh_faces=faces,
             target_sticker_coords=target_stickers,
             sticker_vertex_indices=vertex_indices,
-            timestamp=timestamp
+            timestamp=timestamp,
+            alignment_mode="scaled_procrustes",
+            debug=monitor
         )
 
     print("Step 3: Saving data...")
     
     # Save GLB
-    manager.save(str(output_glb_path))
+    manager.save(str(output_npz_path))
     
     # Save CSV (Redistribute/Export capabilities from the manager)
     # We access the calculated data back from the manager to ensure consistency
@@ -124,10 +128,33 @@ def generate_3d_hand_in_motion(
             'rotation_x': [r[0] for r in manager.rotations],
             'rotation_y': [r[1] for r in manager.rotations],
             'rotation_z': [r[2] for r in manager.rotations],
-            'rotation_w': [r[3] for r in manager.rotations]
+            'rotation_w': [r[3] for r in manager.rotations],
+            'scale': manager.scales
         })
         motion_df.to_csv(output_csv_path, index=False)
     except Exception as e:
         print(f"⚠️ Error saving CSV: {e}")
 
     print("✅ Successfully generated animated hand model.")
+
+
+
+if __name__ == "__main__":
+    dataset_path = r"F:/liu-onedrive-nospecial-carac/_Teams/Social touch Kinect MNG/02_data/semi-controlled/"
+    dataset_block_path = dataset_path + r"2_processed/kinect/2022-06-17_ST16-05/block-order-01/"
+    
+    stickers_path = dataset_block_path + r"handstickers/2022-06-17_ST16-05_semicontrolled_block-order01_kinect_handstickers_xyz_tracked.csv"
+    hands_curated_path = dataset_block_path + r"kinematics_analysis/2022-06-17_ST16-05_semicontrolled_block-order01_kinect_handmodel_tracked_hands_curated.pkl"
+    metadata_path = dataset_block_path + r"kinematics_analysis/2022-06-17_ST16-05_semicontrolled_block-order01_kinect_handmodel_metadata.json"
+    output_npz_path = dataset_block_path + r"kinematics_analysis/2022-06-17_ST16-05_semicontrolled_block-order01_kinect_handmodel_motion.npz"
+    output_csv_path = dataset_block_path + r"kinematics_analysis/2022-06-17_ST16-05_semicontrolled_block-order01_kinect_handmodel_motion.csv"
+
+    generate_3d_hand_in_motion(
+        stickers_path,
+        hands_curated_path,
+        metadata_path,
+        output_npz_path,
+        output_csv_path,
+        force_processing = True,
+        monitor=True
+    )
