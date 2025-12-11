@@ -32,7 +32,8 @@ class XYZExtractorFactory:
 
     @staticmethod
     def get_extractor(
-        choice: Union[ExtractorChoice, str]
+        choice: Union[ExtractorChoice, str],
+        debug: bool = False
     ) -> XYZExtractorInterface:
         """
         Finds and returns an instance of the specified extractor.
@@ -44,6 +45,7 @@ class XYZExtractorFactory:
             choice: The desired extractor, specified either as an
                     ExtractorChoice enum member or a matching string
                     (e.g., "centroid").
+            debug:  Boolean flag enabling debug mode in the created extractor.
 
         Returns:
             An instance of the requested XYZ extractor.
@@ -65,7 +67,8 @@ class XYZExtractorFactory:
             extractor_class = XYZExtractorFactory._EXTRACTOR_REGISTRY.get(extractor_enum)
 
             if extractor_class:
-                return extractor_class()  # Create and return an instance.
+                # Instantiate with the debug flag.
+                return extractor_class(debug=debug)
             else:
                 raise ValueError(f"Extractor '{choice}' is recognized but not registered with a class.")
 
