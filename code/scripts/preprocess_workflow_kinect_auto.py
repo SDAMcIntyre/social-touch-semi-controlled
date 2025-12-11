@@ -46,7 +46,7 @@ from _3_preprocessing._1_sticker_tracking import (
 from _3_preprocessing._2_hand_tracking import (
     track_hands_on_video,
     is_hand_model_valid,
-    generate_hand_motion
+    generate_3d_hand_in_motion
 )
 
 from _3_preprocessing._3_forearm_extraction import (
@@ -206,7 +206,7 @@ def generate_xyz_stickers(
     return result_csv_path
 
 @flow(name="7. Generate 3D Hand Position")
-def generate_3d_hand_in_motion(rgb_video_path: Path, trial_id_path: Path, stickers_xyz_path: Path, output_dir: Path, *, force_processing: bool = False) -> tuple[Path, Path]:
+def generate_3d_hand_in_motion_flow(rgb_video_path: Path, trial_id_path: Path, stickers_xyz_path: Path, output_dir: Path, *, force_processing: bool = False) -> tuple[Path, Path]:
     print(f"[{output_dir.name}] Generating 3D hand motion...")
     name_baseline = rgb_video_path.stem + "_handmodel"
     
@@ -226,7 +226,7 @@ def generate_3d_hand_in_motion(rgb_video_path: Path, trial_id_path: Path, sticke
     
     force_processing = True
     
-    generate_hand_motion(
+    generate_hand_in_motion(
         stickers_xyz_path, 
         hands_curated_path, 
         metadata_path, 
@@ -398,7 +398,7 @@ def run_single_session_pipeline(
         # --- Stage 4: Feature Extraction ---
         # Note: validate_hand_extraction moved AFTER generate_3d_hand_in_motion
         {"name": "generate_3d_hand_in_motion", 
-         "func": generate_3d_hand_in_motion, 
+         "func": generate_3d_hand_in_motion_flow, 
          "params": lambda: {"rgb_video_path": context.get("rgb_video_path"), 
                             "trial_id_path": context.get("trial_data_path"), 
                             "stickers_xyz_path": context.get("sticker_3d_tracking_path"),

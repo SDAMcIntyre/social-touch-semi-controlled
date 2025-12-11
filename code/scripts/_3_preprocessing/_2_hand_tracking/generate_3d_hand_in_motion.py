@@ -30,7 +30,7 @@ def parse_coordinates_from_dataframe(
 
     return np.stack(all_coords, axis=1)
 
-def generate_hand_motion(
+def generate_3d_hand_in_motion(
     stickers_path: Path,
     hands_curated_path: Path,
     metadata_path: Path,
