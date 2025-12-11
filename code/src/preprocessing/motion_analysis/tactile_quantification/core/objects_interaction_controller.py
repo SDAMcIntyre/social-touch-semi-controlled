@@ -1,8 +1,7 @@
 import pandas as pd
 import open3d as o3d
 import numpy as np
-from typing import Dict, Union, Tuple, Optional, Any, List
-from scipy.spatial.transform import Rotation as R
+from typing import Dict, Tuple, Optional, Any, List, Union
 
 from ..model.objects_interaction_processor import ObjectsInteractionProcessor
 
@@ -10,104 +9,76 @@ class ObjectsInteractionController:
     """
     Manages the simulation, coordinating the ObjectsInteractionProcessor (Model).
     
-    Refactored:
-    - Handles geometric transformations (Trajectory application) internally.
-    - Manages the reference PointClouds/Meshes and updates the Processor.
-    - Handles calculation of the second mesh (Hand).
+    Architectural Update:
+    - Decoupled from HandMotionManager/GLB data structures.
+    - Expects pre-transformed World Space meshes (Sequence).
+    - Implements input normalization for proprioception landmarks.
+    - Implements vertex filtering based on exclusion metadata.
     """
     def __init__(self,
-                 hand_motion_data: dict,
-                 references_mesh: o3d.geometry.TriangleMesh,
-                 selected_points: dict = None,
+                 hand_meshes: List[o3d.geometry.TriangleMesh],
+                 timestamps: List[float],
+                 references_mesh: Dict[int, o3d.geometry.TriangleMesh],
+                 selected_points: Optional[Dict[str, Union[List[int], int]]] = None,
+                 excluded_vertex_ids: Optional[List[int]] = None,
                  *,
                  fps: int = 30,
                  visualizer_width_sec: int = 3
     ):
+        """
+        Args:
+            hand_meshes: A time-ordered sequence of Open3D meshes (World Space).
+            timestamps: A time-ordered sequence of floating point timestamps.
+            references_mesh: Dictionary mapping frame indices to environmental point clouds/meshes.
+            selected_points: Dictionary of anatomical landmarks for proprioception tracking. 
+                             Accepts Dict[str, int] or Dict[str, List[int]].
+            excluded_vertex_ids: List of vertex indices to remove from the mesh before contact processing.
+        """
+        if len(hand_meshes) != len(timestamps):
+            raise ValueError(f"Data Mismatch: {len(hand_meshes)} meshes vs {len(timestamps)} timestamps.")
+
         self.fps = fps
+        self.hand_meshes = hand_meshes
+        self.timestamps = timestamps
         self.references_mesh = references_mesh
+        self.excluded_vertex_ids = excluded_vertex_ids
         
         # Initialize Processor with the first available reference in the dict
-        # We assume the dict is not empty based on typical flow
         if not references_mesh:
             raise ValueError("References dictionary cannot be empty.")
             
         initial_key = next(iter(references_mesh))
-        
-        # Processor initialized with a SINGLE reference geometry. 
-        # No indices or tracking passed to processor.
         self.contact_processor = ObjectsInteractionProcessor(reference_geometry=references_mesh[initial_key])
-        
-        self.trajectory_data = {
-            'time_points': hand_motion_data['time_points'], 
-            'translations': hand_motion_data['translations'], 
-            'rotations': hand_motion_data['rotations']
-        }
 
-        self.tracked_points_groups_indices = selected_points.values() if selected_points else []
-        self.tracked_points_groups_labels = list(selected_points.keys()) if selected_points else []
+        # Architectural Fix: Input Normalization
+        # Converts scalar integers to lists to ensure consistent iteration downstream.
+        self.tracked_points_groups_labels: List[str] = []
+        self.tracked_points_groups_indices: List[List[int]] = []
 
-        hand_color = [228/255, 178/255, 148/255]
-        base_mesh = o3d.geometry.TriangleMesh()
-        base_mesh.vertices = o3d.utility.Vector3dVector(hand_motion_data['vertices'])
-        base_mesh.triangles = o3d.utility.Vector3iVector(hand_motion_data['faces'])
-        base_mesh.paint_uniform_color(hand_color)
-        base_mesh.compute_vertex_normals()
-        self.base_mesh = base_mesh
-        # Store base vertices as numpy array for calculations
-        self.base_vertices = np.asarray(base_mesh.vertices)
-        # Store base triangles to reconstruct meshes efficiently later
-        self.base_triangles = base_mesh.triangles
-    
-        self.hand_motion_data = hand_motion_data  
+        if selected_points:
+            self.tracked_points_groups_labels = list(selected_points.keys())
+            raw_values = selected_points.values()
+            normalized_indices = []
+            
+            for val in raw_values:
+                if isinstance(val, int):
+                    normalized_indices.append([val])
+                elif isinstance(val, list):
+                    normalized_indices.append(val)
+                else:
+                    # Fallback for other iterables
+                    normalized_indices.append(list(val))
+            
+            self.tracked_points_groups_indices = normalized_indices
+
+        # Store base mesh for static visualization reference (Frame 0)
+        self.base_mesh = hand_meshes[0]
         self.view_width_in_frame = visualizer_width_sec * fps       
-
-    def _compute_hand_mesh_for_frame(self, frame_id: int) -> Tuple[o3d.geometry.TriangleMesh, bool]:
-        """
-        Private method to fetch and compute the current hand mesh based on frame ID.
-        This handles the calculation of the position of the second mesh (the hand).
-
-        Args:
-            frame_id (int): The index of the frame to compute.
-
-        Returns:
-            Tuple[o3d.geometry.TriangleMesh, bool]: 
-                - The transformed mesh for the specific frame.
-                - A boolean flag indicating if the frame data was valid.
-        """
-        # --- Transformation Logic ---
-        # Ensure we don't go out of bounds if trajectory data is shorter than expected
-        if frame_id >= len(self.trajectory_data['translations']):
-             return self.base_mesh, False
-
-        translation = self.trajectory_data['translations'][frame_id]
-        rotation_quat = self.trajectory_data['rotations'][frame_id]
-        
-        # Check for invalid data (zero quaternion)
-        is_valid_frame = True
-        if np.all(rotation_quat == 0) or np.all(translation == 0):
-            is_valid_frame = False
-            current_vertices = np.copy(self.base_vertices) # Use rest pose for visualization, metrics will be NaN
-        else:
-            # Apply Rigid Body Transformation
-            # R.from_quat expects [x, y, z, w]
-            rot = R.from_quat(rotation_quat)
-            # Apply rotation and translation: v' = R * v + t
-            current_vertices = rot.apply(self.base_vertices) + translation
-
-        # Create the mesh for the current frame
-        current_mesh = o3d.geometry.TriangleMesh(
-            o3d.utility.Vector3dVector(current_vertices),
-            self.base_triangles
-        )
-        # Ensure color/normals are consistent (copying from base)
-        current_mesh.vertex_colors = self.base_mesh.vertex_colors
-        
-        return current_mesh, is_valid_frame
 
     def _calculate_proprioceptive_data(
             self,
             v_transformed: np.ndarray
-        ) -> tuple[dict, dict]:
+        ) -> Tuple[Dict[str, float], Dict[str, Any]]:
         """Calculates motion-related metrics for a single frame using provided vertices."""
         if not self.tracked_points_groups_labels:
             return {}, {}
@@ -120,46 +91,50 @@ class ObjectsInteractionController:
         proprio_data = {key: np.nan for key in proprio_keys}
 
         for label, indices in zip(self.tracked_points_groups_labels, self.tracked_points_groups_indices):
-            position_xyz = np.mean(v_transformed[np.atleast_1d(indices), :], axis=0)
-            proprio_data[f"{label}_position_x"], proprio_data[f"{label}_position_y"], proprio_data[f"{label}_position_z"] = position_xyz
-        return proprio_data
+            # indices is guaranteed to be a List[int] due to __init__ normalization
+            
+            # Ensure indices are valid for current mesh
+            valid_indices = [i for i in indices if i < len(v_transformed)]
+            if valid_indices:
+                position_xyz = np.mean(v_transformed[valid_indices, :], axis=0)
+                proprio_data[f"{label}_position_x"] = position_xyz[0]
+                proprio_data[f"{label}_position_y"] = position_xyz[1]
+                proprio_data[f"{label}_position_z"] = position_xyz[2]
+        
+        return proprio_data, {}
 
     def run(self) -> Tuple[pd.DataFrame, Optional[Dict[str, Any]]]:
         """
-        Executes the simulation.
-        
-        Returns:
-            Tuple[pd.DataFrame, Optional[Dict]]: 
-                - DataFrame containing simulation metrics.
-                - Dictionary containing visualization assets (frames, meshes, references).
+        Executes the simulation iterating over the injected mesh sequence.
         """
         results = []
-        num_frames = len(self.trajectory_data['time_points'])
+        num_frames = len(self.timestamps)
 
         print(f"Computing {num_frames} frames...")
         visualization_frames = []
 
-        for frame_id, time in enumerate(self.trajectory_data['time_points']):
-            if frame_id == 59:
-                pass
+        # Iterate directly over the sequence of meshes and times
+        for frame_id, (time, current_mesh) in enumerate(zip(self.timestamps, self.hand_meshes)):
             
-            # --- Reference Management (Controller Logic) ---
-            # If there is a specific reference point cloud defined for this frame ID,
-            # update the processor's reference.
+            # --- Reference Management ---
             if frame_id in self.references_mesh:
                 self.contact_processor.update_reference(self.references_mesh[frame_id])
             
-            # --- Hand Mesh Calculation (Controller Logic) ---
-            # Fetch the transformed mesh via the private method
-            current_mesh, is_valid_frame = self._compute_hand_mesh_for_frame(frame_id)
+            # --- Processing ---
+            # 1. Proprioception Calculation
+            # MUST happen before vertex removal to ensure indices in `selected_points` remain valid.
+            current_vertices = np.asarray(current_mesh.vertices)
+            proprio_data, _ = self._calculate_proprioceptive_data(current_vertices)
+            
+            # 2. Vertex Filtering (Exclusion)
+            # If excluded_vertex_ids are present, remove them from the mesh.
+            # Open3D's remove_vertices_by_index modifies the mesh in-place.
+            if self.excluded_vertex_ids:
+                current_mesh.remove_vertices_by_index(self.excluded_vertex_ids)
 
-            # --- Processing (Processor Logic) ---
-            proprio_data = self._calculate_proprioceptive_data(np.asarray(current_mesh.vertices))
-            # Pass transformed mesh to processor.
-            if is_valid_frame:
-                contact_data, viz = self.contact_processor.process_single_frame(current_mesh=current_mesh, _debug=False)
-            else:
-                contact_data, viz = self.contact_processor.empty_structure()
+            # 3. Process Contact
+            # The contact processor now receives the mesh with excluded vertices removed.
+            contact_data, viz = self.contact_processor.process_single_frame(current_mesh=current_mesh, _debug=False)
 
             # Store metrics
             merged_data = {**proprio_data, **contact_data}
@@ -167,7 +142,7 @@ class ObjectsInteractionController:
             merged_data["frame_index"] = frame_id
             results.append(merged_data)
             
-            # Prepare and store visualization data for this frame
+            # Prepare visualization data
             viz["transformed_hand_mesh"] = current_mesh
             visualization_frames.append(viz)
 
@@ -184,20 +159,11 @@ class ObjectsInteractionController:
             df = pd.DataFrame(results)
             all_cols = list(df.columns)
             
-            # Define the desired primary order
+            # Reorder Logic
             ordered_prefix = ['frame_index', 'time', 'contact_detected']
-            
-            # Dynamically find columns matching patterns
             contact_loc_cols = sorted([c for c in all_cols if c.startswith('contact_location_')])
-            
-            # Combine the ordered and patterned columns
-            # Velocity columns are removed from calculation, so we don't search for them here
             new_order_start = ordered_prefix + contact_loc_cols
-            
-            # Get the remaining columns
             remaining_cols = sorted([c for c in all_cols if c not in new_order_start])
-            
-            # Create the final column list and reorder the DataFrame
             final_order = new_order_start + remaining_cols
             df = df[final_order]
 

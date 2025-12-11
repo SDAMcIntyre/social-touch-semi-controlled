@@ -17,6 +17,20 @@ class HandTrackingDataManager:
         self._load_data()
         self._calculate_global_bounds()
 
+    def __len__(self) -> int:
+        """
+        Returns the total number of frames in the loaded data.
+        Allows usage of len(manager_instance).
+        """
+        return len(self.data)
+
+    def __getitem__(self, index: int) -> Dict[str, Any]:
+        """
+        Allows direct indexing into the underlying data list.
+        Enables usage of manager_instance[index].
+        """
+        return self.data[index]['api_response']
+
     def _load_data(self):
         """Loads the heavy pickle file into memory."""
         if not self.file_path.exists():
@@ -66,7 +80,7 @@ class HandTrackingDataManager:
         else:
             logging.warning("No valid 3D geometry found in data to calculate bounds. Defaulting to 1.0.")
 
-    def get_hand_geometry(self, frame_index: int) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+    def get_pixelwise_hand_geometry(self, frame_index: int) -> Optional[Tuple[np.ndarray, np.ndarray]]:
         """
         Extracts 2D vertices (pixels) and faces for a specific frame.
         """
@@ -95,9 +109,13 @@ class HandTrackingDataManager:
 
         return vertices, faces
 
-    def get_hand_3d_geometry(self, frame_index: int) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+    def get_3dspace_hand_geometry(self, frame_index: int, key: str = 'vertices_planar_z0') -> Optional[Tuple[np.ndarray, np.ndarray]]:
         """
-        Extracts 3D vertices (planar_z0) and faces for a specific frame.
+        Extracts 3D vertices and faces for a specific frame.
+        
+        Args:
+            frame_index: The index of the frame to retrieve.
+            key: The key in the hand data dictionary to access ('vertices_planar_z0' or 'vertices_3d').
         """
         if frame_index < 0 or frame_index >= len(self.data):
             return None
@@ -113,10 +131,10 @@ class HandTrackingDataManager:
 
         hand_data = hands[0]
         
-        if 'vertices_planar_z0' not in hand_data or 'faces' not in hand_data:
+        if key not in hand_data or 'faces' not in hand_data:
             return None
 
-        vertices = np.array(hand_data['vertices_planar_z0'], dtype=np.float32)
+        vertices = np.array(hand_data[key], dtype=np.float32)
         faces = np.array(hand_data['faces'], dtype=np.int32)
 
         if vertices.size == 0 or faces.size == 0:
@@ -124,12 +142,19 @@ class HandTrackingDataManager:
 
         return vertices, faces
 
-    def extract_clean_mesh_data(self, frame_index: int) -> Optional[Dict[str, np.ndarray]]:
+    def extract_clean_mesh_data(self, frame_index: int, use_default_vertices: bool = False) -> Optional[Dict[str, np.ndarray]]:
         """
         Extracts cleaned NumPy arrays for storage without API wrappers.
         Returns dictionary with 'vertices' and 'faces' keys if data exists.
+        
+        Args:
+            frame_index: The index of the frame to process.
+            use_3d_vertices: If True, extracts 'vertices_3d'. If False (default), extracts 'vertices_planar_z0'.
         """
-        geometry = self.get_hand_3d_geometry(frame_index)
+        target_key = 'vertices_3d' if use_default_vertices else 'vertices_planar_z0'
+        
+        geometry = self.get_3dspace_hand_geometry(frame_index, key=target_key)
+        
         if geometry is None:
             return None
         

@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 from PIL import Image, ImageTk
 
 # Import modules from the same package
-from ..models.hand_data_manager import HandTrackingDataManager
+from ..models.hand_tracking_data_manager import HandTrackingDataManager
 from .handmesh_3d_viewer import Hand3DViewer
 from preprocessing.common import VideoMP4Manager, ColorFormat
 
@@ -429,7 +429,7 @@ class HamerCheckupSelector:
     # --- Drawing Methods ---
 
     def _draw_overlay(self, image: np.ndarray, frame_idx: int) -> np.ndarray:
-        geometry = self.data_manager.get_hand_geometry(frame_idx)
+        geometry = self.data_manager.get_pixelwise_hand_geometry(frame_idx)
         if geometry is None:
             cv2.putText(image, "No Tracking Data", (30, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (200, 0, 0), 2)
             return image
@@ -452,7 +452,7 @@ class HamerCheckupSelector:
         if self.overlay_enabled.get():
             display_frame = self._draw_overlay(display_frame, self.current_frame_idx)
 
-        geometry_3d = self.data_manager.get_hand_3d_geometry(self.current_frame_idx)
+        geometry_3d = self.data_manager.get_3dspace_hand_geometry(self.current_frame_idx)
         if self.viewer_3d:
             self.viewer_3d.update_3d_plot(geometry_3d, global_max_range=self.data_manager.global_max_range)
 
