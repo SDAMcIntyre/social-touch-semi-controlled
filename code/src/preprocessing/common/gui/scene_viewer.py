@@ -225,7 +225,7 @@ class Open3DTriangleMeshSequence(FrameSequenceObject):
         return self.frame_data.get(frame_index)
 
     def add_to_plotter(self, plotter: pv.Plotter, frame_index: int):
-        """Renders an `o3d.geometry.TriangleMesh` object."""
+        """Renders an `o3d.geometry.TriangleMesh` object as a wireframe."""
         if not self.visible:
             return
 
@@ -240,16 +240,18 @@ class Open3DTriangleMeshSequence(FrameSequenceObject):
             ))
             mesh = pv.PolyData(vertices_np, faces_np)
 
-            # --- ✅ MODIFIED: Check for color override ---
+            # --- ✅ MODIFIED: Check for color override and apply wireframe style ---
+            # Added style='wireframe' to all add_mesh calls.
+            # Removed smooth_shading=True as it is irrelevant for wireframe rendering.
             if self.color_override_active:
-                plotter.add_mesh(mesh, color=self.override_color, name=self.name, smooth_shading=True, **self.actor_settings)
+                plotter.add_mesh(mesh, color=self.override_color, name=self.name, style='wireframe', **self.actor_settings)
             elif o3d_mesh.has_vertex_colors():
                 colors_np = np.asarray(o3d_mesh.vertex_colors)
                 colors_uint8 = (colors_np * 255).astype(np.uint8)
                 mesh['colors'] = colors_uint8
-                plotter.add_mesh(mesh, scalars='colors', rgb=True, name=self.name, smooth_shading=True, **self.actor_settings)
+                plotter.add_mesh(mesh, scalars='colors', rgb=True, name=self.name, style='wireframe', **self.actor_settings)
             else:
-                plotter.add_mesh(mesh, name=self.name, smooth_shading=True, **self.actor_settings)
+                plotter.add_mesh(mesh, name=self.name, style='wireframe', **self.actor_settings)
 
 
 class PersistentOpen3DTriangleMeshSequence(Open3DTriangleMeshSequence):
