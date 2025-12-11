@@ -7,10 +7,7 @@ from typing import List, Tuple
 
 from preprocessing.motion_analysis import (
     HandModelSelectorGUI,
-    HandMetadataManager,
     HandMetadataFileHandler
-
-
 )
 
 def is_valid(
