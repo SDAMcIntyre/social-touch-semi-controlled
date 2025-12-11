@@ -2,9 +2,9 @@ from pathlib import Path
 from typing import List, Union
 
 def should_process_task(
+    *,
     output_paths: Union[Path, List[Path]],
     input_paths: Union[Path, List[Path]],
-    *,
     force: bool = False
 ) -> bool:
     """
