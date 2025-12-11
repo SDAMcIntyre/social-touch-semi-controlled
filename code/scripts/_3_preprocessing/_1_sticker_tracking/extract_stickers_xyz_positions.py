@@ -15,6 +15,7 @@ from preprocessing.stickers_analysis import (
     XYZStickerOrchestrator
 )
 
+
 def extract_stickers_xyz_positions(
         source_video_path: Path,
         input_csv_path: Path,
@@ -22,7 +23,8 @@ def extract_stickers_xyz_positions(
         output_csv_path: Path,
         output_metadata_path: Path = None,
         *,
-        force_processing: bool = False
+        force_processing: bool = False,
+        debug: bool = True
 ):
     """
     Extracts 3D sticker positions using a dynamically selected method.
@@ -54,7 +56,7 @@ def extract_stickers_xyz_positions(
 
     try:
         # 3. Get the specific extractor instance from the factory using the method parameter.
-        extractor = XYZExtractorFactory.get_extractor(method)
+        extractor = XYZExtractorFactory.get_extractor(method, debug=debug)
         print(f"✅ Successfully loaded extractor: {extractor.__class__.__name__}")
 
         # 4. Execute the process! 🚀
