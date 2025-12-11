@@ -45,8 +45,8 @@ from _3_preprocessing._1_sticker_tracking import (
 
 from _3_preprocessing._2_hand_tracking import (
     track_hands_on_video,
-    generate_hand_motion,
-    is_hand_model_valid
+    is_hand_model_valid,
+    generate_hand_motion
 )
 
 from _3_preprocessing._3_forearm_extraction import (
@@ -206,26 +206,39 @@ def generate_xyz_stickers(
     return result_csv_path
 
 @flow(name="7. Generate 3D Hand Position")
-def generate_3d_hand_motion(rgb_video_path: Path, trial_id_path: Path, stickers_xyz_path: Path, output_dir: Path, *, force_processing: bool = False) -> tuple[Path, Path]:
+def generate_3d_hand_in_motion(rgb_video_path: Path, trial_id_path: Path, stickers_xyz_path: Path, output_dir: Path, *, force_processing: bool = False) -> tuple[Path, Path]:
     print(f"[{output_dir.name}] Generating 3D hand motion...")
     name_baseline = rgb_video_path.stem + "_handmodel"
     
-    rgb_video_filtered_path = rgb_video_path.parent / f"{rgb_video_path.stem}_filtered{rgb_video_path.suffix}"
-
     tracked_hands_path = output_dir / (name_baseline + "_tracked_hands.pkl")
-
     track_hands_on_video(rgb_video_path, trial_id_path, tracked_hands_path, force_processing=force_processing)
 
+    hands_curated_path = output_dir / (name_baseline + "_tracked_hands_curated.pkl")
+    if not hands_curated_path.with_name(hands_curated_path.name + ".SUCCESS").exists():
+        raise ValueError("Hand models need to be manually assessed first.")
+    
+    metadata_path = Path(output_dir / (name_baseline + "_metadata.json"))
+    if not metadata_path.exists():
+        raise ValueError("Stickers location on the hand model must be manually assessed first.")
 
-    metadata_path = output_dir / (name_baseline + "_metadata.json")
-    hand_motion_glb_path = output_dir / (name_baseline + "_motion.glb")
-    hand_motion_csv_path = output_dir / (name_baseline + "_motion.csv")
-    #generate_hand_motion(stickers_xyz_path, hand_models_dir, metadata_path, hand_motion_glb_path, hand_motion_csv_path, force_processing=force_processing)
-    return hand_motion_glb_path, metadata_path
+    out_motion_npz_path = output_dir / (name_baseline + "_motion.npz")
+    out_motion_csv_path = output_dir / (name_baseline + "_motion.csv")
+    
+    force_processing = True
+    
+    generate_hand_motion(
+        stickers_xyz_path, 
+        hands_curated_path, 
+        metadata_path, 
+        out_motion_npz_path, 
+        out_motion_csv_path, 
+        force_processing=force_processing)
+
+    return out_motion_npz_path, metadata_path
 
 @flow(name="8. Generate Somatosensory Characteristics")
 def compute_somatosensory_characteristics_flow(
-    hand_motion_glb_path: Path,
+    hand_motion_npz_path: Path,
     hand_metadata_path: Path,
     session_processed_dir: Path,
     session_id: str,
@@ -242,7 +255,7 @@ def compute_somatosensory_characteristics_flow(
 
     contact_characteristics_path = output_dir / (name_baseline + "_contact_and_kinematic_data.csv")
     compute_somatosensory_characteristics(
-        hand_motion_glb_path, 
+        hand_motion_npz_path,
         hand_metadata_path,
         forearm_metadata_path, 
         forearm_pointcloud_dir,
@@ -307,7 +320,9 @@ def unify_processed_data_flow(led_path: Path,
                               single_touch_path: Path, 
                               stimuli_path: Path, 
                               rgb_video_path: Path,
-                              output_dir: Path, *, force_processing: bool = False) -> Path:
+                              output_dir: Path,
+                              *,
+                              force_processing: bool = False) -> Path:
     print(f"[{output_dir.name}] Unifying all processed data...")
     final_path = output_dir / (Path(rgb_video_path).stem + "_unified.csv")
     unify_datasets(led_path=led_path, contact_path=contact_path, trial_path=trial_path, single_touch_path=single_touch_path, stimuli_path=stimuli_path, output_path=final_path, force_processing=force_processing)
@@ -381,14 +396,14 @@ def run_single_session_pipeline(
          "outputs": ["stimuli_metadata_path", "stimuli_metadata_aligned_path"]},
 
         # --- Stage 4: Feature Extraction ---
-        # Note: validate_hand_extraction moved AFTER generate_3d_hand_motion
-        {"name": "generate_3d_hand_motion", 
-         "func": generate_3d_hand_motion, 
+        # Note: validate_hand_extraction moved AFTER generate_3d_hand_in_motion
+        {"name": "generate_3d_hand_in_motion", 
+         "func": generate_3d_hand_in_motion, 
          "params": lambda: {"rgb_video_path": context.get("rgb_video_path"), 
                             "trial_id_path": context.get("trial_data_path"), 
                             "stickers_xyz_path": context.get("sticker_3d_tracking_path"),
                             "output_dir": config.video_processed_output_dir / "kinematics_analysis"}, 
-         "outputs": ["hand_motion_glb_path", "hand_metadata_path"]},
+         "outputs": ["hand_motion_npz_path", "hand_metadata_path"]},
          
         {"name": "validate_hand_extraction", 
          "func": validate_hand_extraction, 
@@ -400,7 +415,7 @@ def run_single_session_pipeline(
 
         {"name": "compute_somatosensory_characteristics", 
          "func": compute_somatosensory_characteristics_flow, 
-         "params": lambda: {"hand_motion_glb_path": context.get("hand_motion_glb_path"), 
+         "params": lambda: {"hand_motion_npz_path": context.get("hand_motion_npz_path"), 
                             "hand_metadata_path": context.get("hand_metadata_path"), 
                             "session_processed_dir": config.session_processed_output_dir, 
                             "session_id": config.session_id, 
