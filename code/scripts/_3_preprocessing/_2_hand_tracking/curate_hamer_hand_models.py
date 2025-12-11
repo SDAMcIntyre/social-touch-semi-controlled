@@ -3,6 +3,7 @@ import pickle
 import tkinter as tk
 from pathlib import Path
 from typing import Optional
+import numpy as np  # Added for vector operations
 
 # Import from local modules
 from preprocessing.motion_analysis import (
@@ -94,12 +95,28 @@ def curate_hamer_hand_models(
 
     print(f"Extracting mesh data for {len(selected_indices)} frames...")
     
+    # --- Transformation Constants ---
+    scaling_factor = 0.930
+    MESH_UNIT_CONVERSION_FACTOR = 1000.0
+    
     mesh_library = {}
     
     # We iterate through selected frames and extract clean data
     for idx in selected_indices:
-        mesh_data = app.data_manager.extract_clean_mesh_data(idx)
+        mesh_data = app.data_manager.extract_clean_mesh_data(idx, use_default_vertices=True)
+        
         if mesh_data:
+            # Apply Coordinate System Transformation (Meters -> Millimeters) and Rescaling
+            # We target the 'vertices' key specifically.
+            if 'vertices' in mesh_data:
+                # Ensure data is a numpy array for vectorized multiplication
+                verts = mesh_data['vertices']
+                if not isinstance(verts, np.ndarray):
+                    verts = np.array(verts)
+                
+                # Apply: Meters -> mm (* 1000) -> Scale (* 0.930)
+                mesh_data['vertices'] = verts * MESH_UNIT_CONVERSION_FACTOR * scaling_factor
+            
             mesh_library[idx] = mesh_data
         else:
             logging.warning(f"Frame {idx} selected but has no valid mesh data.")
