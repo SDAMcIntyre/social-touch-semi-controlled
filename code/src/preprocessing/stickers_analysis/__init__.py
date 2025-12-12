@@ -29,7 +29,7 @@ from .ellipse.models.color_space_model import ColorSpace, ColorSpaceDefault, Col
 from .ellipse.models.color_family_model import ColorFamilyModel
 from .ellipse.gui.color_correlation_visualiser import ColorCorrelationVisualizer
 from .ellipse.gui.frame_roi_color_gui import FrameROIColor
-from .ellipse.gui.threshold_selector_tool_gui import ThresholdSelectorTool
+from .ellipse.gui.threshold_selector_tool_gui import ThresholdSelectorTool, SelectionState
 # fit ellipses on correlation map
 from .ellipse.data_access.fitted_ellipses_filehandler import FittedEllipsesFileHandler
 from .ellipse.models.fitted_ellipses_manager import FittedEllipsesManager
