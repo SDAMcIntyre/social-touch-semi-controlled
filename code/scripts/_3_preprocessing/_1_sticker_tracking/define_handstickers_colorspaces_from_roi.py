@@ -1,8 +1,10 @@
 # Standard library imports
 import json
 import os
+import tkinter as tk
+from tkinter import messagebox
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, Optional
 
 # Third-party imports
 import pandas as pd
@@ -31,19 +33,13 @@ from preprocessing.stickers_analysis import (
 def generate_color_config(objs_to_track: List[str]) -> Dict[str, Any]:
     """Generates a configuration dictionary for object drawing colors.
 
-    This function maps object names (e.g., 'sticker_yellow') to their BGR color
-    values. It creates both a bright "live" color for active drawing and a
-    darker "final" color for committed shapes.
-
     Args:
-        objs_to_track: A list of strings, where each string is an object name
-                       expected to end with a color (e.g., 'sticker_blue').
+        objs_to_track: A list of strings, where each string is an object name.
 
     Returns:
         A config dictionary where each key is an object name and its value is
         a dictionary containing 'live' and 'final' BGR color tuples.
     """
-    # OpenCV uses BGR (Blue, Green, Red) format, not RGB.
     color_map = {
         'yellow': (0, 255, 255),
         'blue': (255, 0, 0),
@@ -54,121 +50,47 @@ def generate_color_config(objs_to_track: List[str]) -> Dict[str, Any]:
     color_config = {}
     for obj_name in objs_to_track:
         try:
-            color_name = obj_name.split('_')[-1]
-            if color_name in color_map:
-                live_color = color_map[color_name]
+            # Handle potential suffix variations for discarded objects if re-processing
+            base_color_name = obj_name.split('_')[-1]
+            
+            # Fallback if the name is complex (e.g. sticker_yellow_discarded_1)
+            found_color = None
+            for key in color_map:
+                if key in obj_name:
+                    found_color = key
+                    break
+            
+            if found_color:
+                live_color = color_map[found_color]
                 final_color = tuple(c // 2 for c in live_color)
                 color_config[obj_name] = {'live': live_color, 'final': final_color}
             else:
-                print(f"⚠️ Warning: Color '{color_name}' not in map. Skipping '{obj_name}'.")
+                print(f"⚠️ Warning: Color could not be inferred for '{obj_name}'. Skipping.")
         except IndexError:
             print(f"⚠️ Warning: Could not extract color from '{obj_name}'. Skipping.")
             continue
     return color_config
 
 
-def prepare_json_update_payload(
-    frame_ids: List[int], adjusted_colorspaces: List[Dict[str, Any]], status: str = "pending"
-) -> Dict[str, Any]:
-    """Formats the final colorspace data into a dictionary for JSON output.
-
-    Args:
-        frame_ids: List of frame IDs corresponding to the colorspaces.
-        adjusted_colorspaces: List of colorspace dicts with adjusted coordinates.
-        status: The review status to assign in the payload.
-
-    Returns:
-        A dictionary formatted to be saved as JSON content.
-    """
-    payload = {'status': status, 'colorspaces': []}
-    for frame_id, colorspace in zip(frame_ids, adjusted_colorspaces):
-        frame_content = {"frame_id": frame_id, "colorspace": colorspace}
-        payload['colorspaces'].append(frame_content)
-    return payload
-
-
-def update_json_object(
-    file_path: str, object_name: str, new_content: dict, overwrite: bool = False
-) -> bool:
-    """Updates or overwrites a specific top-level object within a JSON file.
-
-    This function safely reads a JSON file, modifies a specified object, and
-    writes the changes back.
-
-    Args:
-        file_path: The path to the JSON file.
-        object_name: The key of the top-level object to update.
-        new_content: A dictionary containing the new content for the object.
-        overwrite: If True, the existing object is completely replaced.
-                   If False (default), new content is merged into the existing object.
-
-    Returns:
-        bool: False if the update was successful, True if an error occurred.
-              (Note: Returning True on error is unconventional.)
-    """
-    all_data = {}
-    try:
-        if os.path.exists(file_path):
-            with open(file_path, "r") as f:
-                all_data = json.load(f)
-    except (json.JSONDecodeError, IOError) as e:
-        print(f"❌ Error reading or parsing {file_path}: {e}")
-        return True
-
-    # Update the specific object
-    if overwrite or object_name not in all_data:
-        print(f"✅ Overwriting or creating object '{object_name}'.")
-        all_data[object_name] = new_content
-    else:
-        # Merge if both existing and new content are dictionaries
-        existing_object = all_data.get(object_name, {})
-        if isinstance(existing_object, dict) and isinstance(new_content, dict):
-            print(f"✅ Merging new content into object '{object_name}'.")
-            existing_object.update(new_content)
-            all_data[object_name] = existing_object
-        else:
-            print(f"⚠️ Cannot merge due to incompatible types. Overwriting '{object_name}'.")
-            all_data[object_name] = new_content
-
-    # Write the updated data back to the file
-    try:
-        with open(file_path, "w") as f:
-            json.dump(all_data, f, indent=4)
-        print(f"💾 Successfully saved data to '{os.path.basename(file_path)}'")
-        return False
-    except IOError as e:
-        print(f"❌ An error occurred while writing to file: {e}")
-        return True
-
 def run_colorspace_definition_tool(
     video_frames: List[np.ndarray], 
     colors_rgb: Dict[str, Tuple[int, int, int]],
     title: str = None
 ) -> List[Dict[str, Any]]:
-    """Runs the ROI drawing tool for each frame to define a colorspace.
-
-    This function iterates through a list of frames, launching the FrameROIColor tool
-    for each one. The user can then manually draw an ellipse and freehand shape to
-    define the target colorspace.
-
-    Args:
-        video_frames: A list of frames (as NumPy arrays) to be processed.
-        colors_rgb: A dictionary containing 'live' and 'final' RGB color tuples
-                    to use for the drawing interface.
-
-    Returns:
-        A list of dictionaries, where each dictionary contains the extracted
-        colorspace data for the corresponding frame.
-    """
+    """Runs the ROI drawing tool for each frame to define a colorspace."""
     defined_colorspaces = []
+    # Default fallback colors if config is missing
+    live = colors_rgb.get('live', (0, 255, 0)) if colors_rgb else (0, 255, 0)
+    final = colors_rgb.get('final', (0, 128, 0)) if colors_rgb else (0, 128, 0)
+
     for i, frame_bgr in enumerate(video_frames):
         print(f"\n🎨 Defining colorspace for frame {i+1}/{len(video_frames)}...")
         tracker = FrameROIColor(
             frame_bgr,
             resize_to=(1024, 768),
             is_bgr=True,
-            color_live=colors_rgb['live'],
-            color_final=colors_rgb['final'],
+            color_live=live,
+            color_final=final,
             window_title=title
         )
         tracker.run()
@@ -180,6 +102,237 @@ def run_colorspace_definition_tool(
 
     return defined_colorspaces
 
+
+class ExtractionPipeline:
+    """Helper class to encapsulate the video loading and extraction logic."""
+    
+    def __init__(self, video_path: Path, color_config: Dict[str, Any]):
+        self.video_path = video_path
+        self.color_config = color_config
+
+    def execute(self, object_name: str, landmarks: List[int] = None) -> Tuple[List[int], List[Dict[str, Any]]]:
+        """Runs the review GUI and FrameROIColor tool for a specific object."""
+        
+        # Construct filename based on standard convention
+        # Note: We rely on the base video path logic from the original script
+        # Assuming object_name passed here is the base name (e.g., 'sticker_yellow')
+        # If processing a discard, we still load the video for the base object.
+        
+        # Clean object name to find the video file (remove _discarded suffix if present)
+        base_object_name = object_name.split("_discarded")[0]
+        
+        object_video_filename = f"{self.video_path.stem}_{base_object_name}{self.video_path.suffix}"
+        object_video_path = self.video_path.parent / object_video_filename
+
+        if not object_video_path.exists():
+            print(f"❌ Video file not found: {object_video_path}")
+            return [], []
+
+        print(f"Loading video '{object_video_path.name}'...")
+        video_manager = VideoMP4Manager(object_video_path)
+        
+        # 1. Select Frames
+        print("   - Waiting for user to select representative frames...")
+        try:
+            view = TrackerReviewGUI(
+                title=f"Select Frames: {object_name}", 
+                landmarks={'label': landmarks} if landmarks else [],
+                show_valid_button=False,
+                show_rerun_button=False,
+                windowState='maximized')
+        except:
+            view = TrackerReviewGUI(
+                title=f"Select Frames: {object_name}",
+                show_valid_button=False,
+                show_rerun_button=False,
+                windowState='maximized')
+        
+        controller = TrackerReviewOrchestrator(model=video_manager, view=view)
+        returned_values = controller.run()
+        selected_frame_indices = returned_values[1].keys()
+        
+        if not selected_frame_indices:
+            print(f"   - No frames selected for '{object_name}'.")
+            return [], []
+            
+        selected_frames = [video_manager[i] for i in selected_frame_indices]
+
+        # 2. Define Colorspace
+        colorspace_data = run_colorspace_definition_tool(
+            selected_frames, 
+            colors_rgb=self.color_config.get(base_object_name), # Use base config
+            title=f"Define: {object_name}"
+        )
+        
+        return selected_frame_indices, colorspace_data
+
+
+class ColorDefinitionDialog:
+    """GUI Controller for managing Target vs Discard colorspace definition."""
+    
+    def __init__(self, root, object_name: str, pipeline: ExtractionPipeline, manager: ColorSpaceManager):
+        self.root = root
+        self.object_name = object_name
+        self.pipeline = pipeline
+        self.manager = manager
+        
+        # Determine if this object already exists in the manager
+        self.existing_cs = self.manager.get_colorspace(object_name)
+        
+        # Adjust window height slightly if we need to fit the extra button
+        height = 360 if self.existing_cs else 300
+        self.root.title(f"Processing: {object_name}")
+        self.root.geometry(f"400x{height}")
+        
+        # State tracking
+        self.target_defined = False
+        self.discard_count = 0
+        self.pending_updates = [] # List of tuples (name, frames, data, status, merge)
+
+        # UI Elements
+        self.lbl_info = tk.Label(root, text=f"Object: {object_name}", font=("Arial", 12, "bold"))
+        self.lbl_info.pack(pady=10)
+
+        self.btn_target = tk.Button(
+            root, 
+            text="Define Current Color", 
+            command=self.on_define_target,
+            height=2, width=30,
+            bg="#f0f0f0"
+        )
+        self.btn_target.pack(pady=10)
+
+        self.btn_discard = tk.Button(
+            root, 
+            text="Add Discard Color", 
+            command=self.on_add_discard,
+            height=2, width=30
+        )
+        self.btn_discard.pack(pady=10)
+
+        self.btn_proceed = tk.Button(
+            root, 
+            text="Proceed / Save", 
+            command=self.on_proceed,
+            height=2, width=30,
+            bg="#d0e0ff"
+        )
+        self.btn_proceed.pack(pady=20)
+        
+        # Conditional Skip Button
+        if self.existing_cs:
+            self.btn_skip = tk.Button(
+                root, 
+                text="Skip (Keep Existing)", 
+                command=self.on_skip,
+                height=2, width=30,
+                bg="#fff0f0" # Light tint to differentiate
+            )
+            self.btn_skip.pack(pady=5)
+            
+            # Check if existing status implies it's ready, to potentially color the target button
+            if self.existing_cs.status != ColorSpaceStatus.TO_BE_REVIEWED.value:
+                 pass
+
+    def on_define_target(self):
+        """Handler for defining the main object color."""
+        if self.target_defined:
+            return
+
+        print(f"\n🔵 Starting extraction for TARGET: {self.object_name}")
+        self.root.withdraw() # Hide GUI during processing
+        
+        # Fetch existing landmarks if any
+        landmarks = self.existing_cs.get_frame_ids() if self.existing_cs else []
+
+        frame_ids, data = self.pipeline.execute(self.object_name, landmarks)
+        
+        self.root.deiconify() # Restore GUI
+
+        if frame_ids and data:
+            self.target_defined = True
+            self.btn_target.config(bg="green", fg="white", state="disabled", text="Target Defined (Saved on Proceed)")
+            
+            # Queue the update
+            self.pending_updates.append({
+                "object_name": self.object_name,
+                "frame_ids": frame_ids,
+                "data": data,
+                "status": ColorSpaceStatus.TO_BE_PROCESSED,
+                "merge": False # Replace target if redefined
+            })
+        else:
+            print("❌ Target extraction cancelled or empty.")
+
+    def on_add_discard(self):
+        """Handler for adding a discarded color."""
+        self.discard_count += 1
+        discard_name = f"{self.object_name}_discarded_{self.discard_count}"
+        
+        print(f"\n🟠 Starting extraction for DISCARD: {discard_name}")
+        self.root.withdraw()
+        
+        frame_ids, data = self.pipeline.execute(discard_name)
+        
+        self.root.deiconify()
+
+        if frame_ids and data:
+            print(f"✅ Discard '{discard_name}' prepared.")
+            # Queue the update
+            self.pending_updates.append({
+                "object_name": discard_name,
+                "frame_ids": frame_ids,
+                "data": data,
+                "status": ColorSpaceStatus.TO_BE_PROCESSED, # Or a specific DISCARD status if it existed
+                "merge": False # New object
+            })
+        else:
+            self.discard_count -= 1 # Revert counter if cancelled
+
+    def on_proceed(self):
+        """Saves data and closes the dialog."""
+        if not self.target_defined and not self.existing_cs:
+            # Only warn if we don't have an existing definition falling back on
+            confirm = messagebox.askyesno(
+                "Confirm", 
+                "You have not defined the Target Color. Are you sure you want to proceed?"
+            )
+            if not confirm:
+                return
+
+        # Commit changes to Manager
+        for update in self.pending_updates:
+            try:
+                # Check if it's an update or new add
+                if self.manager.get_colorspace(update["object_name"]):
+                     self.manager.update_object(
+                        update["object_name"],
+                        update["frame_ids"],
+                        update["data"],
+                        status=update["status"],
+                        merge=update["merge"]
+                    )
+                else:
+                    self.manager.add_object(
+                        update["object_name"],
+                        update["frame_ids"],
+                        update["data"],
+                        status=update["status"]
+                    )
+            except Exception as e:
+                print(f"❌ Error saving '{update['object_name']}': {e}")
+                
+        self.root.quit()
+        self.root.destroy()
+
+    def on_skip(self):
+        """Skips processing for the current object, preserving existing data."""
+        print(f"⏩ Skipping updates for '{self.object_name}' (Existing data preserved).")
+        self.pending_updates = [] # Ensure no changes are committed
+        self.root.quit()
+        self.root.destroy()
+
+
 def define_handstickers_colorspaces_from_roi(
     video_path: Path,
     roi_metadata_path: Path,
@@ -188,36 +341,15 @@ def define_handstickers_colorspaces_from_roi(
     force_processing: bool = False,
     merge: bool = False
 ) -> None:
-    """Orchestrates the colorspace definition for tracked objects in a video.
-
-    This function performs the following steps:
-    1.  Validates that source metadata exists and destination metadata does not.
-    2.  Loads video frames and tracking data.
-    3.  For each object specified in the metadata:
-        a. Extracts the object's tracked regions of interest (ROIs).
-        b. Prompts the user to select representative frames.
-        c. Defines a colorspace based on the user's selection within the ROI.
-        d. Translates the ROI-local coordinates to full-frame coordinates.
-        e. Saves the new colorspace data to a destination JSON file.
-
-    Args:
-        video_path (str): The absolute path to the source video file.
-        tracking_csv_path (str): The absolute path to the CSV with tracking data.
-        roi_metadata_path (str): The path to the source JSON metadata file.
-        dest_metadata_path (str): The path for the output JSON file.
-    """
+    """Orchestrates the colorspace definition with a GUI selection step."""
+    
     print(f"🎬 Starting colorspace definition for: '{Path(video_path).name}'")
 
     # --- 1. Pre-computation Checks & Validation ---
     if not os.path.exists(roi_metadata_path):
-        print("🟡 Skipping: Source metadata not found. Tracking must be validated first.")
+        print("🟡 Skipping: Source metadata not found.")
         return
 
-    if not force_processing and os.path.exists(dest_metadata_path):
-        print("🟡 Skipping: Destination metadata file already exists.")
-        # TODO: Implement colorspace assessment/update for existing files.
-        return
-    
     metadata_exists = os.path.exists(dest_metadata_path)
     if metadata_exists:
         colorspace_manager: ColorSpaceManager = ColorSpaceFileHandler.load(dest_metadata_path)
@@ -233,80 +365,67 @@ def define_handstickers_colorspaces_from_roi(
         return
 
     color_config = generate_color_config(object_names)
+    
+    # Initialize Pipeline
+    pipeline = ExtractionPipeline(video_path, color_config)
+
+    # --- 3. Processing Loop ---
+    # We create a root Tk instance once, but we will show/hide or create dialogs for each object.
+    # To avoid mainloop conflicts, we instantiate a root for each object dialog or reuse one.
+    # Reusing one root and destroying children is cleaner.
+    
+    # Check if we have a display (headless check)
+    try:
+        root = tk.Tk()
+        root.withdraw() # Hide the main root window
+    except Exception as e:
+        print(f"❌ GUI Error: Could not initialize Tkinter ({e}). Is a display available?")
+        return
+
     colorspace_modified = False
 
-    
     for object_name in object_names:
-        current_colorspace: ColorSpace = colorspace_manager.get_colorspace(object_name)
+        current_colorspace: Optional[ColorSpace] = colorspace_manager.get_colorspace(object_name)
 
-        # Decide whether to process this specific object
-        # if it is the first time, current_colorspace.status doesn't exist (no file)
-        should_process = not metadata_exists or force_processing or (current_colorspace.status == ColorSpaceStatus.TO_BE_REVIEWED.value)
+        # Logic to skip if already done (unless forced)
+        # Note: existing logic checked .status. value.
+        status = current_colorspace.status if current_colorspace else None
+        should_process = (
+            not metadata_exists 
+            or force_processing 
+            or (status == ColorSpaceStatus.TO_BE_DEFINED.value)
+            or (status is None)
+        )
 
         if not should_process:
-            print(f"Skipping '{object_name}' (status: '{current_colorspace.status}').")
+            print(f"Skipping '{object_name}' (status: '{status}').")
             continue
 
         print(f"\n➡️ Processing object: '{object_name}'")
-        # Construct the new filename by inserting your object_name.
-        object_video_filename = f"{video_path.stem}_{object_name}{video_path.suffix}"
-        object_video_path = video_path.parent / object_video_filename
-
-        print(f"Loading video '{object_video_path.name}'...")
-        video_manager = VideoMP4Manager(object_video_path)
         
-        # Step 3b: Manually select the best frames for colorspace definition
-        print("   - Waiting for user to select representative frames...")
-        try:
-            landmarks = current_colorspace.get_frame_ids()
-            view = TrackerReviewGUI(
-                title=object_video_path.name, 
-                landmarks=landmarks,
-                show_valid_button=False,
-                show_rerun_button=False,
-                windowState='maximized')
-        except:
-            view = TrackerReviewGUI(
-                title=object_video_path.name,
-                show_valid_button=False,
-                show_rerun_button=False,
-                windowState='maximized')
-        controller = TrackerReviewOrchestrator(model=video_manager, view=view)
-        _, selected_frame_indices, _ = controller.run()
+        # Launch the Selection Dialog
+        # We create a Toplevel linked to root, but run a local mainloop or wait_window
+        dialog_window = tk.Toplevel(root)
+        app = ColorDefinitionDialog(dialog_window, object_name, pipeline, colorspace_manager)
+        
+        # Wait for this specific window to close before moving to the next object
+        root.wait_window(dialog_window)
+        
+        # If pending updates occurred in the dialog, we flag modification
+        if app.pending_updates:
+            colorspace_modified = True
 
-        if not selected_frame_indices:
-            print(f"   - No frames selected for '{object_name}'. Skipping.")
-            continue
-            
-        selected_frames = [video_manager[i] for i in selected_frame_indices]
-
-        # Step 3c: Define colorspaces based on the selected cropped frames (ROIs)
-        # The coordinates will be relative to the top-left of the cropped image.
-        colorspace_from_gui = run_colorspace_definition_tool(
-            selected_frames, 
-            colors_rgb=color_config.get(object_name),
-            title=object_video_filename
-        )
-
-        try:
-            colorspace_manager.add_object(
-                object_name, 
-                selected_frame_indices, 
-                colorspace_from_gui,
-                status=ColorSpaceStatus.TO_BE_PROCESSED)
-        except ValueError as e:
-            colorspace_manager.update_object(
-                object_name, 
-                selected_frame_indices, 
-                colorspace_from_gui,
-                status=ColorSpaceStatus.TO_BE_PROCESSED,
-                merge=merge)
-        colorspace_modified = True
-    
-    # Step 3e: Update the destination JSON file
+    # --- 4. Save Changes ---
     if colorspace_modified:
+        print("\n💾 Saving all changes to disk...")
         ColorSpaceFileHandler.write(dest_metadata_path, colorspace_manager)
-    print(f"   ✅ Successfully defined and saved colorspace for '{object_name}'.")
+    else:
+        print("\n💤 No changes were made.")
 
     print(f"\n🎉 Finished processing for: '{Path(video_path).name}'")
-
+    
+    # Clean up Tkinter
+    try:
+        root.destroy()
+    except:
+        pass
