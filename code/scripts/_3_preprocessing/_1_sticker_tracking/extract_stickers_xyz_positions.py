@@ -24,7 +24,7 @@ def extract_stickers_xyz_positions(
         output_metadata_path: Path = None,
         *,
         force_processing: bool = False,
-        debug: bool = True
+        debug: bool = False
 ):
     """
     Extracts 3D sticker positions using a dynamically selected method.
