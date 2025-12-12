@@ -312,8 +312,6 @@ class CentroidPointCloudExtractor(XYZExtractorInterface):
         # Data Extraction (Pure Logic)
         px = tracked_obj_row["center_x"]
         py = tracked_obj_row["center_y"]
-        #px = tracked_obj_row["ellipse_center_x"]
-        #py = tracked_obj_row["ellipse_center_y"]
         
         x_mm, y_mm, z_mm = self.get_xyz_from_point_cloud(point_cloud, px, py)
         
