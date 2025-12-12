@@ -32,6 +32,7 @@ tasks:
     enabled: true
     options:
       force_processing: false
+      monitor: false
     depends_on: []
 
   generate_xyz_stickers:
@@ -74,8 +75,8 @@ tasks:
   compute_somatosensory_characteristics:
     enabled: true
     options:
-      force_processing: true
-      monitor: true
+      force_processing: false
+      monitor: false
     # Requires forearm validation and 3D hand data
     depends_on: [validate_forearm_extraction, generate_3d_hand_in_motion]
 
