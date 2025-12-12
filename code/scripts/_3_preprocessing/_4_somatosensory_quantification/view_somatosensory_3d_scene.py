@@ -9,6 +9,7 @@ import numpy as np
 from preprocessing.common import (
     KinectMKV,
     KinectPointCloudView,
+    SceneViewerVideoMaker,
     SceneViewer,
     LazyPointCloudSequence,
     PersistentOpen3DPointCloudSequence,
@@ -122,7 +123,7 @@ def view_somatosensory_3d_scene(
     
     with KinectMKV(kinect_video_path) as mkv:
         # Instantiate the SceneViewer
-        viewer = SceneViewer()
+        viewer = SceneViewerVideoMaker()
 
         point_cloud_view = KinectPointCloudView(mkv)
         
