@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 class ColorSpaceStatus(Enum):
     """Provides type-safe status options for colorspace processing."""
+    TO_BE_DEFINED = "to_be_defined"
     TO_BE_PROCESSED = "to_be_processed"
     TO_BE_REVIEWED = "pending_review"
     REVIEW_COMPLETED = "review_completed"
@@ -12,7 +13,7 @@ class ColorSpaceStatus(Enum):
 class ColorSpaceDefault(Enum):
     """Provides default values for colorspace properties."""
     Threshold = 250
-    Status = ColorSpaceStatus.TO_BE_PROCESSED.value
+    Status = ColorSpaceStatus.TO_BE_DEFINED.value
 
 
 class ColorSpace:

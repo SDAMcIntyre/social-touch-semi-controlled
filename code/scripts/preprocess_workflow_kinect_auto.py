@@ -133,12 +133,18 @@ def validate_hand_extraction(rgb_video_path: Path, hand_models_dir: Path, expect
     return is_valid
 
 @flow(name="6. Track Stickers (2D)")
-def track_stickers(rgb_video_path: Path, output_dir: Path, *, force_processing: bool = False) -> tuple[Path | None, bool]:
+def track_stickers(
+    rgb_video_path: Path, 
+    output_dir: Path, 
+    *, 
+    force_processing: bool = False,
+    monitor: bool = False
+) -> tuple[Path | None, bool]:
     print(f"[{output_dir.name}] Tracking stickers (2D)...")
     name_baseline = rgb_video_path.stem + "_handstickers"
     metadata_roi_path = output_dir / (name_baseline + "_roi_metadata.json")
     stickers_roi_csv_path = output_dir / (name_baseline + "_roi_tracking.csv")
-
+    
     track_objects_in_video(rgb_video_path, metadata_roi_path, output_path=stickers_roi_csv_path, force_processing=force_processing)
     
     if not is_2d_stickers_tracking_valid(metadata_roi_path):
@@ -151,11 +157,11 @@ def track_stickers(rgb_video_path: Path, output_dir: Path, *, force_processing: 
     
     metadata_colorspace_path = output_dir / (name_baseline + "_colorspace_metadata.json")
     binary_video_base_path = output_dir / (name_baseline + "_corrmap.mp4")
-    create_color_correlation_videos(corrmap_video_base_path, metadata_colorspace_path, binary_video_base_path, force_processing=force_processing)
+    create_color_correlation_videos(corrmap_video_base_path, metadata_colorspace_path, binary_video_base_path, force_processing=force_processing, monitor=monitor)
     
     if not is_correlation_videos_threshold_defined(metadata_colorspace_path):
         raise ValueError("❌ --> correlation videos threshold has not been manually validated.")
-    
+
     fit_ellipses_path = output_dir / (name_baseline + "_ellipses.csv")
     fit_ellipses_on_correlation_videos(
         video_path=binary_video_base_path,
@@ -176,7 +182,7 @@ def track_stickers(rgb_video_path: Path, output_dir: Path, *, force_processing: 
         roi_unified_csv_path,
         adj_ellipses_path,
         output_csv_path=final_csv_path,
-        score_threshold=0.7,
+        score_threshold=0.3,
         force_processing=force_processing
     )
 
@@ -188,7 +194,8 @@ def generate_xyz_stickers(
     source_video: Path, 
     output_dir: Path, 
     *, 
-    force_processing: bool = False) -> Path:
+    force_processing: bool = False
+) -> Path:
     print(f"[{output_dir.name}] Generating XYZ sticker positions (3D)...")
     name_baseline = stickers_2d_path.stem.replace('_summary_2d_coordinates', '')
     result_csv_path = output_dir / (name_baseline + "_xyz_tracked.csv")
@@ -224,7 +231,7 @@ def generate_3d_hand_in_motion_flow(rgb_video_path: Path, trial_id_path: Path, s
     out_motion_npz_path = output_dir / (name_baseline + "_motion.npz")
     out_motion_csv_path = output_dir / (name_baseline + "_motion.csv")
     
-    force_processing = True
+    #force_processing = True
     
     generate_3d_hand_in_motion(
         stickers_xyz_path, 

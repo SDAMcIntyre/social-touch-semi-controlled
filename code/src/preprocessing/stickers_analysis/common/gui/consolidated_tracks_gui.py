@@ -276,7 +276,8 @@ class ConsolidatedTracksReviewGUI:
             # Draw ellipse
             if all(k in data for k in ['ellipse_center_x', 'ellipse_center_y', 'axes_major', 'axes_minor', 'angle']):
                 center = (int(data['ellipse_center_x']), int(data['ellipse_center_y']))
-                axes = (int(data['axes_major'] / 2), int(data['axes_minor'] / 2))
+                # Swap the order. 'axes_minor' corresponds to the axis that the 'angle' variable is actually rotating.
+                axes = (int(data['axes_minor'] / 2), int(data['axes_major'] / 2))
                 angle = int(data['angle'])
                 cv2.ellipse(frame_bgr, center, axes, angle, 0, 360, color, 2)
 

@@ -116,7 +116,6 @@ def prepare_stickers_colorspace(
     name_baseline = rgb_video_path.stem + "_handstickers"
     roi_video_base_path = output_dir / (name_baseline + "_roi_unified.mp4")
     metadata_roi_path = output_dir / (name_baseline + "_roi_metadata.json")
-    
     metadata_colorspace_path = output_dir / (name_baseline + "_colorspace_metadata.json")
     define_handstickers_colorspaces_from_roi(
         roi_video_base_path,
@@ -297,7 +296,17 @@ def run_single_session_pipeline(
             )
             dag_handler.mark_completed('review_2d_stickers')
         
-        # 4. Prepare Colorspace
+        # 4. Review Thresholds: Played before prepare colorspace as the result can be discarded, and enriching the model will be necessary
+        if dag_handler.can_run('review_handstickers_color_threshold'):
+            force = dag_handler.get_task_options('review_handstickers_color_threshold').get('force_processing', False)
+            review_handstickers_color_threshold(
+                rgb_video_path=rgb_video_path,
+                output_dir=sticker_dir,
+                force_processing=force
+            )
+            dag_handler.mark_completed('review_handstickers_color_threshold')
+
+        # 5. Prepare Colorspace
         if dag_handler.can_run('prepare_stickers_colorspace'):
             print(f"[{block_name}] ==> Running task: prepare_stickers_colorspace")
             force = dag_handler.get_task_options('prepare_stickers_colorspace').get('force_processing', False)
@@ -308,16 +317,6 @@ def run_single_session_pipeline(
             )
             dag_handler.mark_completed('prepare_stickers_colorspace')
         
-        # 5. Review Thresholds
-        if dag_handler.can_run('review_handstickers_color_threshold'):
-            print(f"[{block_name}] ==> Running task: review_handstickers_color_threshold")
-            force = dag_handler.get_task_options('review_handstickers_color_threshold').get('force_processing', False)
-            review_handstickers_color_threshold(
-                rgb_video_path=rgb_video_path,
-                output_dir=sticker_dir,
-                force_processing=force
-            )
-            dag_handler.mark_completed('review_handstickers_color_threshold')
 
         # 6. Define Trial Chunks
         if dag_handler.can_run('define_trial_chunks'):

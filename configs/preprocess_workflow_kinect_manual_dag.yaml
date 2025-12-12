@@ -26,14 +26,14 @@ tasks:
     description: "Manually select the position of the sticks on an arbitrary standard 3d model of hand."
     depends_on: []
     options:
-      force_processing: false
+      force_processing: true
 
   review_2d_stickers:
     enabled: true
     description: "Manually define/review the tracking ROI for stickers on the hand."
     depends_on: []
     options:
-      force_processing: true
+      force_processing: false
 
   # PHASE 2: REFINEMENT
   prepare_stickers_colorspace:
@@ -51,21 +51,21 @@ tasks:
       force_processing: false
 
   define_trial_chunks:
-    enabled: true
+    enabled: false
     description: "Define the trial chunks."
     depends_on: [review_handstickers_color_threshold]
     options:
       force_processing: false
 
   curate_hamer_hand_models:
-    enabled: true
+    enabled: false
     description: "Validate and curate Hamer hand model tracking using GUI."
     depends_on: [define_trial_chunks]
     options:
       force_processing: false
 
   review_single_touches:
-    enabled: true
+    enabled: false
     description: "Review the automatically segmented single touches."
     depends_on: [define_trial_chunks]
     options:

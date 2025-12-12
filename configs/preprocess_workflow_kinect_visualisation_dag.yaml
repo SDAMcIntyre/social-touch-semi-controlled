@@ -30,12 +30,12 @@ tasks:
     depends_on: []
 
   view_xyz_stickers:
-    enabled: True
+    enabled: False
     description: "Manually view the XYZ estimation of the stickers on the hand."
     depends_on: []
 
   # PHASE 4: COMPLEX ASSESSMENTS
   view_somatosensory_assessement:
-    enabled: False
+    enabled: True
     description: "Manually view the somatosensory assessment results."
     depends_on: []

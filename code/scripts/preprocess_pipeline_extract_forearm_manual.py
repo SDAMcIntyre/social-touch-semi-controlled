@@ -237,7 +237,6 @@ def generate_forearm_pointcloud(
         Path(flag_file).unlink()
         print(f"🧹 Removed old flag file from previous run.")
 
-
     return True
 
 
