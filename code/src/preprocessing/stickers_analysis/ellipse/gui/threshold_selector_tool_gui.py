@@ -6,26 +6,36 @@ from PIL import Image, ImageTk
 from typing import List, Optional, Tuple
 from enum import Enum, auto
 
+# --- Matplotlib Integration ---
+import matplotlib
+matplotlib.use("TkAgg")
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.figure import Figure
+from mpl_toolkits.mplot3d import Axes3D
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+
 class SelectionState(Enum):
-    """
-    Enumeration for the possible exit states of the Threshold Selector.
-    """
     PENDING = auto()
     CONFIRMED = auto()
     CANCELLED = auto()
     REDO_COLORSPACE = auto()
 
+class ViewMode(Enum):
+    SINGLE_FRAME_2D = auto()
+    POINT_CLOUD_3D = auto()
+
 class ThresholdSelectorTool:
     """
-    A Tkinter-based GUI tool to interactively select a threshold value from video frames.
+    Architecturally refined GUI tool for threshold selection.
     
-    Architectural Note:
-    This class implements the 'Quit-Clean-Destroy' pattern to manage Tcl/Tk resource 
-    lifecycles safely, preventing RuntimeErrors during Python garbage collection.
-    
-    UI Update:
-    Implements 'clam' theme override to allow custom button coloration and enhanced
-    visual accessibility.
+    Modifications:
+    - Geometry Propagation: Disabled on 2D render frame to prevent infinite resize loops.
+    - Dynamic Resizing: 2D view listens to <Configure> events to maximize video usage.
+    - Default 3D: Initializes directly into POINT_CLOUD_3D mode.
+    - Voxel Simulation: 3D scatter plots use square markers scaled to approximate 
+      continuous surfaces (touching pixels).
+    - Contextual Geometry: Renders a transparent reference plane for video bounds.
+    - Layout Optimization: Mode switch button grouped with action buttons.
     """
 
     def __init__(
@@ -36,304 +46,367 @@ class ThresholdSelectorTool:
             spot_type: str = 'dark'):
         
         if not frames:
-            raise ValueError("The provided frame list cannot be empty.")
+            raise ValueError("Frame list cannot be empty.")
             
         self.frames = frames
-        self.spot_type = spot_type
         self.total_frames = len(self.frames)
         self.video_name = video_name
-
         self.init_threshold = threshold
+        self.spot_type = spot_type
 
-        # --- State variables ---
+        # --- Data Preparation ---
+        self._prepare_volumes()
+
+        # --- State ---
         self.result: Optional[int] = None
         self.selection_state: SelectionState = SelectionState.PENDING
-
-        # --- Tkinter UI elements ---
-        self.root: Optional[tk.Tk] = None
-        self.original_img_label: Optional[ttk.Label] = None
-        self.thresholded_img_label: Optional[ttk.Label] = None
-        self.image_pane: Optional[ttk.Frame] = None
-        self.style: Optional[ttk.Style] = None
+        # Requirement: 3D mode is shown by default
+        self.view_mode: ViewMode = ViewMode.POINT_CLOUD_3D
         
-        # Tkinter variables (Initialized in run to ensure binding to correct root)
+        # Cache for window dimensions to prevent render loops
+        self.last_2d_size: Tuple[int, int] = (0, 0)
+
+        # --- UI Components ---
+        self.root: Optional[tk.Tk] = None
+        self.canvas_2d_frame: Optional[ttk.Frame] = None
+        self.canvas_3d_frame: Optional[ttk.Frame] = None
+        
+        # Matplotlib references
+        self.fig = None
+        self.ax = None
+        self.mpl_canvas = None
+
+        # Tkinter Vars
         self.frame_var: Optional[tk.IntVar] = None
         self.thresh_var: Optional[tk.IntVar] = None
         self.title_var: Optional[tk.StringVar] = None
+        self.mode_btn_text: Optional[tk.StringVar] = None
 
-        self.target_display_size: Optional[Tuple[int, int]] = None
+    def _prepare_volumes(self):
+        """
+        Pre-processes video data into 3D arrays.
+        """
+        print("Processing volume data...")
+        shape = self.frames[0].shape
+        if len(shape) == 3:
+            gray_frames = [cv2.cvtColor(f, cv2.COLOR_BGR2GRAY) for f in self.frames]
+        else:
+            gray_frames = self.frames
+        
+        self.volume_full = np.stack(gray_frames) # Shape: (Z, Y, X)
+        self.full_h, self.full_w = self.volume_full.shape[1], self.volume_full.shape[2]
+
+        # Downsample for 3D visualization (Performance Optimization)
+        # Target roughly 100x100xZ resolution
+        target_dim = 100
+        h, w = shape[:2]
+        scale = target_dim / max(h, w)
+        new_w, new_h = int(w * scale), int(h * scale)
+        
+        # Resize all frames for the cache
+        resized_frames = [cv2.resize(f, (new_w, new_h), interpolation=cv2.INTER_NEAREST) 
+                          for f in gray_frames]
+        
+        self.volume_small = np.stack(resized_frames)
+        self.small_h, self.small_w = self.volume_small.shape[1], self.volume_small.shape[2]
+        print(f"Volume cached. Full: {self.volume_full.shape}, Small: {self.volume_small.shape}")
 
     def run(self) -> Optional[int]:
-        """
-        Creates and runs the GUI application, then returns the selected value.
-        """
         self.root = tk.Tk()
-        self.root.title("Interactive Threshold Selection")
+        self.root.title("Interactive Threshold Architecture")
         self.root.protocol("WM_DELETE_WINDOW", self._on_cancel)
+        self.root.state('zoomed')
 
-        # Initialize variables bound to this specific root
+        self._init_vars()
+        self._setup_styles()
+        self._setup_layout()
+
+        # Force initial render logic based on default mode (3D)
+        self.root.update()
+        
+        # Set initial button text based on default mode
+        if self.view_mode == ViewMode.POINT_CLOUD_3D:
+             self.mode_btn_text.set("Switch to 2D View")
+             self.canvas_2d_frame.pack_forget()
+             self.canvas_3d_frame.pack(fill=tk.BOTH, expand=True)
+             self.scale_frame.state(['disabled'])
+        
+        self._update_display()
+
+        print(f"\n--- Tool Running: {self.video_name} ---")
+        self.root.mainloop()
+
+        self._cleanup()
+        return self.result
+
+    def _init_vars(self):
         self.frame_var = tk.IntVar(value=0)
         self.thresh_var = tk.IntVar(value=self.init_threshold)
         self.title_var = tk.StringVar()
+        self.mode_btn_text = tk.StringVar(value="Switch to 2D View")
 
-        self._setup_styles()
-        self._setup_ui()
-
-        # Window Setup
-        self.root.state('zoomed')
-        self.root.lift()
-        self.root.attributes('-topmost', True)
-        self.root.after_idle(self.root.attributes, '-topmost', False)
-        self.root.update_idletasks()
-
-        # Layout calculation
-        pane_width = self.image_pane.winfo_width()
-        pane_height = self.image_pane.winfo_height()
-        self.target_display_size = (pane_width // 2, pane_height)
-
-        self._update_display()
-
-        print(f"\n--- Interactive Threshold Selection: {self.video_name} ---")
-        
-        # BLOCKING CALL: Runs until self.root.quit() is called
-        self.root.mainloop()
-
-        # --- CLEANUP PHASE (The Fix) ---
-        # Explicitly delete Tkinter variables while self.root is still valid.
-        # This prevents __del__ from firing on a destroyed interpreter later.
-        if self.frame_var is not None: del self.frame_var
-        if self.thresh_var is not None: del self.thresh_var
-        if self.title_var is not None: del self.title_var
-        
-        # Now it is safe to destroy the interpreter
+    def _cleanup(self):
         if self.root:
             self.root.destroy()
             self.root = None
-
-        return self.result
+        if self.fig:
+            matplotlib.pyplot.close(self.fig)
 
     def _setup_styles(self):
-        """
-        Configures the visual styles for the application.
-        
-        Architecture Note:
-        To support custom background colors on Windows/Mac, we must force the 
-        'clam' theme. Standard themes ignore background color changes.
-        """
-        self.style = ttk.Style(self.root)
-        current_theme = self.style.theme_use()
-        
-        # Force 'clam' theme for button color support if not already active
-        # This might change the look of sliders slightly, but ensures buttons work.
+        self.style = ttk.Style()
         self.style.theme_use('clam')
-
-        # Define Common Font
-        button_font = ("Helvetica", 11, "bold")
-
-        # --- 1. Confirm Style (Green) ---
-        self.style.configure(
-            "Confirm.TButton",
-            background="#2E7D32",  # Dark Green
-            foreground="white",
-            font=button_font,
-            borderwidth=1,
-            focuscolor="none"
-        )
-        self.style.map(
-            "Confirm.TButton",
-            background=[("active", "#4CAF50")],  # Lighter Green on Hover
-            relief=[("pressed", "sunken")]
-        )
-
-        # --- 2. Redo Style (Orange/Amber) ---
-        self.style.configure(
-            "Redo.TButton",
-            background="#F57C00",  # Orange
-            foreground="white",
-            font=button_font,
-            borderwidth=1,
-            focuscolor="none"
-        )
-        self.style.map(
-            "Redo.TButton",
-            background=[("active", "#FF9800")],  # Lighter Orange on Hover
-            relief=[("pressed", "sunken")]
-        )
-
-        # --- 3. Cancel Style (Red) ---
-        self.style.configure(
-            "Cancel.TButton",
-            background="#C62828",  # Dark Red
-            foreground="white",
-            font=button_font,
-            borderwidth=1,
-            focuscolor="none"
-        )
-        self.style.map(
-            "Cancel.TButton",
-            background=[("active", "#EF5350")],  # Lighter Red on Hover
-            relief=[("pressed", "sunken")]
-        )
-
-        # Revert frames/labels to standard look if desired, or keep clam style
-        # For consistency, we leave the rest as 'clam' default.
-
-    def _setup_ui(self):
-        """Creates and arranges all the Tkinter widgets."""
-        main_frame = ttk.Frame(self.root, padding="10")
-        main_frame.grid(row=0, column=0, sticky="nsew")
-        self.root.rowconfigure(0, weight=1)
-        self.root.columnconfigure(0, weight=1)
-
-        # Title
-        title_label = ttk.Label(main_frame, textvariable=self.title_var, font=("Helvetica", 14, "bold"))
-        title_label.grid(row=0, column=0, sticky="w", pady=(0, 10))
-
-        # Images
-        self.image_pane = ttk.Frame(main_frame)
-        self.image_pane.grid(row=1, column=0, sticky="nsew", padx=5, pady=5) 
-        main_frame.rowconfigure(1, weight=1) 
-        main_frame.columnconfigure(0, weight=1)
-
-        self.original_img_label = ttk.Label(self.image_pane)
-        self.original_img_label.pack(side=tk.LEFT, expand=True, fill=tk.BOTH, padx=(0, 5))
+        btn_font = ("Segoe UI", 10, "bold")
         
-        self.thresholded_img_label = ttk.Label(self.image_pane)
-        self.thresholded_img_label.pack(side=tk.LEFT, expand=True, fill=tk.BOTH, padx=(5, 0))
+        colors = {
+            "Confirm": ("#2E7D32", "#4CAF50"),
+            "Redo": ("#EF6C00", "#FF9800"),
+            "Cancel": ("#C62828", "#EF5350"),
+            "Mode": ("#1565C0", "#42A5F5")
+        }
 
-        # Controls
-        controls_pane = ttk.LabelFrame(main_frame, text="Controls", padding="10")
-        controls_pane.grid(row=2, column=0, sticky="ew", pady=(10, 0))
-        controls_pane.columnconfigure(1, weight=1)
+        for name, (normal, active) in colors.items():
+            style_name = f"{name}.TButton"
+            self.style.configure(style_name, background=normal, foreground="white", font=btn_font)
+            self.style.map(style_name, background=[("active", active)])
 
-        # Sliders
-        ttk.Label(controls_pane, text="Frame:").grid(row=0, column=0, sticky="w")
-        frame_slider = ttk.Scale(controls_pane, from_=0, to=self.total_frames - 1,
-                                 orient=tk.HORIZONTAL, variable=self.frame_var,
-                                 command=self._on_slider_change)
-        frame_slider.grid(row=0, column=1, sticky="ew", padx=5)
-        ttk.Label(controls_pane, textvariable=self.frame_var, width=4).grid(row=0, column=2)
+    def _setup_layout(self):
+        main = ttk.Frame(self.root)
+        main.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
-        ttk.Label(controls_pane, text="Threshold:").grid(row=1, column=0, sticky="w")
-        thresh_slider = ttk.Scale(controls_pane, from_=0, to=255,
-                                  orient=tk.HORIZONTAL, variable=self.thresh_var,
-                                  command=self._on_slider_change)
-        thresh_slider.grid(row=1, column=1, sticky="ew", padx=5)
-        ttk.Label(controls_pane, textvariable=self.thresh_var, width=4).grid(row=1, column=2)
+        # Header
+        ttk.Label(main, textvariable=self.title_var, font=("Segoe UI", 14, "bold")).pack(pady=(0, 10), anchor="w")
 
-        # Buttons - Modified to use custom styles and padding
-        button_pane = ttk.Frame(main_frame)
-        button_pane.grid(row=3, column=0, sticky="e", pady=(20, 10))
+        # Central View Container
+        self.view_container = ttk.Frame(main)
+        self.view_container.pack(fill=tk.BOTH, expand=True)
+
+        # 2D View Frame
+        self.canvas_2d_frame = ttk.Frame(self.view_container)
         
-        # Confirm Button (Green)
-        confirm_button = ttk.Button(
-            button_pane, 
-            text="Confirm (Enter)", 
-            command=self._on_confirm,
-            style="Confirm.TButton",
-            width=20
-        )
-        confirm_button.pack(side=tk.RIGHT, padx=5, ipady=5) # ipady adds internal height
+        # --- ARCHITECTURAL FIX: DISABLE GEOMETRY PROPAGATION ---
+        # This prevents the frame from expanding when children (images) are resized,
+        # breaking the infinite resize loop.
+        self.canvas_2d_frame.pack_propagate(False) 
         
-        # Redo Button (Orange)
-        redo_button = ttk.Button(
-            button_pane, 
-            text="Redo (Reselect Colorspace)", 
-            command=self._on_redo,
-            style="Redo.TButton",
-            width=25
-        )
-        redo_button.pack(side=tk.RIGHT, padx=5, ipady=5)
+        # Split 2D frame into two halves
+        self.lbl_orig = ttk.Label(self.canvas_2d_frame, anchor="center")
+        self.lbl_orig.pack(side=tk.LEFT, expand=True, fill=tk.BOTH, padx=2)
+        
+        self.lbl_thresh = ttk.Label(self.canvas_2d_frame, anchor="center")
+        self.lbl_thresh.pack(side=tk.LEFT, expand=True, fill=tk.BOTH, padx=2)
 
-        # Cancel Button (Red)
-        cancel_button = ttk.Button(
-            button_pane, 
-            text="Cancel (Esc)", 
-            command=self._on_cancel,
-            style="Cancel.TButton",
-            width=15
-        )
-        cancel_button.pack(side=tk.RIGHT, ipady=5)
+        # Bind Resize Event for Responsive 2D
+        self.canvas_2d_frame.bind("<Configure>", self._on_2d_resize)
+
+        # 3D View Frame
+        self.canvas_3d_frame = ttk.Frame(self.view_container)
         
-        # Bindings
-        self.root.bind('<Return>', lambda e: self._on_confirm())
+        # Initialize Matplotlib Figure
+        self.fig = Figure(figsize=(5, 4), dpi=100, facecolor='#f0f0f0')
+        self.ax = self.fig.add_subplot(111, projection='3d')
+        self.ax.set_facecolor('#f0f0f0')
+        
+        # Adjust subplot parameters to maximize 3D view area
+        self.fig.subplots_adjust(left=0, right=1, bottom=0, top=1)
+        
+        self.mpl_canvas = FigureCanvasTkAgg(self.fig, master=self.canvas_3d_frame)
+        self.mpl_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
+        # Controls Area
+        controls = ttk.LabelFrame(main, text="Parameters", padding=10)
+        controls.pack(fill=tk.X, pady=(10, 0))
+
+        controls.columnconfigure(1, weight=1)
+        
+        # Frame Slider
+        ttk.Label(controls, text="Frame Index:").grid(row=0, column=0, sticky="e", padx=5)
+        self.scale_frame = ttk.Scale(controls, from_=0, to=self.total_frames-1, variable=self.frame_var, 
+                                     orient=tk.HORIZONTAL, command=lambda v: self._update_display())
+        self.scale_frame.grid(row=0, column=1, sticky="ew")
+        ttk.Label(controls, textvariable=self.frame_var, width=4).grid(row=0, column=2, padx=5)
+
+        # Threshold Slider
+        ttk.Label(controls, text="Threshold:").grid(row=1, column=0, sticky="e", padx=5)
+        self.scale_thresh = ttk.Scale(controls, from_=0, to=255, variable=self.thresh_var, 
+                                      orient=tk.HORIZONTAL, command=lambda v: self._update_display())
+        self.scale_thresh.grid(row=1, column=1, sticky="ew")
+        ttk.Label(controls, textvariable=self.thresh_var, width=4).grid(row=1, column=2, padx=5)
+
+        # Buttons
+        btn_frame = ttk.Frame(main)
+        btn_frame.pack(fill=tk.X, pady=10)
+
+        # Modified Layout: All buttons grouped on the right side
+        # Stacking order: pack(side=RIGHT) stacks from Right to Left.
+        # Desired Order (Visual Right-to-Left): Confirm -> Redo -> Cancel -> Switch Mode
+        
+        ttk.Button(btn_frame, text="Confirm", command=self._confirm, style="Confirm.TButton").pack(side=tk.RIGHT, padx=5)
+        ttk.Button(btn_frame, text="Redo", command=self._redo, style="Redo.TButton").pack(side=tk.RIGHT, padx=5)
+        ttk.Button(btn_frame, text="Cancel", command=self._on_cancel, style="Cancel.TButton").pack(side=tk.RIGHT, padx=5)
+        
+        # Mode button moved here to be close to the other buttons
+        ttk.Button(btn_frame, textvariable=self.mode_btn_text, command=self._toggle_mode, style="Mode.TButton").pack(side=tk.RIGHT, padx=5)
+
+        self.root.bind('<Return>', lambda e: self._confirm())
         self.root.bind('<Escape>', lambda e: self._on_cancel())
-        self.root.bind('<Left>', lambda e: self._increment_frame(-1))
-        self.root.bind('<Right>', lambda e: self._increment_frame(1))
-        self.root.bind('<Control-Left>', lambda e: self._increment_frame(-10))
-        self.root.bind('<Control-Right>', lambda e: self._increment_frame(10))
 
-    def _increment_frame(self, step: int):
-        if self.frame_var:
-            current_frame = self.frame_var.get()
-            new_frame = max(0, min(current_frame + step, self.total_frames - 1))
-            if new_frame != current_frame:
-                self.frame_var.set(new_frame)
-                self._on_slider_change()
-    
-    def _on_slider_change(self, _=None):
+    def _on_2d_resize(self, event):
+        """
+        Event handler for window resizing in 2D mode. 
+        Debounces slightly to prevent massive CPU load during drag.
+        """
+        if self.view_mode != ViewMode.SINGLE_FRAME_2D:
+            return
+            
+        # Basic debounce: only update if size changed significantly
+        if abs(event.width - self.last_2d_size[0]) > 10 or abs(event.height - self.last_2d_size[1]) > 10:
+            self.last_2d_size = (event.width, event.height)
+            self._update_display()
+
+    def _toggle_mode(self):
+        if self.view_mode == ViewMode.SINGLE_FRAME_2D:
+            self.view_mode = ViewMode.POINT_CLOUD_3D
+            self.mode_btn_text.set("Switch to 2D View")
+            self.canvas_2d_frame.pack_forget()
+            self.canvas_3d_frame.pack(fill=tk.BOTH, expand=True)
+            self.scale_frame.state(['disabled'])
+        else:
+            self.view_mode = ViewMode.SINGLE_FRAME_2D
+            self.mode_btn_text.set("Switch to 3D View")
+            self.canvas_3d_frame.pack_forget()
+            self.canvas_2d_frame.pack(fill=tk.BOTH, expand=True)
+            self.scale_frame.state(['!disabled'])
+        
         self._update_display()
 
     def _update_display(self):
-        # Guard clause in case update is triggered during shutdown
-        if not self.root or not self.frame_var:
+        thresh = self.thresh_var.get()
+        
+        if self.view_mode == ViewMode.SINGLE_FRAME_2D:
+            idx = self.frame_var.get()
+            self.title_var.set(f"2D View | Frame {idx}/{self.total_frames} | Threshold: {thresh}")
+            self._render_2d(idx, thresh)
+        else:
+            self.title_var.set(f"3D View | Voxel Cloud | Threshold: {thresh}")
+            self._render_3d(thresh)
+
+    def _render_2d(self, idx, thresh):
+        frame_gray = self.volume_full[idx] 
+        
+        thresh_type = cv2.THRESH_BINARY_INV if self.spot_type == 'dark' else cv2.THRESH_BINARY
+        _, bin_mask = cv2.threshold(frame_gray, thresh, 255, thresh_type)
+
+        show_orig = cv2.cvtColor(frame_gray, cv2.COLOR_GRAY2RGB)
+        show_thresh = cv2.cvtColor(bin_mask, cv2.COLOR_GRAY2RGB)
+
+        # Dynamic size calculation based on container size
+        # We assume the container is split 50/50 for the two images
+        container_w = self.canvas_2d_frame.winfo_width()
+        container_h = self.canvas_2d_frame.winfo_height()
+        
+        # Fallback if window hasn't rendered yet
+        if container_w < 10: 
+            container_w = 800
+            container_h = 600
+
+        target_w = container_w // 2
+        target_h = container_h
+
+        self._set_image(self.lbl_orig, show_orig, (target_w, target_h))
+        self._set_image(self.lbl_thresh, show_thresh, (target_w, target_h))
+
+    def _render_3d(self, thresh):
+        self.ax.clear()
+        
+        # 1. Data Thresholding
+        if self.spot_type == 'dark':
+            mask = self.volume_small < thresh
+        else:
+            mask = self.volume_small > thresh
+
+        z_idxs, y_idxs, x_idxs = np.where(mask)
+
+        # 2. Downsampling for interactivity
+        max_points = 5000
+        total_points = len(z_idxs)
+        if total_points > max_points:
+            choices = np.random.choice(total_points, max_points, replace=False)
+            z_idxs = z_idxs[choices]
+            y_idxs = y_idxs[choices]
+            x_idxs = x_idxs[choices]
+
+        # 3. Add Semi-Transparent Reference Rectangle (Video Size)
+        # We place this at Z=0 (top of the stack)
+        d_z, d_y, d_x = self.volume_small.shape
+        
+        # Vertices of the video plane (X, Y, Z)
+        # Note: In matplotlib 3d, Z is up. We map image Z to negative Z.
+        verts = [
+            [(0, 0, 0), (d_x, 0, 0), (d_x, d_y, 0), (0, d_y, 0)]
+        ]
+        poly = Poly3DCollection(verts, alpha=0.3, facecolors='cyan', edgecolors='blue')
+        self.ax.add_collection3d(poly)
+
+        # 4. Scatter Plot with "Touching" Markers
+        # To make points touch, we use square markers.
+        # Calculation: We need the marker to cover 1 unit in data coordinates.
+        # Heuristic: s is in points^2. 
+        # A crude approximation for "filling" the grid in a default view.
+        # Since exact data-to-pixel calculation changes with zoom, we pick a 
+        # reasonably large constant relative to the small volume dimension (100).
+        marker_size = 25 
+        
+        self.ax.scatter(x_idxs, y_idxs, -z_idxs, c='g', marker='s', s=marker_size, alpha=1.0, depthshade=False)
+        
+        # 5. Axes Configuration
+        self.ax.set_xlim(0, d_x)
+        self.ax.set_ylim(d_y, 0) # Invert Y for image coords
+        self.ax.set_zlim(-d_z, 0)
+        
+        self.ax.set_xlabel("X")
+        self.ax.set_ylabel("Y")
+        self.ax.set_zlabel("Frame")
+        
+        # Remove grid/background for cleaner look if desired, or keep for reference
+        # self.ax.grid(False) 
+
+        self.mpl_canvas.draw()
+
+    def _set_image(self, label, img_arr, target_dims: Tuple[int, int]):
+        tw, th = target_dims
+        h, w = img_arr.shape[:2]
+        
+        # Safety check for zero dimensions
+        if tw <= 0 or th <= 0 or w <= 0 or h <= 0:
             return
 
-        frame_idx = self.frame_var.get()
-        threshold_val = self.thresh_var.get()
-
-        self.title_var.set(f"Video: {self.video_name}  |  Frame: {frame_idx}/{self.total_frames - 1}  |  Threshold: {threshold_val}")
+        # Calculate aspect-ratio preserving resize
+        scale = min(tw/w, th/h)
         
-        original_frame = self.frames[frame_idx]
-        if len(original_frame.shape) == 3:
-            gray_frame = cv2.cvtColor(original_frame, cv2.COLOR_BGR2GRAY)
-        else:
-            gray_frame = original_frame.copy()
-
-        thresh_type = cv2.THRESH_BINARY_INV if self.spot_type == 'dark' else cv2.THRESH_BINARY
-        _, thresholded_frame = cv2.threshold(gray_frame, threshold_val, 255, thresh_type)
-
-        display_gray = cv2.cvtColor(gray_frame, cv2.COLOR_GRAY2BGR)
-        display_thresh = cv2.cvtColor(thresholded_frame, cv2.COLOR_GRAY2BGR)
-
-        self._update_image_label(self.original_img_label, display_gray)
-        self._update_image_label(self.thresholded_img_label, display_thresh)
-
-    def _update_image_label(self, label: ttk.Label, frame: np.ndarray):
-        if self.target_display_size:
-            target_w, target_h = self.target_display_size
-            h, w = frame.shape[:2]
-            if w > 0 and h > 0:
-                scale = min(target_w / w, target_h / h)
-                if scale < 1.0 or (target_w > w and target_h > h):
-                    new_w, new_h = int(w * scale), int(h * scale)
-                    interp = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR
-                    frame = cv2.resize(frame, (new_w, new_h), interpolation=interp)
-
-        cv2image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        img = Image.fromarray(cv2image)
-        imgtk = ImageTk.PhotoImage(image=img)
+        # Resize based on target dimensions
+        new_w = int(w * scale)
+        new_h = int(h * scale)
         
-        label.imgtk = imgtk
-        label.config(image=imgtk)
+        # Ensure dimensions are at least 1x1
+        new_w = max(1, new_w)
+        new_h = max(1, new_h)
 
-    def _on_confirm(self):
-        """Stores the result and quits the mainloop (does not destroy root yet)."""
+        img_arr = cv2.resize(img_arr, (new_w, new_h), interpolation=cv2.INTER_NEAREST)
+        
+        im_pil = Image.fromarray(img_arr)
+        im_tk = ImageTk.PhotoImage(image=im_pil)
+        label.image = im_tk 
+        label.configure(image=im_tk)
+
+    def _confirm(self):
         self.result = self.thresh_var.get()
         self.selection_state = SelectionState.CONFIRMED
-        print(f"✅ Threshold value {self.result} confirmed.")
-        self.root.quit() # Exit mainloop
+        self.root.quit()
 
-    def _on_redo(self):
-        """Marks state as REDO and quits the mainloop."""
-        self.result = None
+    def _redo(self):
         self.selection_state = SelectionState.REDO_COLORSPACE
-        print("🔄 Redo processing requested: Reselect Colorspace.")
-        self.root.quit() # Exit mainloop
+        self.root.quit()
 
     def _on_cancel(self):
-        """Marks state as CANCELLED and quits the mainloop."""
-        self.result = None
         self.selection_state = SelectionState.CANCELLED
-        print("❌ Threshold selection cancelled by user.")
-        self.root.quit() # Exit mainloop
+        self.root.quit()
