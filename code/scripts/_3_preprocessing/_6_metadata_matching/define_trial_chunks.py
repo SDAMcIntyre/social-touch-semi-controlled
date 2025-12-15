@@ -94,7 +94,36 @@ def load_existing_chunks_from_csv(csv_path: Path) -> List[Tuple[int, int]]:
         logging.warning(f"Could not load existing chunks from {csv_path}: {e}")
         return []
 
+def load_reference_led_mask(csv_path: Path) -> Optional[np.ndarray]:
+    """
+    Loads the external LED reference data, replacing NaNs with 0.
 
+    Args:
+        csv_path: Path to the CSV containing 'led_on'.
+
+    Returns:
+        Numpy array of the binary mask (int), or None if loading fails.
+    """
+    if not csv_path.exists():
+        logging.warning(f"Reference LED file not found at: {csv_path}")
+        return None
+    
+    try:
+        df = pd.read_csv(csv_path)
+        
+        # Architectural fix: log message aligned with actual logic ('led_on')
+        if 'led_on' not in df.columns:
+            logging.warning(f"'led_on' column missing in reference file: {csv_path}")
+            return None
+        
+        # Optimization: fillna(0) handles NaN floats before casting to int.
+        # This prevents IntCastingNaNError and ensures valid binary mask generation.
+        return df['led_on'].fillna(0).to_numpy(dtype=int)
+
+    except Exception as e:
+        logging.error(f"Failed to load reference LED mask: {e}")
+        return None
+    
 def save_chunks_to_csv(chunks: List[Tuple[int, int]], output_csv_path: Path, total_frames: int):
     """
     Creates a new CSV file with a 'trial_on' mask.
@@ -129,6 +158,7 @@ def save_chunks_to_csv(chunks: List[Tuple[int, int]], output_csv_path: Path, tot
 
 def define_trial_chunks(
     xy_csv_path: Path,
+    led_on_path: Path,
     rgb_video_path: Path,
     output_csv_path: Path,
     *,
@@ -139,6 +169,7 @@ def define_trial_chunks(
 
     Args:
         xy_csv_path: Path to the tracking data CSV (for visualization).
+        led_on_path: Path to the reference LED CSV (visualization).
         rgb_video_path: Path to the MP4 video file.
         output_csv_path: Final destination CSV containing only 'trial_on'.
         force_processing: If True, overrides the task processing check.
@@ -173,7 +204,15 @@ def define_trial_chunks(
         logging.error(f"Error loading video: {e}")
         return
 
-    # 4. Load Existing Annotations
+    # 4. Load Reference LED Data (New Integration)
+    logging.info(f"Loading reference LED data from: {led_on_path.name}...")
+    reference_mask = load_reference_led_mask(led_on_path)
+    if reference_mask is not None:
+        logging.info(f"Reference mask loaded. Length: {len(reference_mask)}")
+    else:
+        logging.warning("Proceeding without reference LED mask.")
+
+    # 5. Load Existing Annotations
     # We load from output_csv_path if it exists to support resuming
     initial_chunks = load_existing_chunks_from_csv(output_csv_path)
     if initial_chunks:
@@ -181,7 +220,7 @@ def define_trial_chunks(
     else:
         logging.info("Starting a new recording session (No active chunks found).")
 
-    # 5. Initialize and Start GUI
+    # 6. Initialize and Start GUI
     logging.info("Launching Chunk Recording Interface...")
     logging.info("  - Controls: [Space] to Toggle Record, [Arrows] to Seek")
     
@@ -190,16 +229,14 @@ def define_trial_chunks(
         tracks_manager=tracked_data,
         object_colors=sticker_colors,
         initial_chunks=initial_chunks,
+        reference_mask=reference_mask,
         title=f"Annotating: {rgb_video_path.name}",
         windowState='maximized'
     )
     
-    # Note: Assuming gui.start() handles the event loop. 
-    # If TrialSegmenterGUI is a QMainWindow/QWidget, this typically requires app.exec_() in the calling context
-    # or encapsulation within the start() method.
     gui.start()
 
-    # 6. Retrieve and Save Data
+    # 7. Retrieve and Save Data
     final_chunks = gui.chunks
     
     logging.info("-" * 40)
