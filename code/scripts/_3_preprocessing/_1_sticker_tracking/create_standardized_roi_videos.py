@@ -24,6 +24,7 @@ def video_capture_manager(path: str) -> Iterator[cv2.VideoCapture]:
     finally:
         cap.release()
 
+
 def success_video_file_quality_check(video_path: str) -> bool:
     """
     Verifies a video file by trying to open it and read the first frame.
@@ -41,7 +42,7 @@ def success_video_file_quality_check(video_path: str) -> bool:
             if not cap.isOpened():
                 print("Verification failed: Could not open the video file.")
                 return False
-            
+
             # Check 2: Can we read at least one frame?
             ret, frame = cap.read()
             if not ret or frame is None:
@@ -72,6 +73,7 @@ def video_writer_manager(
         print("Finalizing video stream...")
         writer.release()
 
+
 def create_windowed_video(
     video_manager: VideoMP4Manager, output_video_path: str, roi_df: pd.DataFrame
 ):
@@ -79,7 +81,7 @@ def create_windowed_video(
     Creates a cropped video from a source, ensuring the output is never corrupted.
 
     This version uses a context manager for the VideoWriter and an atomic move
-    operation to guarantee file integrity.
+    operation to guarantee file integrity. Includes progress feedback.
     """
     # 1. Input Validation
     required_cols = ['frame_id', 'roi_x', 'roi_y', 'roi_width', 'roi_height', 'status']
@@ -118,8 +120,18 @@ def create_windowed_video(
             roi_df_indexed = roi_df.set_index('frame_id')
             roi_coord_cols = ['roi_x', 'roi_y', 'roi_width', 'roi_height']
 
+            total_frames = len(video_manager)
+            # Log progress every 5% of frames, or at least every 10 frames
+            log_interval = max(10, int(total_frames * 0.05))
+
             # 4. Main writing loop
-            for frame_idx in range(len(video_manager)):
+            for frame_idx in range(total_frames):
+                # --- Progress Feedback Logic ---
+                if frame_idx % log_interval == 0:
+                    percent_complete = (frame_idx / total_frames) * 100
+                    print(f"   ⏳ Progress: Frame {frame_idx}/{total_frames} ({percent_complete:.1f}%)")
+                # -------------------------------
+
                 try:
                     roi_row = roi_df_indexed.loc[frame_idx]
                     if roi_row['status'] == 'Black Frame' or roi_row[roi_coord_cols].isnull().any():
@@ -153,7 +165,7 @@ def create_windowed_video(
             print(f"🗑️ Deleting corrupted file: '{output_video_path}'")
             Path(output_video_path).unlink()
             raise IOError(f"💥 Failed to create a valid video file at '{output_video_path}'. The output was corrupted.")
-        
+
         print(f"🎉 Successfully created and verified video: '{output_video_path}'")
 
     except Exception as e:
