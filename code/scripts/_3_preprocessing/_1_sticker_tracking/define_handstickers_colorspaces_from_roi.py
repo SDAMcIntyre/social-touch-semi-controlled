@@ -387,10 +387,19 @@ def define_handstickers_colorspaces_from_roi(
     for object_name in object_names:
         current_colorspace: Optional[ColorSpace] = colorspace_manager.get_colorspace(object_name)
 
-        # Logic to skip if already done (unless forced)
-        # Note: existing logic checked .status. value.
+        # Check for specific object video existence
+        # Ensure we are checking the base name in case the object name has suffixes, 
+        # though ROI objects are typically base names.
+        base_object_name = object_name.split("_discarded")[0]
+        object_video_filename = f"{video_path.stem}_{base_object_name}{video_path.suffix}"
+        object_video_path = video_path.parent / object_video_filename
+        
+        video_exists = object_video_path.exists()
+
+        # Logic to skip if already done (unless forced) or if video is missing
         status = current_colorspace.status if current_colorspace else None
-        should_process = (
+        
+        should_process = video_exists and (
             not metadata_exists 
             or force_processing 
             or (status == ColorSpaceStatus.TO_BE_DEFINED.value)
@@ -398,7 +407,8 @@ def define_handstickers_colorspaces_from_roi(
         )
 
         if not should_process:
-            print(f"Skipping '{object_name}' (status: '{status}').")
+            reason = "status: " + str(status) if video_exists else "Video file missing"
+            print(f"Skipping '{object_name}' ({reason}).")
             continue
 
         print(f"\n➡️ Processing object: '{object_name}'")
