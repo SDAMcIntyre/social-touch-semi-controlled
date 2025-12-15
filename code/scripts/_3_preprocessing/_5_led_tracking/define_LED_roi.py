@@ -46,7 +46,9 @@ def define_led_roi(
     try:
         # 3. Core Logic with improved control flow
         led_roi = ROIManager(video_path)
-        led_roi.choose_parameters()
+        
+        # ✅ Pass the specific title for this task
+        led_roi.choose_parameters(window_title=f"Define LED ROI: {video_path.name}")
         
         fileHandler = LEDROIFilesHandler()
         fileHandler.save_metadata(output_metadata_path, led_roi.metadata)
