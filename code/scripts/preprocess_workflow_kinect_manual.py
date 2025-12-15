@@ -137,8 +137,11 @@ def review_handstickers_color_threshold(
 
     name_baseline = rgb_video_path.stem + "_handstickers"
     metadata_colorspace_path = output_dir / (name_baseline + "_colorspace_metadata.json")
-    corrmap_video_base_path = output_dir / (name_baseline + "_corrmap.mp4")
+    corrmap_video_base_path = output_dir / (name_baseline + "_corrmap_*.mp4")
+    rgb_video_base_path = output_dir / (name_baseline + "_roi_unified_*.mp4")
+    
     define_handstickers_color_threshold(
+        rgb_video_base_path,
         corrmap_video_base_path, 
         md_path=metadata_colorspace_path,
         force_processing=force_processing
@@ -149,6 +152,7 @@ def review_handstickers_color_threshold(
 def define_trial_chunks_flow(
     rgb_video_path: Path,
     sticker_dir: Path,
+    led_dir: Path,
     output_dir: Path,
     *,
     force_processing: bool = False
@@ -157,9 +161,12 @@ def define_trial_chunks_flow(
     print(f"[{rgb_video_path.name}] Defining trial chunks...")
     xy_csv_path = sticker_dir / (rgb_video_path.stem + "_handstickers_summary_2d_coordinates.csv")
     output_path = output_dir / (rgb_video_path.stem + '_trial-chunks.csv')
+
+    led_on_path = led_dir / (rgb_video_path.stem + "_LED.csv")
     
     define_trial_chunks(
         xy_csv_path,
+        led_on_path,
         rgb_video_path,
         output_csv_path=output_path,
         force_processing=force_processing
@@ -325,6 +332,7 @@ def run_single_session_pipeline(
             define_trial_chunks_flow(
                 rgb_video_path=rgb_video_path,
                 sticker_dir=sticker_dir,
+                led_dir=led_dir,
                 output_dir=temp_seg_dir,
                 force_processing=force
             )
