@@ -37,7 +37,7 @@ def should_process_task(
     for path in inputs:
         if not path.exists():
             # If an input file is missing, the dependency graph is broken.
-            raise FileNotFoundError(f"Input file '{path}' is missing. Cannot process task.")
+            raise FileNotFoundError(f"❌ Input file '{path}' is missing. Cannot process task.")
     
     # 3. Check if force processing is requested
     if force:

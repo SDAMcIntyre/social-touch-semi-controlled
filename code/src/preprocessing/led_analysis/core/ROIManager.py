@@ -19,10 +19,13 @@ class ROIManager:
         }
 
 
-    def choose_parameters(self):
+    def choose_parameters(self, window_title: str = "ROI Selection"):
         """
         Orchestrates the user interaction workflow.
         It now creates and destroys its own UserInterface instance for this specific task.
+        
+        Args:
+            window_title (str): The title to display on the selection windows.
         """
         # ✅ STEP 1: Instantiate the UI handler at the start of the operation.
         ui = UserInterface()
@@ -40,7 +43,11 @@ class ROIManager:
                 montage_indices = video.get_montage_frame_indices(num_frames=200)
                 montage_frames = [video.get_frame(i) for i in montage_indices]
                 
-                selected_index = ui.select_frame_from_video(montage_frames)
+                # Pass the custom title to the frame selector
+                selected_index = ui.select_frame_from_video(
+                    montage_frames, 
+                    title=f"{window_title} - Select Frame"
+                )
 
                 if selected_index is None:
                     print("No frame selected. Exiting operation.")
@@ -52,7 +59,12 @@ class ROIManager:
                 reference_frame = video.get_frame(reference_frame_idx)
 
                 # 2. User draws the ROI
-                self.roi_coords = ui.select_roi_from_frame(reference_frame)
+                # Pass the custom title to the ROI selector
+                self.roi_coords = ui.select_roi_from_frame(
+                    reference_frame, 
+                    window_title=f"{window_title} - Draw ROI"
+                )
+                
                 if self.roi_coords:
                     self.metadata.update(self.roi_coords)
                     print("Processing complete.")
@@ -80,4 +92,4 @@ if __name__ == '__main__':
     manager = ROIManager(
         video_path="path/to/your/video.mkv"
     )
-    manager.choose_parameters()
+    manager.choose_parameters(window_title="Debug Session")
