@@ -44,7 +44,7 @@ def generate_led_roi(
             input_paths=[video_path, metadata_path], 
             output_paths=[output_video_path], 
             force=force_processing):
-        logging.info(f"Output file already exists. Skipping ROI definition for '{video_path.name}'.")
+        logging.info(f"Output file already exists or previous steps are missing. Skipping ROI definition for '{video_path.name}'.")
         return True
 
     # 2. Prerequisite Check for the manually generated metadata file.
