@@ -61,9 +61,9 @@ class HandModelSelectorGUI(QMainWindow):
         # Set up default points
         if default_points is None:
             default_points = [
-                {'label': 'sticker_yellow', 'vertex_id': 143},
+                {'label': 'sticker_yellow', 'vertex_id': 19},
                 {'label': 'sticker_blue', 'vertex_id': 311},
-                {'label': 'sticker_green', 'vertex_id': 206}
+                {'label': 'sticker_green', 'vertex_id': 21}
             ]
             
         # Initialize selected_points with None for all labels
