@@ -29,38 +29,50 @@ class ThresholdSelectorTool:
     Architecturally refined GUI tool for threshold selection.
     
     Modifications:
+    - Variable Renaming: 'frames' -> 'frames_rgb', 'frames_rgb' -> 'frames_corr'.
+    - Logic Swap: Thresholding/Volume is now calculated on 'frames_corr'. 
+      Visual context is provided by 'frames_rgb'.
+    - RGB Integration: Accepts and renders parallel RGB video stream.
     - Geometry Propagation: Disabled on 2D render frame to prevent infinite resize loops.
     - Dynamic Resizing: 2D view listens to <Configure> events to maximize video usage.
     - Default 3D: Initializes directly into POINT_CLOUD_3D mode.
-    - Voxel Simulation: 3D scatter plots use square markers scaled to approximate 
-      continuous surfaces (touching pixels).
-    - Contextual Geometry: Renders a transparent reference plane for video bounds.
-    - Layout Optimization: Mode switch button grouped with action buttons.
+    - Voxel Simulation: 3D scatter plots use square markers.
+    - Layout Update: 2D view now supports 3-column layout (RGB | Corr | Thresh).
     """
 
     def __init__(
             self, 
-            frames: List[np.ndarray], 
+            frames_rgb: List[np.ndarray], 
+            frames_corr: List[np.ndarray], 
             video_name: str = "video", 
             threshold: int = 127,
             spot_type: str = 'dark'):
         
-        if not frames:
+        if not frames_rgb:
             raise ValueError("Frame list cannot be empty.")
-            
-        self.frames = frames
-        self.total_frames = len(self.frames)
+        
+        # --- Architecture Update: Validate and Truncate Streams ---
+        if len(frames_rgb) != len(frames_corr):
+            print(f"Warning: RGB frames ({len(frames_rgb)}) and Correlation frames ({len(frames_corr)}) count mismatch.")
+            min_len = min(len(frames_rgb), len(frames_corr))
+            self.frames_rgb = frames_rgb[:min_len]
+            self.frames_corr = frames_corr[:min_len]
+        else:
+            self.frames_rgb = frames_rgb
+            self.frames_corr = frames_corr
+
+        self.total_frames = len(self.frames_rgb)
         self.video_name = video_name
         self.init_threshold = threshold
         self.spot_type = spot_type
 
         # --- Data Preparation ---
+        # We generate the volume from frames_corr (the analysis data)
         self._prepare_volumes()
 
         # --- State ---
         self.result: Optional[int] = None
         self.selection_state: SelectionState = SelectionState.PENDING
-        # Requirement: 3D mode is shown by default
         self.view_mode: ViewMode = ViewMode.POINT_CLOUD_3D
         
         # Cache for window dimensions to prevent render loops
@@ -84,14 +96,18 @@ class ThresholdSelectorTool:
 
     def _prepare_volumes(self):
         """
-        Pre-processes video data into 3D arrays.
+        Pre-processes correlation video data into 3D arrays.
+        Operates on self.frames_corr.
         """
-        print("Processing volume data...")
-        shape = self.frames[0].shape
+        print("Processing volume data from correlation frames...")
+        shape = self.frames_corr[0].shape
+        
+        # Ensure Grayscale for Volume Analysis
         if len(shape) == 3:
-            gray_frames = [cv2.cvtColor(f, cv2.COLOR_BGR2GRAY) for f in self.frames]
+            # Assuming input might be BGR, convert to Gray
+            gray_frames = [cv2.cvtColor(f, cv2.COLOR_BGR2GRAY) for f in self.frames_corr]
         else:
-            gray_frames = self.frames
+            gray_frames = self.frames_corr
         
         self.volume_full = np.stack(gray_frames) # Shape: (Z, Y, X)
         self.full_h, self.full_w = self.volume_full.shape[1], self.volume_full.shape[2]
@@ -99,7 +115,7 @@ class ThresholdSelectorTool:
         # Downsample for 3D visualization (Performance Optimization)
         # Target roughly 100x100xZ resolution
         target_dim = 100
-        h, w = shape[:2]
+        h, w = self.full_h, self.full_w
         scale = target_dim / max(h, w)
         new_w, new_h = int(w * scale), int(h * scale)
         
@@ -182,20 +198,23 @@ class ThresholdSelectorTool:
 
         # 2D View Frame
         self.canvas_2d_frame = ttk.Frame(self.view_container)
-        
-        # --- ARCHITECTURAL FIX: DISABLE GEOMETRY PROPAGATION ---
-        # This prevents the frame from expanding when children (images) are resized,
-        # breaking the infinite resize loop.
         self.canvas_2d_frame.pack_propagate(False) 
         
-        # Split 2D frame into two halves
+        # Split 2D frame into three sections: RGB | Corr | Thresh
+        
+        # Left: RGB
         self.lbl_orig = ttk.Label(self.canvas_2d_frame, anchor="center")
         self.lbl_orig.pack(side=tk.LEFT, expand=True, fill=tk.BOTH, padx=2)
         
+        # Middle: Correlation
+        self.lbl_corr = ttk.Label(self.canvas_2d_frame, anchor="center")
+        self.lbl_corr.pack(side=tk.LEFT, expand=True, fill=tk.BOTH, padx=2)
+
+        # Right: Threshold
         self.lbl_thresh = ttk.Label(self.canvas_2d_frame, anchor="center")
         self.lbl_thresh.pack(side=tk.LEFT, expand=True, fill=tk.BOTH, padx=2)
 
-        # Bind Resize Event for Responsive 2D
+        # Bind Resize Event
         self.canvas_2d_frame.bind("<Configure>", self._on_2d_resize)
 
         # 3D View Frame
@@ -205,8 +224,6 @@ class ThresholdSelectorTool:
         self.fig = Figure(figsize=(5, 4), dpi=100, facecolor='#f0f0f0')
         self.ax = self.fig.add_subplot(111, projection='3d')
         self.ax.set_facecolor('#f0f0f0')
-        
-        # Adjust subplot parameters to maximize 3D view area
         self.fig.subplots_adjust(left=0, right=1, bottom=0, top=1)
         
         self.mpl_canvas = FigureCanvasTkAgg(self.fig, master=self.canvas_3d_frame)
@@ -236,29 +253,18 @@ class ThresholdSelectorTool:
         btn_frame = ttk.Frame(main)
         btn_frame.pack(fill=tk.X, pady=10)
 
-        # Modified Layout: All buttons grouped on the right side
-        # Stacking order: pack(side=RIGHT) stacks from Right to Left.
-        # Desired Order (Visual Right-to-Left): Confirm -> Redo -> Cancel -> Switch Mode
-        
         ttk.Button(btn_frame, text="Confirm", command=self._confirm, style="Confirm.TButton").pack(side=tk.RIGHT, padx=5)
         ttk.Button(btn_frame, text="Redo", command=self._redo, style="Redo.TButton").pack(side=tk.RIGHT, padx=5)
         ttk.Button(btn_frame, text="Cancel", command=self._on_cancel, style="Cancel.TButton").pack(side=tk.RIGHT, padx=5)
-        
-        # Mode button moved here to be close to the other buttons
         ttk.Button(btn_frame, textvariable=self.mode_btn_text, command=self._toggle_mode, style="Mode.TButton").pack(side=tk.RIGHT, padx=5)
 
         self.root.bind('<Return>', lambda e: self._confirm())
         self.root.bind('<Escape>', lambda e: self._on_cancel())
 
     def _on_2d_resize(self, event):
-        """
-        Event handler for window resizing in 2D mode. 
-        Debounces slightly to prevent massive CPU load during drag.
-        """
         if self.view_mode != ViewMode.SINGLE_FRAME_2D:
             return
             
-        # Basic debounce: only update if size changed significantly
         if abs(event.width - self.last_2d_size[0]) > 10 or abs(event.height - self.last_2d_size[1]) > 10:
             self.last_2d_size = (event.width, event.height)
             self._update_display()
@@ -291,34 +297,46 @@ class ThresholdSelectorTool:
             self._render_3d(thresh)
 
     def _render_2d(self, idx, thresh):
-        frame_gray = self.volume_full[idx] 
+        # 1. Prepare Correlation Frame for Analysis (Grayscale)
+        frame_corr_gray = self.volume_full[idx] 
         
-        thresh_type = cv2.THRESH_BINARY_INV if self.spot_type == 'dark' else cv2.THRESH_BINARY
-        _, bin_mask = cv2.threshold(frame_gray, thresh, 255, thresh_type)
+        # 2. Prepare RGB Frame (Left Image - Visual Context)
+        frame_rgb_bgr = self.frames_rgb[idx]
+        show_orig = cv2.cvtColor(frame_rgb_bgr, cv2.COLOR_BGR2RGB)
+        
+        # 3. Prepare Correlation Frame (Middle Image - Source Data)
+        frame_corr_raw = self.frames_corr[idx]
+        # Check dimensionality to handle conversion correctly
+        if len(frame_corr_raw.shape) == 2:
+             show_corr = cv2.cvtColor(frame_corr_raw, cv2.COLOR_GRAY2RGB)
+        else:
+             show_corr = cv2.cvtColor(frame_corr_raw, cv2.COLOR_BGR2RGB)
 
-        show_orig = cv2.cvtColor(frame_gray, cv2.COLOR_GRAY2RGB)
+        # 4. Create Binary Mask (Right Image - Result)
+        thresh_type = cv2.THRESH_BINARY_INV if self.spot_type == 'dark' else cv2.THRESH_BINARY
+        _, bin_mask = cv2.threshold(frame_corr_gray, thresh, 255, thresh_type)
         show_thresh = cv2.cvtColor(bin_mask, cv2.COLOR_GRAY2RGB)
 
-        # Dynamic size calculation based on container size
-        # We assume the container is split 50/50 for the two images
+        # 5. Dynamic size calculation
         container_w = self.canvas_2d_frame.winfo_width()
         container_h = self.canvas_2d_frame.winfo_height()
         
-        # Fallback if window hasn't rendered yet
         if container_w < 10: 
             container_w = 800
             container_h = 600
 
-        target_w = container_w // 2
+        # Split width by 3 for RGB | Corr | Thresh
+        target_w = container_w // 3
         target_h = container_h
 
         self._set_image(self.lbl_orig, show_orig, (target_w, target_h))
+        self._set_image(self.lbl_corr, show_corr, (target_w, target_h))
         self._set_image(self.lbl_thresh, show_thresh, (target_w, target_h))
 
     def _render_3d(self, thresh):
         self.ax.clear()
         
-        # 1. Data Thresholding
+        # Data Thresholding on volume_small (derived from frames_corr)
         if self.spot_type == 'dark':
             mask = self.volume_small < thresh
         else:
@@ -326,7 +344,7 @@ class ThresholdSelectorTool:
 
         z_idxs, y_idxs, x_idxs = np.where(mask)
 
-        # 2. Downsampling for interactivity
+        # Downsampling for interactivity
         max_points = 5000
         total_points = len(z_idxs)
         if total_points > max_points:
@@ -335,59 +353,38 @@ class ThresholdSelectorTool:
             y_idxs = y_idxs[choices]
             x_idxs = x_idxs[choices]
 
-        # 3. Add Semi-Transparent Reference Rectangle (Video Size)
-        # We place this at Z=0 (top of the stack)
+        # Add Reference Plane
         d_z, d_y, d_x = self.volume_small.shape
-        
-        # Vertices of the video plane (X, Y, Z)
-        # Note: In matplotlib 3d, Z is up. We map image Z to negative Z.
         verts = [
             [(0, 0, 0), (d_x, 0, 0), (d_x, d_y, 0), (0, d_y, 0)]
         ]
         poly = Poly3DCollection(verts, alpha=0.3, facecolors='cyan', edgecolors='blue')
         self.ax.add_collection3d(poly)
 
-        # 4. Scatter Plot with "Touching" Markers
-        # To make points touch, we use square markers.
-        # Calculation: We need the marker to cover 1 unit in data coordinates.
-        # Heuristic: s is in points^2. 
-        # A crude approximation for "filling" the grid in a default view.
-        # Since exact data-to-pixel calculation changes with zoom, we pick a 
-        # reasonably large constant relative to the small volume dimension (100).
+        # Scatter Plot
         marker_size = 25 
-        
         self.ax.scatter(x_idxs, y_idxs, -z_idxs, c='g', marker='s', s=marker_size, alpha=1.0, depthshade=False)
         
-        # 5. Axes Configuration
         self.ax.set_xlim(0, d_x)
-        self.ax.set_ylim(d_y, 0) # Invert Y for image coords
+        self.ax.set_ylim(d_y, 0)
         self.ax.set_zlim(-d_z, 0)
         
         self.ax.set_xlabel("X")
         self.ax.set_ylabel("Y")
         self.ax.set_zlabel("Frame")
         
-        # Remove grid/background for cleaner look if desired, or keep for reference
-        # self.ax.grid(False) 
-
         self.mpl_canvas.draw()
 
     def _set_image(self, label, img_arr, target_dims: Tuple[int, int]):
         tw, th = target_dims
         h, w = img_arr.shape[:2]
         
-        # Safety check for zero dimensions
         if tw <= 0 or th <= 0 or w <= 0 or h <= 0:
             return
 
-        # Calculate aspect-ratio preserving resize
         scale = min(tw/w, th/h)
-        
-        # Resize based on target dimensions
         new_w = int(w * scale)
         new_h = int(h * scale)
-        
-        # Ensure dimensions are at least 1x1
         new_w = max(1, new_w)
         new_h = max(1, new_h)
 

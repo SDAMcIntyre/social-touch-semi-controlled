@@ -11,7 +11,6 @@ from preprocessing.stickers_analysis import (
     ColorSpaceManager,
     ColorSpace,
     ColorSpaceStatus,
-
     ThresholdSelectorTool,
     SelectionState
 )
@@ -42,15 +41,19 @@ def update_object_threshold(metadata: Dict[str, Any], object_name: str, threshol
         print(f"❌ Critical Error: Could not save metadata to '{md_path}'. Reason: {e}")
 
 
-
 def define_handstickers_color_threshold(
-    video_path: Path,
+    rgb_video_base_path: Path,
+    corrmap_video_base_path: Path,
     md_path: Path,
     *,
     force_processing: bool = False
 ):
     """
     Orchestrates the video processing workflow.
+    
+    Architectural Note:
+    rgb_video_base_path and corrmap_video_base_path are treated as template paths.
+    The character '*' within these paths will be replaced by the specific object name during iteration.
     """
     # 1. Load all data
     if not os.path.exists(md_path):
@@ -81,16 +84,26 @@ def define_handstickers_color_threshold(
         print(f"\nProcessing '{name}'...")
         threshold = current_colorspace.threshold if current_colorspace.threshold is not None else 127
 
-        input_video_path = video_path.parent / (video_path.stem + f"_{name}.mp4")
-        print(f"Loading video '{input_video_path}'...")
-        frames_bgr = VideoMP4Manager(input_video_path)
+        # Construct paths for both Correlation and RGB videos using wildcard replacement
+        # The base paths are converted to strings to perform the substitution, then cast back to Path objects.
+        corr_video_path = Path(str(corrmap_video_base_path).replace("*", name))
+        rgb_input_path = Path(str(rgb_video_base_path).replace("*", name))
+
+        print(f"Loading Correlation video '{corr_video_path}'...")
+        frames_corr = VideoMP4Manager(corr_video_path)
+
+        print(f"Loading RGB video '{rgb_input_path}'...")
+        frames_rgb = VideoMP4Manager(rgb_input_path)
         
         # Call the interactive GUI function
         try:
-            tool = ThresholdSelectorTool(frames=frames_bgr, 
-                                         video_name=input_video_path.name,
-                                         threshold=threshold,
-                                         spot_type='bright')  # 'dark', 'bright'
+            tool = ThresholdSelectorTool(
+                frames_rgb=frames_rgb, 
+                frames_corr=frames_corr,
+                video_name=corr_video_path.name,
+                threshold=threshold,
+                spot_type='bright'  # 'dark', 'bright'
+            )
             tool.run()
         except Exception as e:
             print(f"An error occurred while running the threshold tool: {e}")
