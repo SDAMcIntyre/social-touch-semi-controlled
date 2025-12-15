@@ -82,6 +82,7 @@ def annotate_rois_interactively(
                 h = tracking_data["height"]
                 annotation_manager.set_roi(object_name, frame_id, x, y, w, h)
                 print(f"--- ✅ ROI data for '{object_name}' on frame {frame_id} extracted ---")
+                annotation_manager.update_status(object_name, ROIProcessingStatus.TO_BE_PROCESSED)
             else:
                 print(f"--- ⚠️ No ROI was set for '{object_name}' on this frame. ---")
     
@@ -239,17 +240,10 @@ def review_tracked_objects_in_video(
 
     elif final_status == TrackerReviewStatus.PROCEED:
         print(f"⚠️ User marked {len(frames_for_labeling)} frames for re-annotation. Launching interactive tool.")
-        
-        # 1. Handle Deletions
+        # 1. Handle Deletions and Ignore Events, and Handle Interactive Labeling
         remove_frames_from_metadata(annotation_manager, frames_for_deleting)
-        
-        # 2. Handle Ignore Events (New)
         update_ignore_frames_in_metadata(annotation_manager, frames_for_ignore_start, frames_for_ignore_stop)
-        
-        # 3. Handle Interactive Labeling
         annotate_rois_interactively(video_manager, annotation_manager, frames_for_labeling)
-        
-        annotation_manager.update_all_status(ROIProcessingStatus.TO_BE_PROCESSED)
         print("\nRe-annotation complete. The process may need to be run again to verify the new tracking.")
     
     ROIAnnotationFileHandler.save(metadata_path, annotation_manager.data)
