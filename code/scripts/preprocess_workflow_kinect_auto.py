@@ -46,7 +46,7 @@ from _3_preprocessing._1_sticker_tracking import (
 from _3_preprocessing._2_hand_tracking import (
     track_hands_on_video,
     is_hand_model_valid,
-    generate_hand_motion
+    generate_3d_hand_in_motion
 )
 
 from _3_preprocessing._3_forearm_extraction import (
@@ -132,18 +132,44 @@ def validate_hand_extraction(rgb_video_path: Path, hand_models_dir: Path, expect
         raise ValueError("Hand model needs to be manually extracted first (or generation failed).")
     return is_valid
 
-@flow(name="6. Track Stickers (2D)")
-def track_stickers(rgb_video_path: Path, output_dir: Path, *, force_processing: bool = False) -> tuple[Path | None, bool]:
-    print(f"[{output_dir.name}] Tracking stickers (2D)...")
+# --- REFACTORED: Track Stickers Raw Flow ---
+@flow(name="6a. Track Stickers (Raw 2D)")
+def track_stickers_raw_flow(
+    rgb_video_path: Path, 
+    output_dir: Path, 
+    *, 
+    force_processing: bool = False
+) -> tuple[Path, Path]:
+    print(f"[{output_dir.name}] Tracking stickers (Raw 2D)...")
     name_baseline = rgb_video_path.stem + "_handstickers"
     metadata_roi_path = output_dir / (name_baseline + "_roi_metadata.json")
     stickers_roi_csv_path = output_dir / (name_baseline + "_roi_tracking.csv")
-
+    
     track_objects_in_video(rgb_video_path, metadata_roi_path, output_path=stickers_roi_csv_path, force_processing=force_processing)
     
     if not is_2d_stickers_tracking_valid(metadata_roi_path):
         raise ValueError("❌ --> 2D sticker tracking has not been manually validated. Cannot continue the pipeline.")
+
+    return stickers_roi_csv_path, metadata_roi_path
+
+# --- REFACTORED: Refine Sticker Features Flow ---
+@flow(name="6b. Refine Sticker Features")
+def refine_sticker_features_flow(
+    rgb_video_path: Path,
+    output_dir: Path,
+    stickers_roi_csv_path: Path,
+    *,
+    force_processing: bool = False,
+    monitor: bool = False
+) -> tuple[Path | None, bool]:
+    print(f"[{output_dir.name}] Refining sticker features...")
+    name_baseline = rgb_video_path.stem + "_handstickers"
     
+    # Redundant check, but good for safety if run standalone
+    metadata_roi_path = output_dir / (name_baseline + "_roi_metadata.json")
+    if not metadata_roi_path.exists():
+        raise ValueError("Metadata ROI path missing. Ensure raw tracking is complete.")
+
     roi_unified_csv_path = output_dir / (name_baseline + "_roi_standard_size.csv")
     generate_standard_roi_size_dataset(stickers_roi_csv_path, roi_unified_csv_path)
     corrmap_video_base_path = output_dir / (name_baseline + "_roi_unified.mp4")
@@ -151,11 +177,11 @@ def track_stickers(rgb_video_path: Path, output_dir: Path, *, force_processing: 
     
     metadata_colorspace_path = output_dir / (name_baseline + "_colorspace_metadata.json")
     binary_video_base_path = output_dir / (name_baseline + "_corrmap.mp4")
-    create_color_correlation_videos(corrmap_video_base_path, metadata_colorspace_path, binary_video_base_path, force_processing=force_processing)
+    create_color_correlation_videos(corrmap_video_base_path, metadata_colorspace_path, binary_video_base_path, force_processing=force_processing, monitor=monitor)
     
     if not is_correlation_videos_threshold_defined(metadata_colorspace_path):
         raise ValueError("❌ --> correlation videos threshold has not been manually validated.")
-    
+
     fit_ellipses_path = output_dir / (name_baseline + "_ellipses.csv")
     fit_ellipses_on_correlation_videos(
         video_path=binary_video_base_path,
@@ -170,13 +196,13 @@ def track_stickers(rgb_video_path: Path, output_dir: Path, *, force_processing: 
         output_csv_path=adj_ellipses_path,
         force_processing=force_processing
     )
-    
+
     final_csv_path = output_dir / (name_baseline + "_summary_2d_coordinates.csv")
     consolidate_2d_tracking_data(
         roi_unified_csv_path,
         adj_ellipses_path,
         output_csv_path=final_csv_path,
-        score_threshold=0.7,
+        score_threshold=0.3,
         force_processing=force_processing
     )
 
@@ -188,7 +214,8 @@ def generate_xyz_stickers(
     source_video: Path, 
     output_dir: Path, 
     *, 
-    force_processing: bool = False) -> Path:
+    force_processing: bool = False
+) -> Path:
     print(f"[{output_dir.name}] Generating XYZ sticker positions (3D)...")
     name_baseline = stickers_2d_path.stem.replace('_summary_2d_coordinates', '')
     result_csv_path = output_dir / (name_baseline + "_xyz_tracked.csv")
@@ -205,13 +232,38 @@ def generate_xyz_stickers(
     )
     return result_csv_path
 
-@flow(name="7. Generate 3D Hand Position")
-def generate_3d_hand_in_motion(rgb_video_path: Path, trial_id_path: Path, stickers_xyz_path: Path, output_dir: Path, *, force_processing: bool = False) -> tuple[Path, Path]:
+# --- REFACTORED: Track Hands Model Flow ---
+@flow(name="7a. Track Hands Model")
+def track_hands_model_flow(
+    rgb_video_path: Path,
+    output_dir: Path,
+    *,
+    force_processing: bool = False
+) -> Path:
+    print(f"[{output_dir.name}] Tracking Hands Model...")
+    name_baseline = rgb_video_path.stem + "_handmodel"
+    tracked_hands_path = output_dir / (name_baseline + "_tracked_hands.pkl")
+    
+    track_hands_on_video(rgb_video_path, tracked_hands_path, force_processing=force_processing)
+    
+    return tracked_hands_path
+
+# --- REFACTORED: Generate 3D Hand Motion Flow ---
+@flow(name="7b. Generate 3D Hand in Motion")
+def generate_3d_hand_in_motion_flow(
+    rgb_video_path: Path, 
+    tracked_hands_path: Path, 
+    stickers_xyz_path: Path, 
+    output_dir: Path, 
+    *, 
+    force_processing: bool = False
+) -> tuple[Path, Path]:
     print(f"[{output_dir.name}] Generating 3D hand motion...")
     name_baseline = rgb_video_path.stem + "_handmodel"
     
-    tracked_hands_path = output_dir / (name_baseline + "_tracked_hands.pkl")
-    track_hands_on_video(rgb_video_path, trial_id_path, tracked_hands_path, force_processing=force_processing)
+    # Check if tracking exists (safety check if run out of order)
+    if not tracked_hands_path.exists():
+         raise ValueError(f"Tracked hands file not found: {tracked_hands_path}")
 
     hands_curated_path = output_dir / (name_baseline + "_tracked_hands_curated.pkl")
     if not hands_curated_path.with_name(hands_curated_path.name + ".SUCCESS").exists():
@@ -224,9 +276,7 @@ def generate_3d_hand_in_motion(rgb_video_path: Path, trial_id_path: Path, sticke
     out_motion_npz_path = output_dir / (name_baseline + "_motion.npz")
     out_motion_csv_path = output_dir / (name_baseline + "_motion.csv")
     
-    force_processing = True
-    
-    generate_hand_motion(
+    generate_3d_hand_in_motion(
         stickers_xyz_path, 
         hands_curated_path, 
         metadata_path, 
@@ -367,10 +417,19 @@ def run_single_session_pipeline(
          "params": lambda: {"session_output_dir": config.session_processed_output_dir},
          "outputs": []}, 
 
-        {"name": "track_stickers", 
-         "func": track_stickers, 
+        # --- REFACTORED: Raw Tracking ---
+        {"name": "track_stickers_raw", 
+         "func": track_stickers_raw_flow, 
          "params": lambda: {"rgb_video_path": context.get("rgb_video_path"), 
                             "output_dir": config.video_processed_output_dir / "handstickers"}, 
+         "outputs": ["raw_stickers_roi_csv", "raw_stickers_metadata"]},
+
+        # --- REFACTORED: Feature Refinement ---
+        {"name": "refine_sticker_features", 
+         "func": refine_sticker_features_flow, 
+         "params": lambda: {"rgb_video_path": context.get("rgb_video_path"), 
+                            "output_dir": config.video_processed_output_dir / "handstickers",
+                            "stickers_roi_csv_path": context.get("raw_stickers_roi_csv")}, 
          "outputs": ["sticker_2d_tracking_path", None]},
          
         {"name": "generate_xyz_stickers", 
@@ -381,7 +440,6 @@ def run_single_session_pipeline(
          "outputs": ["sticker_3d_tracking_path"]},
 
         # --- Stage 3: Trial Definition & Analysis ---
-        # Moving this UP before Stage 4 as per DAG dependencies
         {"name": "define_trial_id", 
          "func": define_trial_ids_flow,
          "params": lambda: {"rgb_video_path": context.get("rgb_video_path"), 
@@ -396,11 +454,19 @@ def run_single_session_pipeline(
          "outputs": ["stimuli_metadata_path", "stimuli_metadata_aligned_path"]},
 
         # --- Stage 4: Feature Extraction ---
-        # Note: validate_hand_extraction moved AFTER generate_3d_hand_in_motion
+        
+        # --- REFACTORED: Track Hands Model ---
+        {"name": "track_hands_model",
+         "func": track_hands_model_flow,
+         "params": lambda: {"rgb_video_path": context.get("rgb_video_path"),
+                            "output_dir": config.video_processed_output_dir / "kinematics_analysis"},
+         "outputs": ["tracked_hands_path"]},
+
+        # --- REFACTORED: Generate 3D Motion (Consumes Hand Model) ---
         {"name": "generate_3d_hand_in_motion", 
-         "func": generate_3d_hand_in_motion, 
+         "func": generate_3d_hand_in_motion_flow, 
          "params": lambda: {"rgb_video_path": context.get("rgb_video_path"), 
-                            "trial_id_path": context.get("trial_data_path"), 
+                            "tracked_hands_path": context.get("tracked_hands_path"), 
                             "stickers_xyz_path": context.get("sticker_3d_tracking_path"),
                             "output_dir": config.video_processed_output_dir / "kinematics_analysis"}, 
          "outputs": ["hand_motion_npz_path", "hand_metadata_path"]},

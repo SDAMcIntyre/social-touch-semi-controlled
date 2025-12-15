@@ -23,6 +23,8 @@ from .gui.scene_viewer import (
     Trajectory,
     SceneViewer
 )
+from .gui.scene_viewer_video_maker import SceneViewerVideoMaker
+
 from .gui.video_frame_selector import VideoFrameSelector
 from .gui.video_frames_selector import VideoFramesSelector
 

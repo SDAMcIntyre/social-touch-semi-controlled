@@ -12,7 +12,8 @@ from preprocessing.stickers_analysis import (
     ColorSpace,
     ColorSpaceStatus,
 
-    ThresholdSelectorTool
+    ThresholdSelectorTool,
+    SelectionState
 )
 
 
@@ -90,17 +91,20 @@ def define_handstickers_color_threshold(
                                          video_name=input_video_path.name,
                                          threshold=threshold,
                                          spot_type='bright')  # 'dark', 'bright'
-            threshold_from_gui = tool.select_threshold()
+            tool.run()
         except Exception as e:
             print(f"An error occurred while running the threshold tool: {e}")
             # This can happen if tkinter is not available, for example.
             return None
     
         # IMPORTANT: Only update if the user confirmed a value
-        if threshold_from_gui is not None:
+        if tool.selection_state == SelectionState.CONFIRMED:
             print(f"✅ Finished processing for '{name}'.")
-            colorspace_manager.update_threshold(name, threshold_from_gui)
+            colorspace_manager.update_threshold(name, tool.result)
             colorspace_manager.update_status(name, ColorSpaceStatus.REVIEW_COMPLETED.value)
+            colorspace_modified = True
+        elif tool.selection_state == SelectionState.REDO_COLORSPACE:
+            colorspace_manager.update_status(name, ColorSpaceStatus.TO_BE_DEFINED.value)
             colorspace_modified = True
         else:
             print(f"⏩ Skipping metadata update for '{name}' as selection was cancelled.")

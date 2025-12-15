@@ -517,6 +517,13 @@ class TrackerReviewGUI:
         ok_button.focus_set()
 
         self.root.wait_window(popup)
+        
+    # --- NEW: Explicit method to destroy window ---
+    def destroy_window(self):
+        """Destroys the root window."""
+        if self.root:
+            self.root.destroy()
+            self.root = None
 
     # --- UI UPDATE METHODS (Called by the Controller) ---
 
@@ -534,7 +541,7 @@ class TrackerReviewGUI:
             resized_frame = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
             cv2image = cv2.cvtColor(resized_frame, cv2.COLOR_BGR2RGB)
             img = Image.fromarray(cv2image)
-            imgtk = ImageTk.PhotoImage(image=img)
+            imgtk = ImageTk.PhotoImage(image=img, master=self.root)
             self.image_label.imgtk = imgtk
             self.image_label.config(image=imgtk)
 
@@ -616,4 +623,4 @@ class TrackerReviewGUI:
         if self.root:
             if self.controller and hasattr(self.controller, '_update_job') and self.controller._update_job:
                 self.root.after_cancel(self.controller._update_job)
-            self.root.destroy()
+            self.root.quit()
