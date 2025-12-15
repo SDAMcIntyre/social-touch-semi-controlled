@@ -7,7 +7,7 @@
 
 parameters:
   parallel_execution: false
-  kinect_configs_directory: "kinect_configs/all_valid_configs_ST16-05"
+  kinect_configs_directory: "kinect_configs/valid_configs_ST13-03"
 
 tasks:
   # ---------------------------------------------------------------------------
@@ -15,7 +15,7 @@ tasks:
   # Isolated processing for TTL/Synchronization LED.
   # ---------------------------------------------------------------------------
   track_led_blinking:
-    enabled: true
+    enabled: false
     options:
       force_processing: false
     depends_on: []
@@ -25,34 +25,42 @@ tasks:
   # Stickers and Forearm analysis (Initial data sources).
   # ---------------------------------------------------------------------------
   validate_forearm_extraction:
-    enabled: true
+    enabled: false
     depends_on: []
 
-  track_stickers:
-    enabled: true
+  # --- Raw 2D Tracking ---  
+  track_stickers_raw:
+    enabled: false
+    options:
+      force_processing: false
+    depends_on: []
+
+  # --- Sticker Feature Refinement (Depends on Raw Tracking) ---
+  refine_sticker_features:
+    enabled: false
     options:
       force_processing: false
       monitor: false
-    depends_on: []
+    depends_on: [track_stickers_raw]
 
   generate_xyz_stickers:
-    enabled: true
+    enabled: false
     options:
       force_processing: false
-    depends_on: [track_stickers]
+    depends_on: [refine_sticker_features]
 
   # ---------------------------------------------------------------------------
   # STAGE 3: Trial Definition & Analysis
   # Grouped: Trial ID generation and metadata synthesis. Depends on initial tracking.
   # ---------------------------------------------------------------------------
   define_trial_id:
-    enabled: true
+    enabled: false
     options:
       force_processing: false
-    depends_on: [track_stickers]
+    depends_on: [refine_sticker_features]
 
   generate_stimuli_metadata:
-    enabled: true
+    enabled: false
     options:
       force_processing: false
     depends_on: [define_trial_id]
@@ -61,19 +69,28 @@ tasks:
   # STAGE 4: Feature Extraction
   # Hands, touch characteristic analysis, and derived 3D motion.
   # ---------------------------------------------------------------------------
-  generate_3d_hand_in_motion:
+  
+  # --- Hand Model Tracking ---
+  track_hands_model:
     enabled: true
     options:
       force_processing: false
-    # Requires base tracking (stickers XYZ) and trial context (trial ID)
-    depends_on: [generate_xyz_stickers, define_trial_id]
+    depends_on: []
+
+  # --- 3D Kinematics (Depends on Hand Tracking) ---
+  generate_3d_hand_in_motion:
+    enabled: false
+    options:
+      force_processing: false
+    # Requires base tracking (stickers XYZ), trial context (trial ID), and tracked hands
+    depends_on: [generate_xyz_stickers, define_trial_id, track_hands_model]
 
   validate_hand_extraction:
-    enabled: true
+    enabled: false
     depends_on: [generate_3d_hand_in_motion]
 
   compute_somatosensory_characteristics:
-    enabled: true
+    enabled: false
     options:
       force_processing: false
       monitor: false
@@ -81,7 +98,7 @@ tasks:
     depends_on: [validate_forearm_extraction, generate_3d_hand_in_motion]
 
   find_single_touches:
-    enabled: true
+    enabled: false
     options:
       force_processing: false
     # Requires 3D motion, trial context, and stimuli metadata
@@ -91,7 +108,7 @@ tasks:
   # STAGE 5: Final Unification
   # ---------------------------------------------------------------------------
   unify_processed_data:
-    enabled: true
+    enabled: false
     options:
       force_processing: false
     # Aggregates all processed streams into the final dataset.
