@@ -22,7 +22,12 @@ class HamerCheckupSelector:
     """
     def __init__(self, root: tk.Tk, video_path: str, data_path: str, output_path: str, csv_path: str):
         self.root = root
-        self.root.title("Hamer Checkup & Selector")
+        
+        # --- Dynamic Title Configuration ---
+        # Extracts the filename from the provided video path to set the window title
+        video_name = Path(video_path).stem
+        self.root.title(f"Hamer Checkup & Selector - {video_name}")
+        
         self.selected_frames: Set[int] = set()
         self.output_path = Path(output_path)
         
