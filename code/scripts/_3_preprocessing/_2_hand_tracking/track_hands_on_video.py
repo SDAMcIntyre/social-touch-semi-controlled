@@ -30,7 +30,7 @@ class ProcessingConfig:
     max_retries: int = 10
     retry_delay_base: int = 2
     max_workers: int = 8  # For parallel frame processing
-    person_selector: str = "right"
+    person_selector: str = "second"
     hand_side: str = "right"
 
     @property
