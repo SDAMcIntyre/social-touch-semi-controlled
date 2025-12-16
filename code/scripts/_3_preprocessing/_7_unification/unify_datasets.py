@@ -166,10 +166,10 @@ def unify_datasets(
 
     except FileNotFoundError as e:
         logger.error(f"File missing: {e}")
-        return False
+        raise
     except ValueError as e:
         logger.error(f"Data Validation Error: {e}")
-        return False
+        raise
     except Exception as e:
         logger.error(f"Unexpected error: {e}", exc_info=True)
-        return False
+        raise
