@@ -245,15 +245,13 @@ def validate_and_correct_led_timing_from_stimuli(
             file_name, validator, expected_block_id, expected_ntrials,
             show_warning_plots, show_final_plot
         )
-
-        # Step 4: Save Output
-        if is_valid:
-            _save_corrected_data(output_path, led_df, validator.corrected_signal)
-            print(f"INFO: Successfully saved corrected file to '{output_path}'")
-            return True
-        else:
+        if not is_valid:
             print(f"WARN: Validation failed for '{file_name}'. File not saved.")
-            return False
+        
+        # Step 4: Save Output
+        _save_corrected_data(output_path, led_df, validator.corrected_signal)
+        print(f"INFO: Successfully saved corrected file to '{output_path}'")
+        
 
     except (DataIOException, Exception) as e:
         print(f"ERROR: An unexpected error occurred while processing '{file_name}'. Reason: {e}")
