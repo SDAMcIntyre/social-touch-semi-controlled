@@ -1,0 +1,18 @@
+{
+	"folders": [
+		{
+			"path": "."
+		}
+	],
+	"settings": {
+		"workbench.colorTheme": "Solarized Light", // Different theme for this instance
+		"workbench.colorCustomizations": {
+			"activityBar.background": "#ff0000",   // Visual danger indicator
+			"titleBar.activeBackground": "#ff0000",
+			"titleBar.activeForeground": "#dddddd",
+			"editor.background": "#dddddd",
+			"sideBar.background": "#dddddd",
+			"panel.background": "#d8d3d3"
+		}
+	}
+}
