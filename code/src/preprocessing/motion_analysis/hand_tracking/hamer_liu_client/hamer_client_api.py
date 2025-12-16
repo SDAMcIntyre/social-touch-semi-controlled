@@ -37,6 +37,38 @@ class HamerClientAPI:
         if hand_side not in valid_sides:
             raise ValueError(f"Invalid hand_side: '{hand_side}'. Must be one of {valid_sides}")
 
+    def _resolve_person_selector(self, selector: Union[str, int]) -> Union[str, int]:
+        """
+        Resolves the person_selector parameter.
+        Converts ordinal strings ('first', 'second', etc.) to zero-based integer indices.
+        
+        Parameters:
+        selector (Union[str, int]): The input selector.
+        
+        Returns:
+        Union[str, int]: The resolved selector (int index or original string).
+        """
+        if isinstance(selector, str):
+            # Mapping ordinal words to zero-based indices
+            ordinal_map = {
+                "first": 0,
+                "second": 1,
+                "third": 2,
+                "fourth": 3,
+                "fifth": 4,
+                "sixth": 5,
+                "seventh": 6,
+                "eighth": 7,
+                "ninth": 8,
+                "tenth": 9
+            }
+            # Normalize input to lowercase for case-insensitive matching
+            selector_lower = selector.lower()
+            if selector_lower in ordinal_map:
+                return ordinal_map[selector_lower]
+        
+        return selector
+
     def upload_image(
         self, 
         image_path: str, 
@@ -49,7 +81,7 @@ class HamerClientAPI:
         
         Parameters:
         image_path (str): Path to the image file.
-        person_selector (Union[str, int]): "all", "left", "center", "right", or person index.
+        person_selector (Union[str, int]): "all", "left", "center", "right", person index, or ordinal ("first", etc.).
         hand_side (str): "both", "left", or "right".
         should_render (bool): Whether to request visualized output (default: False).
         
@@ -62,9 +94,12 @@ class HamerClientAPI:
         """
         self._validate_params(hand_side)
         
+        # Resolve ordinal strings to integers if necessary
+        resolved_selector = self._resolve_person_selector(person_selector)
+        
         # Payload construction for multipart/form-data
         data_payload = {
-            "person_selector": str(person_selector),
+            "person_selector": str(resolved_selector),
             "hand_side": hand_side,
             "should_render": str(should_render)
         }
@@ -95,7 +130,7 @@ class HamerClientAPI:
         
         Parameters:
         video_path (str): Path to the video file.
-        person_selector (Union[str, int]): "all", "left", "center", "right", or person index.
+        person_selector (Union[str, int]): "all", "left", "center", "right", person index, or ordinal ("first", etc.).
         hand_side (str): "both", "left", or "right".
         should_render (bool): Whether to request visualized output (default: False).
         
@@ -108,8 +143,11 @@ class HamerClientAPI:
         """
         self._validate_params(hand_side)
 
+        # Resolve ordinal strings to integers if necessary
+        resolved_selector = self._resolve_person_selector(person_selector)
+
         data_payload = {
-            "person_selector": str(person_selector),
+            "person_selector": str(resolved_selector),
             "hand_side": hand_side,
             "should_render": str(should_render)
         }
