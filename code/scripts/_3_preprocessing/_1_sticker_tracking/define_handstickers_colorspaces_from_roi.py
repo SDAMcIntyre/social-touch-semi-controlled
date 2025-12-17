@@ -135,14 +135,14 @@ class ExtractionPipeline:
         print("   - Waiting for user to select representative frames...")
         try:
             view = TrackerReviewGUI(
-                title=f"Select Frames: {object_name}", 
+                title=f"Select Frames: {self.video_path.stem}>    {object_name}", 
                 landmarks={'label': landmarks} if landmarks else [],
                 show_valid_button=False,
                 show_rerun_button=False,
                 windowState='maximized')
         except:
             view = TrackerReviewGUI(
-                title=f"Select Frames: {object_name}",
+                title=f"Select Frames: {self.video_path.stem}>    {object_name}", 
                 show_valid_button=False,
                 show_rerun_button=False,
                 windowState='maximized')

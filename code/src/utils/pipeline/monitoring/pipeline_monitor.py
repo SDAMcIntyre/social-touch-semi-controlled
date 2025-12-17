@@ -1,9 +1,11 @@
-# src/pipeline_monitor.py (Refactored for explicit queue passing and plotting control)
+# src/pipeline_monitor.py
 
+import time
+import threading
 from pathlib import Path
-from typing import List, Optional
-from multiprocessing import Manager
-from multiprocessing.queues import Queue
+from typing import List, Optional, Tuple
+from multiprocessing import Manager, Process
+from multiprocessing.queues import Queue as MPQueue
 import pandas as pd
 
 try:
@@ -15,99 +17,150 @@ except ImportError:
 
 class PipelineMonitor:
     """
-    A unified class to monitor a pipeline.
-    - If initialized without a 'data_queue', it becomes the main controller,
-      creating and managing shared resources (Manager, Queue, Plotter).
-    - If initialized with an existing 'data_queue', it acts as a lightweight
-      client for a worker process, sending updates to that queue.
+    High-Performance Asynchronous Monitor.
+    
+    Architecture:
+    [Workers] --(msg)--> [InputQueue] --(Coordinator Thread)--> [DataManager (Memory)]
+                                               |
+                                               +--(periodic)--> [Excel File]
+                                               +--(continuous)--> [PlotQueue] -> [LivePlotter]
     """
 
     def __init__(self,
                  report_path: str,
                  stages: List[str],
-                 data_queue: Optional[Queue] = None,
-                 live_plotting: bool = True):
+                 data_queue: Optional[MPQueue] = None,
+                 live_plotting: bool = True,
+                 save_interval: float = 2.0):
         """
-        Initializes either the main monitor or a worker client.
-
         Args:
-            report_path (str): Path to the Excel report file.
-            stages (List[str]): List of pipeline stage names.
-            data_queue (Optional[Queue]): If provided, configures this instance
-              as a client. If None, configures as the main controller.
-            live_plotting (bool): If True, enables the live plotting dashboard.
-              Only effective for the main controller instance. Defaults to True.
+            save_interval: Seconds to wait between disk writes (throttling).
         """
-        self._data_manager = DataManager(Path(report_path))
         self._is_client = (data_queue is not None)
-
+        self._input_queue = data_queue
+        
+        # --- Client Mode ---
         if self._is_client:
-            # --- Client Configuration (for worker processes) ---
-            self._shared_queue = data_queue
-            self._manager = None
-            self._plotter = None
-            print("📦 Monitor client configured for worker.")
+            return
+
+        # --- Server/Controller Mode ---
+        self._manager = Manager()
+        self._input_queue = self._manager.Queue() # Workers write here
+        self._plot_queue = self._manager.Queue()  # Plotter reads here
+        
+        self._data_manager = DataManager(Path(report_path))
+        self._data_manager.initialize(stages)
+        
+        # Configuration
+        self._save_interval = save_interval
+        self._running = True
+        
+        # Start the Coordinator Thread (Handles logic & persistence)
+        self._coordinator_thread = threading.Thread(target=self._coordinator_loop, daemon=True)
+        self._coordinator_thread.start()
+
+        # Start Live Plotter Process
+        if live_plotting:
+            print("投 Live dashboard is ENABLED.")
+            self._plotter = LivePlotter(self._plot_queue)
+            # Push initial state
+            self._plot_queue.put(self._data_manager.get_dataframe())
         else:
-            # --- Main Controller Configuration ---
-            print("✨ Initializing main monitor and shared resources...")
-            self._manager = Manager()
-            self._shared_queue = self._manager.Queue()
-            
-            if live_plotting:
-                print("📊 Live dashboard is ENABLED.")
-                self._plotter = LivePlotter(self._shared_queue)
-            else:
-                print("📉 Live dashboard is DISABLED.")
-                self._plotter = None
-                
-            self._data_manager.initialize(stages)
+            self._plotter = None
 
     @property
-    def queue(self) -> Queue:
-        """Returns the shared queue. Only available on the main instance."""
-        if self._is_client or self._shared_queue is None:
-            raise AttributeError("Worker clients do not own the queue. Access it from the main instance.")
-        return self._shared_queue
+    def queue(self) -> MPQueue:
+        """Returns the input queue for workers."""
+        if self._input_queue is None:
+             raise RuntimeError("Queue not initialized.")
+        return self._input_queue
+
+    def _coordinator_loop(self):
+        """
+        Runs in the main process (background thread).
+        Consumes messages, updates memory, and throttles disk writes.
+        """
+        last_save_time = time.time()
+        needs_save = False
+
+        while self._running:
+            try:
+                # 1. Process all pending messages (Batch processing)
+                # We drain the queue to avoid lag if many updates come at once.
+                msg_count = 0
+                while not self._input_queue.empty():
+                    try:
+                        # Expected format: (dataset, stage, status, message)
+                        data = self._input_queue.get_nowait()
+                        
+                        if data == "STOP":
+                            self._running = False
+                            break
+                        
+                        dataset, stage, status, msg = data
+                        self._data_manager.update_memory(dataset, stage, status, msg)
+                        needs_save = True
+                        msg_count += 1
+                    except Exception:
+                        break # Queue empty or error
+                
+                if not self._running:
+                    break
+
+                # 2. Update Plotter (if state changed)
+                if msg_count > 0:
+                    current_df = self._data_manager.get_dataframe()
+                    # Push copy to plotter (fire and forget)
+                    if self._plot_queue:
+                         self._plot_queue.put(current_df)
+
+                # 3. Throttled Disk Write
+                now = time.time()
+                if needs_save and (now - last_save_time > self._save_interval):
+                    self._data_manager.save_report()
+                    last_save_time = now
+                    needs_save = False
+                
+                # Sleep briefly to prevent CPU spinning
+                time.sleep(0.05)
+
+            except Exception as e:
+                print(f"🚨 Coordinator Error: {e}")
+                time.sleep(1)
+
+        # Final Save on exit
+        print("💾 Saving final report...")
+        self._data_manager.save_report()
 
     def update(self, dataset: str, stage: str, status: str, message: str = ""):
         """
-        Logs a status update, saves it, and pushes the new state to the queue.
-        This method works for both the main instance and worker clients.
+        Fast, non-blocking update.
         """
-        print(f"[{dataset}] -> Stage '{stage}': {status}")
-        updated_df = self._data_manager.update(dataset, stage, status, message)
+        # Create message tuple
+        msg = (dataset, stage, status, message)
         
-        if updated_df is not None and self._shared_queue:
-            try:
-                self._shared_queue.put(updated_df)
-            except Exception as e:
-                print(f"🚨 Could not put data into queue: {e}")
+        try:
+            self._input_queue.put(msg)
+            # Print log for feedback (optional, can be removed for extreme speed)
+            print(f"[{dataset}] -> {stage}: {status}") 
+        except Exception as e:
+            print(f"圷 Failed to send update: {e}")
 
     def show_dashboard(self):
-        """Displays the live dashboard. Only callable from the main instance."""
-        if self._is_client:
-            raise RuntimeError("Dashboard can only be shown from the main monitor instance.")
-        
-        if not self._plotter:
-            print("📉 Live dashboard is disabled. Cannot show.")
+        if self._is_client or not self._plotter:
             return
-        
-        initial_df = self._data_manager.get_dataframe()
-        if initial_df is not None and self._shared_queue is not None:
-            self._shared_queue.put(initial_df)
         self._plotter.start()
 
     def close_dashboard(self, block: bool = False):
-        """
-        Closes the live dashboard. Only callable from the main instance.
+        if self._is_client:
+            return
+            
+        # Stop coordinator
+        if hasattr(self, '_input_queue'):
+            self._input_queue.put("STOP")
+        
+        if hasattr(self, '_coordinator_thread'):
+            self._coordinator_thread.join(timeout=3.0)
 
-        Args:
-            block (bool): If True, the call will block until the plot window
-                          is manually closed by the user. Defaults to False.
-        """
-        if self._is_client or not self._plotter:
-            return  # Silently ignore for clients or when plotting is disabled
-
-        print("👋 Closing dashboard...")
-        # Assumes the LivePlotter's stop method is updated to accept a 'block' argument.
-        self._plotter.stop(block=block)
+        if self._plotter:
+            self._plotter.stop(block=block)
