@@ -35,7 +35,7 @@ class ThresholdSelectorTool:
     - RGB Integration: Accepts and renders parallel RGB video stream.
     - Geometry Propagation: Disabled on 2D render frame to prevent infinite resize loops.
     - Dynamic Resizing: 2D view listens to <Configure> events to maximize video usage.
-    - Default 3D: Initializes directly into POINT_CLOUD_3D mode.
+    - Default View: Initializes directly into SINGLE_FRAME_2D mode.
     - Voxel Simulation: 3D scatter plots use square markers.
     - Layout Update: 2D view now supports 3-column layout (RGB | Corr | Thresh).
     """
@@ -73,7 +73,8 @@ class ThresholdSelectorTool:
         # --- State ---
         self.result: Optional[int] = None
         self.selection_state: SelectionState = SelectionState.PENDING
-        self.view_mode: ViewMode = ViewMode.POINT_CLOUD_3D
+        # UPDATED: Default mode is now 2D
+        self.view_mode: ViewMode = ViewMode.SINGLE_FRAME_2D
         
         # Cache for window dimensions to prevent render loops
         self.last_2d_size: Tuple[int, int] = (0, 0)
@@ -137,15 +138,21 @@ class ThresholdSelectorTool:
         self._setup_styles()
         self._setup_layout()
 
-        # Force initial render logic based on default mode (3D)
+        # Force initial render logic based on default mode
         self.root.update()
         
-        # Set initial button text based on default mode
+        # Set initial layout based on default mode
         if self.view_mode == ViewMode.POINT_CLOUD_3D:
              self.mode_btn_text.set("Switch to 2D View")
              self.canvas_2d_frame.pack_forget()
              self.canvas_3d_frame.pack(fill=tk.BOTH, expand=True)
              self.scale_frame.state(['disabled'])
+        else:
+             # UPDATED: Handle 2D initialization
+             self.mode_btn_text.set("Switch to 3D View")
+             self.canvas_3d_frame.pack_forget()
+             self.canvas_2d_frame.pack(fill=tk.BOTH, expand=True)
+             self.scale_frame.state(['!disabled'])
         
         self._update_display()
 
@@ -159,7 +166,8 @@ class ThresholdSelectorTool:
         self.frame_var = tk.IntVar(value=0)
         self.thresh_var = tk.IntVar(value=self.init_threshold)
         self.title_var = tk.StringVar()
-        self.mode_btn_text = tk.StringVar(value="Switch to 2D View")
+        # UPDATED: Default text matches 2D default start
+        self.mode_btn_text = tk.StringVar(value="Switch to 3D View")
 
     def _cleanup(self):
         if self.root:
