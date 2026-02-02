@@ -1,75 +1,16 @@
 # reporting.py
 import logging
-import webbrowser
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
-from pandas.plotting import parallel_coordinates
 from matplotlib.colors import LogNorm
 from pathlib import Path
-from typing import Protocol, Union, List, Optional, Tuple, Dict
-
-class TableRenderer(Protocol):
-    """
-    Protocol defining the contract for table rendering strategies.
-    """
-    def render(self, df: pd.DataFrame, title: str = "Data Table") -> None:
-        ...
-
-class GreatTablesStrategy:
-    """
-    Renders tables to static HTML using 'great_tables' (GT).
-    Optimized for publication-quality reporting.
-    """
-    def __init__(self, output_file: Union[str, Path]):
-        self.output_file = Path(output_file)
-        try:
-            from great_tables import GT, style, loc
-            self.GT = GT
-            self.style = style
-            self.loc = loc
-            self.available = True
-        except ImportError:
-            logging.warning("Library 'great_tables' not found. HTML report generation disabled.")
-            self.available = False
-
-    def render(self, df: pd.DataFrame, title: str = "Data Table") -> None:
-        if not self.available:
-            return
-
-        try:
-            gt_tbl = (
-                self.GT(df)
-                .tab_header(
-                    title=title,
-                    subtitle=f"Generated on {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}"
-                )
-            )
-            
-            # Apply heatmapping to numeric columns if present
-            numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-            if numeric_cols:
-                gt_tbl = gt_tbl.data_color(
-                    columns=numeric_cols,
-                    palette=["#ffffff", "#e6f2ff", "#004d99"], # White to Blue
-                )
-
-            html_content = gt_tbl.as_raw_html()
-            
-            with open(self.output_file, "w", encoding="utf-8") as f:
-                f.write(html_content)
-
-            abs_path = self.output_file.resolve()
-            logging.info(f"Report generated at: {abs_path}")
-            webbrowser.open(f"file://{abs_path}")
-            
-        except Exception as e:
-            logging.error(f"Failed to render HTML report: {e}")
+from typing import Union, Tuple, Dict, Optional
 
 class VisualReportingStrategy:
     """
-    Renders static statistical visualizations (Heatmaps, Parallel Coordinates)
+    Renders static statistical visualizations (Heatmaps only)
     using Matplotlib and Seaborn. Enforces global scaling for comparability.
     """
     def __init__(self, output_dir: Union[str, Path]):
@@ -130,24 +71,27 @@ class VisualReportingStrategy:
         df: pd.DataFrame, 
         x_col: str, 
         y_col_1: str, 
-        y_col_2: str,
+        y_col_2: str, 
         pop_col: str,
         type_col: str,
         log_scale: bool = True,
-        log_axis: bool = True
+        log_axis: bool = True,
+        mode: str = "count",
+        value_col: Optional[str] = None
     ):
         """
         Generates a 2x2 heatmap grid PER POPULATION (source file).
-        Includes point counts per heatmap and aggregate sum in the title.
         
         Args:
             log_scale: Toggles LogNorm (color scaling).
             log_axis: Toggles Geometric Binning (spatial axis scaling).
+            mode: "count" (frequency) or "efficacy" (ratio).
+            value_col: Column to average if mode is "efficacy".
         """
         color_scale_name = "Log" if log_scale else "Linear"
         axis_scale_name = "Log" if log_axis else "Linear"
         
-        logging.info(f"Generating Per-Population Heatmaps (Color: {color_scale_name}, Axis: {axis_scale_name})...")
+        logging.info(f"Generating Per-Population Heatmaps [{mode.upper()}] (Color: {color_scale_name}, Axis: {axis_scale_name})...")
         
         unique_pops = df[pop_col].unique()
         
@@ -163,13 +107,10 @@ class VisualReportingStrategy:
 
         # 2. Pre-compute Matrices
         global_max_density = 0
-        # Cache stores: (pop_id, interaction, y_var) -> (Matrix, Count)
+        
+        # Cache stores: (pop_id, interaction, y_var) -> (ValueMatrix, Count)
         plot_cache: Dict[Tuple, Tuple[pd.DataFrame, int]] = {} 
         
-        # Helper to create an empty zero-filled dataframe with correct structure
-        def create_empty_matrix(y_categories):
-            return pd.DataFrame(0, index=y_categories, columns=x_cats)
-
         logging.info("Pre-computing heatmap matrices for global normalization...")
         
         for pop_id in unique_pops:
@@ -189,32 +130,41 @@ class VisualReportingStrategy:
                         current_count = 0
 
                         if subset.empty:
-                            current_matrix = create_empty_matrix(y_cats)
+                            fill_val = 0 if mode == "count" else np.nan
+                            current_matrix = pd.DataFrame(fill_val, index=y_cats, columns=x_cats)
                             current_count = 0
                         else:
-                            # Bin the data
                             x_binned = pd.cut(subset[x_col], bins=x_edges, include_lowest=True)
                             y_binned = pd.cut(subset[y_var], bins=y_edges, include_lowest=True)
 
-                            # Create Crosstab
-                            current_matrix = pd.crosstab(y_binned, x_binned, dropna=False)
-                            # Ensure full grid exists
-                            current_matrix = current_matrix.reindex(index=y_cats, columns=x_cats, fill_value=0)
-                            # Calculate count
-                            current_count = int(current_matrix.sum().sum())
+                            count_matrix_raw = pd.crosstab(y_binned, x_binned, dropna=False)
+                            current_count = int(count_matrix_raw.sum().sum())
+
+                            if mode == "efficacy" and value_col:
+                                mean_series = subset.groupby([y_binned, x_binned], observed=False)[value_col].mean()
+                                current_matrix = mean_series.unstack(fill_value=np.nan)
+                                current_matrix = current_matrix.round(2)
+                            else:
+                                current_matrix = count_matrix_raw
+
+                            fill_val = 0 if mode == "count" else np.nan
+                            current_matrix = current_matrix.reindex(index=y_cats, columns=x_cats, fill_value=fill_val)
 
                         current_max = current_matrix.max().max()
-                        if current_max > global_max_density:
+                        if pd.notna(current_max) and current_max > global_max_density:
                             global_max_density = current_max
                         
                         plot_cache[(pop_id, interaction_type, y_var)] = (current_matrix, current_count)
 
                     except Exception as e:
                         logging.warning(f"Binning error for {pop_id}/{interaction_type}: {e}")
-                        # Fallback to empty matrix structure to ensure plotting logic works
-                        plot_cache[(pop_id, interaction_type, y_var)] = (create_empty_matrix(y_cats), 0)
+                        fill_val = 0 if mode == "count" else np.nan
+                        plot_cache[(pop_id, interaction_type, y_var)] = (pd.DataFrame(fill_val, index=y_cats, columns=x_cats), 0)
 
-        if global_max_density == 0:
+        # Set Scale defaults
+        if mode == "efficacy":
+            global_max_density = 1.0 
+        elif global_max_density == 0:
             global_max_density = 1
 
         # 3. Render Plots
@@ -222,8 +172,6 @@ class VisualReportingStrategy:
 
         for pop_id in unique_pops:
             try:
-                # Calculate Grand Total for this population before plotting
-                # We need to access the counts stored in the cache
                 pop_counts = []
                 for i_type in ['tap', 'stroke']:
                     for y_v in [y_col_1, y_col_2]:
@@ -233,12 +181,13 @@ class VisualReportingStrategy:
                 grand_total = sum(pop_counts)
 
                 fig, axes = plt.subplots(2, 2, figsize=(18, 14))
+                title_metric = "Ratio" if mode == "efficacy" else "Count"
                 fig.suptitle(f'Population Analysis: {pop_id} (Axis: {axis_scale_name} | Color: {color_scale_name}) | Total Points: {grand_total}', fontsize=16)
                 
                 plot_configs = [
                     (0, 0, 'tap', y_col_1, y1_cats, f"Tap: {x_col} vs {y_col_1}"),
-                    (0, 1, 'tap', y_col_2, y2_cats, f"Tap: {x_col} vs {y_col_2}"),
-                    (1, 0, 'stroke', y_col_1, y1_cats, f"Stroke: {x_col} vs {y_col_1}"),
+                    (0, 1, 'stroke', y_col_1, y1_cats, f"Stroke: {x_col} vs {y_col_1}"),
+                    (1, 0, 'tap', y_col_2, y2_cats, f"Tap: {x_col} vs {y_col_2}"),
                     (1, 1, 'stroke', y_col_2, y2_cats, f"Stroke: {x_col} vs {y_col_2}")
                 ]
 
@@ -246,56 +195,91 @@ class VisualReportingStrategy:
                     ax = axes[row, col]
                     matrix, count = plot_cache.get((pop_id, i_type, y_var))
 
-                    # Logic to ensure consistency:
-                    # 1. Determine if empty.
-                    # 2. Even if empty, we PLOT the heatmap (to generate the colorbar/layout).
-                    # 3. If empty, we MASK the heatmap and add text.
+                    if mode == "efficacy":
+                        is_empty = matrix.isna().all().all()
+                    else:
+                        is_empty = (matrix.sum().sum() == 0)
                     
-                    is_empty = (matrix.sum().sum() == 0)
-                    
-                    # Setup Mask: True means "don't show this cell"
                     if is_empty:
-                        mask = np.ones_like(matrix) # Mask everything
-                        # For LogNorm, we cannot plot 0s without error, even if masked.
-                        # We temporarily fill with a safe value (1).
-                        plot_data = matrix.replace(0, 1) if log_scale else matrix
+                        mask = np.ones_like(matrix)
+                        plot_data = matrix
                     else:
                         mask = None
                         plot_data = matrix
 
-                    # Configure Heatmap
                     heatmap_kwargs = {
                         'cmap': 'magma',
-                        'cbar': True, # ALWAYS True to reserve layout space
+                        'cbar': True, 
                         'ax': ax,
                         'mask': mask
                     }
 
-                    if log_scale:
-                        heatmap_kwargs['norm'] = LogNorm(vmin=1, vmax=global_max_density)
+                    if mode == "efficacy":
+                        heatmap_kwargs['vmin'] = 0.0
+                        heatmap_kwargs['vmax'] = 1.0
                     else:
-                        heatmap_kwargs['vmin'] = 0
-                        heatmap_kwargs['vmax'] = global_max_density
+                        if log_scale:
+                            safe_data = plot_data.replace(0, 1)
+                            heatmap_kwargs['norm'] = LogNorm(vmin=1, vmax=global_max_density)
+                            if not is_empty:
+                                plot_data = safe_data
+                        else:
+                            heatmap_kwargs['vmin'] = 0
+                            heatmap_kwargs['vmax'] = global_max_density
 
                     # Render
-                    
                     sns.heatmap(plot_data, **heatmap_kwargs)
                     
-                    # Post-Plot Decoration
-                    # Append count to the individual subplot title
-                    ax.set_title(f"{base_title} (n={count})")
+                    # ---------------------------------------------------------
+                    # MODIFICATION: Force Max Value on Colorbar
+                    # ---------------------------------------------------------
+                    try:
+                        cbar = ax.collections[0].colorbar
+                        # Get current ticks generated by matplotlib
+                        current_ticks = cbar.get_ticks()
+                        
+                        # Determine the upper bound we want to enforce
+                        target_max = 1.0 if mode == "efficacy" else global_max_density
+                        
+                        # Filter existing ticks that might be out of bounds (ghost ticks)
+                        # and ensure we don't have duplicates close to target_max
+                        new_ticks = [t for t in current_ticks if t < target_max]
+                        
+                        # Add the global max explicitly
+                        new_ticks.append(target_max)
+                        
+                        # Remove values < 1 for Count/Log mode to avoid log(0) issues or clutter
+                        if mode == "count" and log_scale:
+                            new_ticks = [t for t in new_ticks if t >= 1]
+                        elif mode == "count":
+                            new_ticks = [t for t in new_ticks if t >= 0]
+                            
+                        # Apply new ticks
+                        cbar.set_ticks(new_ticks)
+                        
+                        # Format labels
+                        if mode == "count":
+                            # Integers for count
+                            cbar.set_ticklabels([f"{int(t)}" for t in new_ticks])
+                        else:
+                            # Floats for efficacy
+                            cbar.set_ticklabels([f"{t:.2f}" for t in new_ticks])
+                            
+                    except Exception as e:
+                        logging.warning(f"Could not adjust colorbar ticks: {e}")
+                    # ---------------------------------------------------------
+
+                    ax.set_title(f"{base_title} ({title_metric}, n={count})")
                     ax.invert_yaxis()
                     ax.set_xlabel(x_col)
                     ax.set_ylabel(y_var)
 
-                    # Overlay "No Data" if needed
                     if is_empty:
                         ax.text(0.5, 0.5, "No Data", 
                                 ha='center', va='center', 
                                 transform=ax.transAxes,
                                 fontsize=12, color='gray')
 
-                    # Format Labels
                     def format_labels(cats):
                         return [f"{c.mid:.2f}" for c in cats]
 
@@ -305,69 +289,7 @@ class VisualReportingStrategy:
                 plt.tight_layout(rect=[0, 0.03, 1, 0.95])
                 
                 safe_name = str(pop_id).replace(" ", "_").replace("/", "-")
-                self._save_plot(f"heatmap_{safe_name}.png")
+                self._save_plot(f"heatmap_{mode}_{safe_name}.png")
 
             except Exception as e:
                 logging.error(f"Failed to render heatmap for {pop_id}: {e}")
-
-    def generate_parallel_coordinates(self, df: pd.DataFrame, cols: List[str], pop_col: str, type_col: str):
-        """
-        Generates two parallel coordinates plots (Tap vs Stroke).
-        """
-        logging.info("Generating Parallel Coordinates Plots (Tap/Stroke)...")
-        try:
-            valid_cols = [c for c in cols if c in df.columns]
-            if not valid_cols or pop_col not in df.columns or type_col not in df.columns:
-                logging.warning("Missing columns for parallel coordinates.")
-                return
-
-            # Global Normalization (Min-Max)
-            data_norm = df.copy()
-            data_norm = data_norm.dropna(subset=valid_cols + [pop_col, type_col])
-            
-            for col in valid_cols:
-                min_val = data_norm[col].min()
-                max_val = data_norm[col].max()
-                if max_val - min_val != 0:
-                    data_norm[col] = (data_norm[col] - min_val) / (max_val - min_val)
-                else:
-                    data_norm[col] = 0.0
-
-            interaction_types = ['tap', 'stroke']
-            
-            for i_type in interaction_types:
-                subset = data_norm[data_norm[type_col] == i_type]
-                
-                if subset.empty:
-                    logging.info(f"No data for Parallel Coordinates: {i_type}")
-                    continue
-                    
-                plt.figure(figsize=(14, 7))
-                
-                parallel_coordinates(
-                    subset[valid_cols + [pop_col]], 
-                    class_column=pop_col, 
-                    colormap='viridis', 
-                    alpha=0.6,
-                    linewidth=1.5
-                )
-                
-                plt.title(f"Parallel Coordinates: {i_type.capitalize()} (Color: Population)")
-                plt.ylabel("Normalized Value (Global 0-1)")
-                plt.grid(axis='y', linestyle='--', alpha=0.7)
-                plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left', title="Population")
-                
-                self._save_plot(f"parallel_coordinates_{i_type}.png")
-
-        except Exception as e:
-            logging.error(f"Failed to generate parallel coordinates: {e}")
-
-class TableContext:
-    """
-    Context manager for executing the selected rendering strategy.
-    """
-    def __init__(self, strategy: TableRenderer) -> None:
-        self._strategy = strategy
-
-    def execute_render(self, df: pd.DataFrame, title: str) -> None:
-        self._strategy.render(df, title)
