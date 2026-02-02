@@ -150,11 +150,16 @@ def create_color_correlation_videos(
     Automatically identifies 'discarded' color variants and uses them to
     penalize false positives in the correlation map.
     """
-    colorspace_manager: ColorSpaceManager = ColorSpaceFileHandler.load(md_path)
+    print("--- Starting Color Correlation Video Processing ---")
+
+    # Load metadata with auto-creation option if file is missing
+    colorspace_manager: ColorSpaceManager = ColorSpaceFileHandler.load(
+        md_path, 
+        create_from_template_if_missing=True
+    )
+    
     metadata_file_modified = False
     last_output_path = None
-
-    print("--- Starting Color Correlation Video Processing ---")
 
     for name in colorspace_manager.colorspace_names:
         # Skip "discarded" definitions in the main loop; they are only used as helpers
