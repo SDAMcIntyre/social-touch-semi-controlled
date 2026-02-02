@@ -28,6 +28,8 @@ class ColorSpace:
         Args:
             data (Dict[str, Any]): The dictionary for a single named colorspace.
         """
+        # Handle is_template, defaulting to False if missing
+        self.is_template: bool = data.get("is_template", False)
         self.status: str = data.get("status", ColorSpaceDefault.Status.value)
         self.threshold: Optional[int] = data.get("threshold")
         self.frames_colorspace: List[Dict[str, Any]] = data.get("colorspaces", [])
@@ -85,6 +87,7 @@ class ColorSpace:
     def to_dict(self) -> Dict[str, Any]:
         """Converts the object back to its dictionary representation for JSON serialization."""
         data = {
+            "is_template": self.is_template,  # Included in serialization
             "status": self.status,
             "threshold": self.threshold,
             "colorspaces": self.frames_colorspace,
