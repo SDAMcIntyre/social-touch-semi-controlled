@@ -23,8 +23,24 @@ parameters:
 
 tasks:
   # --- Analysis Tasks ---
-  analyse_number_single_touches:
+  
+  # Primary processing flow. Must run first.
+  process_unified_touches:
     enabled: true
     options:
       force_processing: false
     depends_on: []
+
+  # Consumes output from process_unified_touches
+  analyse_number_single_touches:
+    enabled: true
+    options:
+      force_processing: true
+    depends_on: ["process_unified_touches"]
+
+  # Consumes output from process_unified_touches
+  analyse_ap_efficacy:
+    enabled: true
+    options:
+      force_processing: true
+    depends_on: ["process_unified_touches"]
