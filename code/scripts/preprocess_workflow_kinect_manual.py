@@ -160,9 +160,8 @@ def define_trial_chunks_flow(
     """Define trial chunks based on sticker data."""
     print(f"[{rgb_video_path.name}] Defining trial chunks...")
     xy_csv_path = sticker_dir / (rgb_video_path.stem + "_handstickers_summary_2d_coordinates.csv")
-    output_path = output_dir / (rgb_video_path.stem + '_trial-chunks.csv')
-
     led_on_path = led_dir / (rgb_video_path.stem + "_LED.csv")
+    output_path = output_dir / (rgb_video_path.stem + '_trial-chunks.csv')
     
     define_trial_chunks(
         xy_csv_path,
