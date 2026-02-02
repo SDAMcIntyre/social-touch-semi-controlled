@@ -119,6 +119,7 @@ class ColorSpaceManager:
                    adjusted_colorspaces: List[Dict[str, Any]],
                    status: ColorSpaceStatus = ColorSpaceStatus.TO_BE_PROCESSED,
                    threshold: int = ColorSpaceDefault.Threshold.value,
+                   is_template: bool = False,
                    *,
                    replace: bool = False) -> bool:
         """
@@ -130,6 +131,7 @@ class ColorSpaceManager:
             adjusted_colorspaces: List of corresponding colorspace dicts.
             status: The review status to assign.
             threshold: The threshold value to assign.
+            is_template: Whether this object is a template (default: False).
 
         Returns:
             True if the object was added, False if it already exists.
@@ -142,6 +144,7 @@ class ColorSpaceManager:
             )
 
         new_payload = {
+            'is_template': is_template,
             'status': status.value,
             'threshold': threshold,
             'colorspaces': [
@@ -195,6 +198,7 @@ class ColorSpaceManager:
                          adjusted_colorspaces: List[Dict[str, Any]],
                          status: ColorSpaceStatus = ColorSpaceStatus.TO_BE_PROCESSED,
                          threshold: Optional[int] = None,
+                         is_template: bool = False,
                          *,
                          merge: bool = True) -> None:
         """
@@ -212,6 +216,8 @@ class ColorSpaceManager:
             threshold: The threshold value. If updating and set to None, the
                     existing threshold is kept. If adding and set to None, a
                     default is used.
+            is_template: Whether this object is a template (default: False).
+                         Used only when creating a NEW object.
             merge: If True (default) and the object exists, new frame data is
                 merged with existing data. If False, existing frame data is
                 replaced. This has no effect when creating a new object.
@@ -247,7 +253,8 @@ class ColorSpaceManager:
                 frame_ids=frame_ids,
                 adjusted_colorspaces=adjusted_colorspaces,
                 status=status,
-                threshold=create_threshold
+                threshold=create_threshold,
+                is_template=is_template
             )
 
     def to_dict(self) -> Dict[str, Any]:
