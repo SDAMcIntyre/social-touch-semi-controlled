@@ -82,7 +82,7 @@ class TrialSegmenterGUI:
         # --- UI Elements ---
         self.root = None
         self.image_label = None
-        self.reference_canvas = None  # NEW
+        self.reference_canvas = None
         self.timeline_scale = None
         self.chunk_canvas = None
         self.record_button = None
@@ -90,6 +90,7 @@ class TrialSegmenterGUI:
         self.current_frame_label = None
         self.scale_var = None
         self.play_button = None
+        self.flip_ellipse_var = None  # New State Variable
 
     def _compute_rle_segments(self, mask: np.ndarray) -> List[Tuple[int, int]]:
         """
@@ -116,10 +117,13 @@ class TrialSegmenterGUI:
         self.root.title(self.title)
 
         self.scale_var = tk.IntVar(value=0)
+        
+        # Initialize Flip State (Default True per request)
+        self.flip_ellipse_var = tk.BooleanVar(value=True)
 
         # --- Window Positioning ---
         if self.windowState.upper() == 'NORMAL':
-            window_width, window_height = 1280, 950 # Slightly taller for extra strip
+            window_width, window_height = 1280, 950 
             screen_width = self.root.winfo_screenwidth()
             screen_height = self.root.winfo_screenheight()
             center_x = int(screen_width / 2 - window_width / 2)
@@ -142,8 +146,7 @@ class TrialSegmenterGUI:
         self.image_label = ttk.Label(main_frame)
         self.image_label.grid(row=0, column=0, sticky="nsew")
 
-        # 2. Reference Strip Canvas (Row 1 - NEW)
-        # Positioned above slider. Using height=15 for a compact strip.
+        # 2. Reference Strip Canvas (Row 1)
         self.reference_canvas = tk.Canvas(main_frame, height=15, bg="#f0f0f0", highlightthickness=0)
         self.reference_canvas.grid(row=1, column=0, sticky="ew", pady=(5, 0))
         self.reference_canvas.bind("<Configure>", self._on_reference_canvas_resize)
@@ -187,9 +190,20 @@ class TrialSegmenterGUI:
         self.current_frame_label = ttk.Label(left_controls, text=f"Frame: 0 / {total_frames - 1}")
         self.current_frame_label.pack(side=tk.LEFT, padx=10)
 
-        # Right Side: Deletion Management
+        # Right Side: Deletion Management & Settings
         right_controls = ttk.Frame(controls_container)
         right_controls.grid(row=0, column=2, sticky="e")
+        
+        # --- NEW: Flip Ellipse Toggle ---
+        # Placed at the top of the right control panel
+        flip_check = ttk.Checkbutton(
+            right_controls, 
+            text="Flip Ellipse Angle", 
+            variable=self.flip_ellipse_var,
+            command=lambda: self.seek_to_frame(self.scale_var.get()) # Immediate Refresh
+        )
+        flip_check.pack(side=tk.TOP, anchor="w", pady=(0, 10))
+        # --------------------------------
 
         ttk.Label(right_controls, text="Recorded Chunks:").pack(side=tk.TOP, anchor="w")
         
@@ -501,7 +515,13 @@ class TrialSegmenterGUI:
                             if not any(np.isnan(v) for v in ell_vals if isinstance(v, (int, float))):
                                 center = (int(data['ellipse_center_x']), int(data['ellipse_center_y']))
                                 axes = (int(data['axes_major'] / 2), int(data['axes_minor'] / 2))
-                                angle = int(data['angle'])
+                                
+                                # FIX: Conditional Flip logic
+                                raw_angle = int(data['angle'])
+                                # If checkbox is Checked (True), we negate the angle to flip Y.
+                                # If unchecked (False), we use raw angle.
+                                angle = -raw_angle if self.flip_ellipse_var.get() else raw_angle
+                                
                                 cv2.ellipse(frame_bgr, center, axes, angle, 0, 360, color, 2)
 
                     except (ValueError, OverflowError):
