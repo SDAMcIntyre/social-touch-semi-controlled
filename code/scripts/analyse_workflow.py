@@ -1,3 +1,4 @@
+# analyse_workflow.py
 import os
 import logging
 from pathlib import Path
@@ -23,51 +24,51 @@ from primary_processing import (
     KinectConfig, 
     get_block_files
 )
-# Imported the new function here
+
+# Imported from the updated touch_analysis module (assuming path matches 'analyse/touch_analytics')
 from analyse.touch_analytics import (
-    analyse_number_single_touches, 
-    generate_touch_summary_matrix
+    generate_unified_summary,
+    generate_touch_summary_matrix,
+    generate_ap_efficacy_matrix
 )
 
 # --- Analysis Flows ---
 
-@flow(name="analyse_number_single_touches")
-def analyse_number_single_touches_flow(
+@flow(name="process_unified_touches")
+def process_unified_touches_flow(
     input_items: List[Tuple[Path, Path]], 
     force_processing: bool = False
 ) -> List[Path]:
     """
-    Wrapper flow for the single touches analysis.
-    
-    Args:
-        input_items: A list of tuples, where each tuple contains:
-                     (input_file_path, database_path)
+    STEP 1: Primary Processing.
+    Analyses raw session data and produces a unified summary CSV.
     """
-    print(f"[Batch Analysis] Processing {len(input_items)} items...")
+    print(f"[Batch Analysis] Generating unified summaries for {len(input_items)} items...")
     
     results = []
     
     for input_file, database_path in input_items:
         try:
-            # 1. Construct Output Directory
             output_dir = database_path / "4_analysed"
-            
-            # 2. Modify Filename
             filename = input_file.name
+            
+            # Standardized Filename
             if "_semicontrolled_" in filename:
                 prefix = filename.split("_semicontrolled_")[0]
-                new_filename = f"{prefix}_semicontrolled_single_touches_summary.csv"
+                new_filename = f"{prefix}_semicontrolled_touch_summary.csv"
             else:
-                new_filename = f"{input_file.stem}_single_touches_summary.csv"
+                new_filename = f"{input_file.stem}_touch_summary.csv"
 
             output_file_path = output_dir / new_filename
-
-            # 3. Ensure Output Directory Exists
             output_dir.mkdir(parents=True, exist_ok=True)
 
-            # 4. Execute Analysis
-            # Note: We rely on default show=False for individual files in batch
-            result_path = analyse_number_single_touches(input_file, output_file_path, show=False)
+            # Delegate processing (and checks) to the function
+            result_path = generate_unified_summary(
+                input_file, 
+                output_file_path, 
+                show=False, 
+                force=force_processing
+            )
             results.append(result_path)
 
         except Exception as e:
@@ -75,33 +76,119 @@ def analyse_number_single_touches_flow(
             import traceback
             traceback.print_exc()
             
-    # 5. Generate Aggregate Matrix
-    if results:
-        try:
-            # Anchor output to the first database path
-            anchor_db_path = input_items[0][1]
-            matrix_output_path = anchor_db_path / "batch_condition_matrix.csv"
-            
-            logging.info("Generating batch condition matrix...")
-            # show=True is the default now, but it's good practice to be explicit in workflows
-            generate_touch_summary_matrix(results, matrix_output_path, show=True)
-            
-        except Exception as e:
-            logging.error(f"Failed to generate aggregate matrix: {e}")
-
     return results
 
 
-# --- Batch Processing Logic ---
+@flow(name="analyse_number_single_touches")
+def analyse_number_single_touches_flow(
+    input_items: List[Tuple[Path, Path]], 
+    force_processing: bool = False
+) -> List[Path]:
+    """
+    STEP 2: Matrix Generation (Counts).
+    Generates a matrix of single touch counts into '4_analysed/touch_count'.
+    """
+    print(f"[Batch Analysis] Generating Count Matrix...")
+    
+    unified_files = _collect_unified_files(input_items)
+    
+    if unified_files:
+        try:
+            # Use the first database path as the anchor for the matrix output
+            anchor_db_path = input_items[0][1]
+            
+            # Define specific subfolder for this analysis flow
+            output_dir = anchor_db_path / "4_analysed" / "touch_count"
+            output_dir.mkdir(parents=True, exist_ok=True)
+            
+            matrix_output_path = output_dir / "batch_condition_matrix.csv"
+            
+            logging.info(f"Calling batch condition matrix generation. Output: {matrix_output_path}")
+            # Delegate processing (and checks) to the function
+            generate_touch_summary_matrix(
+                unified_files, 
+                matrix_output_path, 
+                show=True, 
+                force=force_processing
+            )
+            return [matrix_output_path]
+        except Exception as e:
+            logging.error(f"Failed to generate aggregate matrix: {e}")
+            return []
+    else:
+        logging.warning("No unified summary files found. Run 'process_unified_touches' first.")
+        return []
+
+@flow(name="analyse_ap_efficacy")
+def analyse_ap_efficacy_flow(
+    input_items: List[Tuple[Path, Path]], 
+    force_processing: bool = False
+) -> List[Path]:
+    """
+    STEP 3: Matrix Generation (Efficacy).
+    Generates a matrix of AP efficacy into '4_analysed/ap_efficacy'.
+    """
+    print(f"[Batch Analysis - AP Efficacy] Generating Efficacy Matrix...")
+    
+    unified_files = _collect_unified_files(input_items)
+    
+    if unified_files:
+        try:
+            anchor_db_path = input_items[0][1]
+            
+            # Define specific subfolder for this analysis flow
+            output_dir = anchor_db_path / "4_analysed" / "ap_efficacy"
+            output_dir.mkdir(parents=True, exist_ok=True)
+            
+            matrix_output_path = output_dir / "batch_ap_efficacy_matrix.csv"
+            
+            logging.info(f"Calling batch AP efficacy matrix generation. Output: {matrix_output_path}")
+            # Delegate processing (and checks) to the function
+            generate_ap_efficacy_matrix(
+                unified_files, 
+                matrix_output_path, 
+                show=True, 
+                force=force_processing
+            )
+            return [matrix_output_path]
+        except Exception as e:
+            logging.error(f"Failed to generate AP matrix: {e}")
+            return []
+    else:
+        logging.warning("No unified summary files found. Run 'process_unified_touches' first.")
+        return []
+
+def _collect_unified_files(input_items: List[Tuple[Path, Path]]) -> List[Path]:
+    """
+    Helper to reconstruct the expected paths of the unified summary files.
+    These files are expected to be in the root of '4_analysed' based on Step 1.
+    """
+    unified_files = []
+    for input_file, database_path in input_items:
+        output_dir = database_path / "4_analysed"
+        filename = input_file.name
+        
+        if "_semicontrolled_" in filename:
+            prefix = filename.split("_semicontrolled_")[0]
+            new_filename = f"{prefix}_semicontrolled_touch_summary.csv"
+        else:
+            new_filename = f"{input_file.stem}_touch_summary.csv"
+            
+        expected_path = output_dir / new_filename
+        if expected_path.exists():
+            unified_files.append(expected_path)
+        else:
+            logging.debug(f"Expected unified file missing: {expected_path}")
+            
+    return unified_files
+
+# --- Batch Processing Logic (Main) ---
 
 def collect_unique_session_dirs(
     config_dir_names: List[str], 
     root_configs_path: Path, 
     project_data_root: Path
 ) -> Dict[Path, Path]:
-    """
-    Iterates through a list of config directory names, loads all valid KinectConfigs.
-    """
     session_dir_map = {}
     total_files_scanned = 0
 
@@ -117,7 +204,6 @@ def collect_unique_session_dirs(
         
         for block_file in block_files:
             try:
-                # Load config to resolve the session output path
                 config_data = KinectConfigFileHandler.load_and_resolve_config(block_file)
                 config = KinectConfig(config_data=config_data, database_path=project_data_root)
                 
@@ -140,11 +226,6 @@ def run_batch_analysis(
     dag_handler: DagConfigHandler,
     report_file_path: Path
 ):
-    """
-    Orchestrates the analysis workflow.
-    """
-    
-    # 1. Collect Unique Session Maps
     session_map = collect_unique_session_dirs(
         kinect_config_dirs, 
         configs_root_path, 
@@ -155,22 +236,18 @@ def run_batch_analysis(
         logging.warning("No valid session directories found. Exiting.")
         return
 
-    # 2. Check DAG Configuration
-    task_name = "analyse_number_single_touches"
-    batch_id = "batch_run_all_sessions"
+    available_tasks = [
+        ("process_unified_touches", process_unified_touches_flow),
+        ("analyse_number_single_touches", analyse_number_single_touches_flow),
+        ("analyse_ap_efficacy", analyse_ap_efficacy_flow)
+    ]
     
-    if task_name not in dag_handler.tasks or not dag_handler.tasks[task_name].get("enabled", True):
-        logging.info(f"Task '{task_name}' is disabled in DAG. Exiting.")
-        return
+    task_names = [t[0] for t in available_tasks]
+    monitor = PipelineMonitor(report_path=report_file_path, stages=task_names, data_queue=Queue())
 
-    options = dag_handler.get_task_options(task_name)
-    monitor = PipelineMonitor(report_path=report_file_path, stages=[task_name], data_queue=Queue())
-
-    # 3. Aggregate target files with their source context
     items_to_process: List[Tuple[Path, Path]] = []
     
     logging.info(f"Scanning {len(session_map)} sessions for data files...")
-
     for search_dir in sorted(session_map.keys()):
         database_path_context = session_map[search_dir]
         candidates = list(search_dir.glob("*_semicontrolled_aggregated_session.csv"))
@@ -178,53 +255,50 @@ def run_batch_analysis(
         if candidates:
             target_file = candidates[0]
             items_to_process.append((target_file, database_path_context))
-        else:
-            logging.warning(f"No aggregated session file found in {search_dir.name}")
 
     if not items_to_process:
-        logging.warning("No input files found across all sessions. Exiting.")
+        logging.warning("No input files found. Exiting.")
         return
 
-    # 4. Execute Flow
     logging.info(f"🚀 Starting analysis for {len(items_to_process)} collected items.")
     
-    executor = TaskExecutor(task_name, batch_id, dag_handler, monitor)
-    
-    with executor:
-        if executor.can_run:
-            try:
-                analyse_number_single_touches_flow(
-                    input_items=items_to_process,
-                    force_processing=options.get("force_processing", False)
-                )
-                
-            except Exception as e:
-                executor.error_msg = f"Batch analysis failed: {str(e)}"
-                logging.error(f"Error during batch execution: {e}")
+    for task_name, flow_func in available_tasks:
+        if task_name not in dag_handler.tasks or not dag_handler.tasks[task_name].get("enabled", True):
+            logging.info(f"Task '{task_name}' is disabled in DAG. Skipping.")
+            continue
+
+        options = dag_handler.get_task_options(task_name)
+        batch_id = f"batch_run_{task_name}"
+        
+        executor = TaskExecutor(task_name, batch_id, dag_handler, monitor)
+        
+        with executor:
+            if executor.can_run:
+                try:
+                    flow_func(
+                        input_items=items_to_process,
+                        force_processing=options.get("force_processing", False)
+                    )
+                except Exception as e:
+                    executor.error_msg = f"Batch analysis failed: {str(e)}"
+                    logging.error(f"Error during {task_name}: {e}")
 
     logging.info("✅ Batch analysis finished.")
 
-
 def main():
     freeze_support()
-    
-    # Configuration
     project_data_root = path_tools.get_project_data_root() 
     configs_dir = Path("configs")
     dag_config_path = configs_dir / "analyse_workflow_dag.yaml"
-    
     reports_dir = Path("reports")
     reports_dir.mkdir(exist_ok=True)
     report_file_path = reports_dir / "analysis_status.xlsx"
 
-    # Load DAG
     if not dag_config_path.exists():
         logging.error(f"DAG config not found at {dag_config_path}")
         exit(1)
         
     dag_handler = DagConfigHandler(dag_config_path)
-    
-    # Extract list of config directories from DAG parameters
     config_dirs_param = dag_handler.get_parameter('kinect_configs_directories')
     
     if isinstance(config_dirs_param, str):
@@ -232,7 +306,7 @@ def main():
     elif isinstance(config_dirs_param, list):
         kinect_config_dirs = config_dirs_param
     else:
-        logging.error("Parameter 'kinect_configs_directories' must be a string or a list of strings.")
+        logging.error("Parameter error")
         exit(1)
 
     run_batch_analysis(
