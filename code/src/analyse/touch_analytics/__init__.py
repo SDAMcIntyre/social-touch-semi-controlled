@@ -2,19 +2,21 @@
 
 from .touch_config import DISCRETIZATION_CONFIG
 from .reporting import (
-    TableRenderer, 
-    GreatTablesStrategy, 
-    TableContext
+    VisualReportingStrategy # Implicitly exported by usage, but not explicitly in original __all__
 )
-from .touch_analysis import analyse_number_single_touches
-from .matrix_generation import generate_touch_summary_matrix
+from .touch_analysis import (
+    generate_unified_summary
+)
+from .matrix_generation import (
+    generate_touch_summary_matrix,
+    generate_ap_efficacy_matrix
+)
 
 # Define the public API of the package
 __all__ = [
     "DISCRETIZATION_CONFIG",
-    "TableRenderer",
-    "GreatTablesStrategy",
-    "TableContext",
-    "analyse_number_single_touches",
+    "analyse_number_single_touches", # Kept if it exists externally, though not in provided files
+    "analyse_ap_generation_efficacy", # Kept if it exists externally
     "generate_touch_summary_matrix",
+    "generate_ap_efficacy_matrix",
 ]
