@@ -350,11 +350,11 @@ def define_handstickers_colorspaces_from_roi(
         print("🟡 Skipping: Source metadata not found.")
         return
 
-    metadata_exists = os.path.exists(dest_metadata_path)
-    if metadata_exists:
-        colorspace_manager: ColorSpaceManager = ColorSpaceFileHandler.load(dest_metadata_path)
-    else:
-        colorspace_manager = ColorSpaceManager()
+    if not os.path.exists(dest_metadata_path):
+        print("🟡 Skipping: Destination metadata not found. Run automatic pipeline first.")
+        return
+    
+    colorspace_manager: ColorSpaceManager = ColorSpaceFileHandler.load(dest_metadata_path)
 
     # --- 2. Load Source Data ---
     annotation_data = ROIAnnotationFileHandler.load(roi_metadata_path)
@@ -400,8 +400,7 @@ def define_handstickers_colorspaces_from_roi(
         status = current_colorspace.status if current_colorspace else None
         
         should_process = video_exists and (
-            not metadata_exists 
-            or force_processing 
+            force_processing 
             or (status == ColorSpaceStatus.TO_BE_DEFINED.value)
             or (status is None)
         )
