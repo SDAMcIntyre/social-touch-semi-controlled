@@ -1,0 +1,17 @@
+# ==============================================================================
+# VIEW MERGED NEURAL-KINECT — DAG CONFIGURATION
+# ==============================================================================
+# Drives view_merged_neural_kinect.py.
+# Point kinect_configs_directory at the block configs for the session to view.
+# ==============================================================================
+
+parameters:
+  kinect_configs_directory: "kinect_configs/valid_configs_ST13-03"
+
+tasks:
+  view_neural_kinect_scene:
+    enabled: true
+    description: "Launch the NeuralKinectViewer for the merged neural + Kinect 3D scene."
+    options:
+      crop_half_size_mm: 400.0   # AABB half-size in mm around the contact centroid
+    depends_on: []
