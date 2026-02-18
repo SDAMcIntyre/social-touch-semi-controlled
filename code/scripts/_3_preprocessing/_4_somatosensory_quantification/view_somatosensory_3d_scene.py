@@ -1,6 +1,6 @@
 import sys
 from pathlib import Path
-from typing import Iterable, List
+from typing import List
 import traceback
 from PyQt5.QtWidgets import QApplication
 import numpy as np
@@ -32,34 +32,7 @@ from preprocessing.motion_analysis import (
     HandMotionManager
 )
 
-def define_custom_colors(string_list: Iterable[str]) -> dict[str, str]:
-    """
-    Searches an iterable of strings for standard color keywords.
-
-    Args:
-        string_list: An iterable (e.g., list, dict_keys) of strings to search through.
-
-    Returns:
-        A list of unique color names found in the strings.
-    """
-    # Define the set of standard color keywords to search for
-    STANDARD_COLORS = {
-        "red", "green", "blue", "yellow", "orange", "purple", "pink",
-        "black", "white", "brown", "gray", "grey", "cyan", "magenta", "violet"
-    }
-    
-    found_colors = {}
-    
-    # Iterate through each string in the input list
-    for item in string_list:
-        # Convert the string to lowercase for case-insensitive matching
-        item_lower = item.lower()
-        # Check if any of the standard colors are a substring of the item
-        for color in STANDARD_COLORS:
-            if color in item_lower:
-                found_colors[item] = color
-    
-    return found_colors
+from merging.gui.neural_kinect_scene_viewer import define_custom_colors
 
 
 def view_somatosensory_3d_scene(
