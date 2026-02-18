@@ -35,12 +35,6 @@ Original planning documents: [`docs/plans/active/neural-kinect-viewer/`](../plan
 |---|---|---|
 | `StickerVelocityCompass(QWidget)` | Group 1 | 120 × 140 px QPainter widget. Draws a 2D XY velocity arrow (length ∝ XY speed, color ∝ Z speed: blue = approaching / red = receding) inside a ring drawn in the sticker's assigned color. |
 
-### `code/src/preprocessing/common/data_access/`
-
-| File | Class | Notes |
-|---|---|---|
-| `kinect_mkv_rescue.py` | `KinectRescue`, `RescueFrame` | Fallback iterator for recordings whose `.mkv` cannot be opened by the pyk4a SDK. Reads color frames from a companion MP4 via OpenCV and depth from a raw 16-bit binary file. |
-
 ---
 
 ## Entry-point script
