@@ -21,7 +21,7 @@ import queue
 import re
 import threading
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 # ---------------------------------------------------------------------------
 # Third-party
@@ -947,9 +947,15 @@ class NeuralKinectViewer(QMainWindow):
             point_size=self._point_sizes['contact_points'],
         )
 
-        for name, color in self._custom_colors.items():
+        # Register ALL stickers (not only coloured ones) and cache actor refs.
+        # Sphere geometry stays at origin; _update_frame() translates via
+        # actor.SetPosition() instead of recreating the sphere each frame.
+        self._sticker_actors: Dict[str, Any] = {}
+        for name in self._stickers_xyz_dict:
+            color = self._custom_colors.get(name, 'magenta')
             sphere = pv.Sphere(radius=4.0, center=(0.0, 0.0, 0.0))
-            self.plotter.add_mesh(sphere, color=color, name=f'sticker_{name}')
+            actor = self.plotter.add_mesh(sphere, color=color, name=f'sticker_{name}')
+            self._sticker_actors[name] = actor
 
         # ------------------------------------------------------------------
         # Default camera — edit these three lines to change the startup view.
@@ -1026,8 +1032,6 @@ class NeuralKinectViewer(QMainWindow):
                     self.plotter.remove_actor('_bounds_proxy')
                 except Exception:
                     pass
-
-        empty = pv.PolyData(np.empty((0, 3), dtype=np.float32))
 
         # 1. Kinect point cloud (GPU-cropped AABB) ----------------------
         # In-place update via overwrite() — avoids VTK mapper/actor recreation.
@@ -1117,28 +1121,20 @@ class NeuralKinectViewer(QMainWindow):
                     self._last_hand_tri_count = 0
 
         # 4. Stickers + compass widgets ----------------------------------
+        # Actor references were captured in _init_actors(); sphere geometry
+        # stays at origin and is translated via SetPosition() each frame,
+        # eliminating per-frame pv.Sphere() creation and plotter.add_mesh().
         for name, positions in self._stickers_xyz_dict.items():
             pos = positions[frame_idx] if frame_idx < len(positions) else None
-            actor_name = f'sticker_{name}'
+            actor = self._sticker_actors.get(name)
 
-            if pos is None or np.any(np.isnan(pos)):
-                # Hide by replacing with empty mesh (never use SetVisibility)
-                self.plotter.add_mesh(
-                    empty, color=self._custom_colors.get(name, 'magenta'),
-                    name=actor_name
-                )
-            elif self._visibility.get(name, True):
-                sphere = pv.Sphere(radius=4.0, center=pos.tolist())
-                self.plotter.add_mesh(
-                    sphere,
-                    color=self._custom_colors.get(name, 'magenta'),
-                    name=actor_name,
-                )
-            else:
-                self.plotter.add_mesh(
-                    empty, color=self._custom_colors.get(name, 'magenta'),
-                    name=actor_name
-                )
+            if actor is not None:
+                valid_pos = pos is not None and not np.any(np.isnan(pos))
+                if valid_pos and self._visibility.get(name, True):
+                    actor.SetPosition(*pos.tolist())
+                    actor.VisibilityOn()
+                else:
+                    actor.VisibilityOff()
 
             # Compass update
             if name in self._compass_widgets and frame_idx > 0:
