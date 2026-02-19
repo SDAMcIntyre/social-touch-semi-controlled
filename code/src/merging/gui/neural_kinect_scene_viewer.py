@@ -219,21 +219,32 @@ class FramePreloader(threading.Thread):
 
     def get_frame(self, frame_idx: int):
         """
-        Return the cached PointCloudData for *frame_idx*, if available.
+        Return ``(frame_data, is_exact)`` for *frame_idx*.
 
-        Falls back to a **synchronous** (blocking) load for large seeks
-        where the frame is not yet in the buffer.  This path is rare during
-        normal playback.
+        ``is_exact=True``  — the returned data is for exactly *frame_idx*.
+        ``is_exact=False`` — the returned data is the nearest cached frame;
+                             the caller should schedule a re-render once the
+                             exact frame arrives in the buffer.
+
+        Falls back to a synchronous (blocking) load only when the buffer is
+        completely empty (e.g. the very first access before the preloader has
+        decoded any frames).
         """
         with self._lock:
             if frame_idx in self._buffer:
-                return self._buffer[frame_idx]
-        # Cache miss — synchronous fallback (main thread calls source directly
-        # only in this exceptional case; the preloader is ahead in its loop)
+                return self._buffer[frame_idx], True
+            if self._buffer:
+                # Nearest cached frame — avoids blocking the main thread on
+                # large seeks while the preloader catches up.
+                nearest_key = min(
+                    self._buffer.keys(), key=lambda k: abs(k - frame_idx)
+                )
+                return self._buffer[nearest_key], False
+        # Buffer empty — synchronous fallback (rare; only at startup)
         try:
-            return self._source[frame_idx]
+            return self._source[frame_idx], True
         except Exception:
-            return None
+            return None, True
 
     def buffer_count(self) -> int:
         """Return the number of frames currently held in the ring buffer."""
@@ -613,6 +624,15 @@ class NeuralKinectViewer(QMainWindow):
         self._interactive_stride: int = 4
         self._is_interactive: bool = False
 
+        # Persistent CuPy array for the crop centre; initialised lazily on
+        # the first _crop_pointcloud_gpu() call and reused every frame to
+        # avoid a cp.asarray() upload overhead per frame.
+        self._c_gpu = None  # type: ignore[assignment]
+
+        # Frame index awaiting an exact-frame re-render after a cache-miss
+        # returned an approximate (nearest-cached) frame.
+        self._exact_frame_pending: Optional[int] = None
+
         # ------------------------------------------------------------------
         # 8. Build Qt UI
         # ------------------------------------------------------------------
@@ -636,6 +656,12 @@ class NeuralKinectViewer(QMainWindow):
         self._drag_timer.timeout.connect(self._on_drag_timer_fired)
         self._drag_timer.setInterval(80)
         self._pending_drag_frame: Optional[int] = None
+
+        # Polling timer: fires every 50 ms after a cache-miss delivered an
+        # approximate frame, re-renders once the exact frame is buffered.
+        self._exact_frame_timer = QTimer(self)
+        self._exact_frame_timer.setInterval(50)
+        self._exact_frame_timer.timeout.connect(self._on_exact_frame_poll)
 
         # Guard: first render is deferred to showEvent, not __init__, so that
         # the VTK render window has valid pixel dimensions when Render() fires.
@@ -1063,7 +1089,7 @@ class NeuralKinectViewer(QMainWindow):
         # Remove the invisible bounding proxy once a real kinect frame is
         # available, so it no longer inflates the scene bounds unnecessarily.
         if self._bounds_proxy_active:
-            pc_data = self._preloader.get_frame(frame_idx)
+            pc_data, _ = self._preloader.get_frame(frame_idx)
             if (
                 pc_data is not None
                 and pc_data.points is not None
@@ -1080,8 +1106,9 @@ class NeuralKinectViewer(QMainWindow):
         # overwrite() calls VTK DeepCopy, which updates points + cells + scalars
         # on the same dataset object that the registered mapper references.
         _kcloud: Optional[pv.PolyData] = None  # built below; None → use empty
+        _got_exact: bool = True  # False when a nearest-frame fallback was used
         if self._visibility.get('kinect_point_cloud', True):
-            pc_data = self._preloader.get_frame(frame_idx)
+            pc_data, _got_exact = self._preloader.get_frame(frame_idx)
             if (
                 pc_data is not None
                 and pc_data.points is not None
@@ -1233,6 +1260,14 @@ class NeuralKinectViewer(QMainWindow):
         # 9. Signal preloader to look ahead -----------------------------
         self._preloader.seek(frame_idx + 1)
 
+        # 10. Schedule a re-render if we displayed an approximate frame --
+        # When get_frame() returned a nearest-cached neighbour instead of the
+        # exact frame, queue a 50-ms poll that re-renders once the buffer
+        # catches up.  Skipped during interactive motion (playback / drag)
+        # because the next advance will supersede the approximate frame anyway.
+        if not _got_exact:
+            self._schedule_exact_frame(frame_idx)
+
     # ------------------------------------------------------------------
     # Supporting methods
     # ------------------------------------------------------------------
@@ -1254,7 +1289,11 @@ class NeuralKinectViewer(QMainWindow):
             try:
                 import cupy as cp
                 xyz_gpu = cp.asarray(xyz.astype(np.float32))
-                c_gpu = cp.asarray(center.astype(np.float32))
+                # Lazy-init: upload centre once; contact_centroid is fixed for
+                # the lifetime of the viewer so no invalidation is needed.
+                if self._c_gpu is None:
+                    self._c_gpu = cp.asarray(center.astype(np.float32))
+                c_gpu = self._c_gpu
                 mask_gpu = (
                     (cp.abs(xyz_gpu - c_gpu) <= half_size).all(axis=1)
                     & (xyz_gpu[:, 2] > 0)
@@ -1355,6 +1394,35 @@ class NeuralKinectViewer(QMainWindow):
     def _on_lod_changed(self, value: int) -> None:
         self._interactive_stride = value
 
+    def _schedule_exact_frame(self, frame_idx: int) -> None:
+        """
+        Start polling the preloader buffer until *frame_idx* is cached
+        exactly, then re-render it at full resolution.
+
+        Skipped during active interaction (slider drag, playback) because
+        the next advance will supersede the approximate frame immediately.
+        """
+        if self._is_interactive:
+            return
+        self._exact_frame_pending = frame_idx
+        if not self._exact_frame_timer.isActive():
+            self._exact_frame_timer.start()
+
+    def _on_exact_frame_poll(self) -> None:
+        """Poll the preloader buffer for the pending exact frame."""
+        if self._exact_frame_pending is None or self._is_interactive:
+            self._exact_frame_timer.stop()
+            self._exact_frame_pending = None
+            return
+        frame_idx = self._exact_frame_pending
+        _, is_exact = self._preloader.get_frame(frame_idx)
+        if is_exact:
+            self._exact_frame_timer.stop()
+            self._exact_frame_pending = None
+            # Re-render only if the user is still on the same frame
+            if self.current_index == frame_idx:
+                self._update_frame(frame_idx)
+
     def _refresh_cam_pos_label(self, *_) -> None:
         """Update the camera position + orientation readout in the right panel."""
         try:
@@ -1402,6 +1470,7 @@ class NeuralKinectViewer(QMainWindow):
     def closeEvent(self, event) -> None:  # noqa: N802
         self._play_timer.stop()
         self._drag_timer.stop()
+        self._exact_frame_timer.stop()
         self._preloader.stop()
         self._preloader.join(timeout=2.0)
         try:
