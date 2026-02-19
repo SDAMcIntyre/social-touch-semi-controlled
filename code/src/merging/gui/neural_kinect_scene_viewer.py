@@ -541,6 +541,26 @@ class NeuralKinectViewer(QMainWindow):
         )
 
         # ------------------------------------------------------------------
+        # 4b. Pre-extract contact points indexed by kinect frame.
+        #
+        # merged_df rows are at neural sampling rate (~1 kHz).  contact_points
+        # is only valid for rows where time_kinect is not NaN — those rows
+        # correspond 1-to-1 with kinect frames and can be indexed directly by
+        # self.current_index without any scale-factor remapping.
+        # ------------------------------------------------------------------
+        self._contact_pts_by_frame: Optional[List[Optional[np.ndarray]]] = None
+        if (
+            self.merged_df is not None
+            and 'contact_points' in self.merged_df.columns
+            and 'time_kinect' in self.merged_df.columns
+        ):
+            kinect_rows = self.merged_df.dropna(subset=['time_kinect'])
+            self._contact_pts_by_frame = [
+                _parse_contact_points_cell(cell)
+                for cell in kinect_rows['contact_points']
+            ]
+
+        # ------------------------------------------------------------------
         # 5. Contact centroid (used for camera + GPU crop centre)
         # ------------------------------------------------------------------
         self.contact_centroid: np.ndarray = self._compute_contact_centroid()
@@ -727,17 +747,18 @@ class NeuralKinectViewer(QMainWindow):
         self._visibility: Dict[str, bool] = {
             name: True
             for name in (
-                ['kinect_point_cloud', 'forearms', 'hand_meshes']
+                ['kinect_point_cloud', 'forearms', 'hand_meshes', 'contact_points']
                 + list(self._stickers_xyz_dict.keys())
             )
         }
         self._point_sizes: Dict[str, float] = {
             'kinect_point_cloud': 2.0,
             'forearms': 8.0,
+            'contact_points': 3.0,
         }
         self._compass_widgets: Dict[str, StickerVelocityCompass] = {}
 
-        def _add_object_group(label: str, key: str, has_slider: bool = False):
+        def _add_object_group(label: str, key: str, has_slider: bool = False, point_size: int = 3):
             box = QGroupBox(label)
             box_layout = QVBoxLayout(box)
 
@@ -756,7 +777,7 @@ class NeuralKinectViewer(QMainWindow):
                 sl = QSlider(Qt.Horizontal)
                 sl.setMinimum(1)
                 sl.setMaximum(20)
-                sl.setValue(int(self._point_sizes.get(key, 3)))
+                sl.setValue(int(self._point_sizes.get(key, point_size)))
                 sl.valueChanged.connect(
                     lambda val, k=key: self._on_point_size_changed(k, val)
                 )
@@ -765,9 +786,11 @@ class NeuralKinectViewer(QMainWindow):
 
             self._right_panel_layout.addWidget(box)
 
-        _add_object_group("Kinect Cloud", "kinect_point_cloud", has_slider=True)
-        _add_object_group("Forearms",     "forearms",           has_slider=True)
-        _add_object_group("Hand Mesh",    "hand_meshes",        has_slider=False)
+        _add_object_group("Kinect Cloud",    "kinect_point_cloud", has_slider=True)
+        _add_object_group("Forearms",        "forearms",           has_slider=True)
+        _add_object_group("Hand Mesh",       "hand_meshes",        has_slider=False)
+        if self._contact_pts_by_frame is not None:
+            _add_object_group("Contact Points", "contact_points", has_slider=True, point_size=6)
 
         for sticker_name in self._stickers_xyz_dict:
             _add_object_group(sticker_name, sticker_name)
@@ -879,6 +902,13 @@ class NeuralKinectViewer(QMainWindow):
             point_size=self._point_sizes['forearms'],
         )
         self.plotter.add_mesh(empty, name='hand_meshes', style='wireframe')
+        self.plotter.add_mesh(
+            empty,
+            name='contact_points',
+            color='red',
+            render_points_as_spheres=True,
+            point_size=self._point_sizes['contact_points'],
+        )
 
         for name, color in self._custom_colors.items():
             sphere = pv.Sphere(radius=4.0, center=(0.0, 0.0, 0.0))
@@ -1086,7 +1116,36 @@ class NeuralKinectViewer(QMainWindow):
                 if not np.any(np.isnan(prev_pos)) and pos is not None and not np.any(np.isnan(pos)):
                     self._compass_widgets[name].update_velocity(pos - prev_pos)
 
-        # 5. Single render call -----------------------------------------
+        # 5. Contact points (kinect-frame-aligned, pre-parsed at init) ----
+        if self._contact_pts_by_frame is not None:
+            if not self._visibility.get('contact_points', True):
+                self.plotter.add_mesh(
+                    empty, name='contact_points', color='red',
+                    render_points_as_spheres=True,
+                    point_size=self._point_sizes.get('contact_points', 6.0),
+                )
+            else:
+                pts_contact = (
+                    self._contact_pts_by_frame[frame_idx]
+                    if frame_idx < len(self._contact_pts_by_frame)
+                    else None
+                )
+                if pts_contact is not None and len(pts_contact) > 0:
+                    cloud_contact = pv.PolyData(pts_contact.astype(np.float32))
+                    self.plotter.add_mesh(
+                        cloud_contact, color='red',
+                        name='contact_points',
+                        render_points_as_spheres=True,
+                        point_size=self._point_sizes.get('contact_points', 6.0),
+                    )
+                else:
+                    self.plotter.add_mesh(
+                        empty, name='contact_points', color='red',
+                        render_points_as_spheres=True,
+                        point_size=self._point_sizes.get('contact_points', 6.0),
+                    )
+
+        # 6. Single render call -----------------------------------------
         # Recalculate near/far clipping planes from current actor bounds.
         # VTK only does this automatically on camera-interaction events; a
         # programmatic render() call does not trigger it.  Without this,
@@ -1096,17 +1155,17 @@ class NeuralKinectViewer(QMainWindow):
         self.plotter.render()
         self._refresh_cam_pos_label()
 
-        # 6. Neural panel cursor ----------------------------------------
+        # 7. Neural panel cursor ----------------------------------------
         if self.neural_panel is not None:
             self.neural_panel.update_cursor(frame_idx, self._neural_scale)
 
-        # 7. Frame label + buffer fill indicator ------------------------
+        # 8. Frame label + buffer fill indicator ------------------------
         self.frame_label.setText(f"{frame_idx + 1} / {self._total_frames}")
         buf_n = self._preloader.buffer_count()
         buf_max = self._preloader._buffer_size
         self._buffer_label.setText(f"Buf: {buf_n}/{buf_max}")
 
-        # 8. Signal preloader to look ahead -----------------------------
+        # 9. Signal preloader to look ahead -----------------------------
         self._preloader.seek(frame_idx + 1)
 
     # ------------------------------------------------------------------
@@ -1221,6 +1280,7 @@ class NeuralKinectViewer(QMainWindow):
 
     def _on_point_size_changed(self, key: str, value: int) -> None:
         self._point_sizes[key] = float(value)
+        self._update_frame(self.current_index)
 
     def _on_crop_changed(self, value: int) -> None:
         self._crop_half_size = float(value)
