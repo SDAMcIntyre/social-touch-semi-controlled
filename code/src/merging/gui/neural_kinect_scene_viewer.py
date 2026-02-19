@@ -1140,14 +1140,12 @@ class NeuralKinectViewer(QMainWindow):
                     )
         if _kcloud is None:
             _kcloud = pv.PolyData(np.empty((0, 3), dtype=np.float32))
-            _kcloud['colors'] = np.empty((0, 3), dtype=np.uint8)
         self._mesh_kinect.overwrite(_kcloud)
 
         # 2. Forearm (updated only when the bisect key changes) ----------
         forearm_key = self._bisect_forearm(frame_idx)
         if not self._visibility.get('forearms', True):
             _fa_empty = pv.PolyData(np.empty((0, 3), dtype=np.float32))
-            _fa_empty['colors'] = np.empty((0, 3), dtype=np.uint8)
             self._mesh_forearm.overwrite(_fa_empty)
             self._last_forearm_key = object()  # force rebuild when re-enabled
         elif forearm_key != getattr(self, '_last_forearm_key', object()):
@@ -1167,7 +1165,6 @@ class NeuralKinectViewer(QMainWindow):
                     )
             if _fa_cloud is None:
                 _fa_cloud = pv.PolyData(np.empty((0, 3), dtype=np.float32))
-                _fa_cloud['colors'] = np.empty((0, 3), dtype=np.uint8)
             self._mesh_forearm.overwrite(_fa_cloud)
 
         # 3. Hand mesh (lazy per-frame transform) ------------------------
