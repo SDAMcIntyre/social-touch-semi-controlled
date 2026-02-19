@@ -4,7 +4,17 @@ neural_kinect_scene_viewer.py
 High-performance 3D viewer that combines Kinect point-cloud data with neural
 recording overlays.  Key design invariants:
 
-- NEVER calls plotter.clear() — named actor replacement keeps VTK state stable.
+- NEVER calls plotter.clear() or plotter.add_mesh() inside _update_frame().
+  All dynamic actors are registered once in _init_actors() and updated via:
+    • PolyData.overwrite()  — point clouds and contact points (updates dataset
+                              in-place via VTK DeepCopy; same mapper/actor).
+    • mesh.points = verts   — hand mesh when triangle count is unchanged
+                              (cheapest path: only vertex positions updated).
+    • actor.SetPosition()   — sticker spheres (geometry stays at origin;
+                              only the actor transform changes).
+  plotter.render() propagates all modifications automatically; Modified() is
+  called internally by overwrite() and the mesh.points setter, so no explicit
+  mapper.Update() calls are needed.
 - The FramePreloader is the ONLY thread that calls KinectPointCloudView[idx].
 - Hand meshes are loaded lazily (one frame at a time) via HandMotionManager[i].
 - CuPy GPU cropping is used when available; CPU fallback is transparent.
@@ -1011,10 +1021,21 @@ class NeuralKinectViewer(QMainWindow):
 
     def _update_frame(self, frame_idx: int) -> None:
         """
-        Update all named actors for *frame_idx* and render exactly once.
+        Update all dynamic actors for *frame_idx* and render exactly once.
 
-        Called by slider changes and the play timer.  Camera state is
-        preserved because ``plotter.clear()`` is never called.
+        All five dynamic sections use in-place mutation rather than
+        ``plotter.add_mesh()``:
+
+        1. Kinect cloud  — ``self._mesh_kinect.overwrite(new_cloud)``
+        2. Forearm       — ``self._mesh_forearm.overwrite(new_cloud)``
+           (only when the bisect forearm key changes)
+        3. Hand mesh     — ``self._mesh_hand.points = verts + Modified()``
+           when topology is unchanged; ``overwrite()`` when it changes
+        4. Stickers      — ``actor.SetPosition(*pos) / VisibilityOn/Off()``
+        5. Contact pts   — ``self._mesh_contact.overwrite(new_cloud)``
+
+        Camera state is preserved because ``plotter.clear()`` is never called.
+        ``plotter.render()`` at the end propagates all VTK Modified() flags.
         """
         self.current_index = frame_idx
 
