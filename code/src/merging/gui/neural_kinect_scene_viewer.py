@@ -18,6 +18,9 @@ recording overlays.  Key design invariants:
 - The FramePreloader is the ONLY thread that calls KinectPointCloudView[idx].
 - Hand meshes are loaded lazily (one frame at a time) via HandMotionManager[i].
 - CuPy GPU cropping is used when available; CPU fallback is transparent.
+- During slider drag or playback the Kinect cloud is subsampled by
+  ``_interactive_stride`` (default 4) to cut render time; a single
+  full-resolution frame is rendered on pause / slider release.
 - All merged-CSV features (NeuralDataPanel, StickerVelocityCompass) are
   optional and skipped entirely when merged_csv_path=None.
 """
@@ -604,6 +607,12 @@ class NeuralKinectViewer(QMainWindow):
         # that intermediate drag ticks skip the expensive full frame render.
         self._slider_dragging: bool = False
 
+        # LOD stride — Kinect cloud is subsampled by this factor during
+        # interactive motion (slider drag or playback).  Set to False on
+        # pause / slider release so one full-resolution frame is rendered.
+        self._interactive_stride: int = 4
+        self._is_interactive: bool = False
+
         # ------------------------------------------------------------------
         # 8. Build Qt UI
         # ------------------------------------------------------------------
@@ -875,6 +884,18 @@ class NeuralKinectViewer(QMainWindow):
         self.crop_spinbox.valueChanged.connect(self._on_crop_changed)
         layout.addWidget(self.crop_spinbox)
 
+        layout.addWidget(QLabel("LOD"))
+        self.lod_spinbox = QSpinBox()
+        self.lod_spinbox.setMinimum(1)
+        self.lod_spinbox.setMaximum(8)
+        self.lod_spinbox.setValue(self._interactive_stride)
+        self.lod_spinbox.setToolTip(
+            "Point-cloud stride during interaction (1 = full resolution, "
+            "higher = faster but sparser)"
+        )
+        self.lod_spinbox.valueChanged.connect(self._on_lod_changed)
+        layout.addWidget(self.lod_spinbox)
+
         return widget
 
     # ------------------------------------------------------------------
@@ -1070,6 +1091,14 @@ class NeuralKinectViewer(QMainWindow):
                     pc_data.points, pc_data.color,
                     self.contact_centroid, self._crop_half_size,
                 )
+                # During interactive motion (drag / playback) subsample the
+                # cloud by _interactive_stride to cut VTK render time.  A
+                # full-resolution frame is rendered on pause / slider release.
+                if self._is_interactive and self._interactive_stride > 1:
+                    s = self._interactive_stride
+                    pts = pts[::s]
+                    if cols is not None:
+                        cols = cols[::s]
                 if pts.shape[0] > 0:
                     _kcloud = pv.PolyData(pts.astype(np.float32))
                     _kcloud['colors'] = (
@@ -1280,12 +1309,14 @@ class NeuralKinectViewer(QMainWindow):
 
     def _on_slider_pressed(self) -> None:
         """Mark the start of a user drag and start the throttle timer."""
+        self._is_interactive = True
         self._slider_dragging = True
         self._pending_drag_frame = None
         self._drag_timer.start()
 
     def _on_slider_released(self) -> None:
         """On drag release, stop the throttle timer and do a final full render."""
+        self._is_interactive = False
         self._slider_dragging = False
         self._drag_timer.stop()
         self._pending_drag_frame = None
@@ -1321,6 +1352,9 @@ class NeuralKinectViewer(QMainWindow):
     def _on_crop_changed(self, value: int) -> None:
         self._crop_half_size = float(value)
 
+    def _on_lod_changed(self, value: int) -> None:
+        self._interactive_stride = value
+
     def _refresh_cam_pos_label(self, *_) -> None:
         """Update the camera position + orientation readout in the right panel."""
         try:
@@ -1342,7 +1376,12 @@ class NeuralKinectViewer(QMainWindow):
         if self._play_timer.isActive():
             self._play_timer.stop()
             self.play_button.setText("▶ Play")
+            # Restore full-resolution on pause
+            self._is_interactive = False
+            self._update_frame(self.current_index)
         else:
+            # Engage LOD stride for playback
+            self._is_interactive = True
             fps = 30
             if (
                 self._mkv._reader is not None
