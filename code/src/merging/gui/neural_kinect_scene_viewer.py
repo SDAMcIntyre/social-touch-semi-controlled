@@ -756,7 +756,7 @@ class NeuralKinectViewer(QMainWindow):
                 sl = QSlider(Qt.Horizontal)
                 sl.setMinimum(1)
                 sl.setMaximum(20)
-                sl.setValue(int(self._point_sizes.get(key, 5)))
+                sl.setValue(int(self._point_sizes.get(key, 3)))
                 sl.valueChanged.connect(
                     lambda val, k=key: self._on_point_size_changed(k, val)
                 )
