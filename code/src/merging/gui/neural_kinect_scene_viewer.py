@@ -6,7 +6,7 @@ recording overlays.  Key design invariants:
 
 - NEVER calls plotter.clear() or plotter.add_mesh() inside _update_frame().
   All dynamic actors are registered once in _init_actors() and updated via:
-    • PolyData.overwrite()  — point clouds and contact points (updates dataset
+    • PolyData.DeepCopy()  — point clouds and contact points (updates dataset
                               in-place via VTK DeepCopy; same mapper/actor).
     • mesh.points = verts   — hand mesh when triangle count is unchanged
                               (cheapest path: only vertex positions updated).
@@ -1079,13 +1079,13 @@ class NeuralKinectViewer(QMainWindow):
         All five dynamic sections use in-place mutation rather than
         ``plotter.add_mesh()``:
 
-        1. Kinect cloud  — ``self._mesh_kinect.overwrite(new_cloud)``
-        2. Forearm       — ``self._mesh_forearm.overwrite(new_cloud)``
+        1. Kinect cloud  — ``self._mesh_kinect.DeepCopy(new_cloud)``
+        2. Forearm       — ``self._mesh_forearm.DeepCopy(new_cloud)``
            (only when the bisect forearm key changes)
         3. Hand mesh     — ``self._mesh_hand.points = verts + Modified()``
            when topology is unchanged; ``overwrite()`` when it changes
         4. Stickers      — ``actor.SetPosition(*pos) / VisibilityOn/Off()``
-        5. Contact pts   — ``self._mesh_contact.overwrite(new_cloud)``
+        5. Contact pts   — ``self._mesh_contact.DeepCopy(new_cloud)``
 
         Camera state is preserved because ``plotter.clear()`` is never called.
         ``plotter.render()`` at the end propagates all VTK Modified() flags.
@@ -1108,9 +1108,9 @@ class NeuralKinectViewer(QMainWindow):
                     pass
 
         # 1. Kinect point cloud (GPU-cropped AABB) ----------------------
-        # In-place update via overwrite() — avoids VTK mapper/actor recreation.
-        # overwrite() calls VTK DeepCopy, which updates points + cells + scalars
-        # on the same dataset object that the registered mapper references.
+        # In-place update via DeepCopy() — avoids VTK mapper/actor recreation.
+        # DeepCopy updates points + cells + scalars on the same dataset object
+        # that the registered mapper references.
         _kcloud: Optional[pv.PolyData] = None  # built below; None → use empty
         _got_exact: bool = True  # False when a nearest-frame fallback was used
         if self._visibility.get('kinect_point_cloud', True):
@@ -1140,13 +1140,13 @@ class NeuralKinectViewer(QMainWindow):
                     )
         if _kcloud is None:
             _kcloud = pv.PolyData(np.empty((0, 3), dtype=np.float32))
-        self._mesh_kinect.overwrite(_kcloud)
+        self._mesh_kinect.DeepCopy(_kcloud)
 
         # 2. Forearm (updated only when the bisect key changes) ----------
         forearm_key = self._bisect_forearm(frame_idx)
         if not self._visibility.get('forearms', True):
             _fa_empty = pv.PolyData(np.empty((0, 3), dtype=np.float32))
-            self._mesh_forearm.overwrite(_fa_empty)
+            self._mesh_forearm.DeepCopy(_fa_empty)
             self._last_forearm_key = object()  # force rebuild when re-enabled
         elif forearm_key != getattr(self, '_last_forearm_key', object()):
             self._last_forearm_key = forearm_key
@@ -1165,16 +1165,16 @@ class NeuralKinectViewer(QMainWindow):
                     )
             if _fa_cloud is None:
                 _fa_cloud = pv.PolyData(np.empty((0, 3), dtype=np.float32))
-            self._mesh_forearm.overwrite(_fa_cloud)
+            self._mesh_forearm.DeepCopy(_fa_cloud)
 
         # 3. Hand mesh (lazy per-frame transform) ------------------------
         # In-place update: when the triangle count is unchanged (common for
         # MANO's fixed 778-vertex topology), only vertex positions are written
         # (mesh.points = verts + Modified()), avoiding a full DeepCopy.
-        # When topology changes or the mesh becomes unavailable, overwrite().
+        # When topology changes or the mesh becomes unavailable, DeepCopy().
         if not self._visibility.get('hand_meshes', True):
             if self._last_hand_tri_count != 0:
-                self._mesh_hand.overwrite(pv.PolyData(np.empty((0, 3), dtype=np.float32)))
+                self._mesh_hand.DeepCopy(pv.PolyData(np.empty((0, 3), dtype=np.float32)))
                 self._last_hand_tri_count = 0
         else:
             o3d_mesh = self._get_hand_mesh(frame_idx)
@@ -1191,11 +1191,11 @@ class NeuralKinectViewer(QMainWindow):
                     faces = np.hstack([
                         np.full((n_tris, 1), 3, dtype=tris.dtype), tris
                     ])
-                    self._mesh_hand.overwrite(pv.PolyData(verts, faces))
+                    self._mesh_hand.DeepCopy(pv.PolyData(verts, faces))
                     self._last_hand_tri_count = n_tris
             else:
                 if self._last_hand_tri_count != 0:
-                    self._mesh_hand.overwrite(
+                    self._mesh_hand.DeepCopy(
                         pv.PolyData(np.empty((0, 3), dtype=np.float32))
                     )
                     self._last_hand_tri_count = 0
@@ -1232,11 +1232,11 @@ class NeuralKinectViewer(QMainWindow):
                     else None
                 )
             if _cpts is not None and len(_cpts) > 0:
-                self._mesh_contact.overwrite(
+                self._mesh_contact.DeepCopy(
                     pv.PolyData(_cpts.astype(np.float32))
                 )
             else:
-                self._mesh_contact.overwrite(
+                self._mesh_contact.DeepCopy(
                     pv.PolyData(np.empty((0, 3), dtype=np.float32))
                 )
 
