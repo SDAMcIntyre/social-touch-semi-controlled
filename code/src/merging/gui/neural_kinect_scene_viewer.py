@@ -1148,32 +1148,21 @@ class NeuralKinectViewer(QMainWindow):
 
         # 5. Contact points (kinect-frame-aligned, pre-parsed at init) ----
         if self._contact_pts_by_frame is not None:
-            if not self._visibility.get('contact_points', True):
-                self.plotter.add_mesh(
-                    empty, name='contact_points', color='red',
-                    render_points_as_spheres=True,
-                    point_size=self._point_sizes.get('contact_points', 6.0),
-                )
-            else:
-                pts_contact = (
+            _cpts: Optional[np.ndarray] = None
+            if self._visibility.get('contact_points', True):
+                _cpts = (
                     self._contact_pts_by_frame[frame_idx]
                     if frame_idx < len(self._contact_pts_by_frame)
                     else None
                 )
-                if pts_contact is not None and len(pts_contact) > 0:
-                    cloud_contact = pv.PolyData(pts_contact.astype(np.float32))
-                    self.plotter.add_mesh(
-                        cloud_contact, color='red',
-                        name='contact_points',
-                        render_points_as_spheres=True,
-                        point_size=self._point_sizes.get('contact_points', 6.0),
-                    )
-                else:
-                    self.plotter.add_mesh(
-                        empty, name='contact_points', color='red',
-                        render_points_as_spheres=True,
-                        point_size=self._point_sizes.get('contact_points', 6.0),
-                    )
+            if _cpts is not None and len(_cpts) > 0:
+                self._mesh_contact.overwrite(
+                    pv.PolyData(_cpts.astype(np.float32))
+                )
+            else:
+                self._mesh_contact.overwrite(
+                    pv.PolyData(np.empty((0, 3), dtype=np.float32))
+                )
 
         # 6. Single render call -----------------------------------------
         # Recalculate near/far clipping planes from current actor bounds.
