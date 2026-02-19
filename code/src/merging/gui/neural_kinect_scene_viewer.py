@@ -888,6 +888,7 @@ class NeuralKinectViewer(QMainWindow):
         # RGB mode from the first add_mesh() call (scalars='colors', rgb=True).
         self._mesh_kinect['colors'] = np.empty((0, 3), dtype=np.uint8)
         self._mesh_forearm = pv.PolyData(np.empty((0, 3), dtype=np.float32))
+        self._mesh_forearm['colors'] = np.empty((0, 3), dtype=np.uint8)
         self._mesh_hand = pv.PolyData(np.empty((0, 3), dtype=np.float32))
         self._mesh_contact = pv.PolyData(np.empty((0, 3), dtype=np.float32))
 
@@ -927,6 +928,8 @@ class NeuralKinectViewer(QMainWindow):
         )
         self.plotter.add_mesh(
             self._mesh_forearm,
+            scalars='colors',
+            rgb=True,
             name='forearms',
             render_points_as_spheres=True,
             point_size=self._point_sizes['forearms'],
@@ -1052,36 +1055,29 @@ class NeuralKinectViewer(QMainWindow):
         # 2. Forearm (updated only when the bisect key changes) ----------
         forearm_key = self._bisect_forearm(frame_idx)
         if not self._visibility.get('forearms', True):
-            self.plotter.add_mesh(empty, name='forearms',
-                                  render_points_as_spheres=True,
-                                  point_size=self._point_sizes['forearms'])
+            _fa_empty = pv.PolyData(np.empty((0, 3), dtype=np.float32))
+            _fa_empty['colors'] = np.empty((0, 3), dtype=np.uint8)
+            self._mesh_forearm.overwrite(_fa_empty)
             self._last_forearm_key = object()  # force rebuild when re-enabled
         elif forearm_key != getattr(self, '_last_forearm_key', object()):
             self._last_forearm_key = forearm_key
             o3d_pc = self._forearms_dict.get(forearm_key)
+            _fa_cloud: Optional[pv.PolyData] = None
             if o3d_pc is not None and o3d_pc.has_points():
-                pts_fa = np.asarray(o3d_pc.points)
-                cloud_fa = pv.PolyData(pts_fa)
+                pts_fa = np.asarray(o3d_pc.points, dtype=np.float32)
+                _fa_cloud = pv.PolyData(pts_fa)
                 if o3d_pc.has_colors():
-                    cols_fa = (np.asarray(o3d_pc.colors) * 255).astype(np.uint8)
-                    cloud_fa['colors'] = cols_fa
-                    self.plotter.add_mesh(
-                        cloud_fa, scalars='colors', rgb=True,
-                        name='forearms',
-                        render_points_as_spheres=True,
-                        point_size=self._point_sizes['forearms'],
-                    )
+                    _fa_cloud['colors'] = (
+                        np.asarray(o3d_pc.colors) * 255
+                    ).astype(np.uint8)
                 else:
-                    self.plotter.add_mesh(
-                        cloud_fa, color='gray',
-                        name='forearms',
-                        render_points_as_spheres=True,
-                        point_size=self._point_sizes['forearms'],
+                    _fa_cloud['colors'] = np.full(
+                        (len(pts_fa), 3), 128, dtype=np.uint8
                     )
-            else:
-                self.plotter.add_mesh(empty, name='forearms',
-                                      render_points_as_spheres=True,
-                                      point_size=self._point_sizes['forearms'])
+            if _fa_cloud is None:
+                _fa_cloud = pv.PolyData(np.empty((0, 3), dtype=np.float32))
+                _fa_cloud['colors'] = np.empty((0, 3), dtype=np.uint8)
+            self._mesh_forearm.overwrite(_fa_cloud)
 
         # 3. Hand mesh (lazy per-frame transform) ------------------------
         if not self._visibility.get('hand_meshes', True):
