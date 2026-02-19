@@ -318,7 +318,7 @@ class NeuralDataPanel(QWidget):
         # Zoom state — zoomed ±3 s window is the default
         self._neural_fps: int = neural_fps
         self._zoom_mode: bool = True
-        self._zoom_half_window: int = 3 * neural_fps  # samples (3 000 at 1 kHz)
+        self._zoom_half_window: int = 5 * neural_fps  # samples (3 000 at 1 kHz)
         self._current_sample: int = 0
 
         # --- Matplotlib figure ---
@@ -377,7 +377,7 @@ class NeuralDataPanel(QWidget):
         for ax, (color, col, ylabel) in zip(axes, signal_specs):
             ax.set_facecolor('#0d0d1a')
             if col in merged_df.columns:
-                ax.plot(x, merged_df[col].fillna(0), color=color, lw=0.8)
+                ax.plot(x, merged_df[col].ffill(), color=color, lw=0.8)
             ax.set_ylabel(ylabel, color='white', fontsize=7)
             ax.tick_params(colors='white', labelsize=6)
             for spine in ax.spines.values():
@@ -588,18 +588,21 @@ class NeuralKinectViewer(QMainWindow):
         self._drag_timer.setInterval(80)
         self._pending_drag_frame: Optional[int] = None
 
+        # Guard: first render is deferred to showEvent, not __init__, so that
+        # the VTK render window has valid pixel dimensions when Render() fires.
+        self._initial_render_done: bool = False
+
         # ------------------------------------------------------------------
         # 12. Initial frame render
         # ------------------------------------------------------------------
         # _build_frame_controls() calls setValue(0) before valueChanged is
         # connected, so _update_frame is never triggered during __init__.
-        # Defer until the Qt event loop is running and the window is visible
-        # so the widget has a real pixel size.  Initialize() must be called
-        # first: VTK silently drops render() calls until the interactor has
-        # been set up with the widget dimensions (normally triggered by the
-        # first mouse click inside the plotter, which is why renders only
-        # worked after the user manually interacted with the 3D viewport).
-        QTimer.singleShot(0, self._deferred_start)
+        # Deferred to showEvent (see showEvent override below): that fires
+        # once the window manager has assigned real geometry to the window,
+        # guaranteeing VTK's render window has valid pixel dimensions.
+        # QTimer.singleShot(0, ...) from here fired before the first
+        # resizeEvent/paintEvent reached the QtInteractor, causing VTK to
+        # silently discard the Render() call (render window size was (0, 0)).
 
     def _deferred_start(self) -> None:
         """Initialize the VTK interactor, then render frame 0."""
@@ -617,7 +620,25 @@ class NeuralKinectViewer(QMainWindow):
             self.plotter.interactor.Initialize()
         except Exception:
             pass
+
+        # Sync VTK render-window size with the actual Qt widget size.
+        # QtInteractor may not have pushed its geometry to VTK yet at this
+        # point; if VTK still thinks the size is (0, 0), Render() is a no-op.
+        sz = self.plotter.interactor.size()
+        if sz.width() > 0 and sz.height() > 0:
+            self.plotter.render_window.SetSize(sz.width(), sz.height())
+
         self._update_frame(0)
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        """Trigger the first render once the window has real geometry."""
+        super().showEvent(event)
+        if not self._initial_render_done:
+            self._initial_render_done = True
+            # Defer by one tick so Qt finishes processing the show event and
+            # child widgets have their final pixel dimensions before VTK reads
+            # the render-window size.
+            QTimer.singleShot(0, self._deferred_start)
 
     # ------------------------------------------------------------------
     # Contact centroid
@@ -890,6 +911,19 @@ class NeuralKinectViewer(QMainWindow):
 
         self.plotter.camera_set = True
 
+        # Invisible bounding proxy — gives VTK a plausible clipping range
+        # even when early frames (0, 1, …) have all-empty actor data.
+        # Removed by _update_frame on the first frame that has real geometry.
+        self._bounds_proxy_active = True
+        _bounds_proxy = pv.Box(bounds=(
+            cx - self._crop_half_size, cx + self._crop_half_size,
+            cy - self._crop_half_size, cy + self._crop_half_size,
+            cz - self._crop_half_size, cz + self._crop_half_size,
+        ))
+        self.plotter.add_mesh(
+            _bounds_proxy, opacity=0.001, name='_bounds_proxy', pickable=False,
+        )
+
         # Update camera readout whenever the user rotates / pans the scene
         try:
             self.plotter.iren.AddObserver(
@@ -910,6 +944,21 @@ class NeuralKinectViewer(QMainWindow):
         preserved because ``plotter.clear()`` is never called.
         """
         self.current_index = frame_idx
+
+        # Remove the invisible bounding proxy once a real kinect frame is
+        # available, so it no longer inflates the scene bounds unnecessarily.
+        if self._bounds_proxy_active:
+            pc_data = self._preloader.get_frame(frame_idx)
+            if (
+                pc_data is not None
+                and pc_data.points is not None
+                and pc_data.points.shape[0] > 0
+            ):
+                self._bounds_proxy_active = False
+                try:
+                    self.plotter.remove_actor('_bounds_proxy')
+                except Exception:
+                    pass
 
         empty = pv.PolyData(np.empty((0, 3), dtype=np.float32))
 
@@ -1038,6 +1087,12 @@ class NeuralKinectViewer(QMainWindow):
                     self._compass_widgets[name].update_velocity(pos - prev_pos)
 
         # 5. Single render call -----------------------------------------
+        # Recalculate near/far clipping planes from current actor bounds.
+        # VTK only does this automatically on camera-interaction events; a
+        # programmatic render() call does not trigger it.  Without this,
+        # geometry added after the initial empty-actor setup (which produces
+        # a degenerate bounding box) is silently clipped to invisibility.
+        self.plotter.renderer.ResetCameraClippingRange()
         self.plotter.render()
         self._refresh_cam_pos_label()
 
