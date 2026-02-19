@@ -884,6 +884,9 @@ class NeuralKinectViewer(QMainWindow):
         # mutates .points / scalar arrays in-place and calls .Modified().
         # ------------------------------------------------------------------
         self._mesh_kinect = pv.PolyData(np.empty((0, 3), dtype=np.float32))
+        # Pre-seed the 'colors' scalar array so the mapper is configured for
+        # RGB mode from the first add_mesh() call (scalars='colors', rgb=True).
+        self._mesh_kinect['colors'] = np.empty((0, 3), dtype=np.uint8)
         self._mesh_forearm = pv.PolyData(np.empty((0, 3), dtype=np.float32))
         self._mesh_hand = pv.PolyData(np.empty((0, 3), dtype=np.float32))
         self._mesh_contact = pv.PolyData(np.empty((0, 3), dtype=np.float32))
@@ -916,6 +919,8 @@ class NeuralKinectViewer(QMainWindow):
         # Dynamic actors — registered once, mutated in-place by _update_frame()
         self.plotter.add_mesh(
             self._mesh_kinect,
+            scalars='colors',
+            rgb=True,
             name='kinect_point_cloud',
             render_points_as_spheres=False,
             point_size=self._point_sizes['kinect_point_cloud'],
@@ -1018,11 +1023,11 @@ class NeuralKinectViewer(QMainWindow):
         empty = pv.PolyData(np.empty((0, 3), dtype=np.float32))
 
         # 1. Kinect point cloud (GPU-cropped AABB) ----------------------
-        if not self._visibility.get('kinect_point_cloud', True):
-            self.plotter.add_mesh(empty, name='kinect_point_cloud',
-                                  render_points_as_spheres=False,
-                                  point_size=self._point_sizes['kinect_point_cloud'])
-        else:
+        # In-place update via overwrite() — avoids VTK mapper/actor recreation.
+        # overwrite() calls VTK DeepCopy, which updates points + cells + scalars
+        # on the same dataset object that the registered mapper references.
+        _kcloud: Optional[pv.PolyData] = None  # built below; None → use empty
+        if self._visibility.get('kinect_point_cloud', True):
             pc_data = self._preloader.get_frame(frame_idx)
             if (
                 pc_data is not None
@@ -1034,30 +1039,15 @@ class NeuralKinectViewer(QMainWindow):
                     self.contact_centroid, self._crop_half_size,
                 )
                 if pts.shape[0] > 0:
-                    cloud = pv.PolyData(pts)
-                    if cols is not None:
-                        cloud['colors'] = cols.astype(np.uint8)
-                        self.plotter.add_mesh(
-                            cloud, scalars='colors', rgb=True,
-                            name='kinect_point_cloud',
-                            render_points_as_spheres=False,
-                            point_size=self._point_sizes['kinect_point_cloud'],
-                        )
-                    else:
-                        self.plotter.add_mesh(
-                            cloud, color='gray',
-                            name='kinect_point_cloud',
-                            render_points_as_spheres=False,
-                            point_size=self._point_sizes['kinect_point_cloud'],
-                        )
-                else:
-                    self.plotter.add_mesh(empty, name='kinect_point_cloud',
-                                          render_points_as_spheres=False,
-                                          point_size=self._point_sizes['kinect_point_cloud'])
-            else:
-                self.plotter.add_mesh(empty, name='kinect_point_cloud',
-                                      render_points_as_spheres=False,
-                                      point_size=self._point_sizes['kinect_point_cloud'])
+                    _kcloud = pv.PolyData(pts.astype(np.float32))
+                    _kcloud['colors'] = (
+                        cols.astype(np.uint8) if cols is not None
+                        else np.full((len(pts), 3), 128, dtype=np.uint8)
+                    )
+        if _kcloud is None:
+            _kcloud = pv.PolyData(np.empty((0, 3), dtype=np.float32))
+            _kcloud['colors'] = np.empty((0, 3), dtype=np.uint8)
+        self._mesh_kinect.overwrite(_kcloud)
 
         # 2. Forearm (updated only when the bisect key changes) ----------
         forearm_key = self._bisect_forearm(frame_idx)
