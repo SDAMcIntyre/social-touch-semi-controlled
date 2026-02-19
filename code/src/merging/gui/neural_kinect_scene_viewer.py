@@ -31,8 +31,9 @@ import pandas as pd
 import pyvista as pv
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
-from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtCore import Qt, QEvent, QTimer
 from PyQt5.QtWidgets import (
+    QApplication,
     QCheckBox,
     QDoubleSpinBox,
     QGroupBox,
@@ -299,9 +300,10 @@ class NeuralDataPanel(QWidget):
     ``Nerve_freq``, ``contact_depth``, and ``contact_area`` from the merged
     CSV, with a red vertical cursor line tracking the current frame.
 
-    Two display modes are toggled via the "Full view" / "Zoom ±3 s" button:
-    - **Zoom mode** (default): x-axis shows a ±3 s window around the cursor.
-    - **Full mode**: x-axis spans the entire recording.
+    Zoom is controlled continuously via the mouse wheel over the canvas
+    (scroll up → zoom in, scroll down → zoom out) and via the ± spinbox.
+    The spinbox and wheel stay in sync; zoom is clamped between 0.5 s and
+    half the full recording length.
     """
 
     def __init__(
@@ -315,10 +317,10 @@ class NeuralDataPanel(QWidget):
         self._total_kinect_frames = total_kinect_frames
         self._total_samples: int = len(merged_df)
 
-        # Zoom state — zoomed ±3 s window is the default
+        # Zoom state — zoomed ±5 s window is the default
         self._neural_fps: int = neural_fps
-        self._zoom_mode: bool = True
-        self._zoom_half_window: int = 5 * neural_fps  # samples (3 000 at 1 kHz)
+        self._zoom_half_window: int = 5 * neural_fps  # samples (5 000 at 1 kHz)
+        self._max_half_window: int = self._total_samples // 2
         self._current_sample: int = 0
 
         # --- Matplotlib figure ---
@@ -339,9 +341,10 @@ class NeuralDataPanel(QWidget):
         btn_layout.addWidget(QLabel("\u00b1"))
         self._window_spinbox = QDoubleSpinBox()
         self._window_spinbox.setMinimum(0.5)
-        self._window_spinbox.setMaximum(60.0)
+        _max_secs = min(self._total_samples / self._neural_fps / 2.0, 3600.0)
+        self._window_spinbox.setMaximum(_max_secs)
         self._window_spinbox.setSingleStep(0.5)
-        self._window_spinbox.setValue(3.0)
+        self._window_spinbox.setValue(5.0)
         self._window_spinbox.setSuffix(" s")
         self._window_spinbox.setFixedWidth(70)
         self._window_spinbox.setFixedHeight(18)
@@ -349,14 +352,9 @@ class NeuralDataPanel(QWidget):
         self._window_spinbox.valueChanged.connect(self._on_zoom_window_changed)
         btn_layout.addWidget(self._window_spinbox)
 
-        self._zoom_btn = QPushButton("Full view")
-        self._zoom_btn.setFixedHeight(18)
-        self._zoom_btn.setFixedWidth(80)
-        self._zoom_btn.setStyleSheet("font-size: 8pt;")
-        self._zoom_btn.clicked.connect(self._toggle_zoom)
-        btn_layout.addWidget(self._zoom_btn)
         layout.addWidget(btn_row)
 
+        self.canvas.installEventFilter(self)
         layout.addWidget(self.canvas)
         self.setFixedHeight(220)
 
@@ -392,41 +390,49 @@ class NeuralDataPanel(QWidget):
         Move the red vertical cursor to the position corresponding to
         *frame_idx* in the merged-CSV sample space.
 
-        In zoom mode the x-axis limits are also shifted to keep the cursor
-        centred in a ±3 s window.  Uses ``draw_idle()`` (non-blocking) to
-        avoid jank at 30 fps.
+        The x-axis limits are shifted to keep the cursor centred in the
+        current zoom window.  Uses ``draw_idle()`` (non-blocking) to avoid
+        jank at 30 fps.
         """
         sample_idx = int(frame_idx * scale_factor)
         self._current_sample = sample_idx
         for line in self._cursor_lines:
             line.set_xdata([sample_idx])
-        if self._zoom_mode:
-            lo = max(0, sample_idx - self._zoom_half_window)
-            hi = min(self._total_samples - 1, sample_idx + self._zoom_half_window)
-            self.ax_freq.set_xlim(lo, hi)
-        self.canvas.draw_idle()
-
-    def _toggle_zoom(self) -> None:
-        """Switch between the zoomed window view and full time-series view."""
-        self._zoom_mode = not self._zoom_mode
-        if self._zoom_mode:
-            self._zoom_btn.setText("Full view")
-            lo = max(0, self._current_sample - self._zoom_half_window)
-            hi = min(self._total_samples - 1, self._current_sample + self._zoom_half_window)
-            self.ax_freq.set_xlim(lo, hi)
-        else:
-            self._zoom_btn.setText("Zoom")
-            self.ax_freq.set_xlim(0, self._total_samples - 1)
+        lo = max(0, sample_idx - self._zoom_half_window)
+        hi = min(self._total_samples - 1, sample_idx + self._zoom_half_window)
+        self.ax_freq.set_xlim(lo, hi)
         self.canvas.draw_idle()
 
     def _on_zoom_window_changed(self, seconds: float) -> None:
-        """Update the half-window size and refresh xlim if zoom mode is active."""
+        """Update the half-window size and refresh xlim."""
         self._zoom_half_window = int(seconds * self._neural_fps)
-        if self._zoom_mode:
+        lo = max(0, self._current_sample - self._zoom_half_window)
+        hi = min(self._total_samples - 1, self._current_sample + self._zoom_half_window)
+        self.ax_freq.set_xlim(lo, hi)
+        self.canvas.draw_idle()
+
+    def eventFilter(self, obj, event) -> bool:
+        """Intercept mouse-wheel events on the canvas for continuous zoom."""
+        if obj is self.canvas and event.type() == QEvent.Wheel:
+            delta = event.angleDelta().y()
+            if delta == 0:
+                return False
+            notches = delta / 120.0          # typically ±1 per detent
+            factor = 1.25 ** (-notches)      # scroll-up shrinks, scroll-down grows
+            new_half = int(self._zoom_half_window * factor)
+            min_half = max(1, int(0.5 * self._neural_fps))
+            new_half = max(min_half, min(new_half, self._max_half_window))
+            self._zoom_half_window = new_half
+            # Sync spinbox without re-triggering _on_zoom_window_changed
+            self._window_spinbox.blockSignals(True)
+            self._window_spinbox.setValue(new_half / self._neural_fps)
+            self._window_spinbox.blockSignals(False)
             lo = max(0, self._current_sample - self._zoom_half_window)
             hi = min(self._total_samples - 1, self._current_sample + self._zoom_half_window)
             self.ax_freq.set_xlim(lo, hi)
             self.canvas.draw_idle()
+            return True   # consume event — don't let Matplotlib handle it
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -655,6 +661,12 @@ class NeuralKinectViewer(QMainWindow):
         super().showEvent(event)
         if not self._initial_render_done:
             self._initial_render_done = True
+            # Move to primary screen (index 0) before maximising so the window
+            # always lands on the main display even on multi-monitor setups.
+            primary = QApplication.primaryScreen()
+            if primary is not None:
+                self.move(primary.geometry().topLeft())
+            self.showMaximized()
             # Defer by one tick so Qt finishes processing the show event and
             # child widgets have their final pixel dimensions before VTK reads
             # the render-window size.
@@ -857,11 +869,24 @@ class NeuralKinectViewer(QMainWindow):
 
     def _init_actors(self) -> None:
         """
-        Add every named actor once so that subsequent ``add_mesh(name=X)``
-        calls replace the mesh in-place without touching the camera.
+        Add every named actor once so that subsequent in-place mutations of
+        the persistent ``PolyData`` objects update the scene without touching
+        the camera.
+
+        Persistent mesh references (``self._mesh_*``) are mutated by
+        ``_update_frame()`` instead of calling ``plotter.add_mesh()`` each
+        frame.
         """
 
-        empty = pv.PolyData(np.empty((0, 3), dtype=np.float32))
+        # ------------------------------------------------------------------
+        # Persistent PolyData objects for dynamic actors.
+        # Each is registered once with plotter.add_mesh(); _update_frame()
+        # mutates .points / scalar arrays in-place and calls .Modified().
+        # ------------------------------------------------------------------
+        self._mesh_kinect = pv.PolyData(np.empty((0, 3), dtype=np.float32))
+        self._mesh_forearm = pv.PolyData(np.empty((0, 3), dtype=np.float32))
+        self._mesh_hand = pv.PolyData(np.empty((0, 3), dtype=np.float32))
+        self._mesh_contact = pv.PolyData(np.empty((0, 3), dtype=np.float32))
 
         # Static actors
         self.plotter.add_text(
@@ -888,22 +913,22 @@ class NeuralKinectViewer(QMainWindow):
             pickable=False,
         )
 
-        # Dynamic placeholder actors (empty mesh = named slot reserved)
+        # Dynamic actors — registered once, mutated in-place by _update_frame()
         self.plotter.add_mesh(
-            empty,
+            self._mesh_kinect,
             name='kinect_point_cloud',
             render_points_as_spheres=False,
             point_size=self._point_sizes['kinect_point_cloud'],
         )
         self.plotter.add_mesh(
-            empty,
+            self._mesh_forearm,
             name='forearms',
             render_points_as_spheres=True,
             point_size=self._point_sizes['forearms'],
         )
-        self.plotter.add_mesh(empty, name='hand_meshes', style='wireframe')
+        self.plotter.add_mesh(self._mesh_hand, name='hand_meshes', style='wireframe')
         self.plotter.add_mesh(
-            empty,
+            self._mesh_contact,
             name='contact_points',
             color='red',
             render_points_as_spheres=True,
