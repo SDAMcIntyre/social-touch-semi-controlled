@@ -538,6 +538,10 @@ class NeuralKinectViewer(QMainWindow):
             self._hand_manager = None
         self._last_hand_frame: int = -1
         self._last_hand_mesh = None
+        # Tracks face count of the last hand mesh written into self._mesh_hand.
+        # When the count is unchanged, only vertex positions need updating
+        # (mesh.points = verts + Modified()), avoiding a full DeepCopy.
+        self._last_hand_tri_count: int = -1
 
         # ------------------------------------------------------------------
         # 4. Optional merged CSV
@@ -1080,22 +1084,37 @@ class NeuralKinectViewer(QMainWindow):
             self._mesh_forearm.overwrite(_fa_cloud)
 
         # 3. Hand mesh (lazy per-frame transform) ------------------------
+        # In-place update: when the triangle count is unchanged (common for
+        # MANO's fixed 778-vertex topology), only vertex positions are written
+        # (mesh.points = verts + Modified()), avoiding a full DeepCopy.
+        # When topology changes or the mesh becomes unavailable, overwrite().
         if not self._visibility.get('hand_meshes', True):
-            self.plotter.add_mesh(empty, name='hand_meshes', style='wireframe')
+            if self._last_hand_tri_count != 0:
+                self._mesh_hand.overwrite(pv.PolyData(np.empty((0, 3), dtype=np.float32)))
+                self._last_hand_tri_count = 0
         else:
             o3d_mesh = self._get_hand_mesh(frame_idx)
             if o3d_mesh is not None and o3d_mesh.has_triangles():
-                verts = np.asarray(o3d_mesh.vertices)
+                verts = np.asarray(o3d_mesh.vertices, dtype=np.float32)
                 tris = np.asarray(o3d_mesh.triangles)
-                faces = np.hstack([
-                    np.full((len(tris), 1), 3, dtype=tris.dtype), tris
-                ])
-                pv_mesh = pv.PolyData(verts, faces)
-                self.plotter.add_mesh(
-                    pv_mesh, color='white', style='wireframe', name='hand_meshes'
-                )
+                n_tris = len(tris)
+                if n_tris == self._last_hand_tri_count:
+                    # Same topology — update only vertex positions in-place
+                    self._mesh_hand.points = verts
+                    self._mesh_hand.Modified()
+                else:
+                    # Topology changed — rebuild faces and overwrite
+                    faces = np.hstack([
+                        np.full((n_tris, 1), 3, dtype=tris.dtype), tris
+                    ])
+                    self._mesh_hand.overwrite(pv.PolyData(verts, faces))
+                    self._last_hand_tri_count = n_tris
             else:
-                self.plotter.add_mesh(empty, name='hand_meshes', style='wireframe')
+                if self._last_hand_tri_count != 0:
+                    self._mesh_hand.overwrite(
+                        pv.PolyData(np.empty((0, 3), dtype=np.float32))
+                    )
+                    self._last_hand_tri_count = 0
 
         # 4. Stickers + compass widgets ----------------------------------
         for name, positions in self._stickers_xyz_dict.items():
