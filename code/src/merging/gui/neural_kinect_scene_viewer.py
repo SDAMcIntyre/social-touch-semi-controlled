@@ -978,8 +978,10 @@ class NeuralKinectViewer(QMainWindow):
             pickable=False,
         )
 
-        # Dynamic actors — registered once, mutated in-place by _update_frame()
-        self.plotter.add_mesh(
+        # Dynamic actors — registered once, mutated in-place by _update_frame().
+        # Actor references are stored so _on_point_size_changed() can call
+        # actor.GetProperty().SetPointSize() without re-running add_mesh().
+        self._actor_kinect = self.plotter.add_mesh(
             self._mesh_kinect,
             scalars='colors',
             rgb=True,
@@ -987,7 +989,7 @@ class NeuralKinectViewer(QMainWindow):
             render_points_as_spheres=False,
             point_size=self._point_sizes['kinect_point_cloud'],
         )
-        self.plotter.add_mesh(
+        self._actor_forearm = self.plotter.add_mesh(
             self._mesh_forearm,
             scalars='colors',
             rgb=True,
@@ -996,7 +998,7 @@ class NeuralKinectViewer(QMainWindow):
             point_size=self._point_sizes['forearms'],
         )
         self.plotter.add_mesh(self._mesh_hand, name='hand_meshes', style='wireframe')
-        self.plotter.add_mesh(
+        self._actor_contact = self.plotter.add_mesh(
             self._mesh_contact,
             name='contact_points',
             color='red',
@@ -1386,7 +1388,21 @@ class NeuralKinectViewer(QMainWindow):
 
     def _on_point_size_changed(self, key: str, value: int) -> None:
         self._point_sizes[key] = float(value)
-        self._update_frame(self.current_index)
+        # Apply directly to the stored actor (avoids a full _update_frame() call).
+        # Phase 1 replaced per-frame add_mesh() with in-place overwrite(), so
+        # point_size is no longer re-applied on every frame; storing the actor
+        # reference and calling SetPointSize() here restores slider behaviour.
+        actor_map = {
+            'kinect_point_cloud': getattr(self, '_actor_kinect', None),
+            'forearms':           getattr(self, '_actor_forearm', None),
+            'contact_points':     getattr(self, '_actor_contact', None),
+        }
+        actor = actor_map.get(key)
+        if actor is not None:
+            actor.GetProperty().SetPointSize(float(value))
+            self.plotter.render()
+        else:
+            self._update_frame(self.current_index)
 
     def _on_crop_changed(self, value: int) -> None:
         self._crop_half_size = float(value)
