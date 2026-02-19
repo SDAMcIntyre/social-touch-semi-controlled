@@ -759,7 +759,7 @@ class NeuralKinectViewer(QMainWindow):
         plotter_widget = QWidget()
         plotter_layout = QVBoxLayout(plotter_widget)
         self.plotter = QtInteractor(plotter_widget)
-        self.plotter.set_background('midnightblue')
+        self.plotter.set_background('black')
         plotter_layout.addWidget(self.plotter.interactor)
         top_layout.addWidget(plotter_widget, stretch=4)
 
