@@ -944,12 +944,16 @@ class NeuralKinectViewer(QMainWindow):
         # Each is registered once with plotter.add_mesh(); _update_frame()
         # mutates .points / scalar arrays in-place and calls .Modified().
         # ------------------------------------------------------------------
-        self._mesh_kinect = pv.PolyData(np.empty((0, 3), dtype=np.float32))
-        # Pre-seed the 'colors' scalar array so the mapper is configured for
-        # RGB mode from the first add_mesh() call (scalars='colors', rgb=True).
-        self._mesh_kinect['colors'] = np.empty((0, 3), dtype=np.uint8)
-        self._mesh_forearm = pv.PolyData(np.empty((0, 3), dtype=np.float32))
-        self._mesh_forearm['colors'] = np.empty((0, 3), dtype=np.uint8)
+        # Seed with one dummy black point so VTK's PointData registers the
+        # 'colors' array before plotter.add_mesh() validates scalars='colors'.
+        # pv.PolyData with 0 points does not store scalar arrays reliably;
+        # the single point is immediately overwritten by the first _update_frame().
+        _seed = np.zeros((1, 3), dtype=np.float32)
+        _seed_col = np.zeros((1, 3), dtype=np.uint8)
+        self._mesh_kinect = pv.PolyData(_seed.copy())
+        self._mesh_kinect['colors'] = _seed_col.copy()
+        self._mesh_forearm = pv.PolyData(_seed.copy())
+        self._mesh_forearm['colors'] = _seed_col.copy()
         self._mesh_hand = pv.PolyData(np.empty((0, 3), dtype=np.float32))
         self._mesh_contact = pv.PolyData(np.empty((0, 3), dtype=np.float32))
 
