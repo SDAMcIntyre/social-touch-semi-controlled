@@ -4,8 +4,14 @@ import cv2
 import numpy as np
 
 # PyK4A is the library for Azure Kinect DK
-from pyk4a import PyK4APlayback, K4AException
-from pyk4a.config import ColorResolution, DepthMode
+try:
+    from pyk4a import PyK4APlayback, K4AException
+    from pyk4a.config import ColorResolution, DepthMode
+except ImportError:
+    PyK4APlayback = None
+    K4AException = OSError
+    class ColorResolution: pass
+    class DepthMode: pass
 
 # This maps the stable enum to the hardware's known dimensions (width, height).
 CUSTOM_RESOLUTION_MAP = {

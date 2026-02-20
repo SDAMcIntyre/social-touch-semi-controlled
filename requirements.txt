@@ -48,20 +48,28 @@ PyQt5_sip==12.17.0
 # --- Workflow Orchestration ---
 prefect==3.4.22
 
+# --- GPU Acceleration (optional) ---
+# cupy-cuda12x works with CUDA 12.x+ drivers (RTX 4070 Ti Super confirmed).
+# Install separately if needed: pip install cupy-cuda12x
+cupy-cuda12x>=13.0; platform_system != "Darwin"
+
 # --- Machine Learning ---
-tensorflow==2.20.0
-torch==2.8.0
+# tensorflow: only required by the imported HaMeR files (wrappers.py / network.py).
+# No standard PyPI release of 2.20.x exists yet — install manually if HaMeR inference is needed.
+# tensorflow
+# torch: install manually with the correct CUDA wheel for your system, e.g.:
+#   pip install torch --index-url https://download.pytorch.org/whl/cu121
+torch
 
 # --- Miscellaneous ---
 keyboard
-modules==1.0.0
 psutil==7.0.0
 psychopy==2025.1.1
 pygame==2.6.1
 pyk4a==1.5.0; platform_system != "Darwin" # Python wrapper for Azure Kinect SDK
 pynput==1.8.1
 pyserial==3.5
-pywin32==311
+pywin32==311; platform_system == "Windows"
 PyYAML==6.0.3
 QtPy==2.4.3
 tifffile==2025.5.10

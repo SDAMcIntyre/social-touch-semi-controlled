@@ -140,6 +140,13 @@ semi_controlled_project_data_config.json
 # sandbox scripts
 /code/scripts/misc
 GEMINI.md
+CLAUDE.md
+
+# Claude Code local settings
+.claude/
+
+# project skeleton / guidelines reference (local only)
+/skeleton/
 
 # pipeline reports folder
 reports/
