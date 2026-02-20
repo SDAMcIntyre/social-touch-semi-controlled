@@ -1,292 +1,406 @@
 import os
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Union, List, Tuple, Optional
-
+from typing import List, Optional
 import tkinter as tk
 from tkinter import messagebox
-from pathlib import Path
 
-# --- 1. Project-Specific Imports ---
-# Assuming these imports are correct for your project structure
 import utils.path_tools as path_tools
 from primary_processing import (
-    ForearmConfigFileHandler,
-    ForearmConfig,
-    KinectConfigFileHandler,
-    KinectConfig,
+    ForearmConfigFileHandler, ForearmConfig,
+    KinectConfigFileHandler, KinectConfig,
 )
-from preprocessing.forearm_extraction import (
-    ForearmFrameParametersFileHandler,
-    ForearmParameters,
-)
+from preprocessing.forearm_extraction import ForearmFrameParametersFileHandler, ForearmParameters
 from _3_preprocessing._3_forearm_extraction import (
-    define_forearm_extraction_parameters,
+    load_saved_parameters,
+    select_frame_groups,
+    define_rois_for_frame_groups,
+    save_forearm_parameters,
     extract_forearm,
     clean_forearm_pointcloud,
     define_normals,
-    define_forearm_mesh
+    define_forearm_mesh,
 )
 
 
-# --- CHOOSE YOUR EXECUTION MODE HERE ---
-# ------------------------------------------------------
-# ---------------------------------------
-# ---------------------
-# -----------
-FORCE_PROCESSING = True
-# -----------
-# ---------------------
-# ---------------------------------------
-# ------------------------------------------------------
+# ──────────────────────────────────────────────────────────────────────────────
+# CONFIGURATION
+# ──────────────────────────────────────────────────────────────────────────────
+
+FORCE_PROCESSING = True  # Set False to skip sessions that already have a .SUCCESS flag
 
 
-def create_confirmation_flag():
+# ──────────────────────────────────────────────────────────────────────────────
+# DATA CLASSES
+# ──────────────────────────────────────────────────────────────────────────────
+
+@dataclass
+class FrameBatch:
+    """All resolved inputs and output paths for processing one frame (or frame group)."""
+
+    # Inputs
+    depth_video : Path
+    frame_params: ForearmParameters
+
+    # Outputs — one path per processing stage
+    raw_ply      : Path
+    raw_params   : Path
+    cleaned_ply  : Path
+    cleaned_meta : Path
+    normals_ply  : Path
+    normals_meta : Path
+    mesh_obj     : Path
+
+    @property
+    def description(self) -> str:
+        """Human-readable label for log messages."""
+        p = self.frame_params
+        if p.is_averaged:
+            return f"frames {p.frame_ids} (representative: {p.representative_frame_id})"
+        return f"frame {p.frame_id}"
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# I/O RESOLUTION
+# ──────────────────────────────────────────────────────────────────────────────
+
+def resolve_rgb_video_paths(config_links: List[str], project_data_root: Path) -> List[Path]:
     """
-    Displays a confirmation dialog. If 'Yes' is clicked,
-    it creates a flag file.
+    Resolves each Kinect config link to its corresponding RGB (.mp4) video path.
+    Configs whose video file is missing on disk are skipped with a warning.
+    Raises FileNotFoundError if no valid paths can be resolved at all.
     """
-    # Create the main window but hide it, as we only need the dialog box
+    print("🔍 Resolving Kinect configs → RGB video paths...")
+    rgb_paths: List[Path] = []
+
+    for link in config_links:
+        try:
+            config_data   = KinectConfigFileHandler.load_and_resolve_config(link)
+            kinect_config = KinectConfig(config_data=config_data, database_path=project_data_root)
+            rgb_path      = kinect_config.source_video.with_suffix(".mp4")
+
+            if not rgb_path.exists():
+                print(f"  ⚠️  RGB video not found, skipping: {rgb_path}")
+                continue
+
+            rgb_paths.append(rgb_path)
+
+        except Exception as exc:
+            print(f"  ❌ Failed to load Kinect config '{link}': {exc}")
+
+    if not rgb_paths:
+        raise FileNotFoundError("No valid RGB video paths found — cannot define ROI.")
+
+    print(f"  📹 {len(rgb_paths)} RGB video(s) located.\n")
+    return rgb_paths
+
+
+def plan_frame_batch(
+    params: ForearmParameters,
+    rgb_video_paths: List[Path],
+    pointclouds_dir: Path,
+) -> Optional[FrameBatch]:
+    """
+    Resolves all input and output paths for one frame, returning a FrameBatch.
+
+    Returns None (with a warning) if the required source videos cannot be found
+    on disk, so the caller can safely skip this frame without crashing.
+    """
+    # Match the frame's video filename to one of the known RGB paths
+    rgb_path = next((p for p in rgb_video_paths if p.name == params.video_filename), None)
+    if rgb_path is None:
+        print(f"  ⚠️  No source found for '{params.video_filename}' — skipping {params}.")
+        return None
+
+    # The depth video shares the same stem as the RGB video, but is an .mkv file
+    depth_path = rgb_path.with_suffix(".mkv")
+    if not depth_path.exists():
+        print(f"  ⚠️  Depth video not found — skipping: {depth_path}")
+        return None
+
+    base = _build_output_stem(depth_path.stem, params)
+
+    return FrameBatch(
+        depth_video  = depth_path,
+        frame_params = params,
+        raw_ply      = pointclouds_dir / f"{base}.ply",
+        raw_params   = pointclouds_dir / f"{base}_extraction_params.json",
+        cleaned_ply  = pointclouds_dir / f"{base}_cleaned.ply",
+        cleaned_meta = pointclouds_dir / f"{base}_cleaning_stats.json",
+        normals_ply  = pointclouds_dir / f"{base}_with_normals.ply",
+        normals_meta = pointclouds_dir / f"{base}_with_normals_metadata.json",
+        mesh_obj     = pointclouds_dir / f"{base}_mesh.obj",
+    )
+
+
+def _build_output_stem(video_stem: str, params: ForearmParameters) -> str:
+    """Returns a descriptive, zero-padded filename stem for a frame or frame group."""
+    if params.is_averaged:
+        lo, hi = min(params.frame_ids), max(params.frame_ids)
+        return f"{video_stem}_frames_{lo:04d}-{hi:04d}_avg_N{len(params.frame_ids)}"
+    return f"{video_stem}_frame_{params.frame_id:04d}"
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# COMPUTATION
+# ──────────────────────────────────────────────────────────────────────────────
+
+def execute_frame_batch(batch: FrameBatch) -> None:
+    """
+    Runs the four processing steps for a single FrameBatch in sequence:
+
+        1. Extract  — pull the raw forearm point cloud from the depth video
+        2. Clean    — remove noise and outliers
+        3. Normals  — estimate surface normals on the cleaned cloud
+        4. Mesh     — reconstruct a surface mesh from the oriented cloud
+    """
+    print(f"  🔎 [1/4] Extracting forearm  ({batch.depth_video.name}, {batch.description})")
+    extract_forearm(
+        video_path=batch.depth_video, video_config=batch.frame_params,
+        output_ply_path=batch.raw_ply, output_params_path=batch.raw_params,
+        interactive=True,
+    )
+    print(f"         → {batch.raw_ply.name}")
+
+    print(f"  🧹 [2/4] Cleaning point cloud")
+    clean_forearm_pointcloud(
+        input_ply_path=batch.raw_ply, output_ply_path=batch.cleaned_ply,
+        output_metadata_path=batch.cleaned_meta,
+    )
+    print(f"         → {batch.cleaned_ply.name}")
+
+    print(f"  🧠 [3/4] Computing normals")
+    define_normals(batch.cleaned_ply, batch.normals_ply, batch.normals_meta)
+    print(f"         → {batch.normals_ply.name}")
+
+    print(f"  🕸️  [4/4] Building mesh")
+    define_forearm_mesh(source=batch.normals_ply, output_path=batch.mesh_obj, show=True)
+    print(f"         → {batch.mesh_obj.name}\n")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# ORCHESTRATION
+# ──────────────────────────────────────────────────────────────────────────────
+
+def run_session(session_config: ForearmConfig, project_data_root: Path) -> None:
+    """
+    Orchestrates the full forearm extraction pipeline for one recording session:
+
+        1. Resolve source videos from the session's Kinect configs
+        2. Prompt the user to select frame groups from those videos
+        3. Prompt the user to draw a forearm ROI for each group
+        4. Save the resulting parameters to disk
+        5. Plan one FrameBatch per defined frame (resolves all paths up front)
+        6. Execute each FrameBatch in sequence
+    """
+    print(f"\n🚀 Session: {session_config.session_id}")
+
+    pointclouds_dir = _setup_output_directories(session_config.session_processed_path)
+    rgb_video_paths = resolve_rgb_video_paths(session_config.config_file_links, project_data_root)
+    metadata_path   = _build_metadata_path(session_config, pointclouds_dir)
+
+    frame_params_list = _annotate_forearm_roi(rgb_video_paths, metadata_path)
+
+    batches = _plan_all_batches(frame_params_list, rgb_video_paths, pointclouds_dir)
+    _execute_all_batches(batches)
+
+
+def _setup_output_directories(session_output_dir: Path) -> Path:
+    """Creates the session output directory and pointclouds subfolder. Returns the subfolder."""
+    session_output_dir.mkdir(parents=True, exist_ok=True)
+
+    pointclouds_dir = session_output_dir / "forearm_pointclouds"
+    pointclouds_dir.mkdir(exist_ok=True)
+
+    print(f"  📂 Output: {pointclouds_dir}")
+    return pointclouds_dir
+
+
+def _build_metadata_path(session_config: ForearmConfig, pointclouds_dir: Path) -> Path:
+    """Returns the path where the ROI annotation metadata JSON will be stored."""
+    return pointclouds_dir / f"{session_config.session_id}_arm_roi_metadata.json"
+
+
+def _annotate_forearm_roi(
+    rgb_video_paths: List[Path],
+    metadata_path: Path,
+) -> List[ForearmParameters]:
+    """
+    Guides the user through the two interactive annotation steps and persists
+    the result to disk.
+
+    Step 1 — select frame groups: the user picks which frames (or groups of
+    frames) to annotate. Any previously saved groups are pre-filled so the user
+    can review rather than re-do prior work.
+
+    Step 2 — draw ROIs: for each selected group, the representative frame is
+    shown and the user draws the forearm region. Previously saved ROIs are
+    pre-drawn for the same reason.
+
+    The collected parameters are then saved and returned so the caller can
+    immediately plan and execute FrameBatches.
+
+    Args:
+        rgb_video_paths: RGB video files available for this session.
+        metadata_path: Where to load existing parameters from and save new ones to.
+
+    Returns:
+        The saved list of ForearmParameters, ready for FrameBatch planning.
+
+    Raises:
+        RuntimeError: If the user cancels group selection or no ROIs are defined.
+    """
+    print("\n✍️  Please annotate the forearm ROI in the interactive windows.\n")
+
+    saved_parameters = load_saved_parameters(str(metadata_path))
+
+    selected_groups = select_frame_groups(
+        rgb_video_paths=[str(p) for p in rgb_video_paths],
+        saved_parameters=saved_parameters,
+    )
+    if selected_groups is None:
+        raise RuntimeError("Frame group selection was cancelled — cannot continue.")
+
+    parameters = define_rois_for_frame_groups(selected_groups, saved_parameters)
+    if not parameters:
+        raise RuntimeError("No ROIs were defined — cannot continue.")
+
+    save_forearm_parameters(parameters, str(metadata_path))
+    return ForearmFrameParametersFileHandler.load(str(metadata_path))
+
+
+def _plan_all_batches(
+    frame_params_list: List[ForearmParameters],
+    rgb_video_paths: List[Path],
+    pointclouds_dir: Path,
+) -> List[FrameBatch]:
+    """
+    Resolves paths for all frames up front, before any processing begins.
+    Frames whose source videos cannot be found are dropped here with a warning.
+    """
+    batches = [
+        batch for params in frame_params_list
+        if (batch := plan_frame_batch(params, rgb_video_paths, pointclouds_dir)) is not None
+    ]
+    print(f"  📋 {len(batches)}/{len(frame_params_list)} frame(s) planned successfully.\n")
+    return batches
+
+
+def _execute_all_batches(batches: List[FrameBatch]) -> None:
+    """Executes each FrameBatch in sequence, catching and logging per-batch errors."""
+    for batch in batches:
+        print(f"── {batch.depth_video.name}  |  {batch.description}")
+        try:
+            execute_frame_batch(batch)
+        except Exception as exc:
+            print(f"  ❌ Error processing {batch.description}: {exc}\n")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# BATCH RUNNER
+# ──────────────────────────────────────────────────────────────────────────────
+
+def batch_process_all_sessions(configs_forearm_dir: Path, project_data_root: Path) -> None:
+    """
+    Discovers all *.yaml session configs and runs the pipeline for each one.
+    After each session, prompts the user to confirm quality and writes (or
+    removes) a .SUCCESS flag accordingly. Sessions with an existing flag are
+    skipped unless FORCE_PROCESSING is True.
+    """
+    session_files = _discover_session_configs(configs_forearm_dir)
+    total = len(session_files)
+
+    for idx, session_file in enumerate(session_files, start=1):
+        print(f"\n{'─' * 60}")
+        print(f"  Session {idx}/{total}: {session_file.name}")
+        print(f"{'─' * 60}")
+
+        try:
+            session_config: ForearmConfig = ForearmConfigFileHandler.load(session_file)
+
+            if _should_skip_session(session_config):
+                continue
+
+            run_session(session_config, project_data_root)
+            _handle_session_confirmation(session_config)
+
+        except Exception as exc:
+            print(f"  ❌ FATAL — skipping session '{session_file.name}': {exc}")
+
+    print(f"\n🎉 Batch complete — {total} session(s) processed.")
+
+
+def _discover_session_configs(configs_forearm_dir: Path) -> List[Path]:
+    """Returns sorted *.yaml files from the config directory, or raises if none found."""
+    if not configs_forearm_dir.is_dir():
+        raise FileNotFoundError(f"Config directory not found: {configs_forearm_dir}")
+
+    session_files = sorted(configs_forearm_dir.glob("*.yaml"))
+    if not session_files:
+        raise FileNotFoundError(f"No *.yaml session configs found in: {configs_forearm_dir}")
+
+    print(f"Found {len(session_files)} session config(s) in '{configs_forearm_dir}'.")
+    return session_files
+
+
+def _should_skip_session(session_config: ForearmConfig) -> bool:
+    """Returns True (and logs a message) if this session already has a .SUCCESS flag."""
+    if FORCE_PROCESSING:
+        return False
+
+    flag_file = _get_flag_file_path(session_config)
+    if flag_file.exists():
+        print(f"  ⏭️  .SUCCESS flag found — skipping session '{session_config.session_id}'.\n")
+        return True
+
+    return False
+
+
+def _handle_session_confirmation(session_config: ForearmConfig) -> None:
+    """Prompts the user to confirm quality, then writes or removes the .SUCCESS flag."""
+    flag_file = _get_flag_file_path(session_config)
+
+    if _ask_user_confirmation():
+        flag_file.touch()
+        print(f"  ✅ Confirmed — flag written: {flag_file.resolve()}")
+    else:
+        flag_file.unlink(missing_ok=True)
+        print(f"  🧹 Not confirmed — flag removed (session will reprocess next run).")
+
+
+def _get_flag_file_path(session_config: ForearmConfig) -> Path:
+    """Returns the .SUCCESS flag path for a given session."""
+    return session_config.session_processed_path / "forearm_pointclouds" / ".SUCCESS"
+
+
+def _ask_user_confirmation() -> bool:
+    """Shows a yes/no dialog and returns True if the user confirms."""
     root = tk.Tk()
     root.withdraw()
-
-    # Show the confirmation dialog
-    response = messagebox.askyesno(
+    return messagebox.askyesno(
         title="Processing Confirmation",
         message="Was the processing correct?"
     )
 
-    # Act based on the user's response
-    return response
 
+# ──────────────────────────────────────────────────────────────────────────────
+# ENTRY POINT
+# ──────────────────────────────────────────────────────────────────────────────
 
-# --- 2. Helper Functions for the Main Pipeline ---
-
-def _setup_session_directories(session_output_dir: Path) -> Path:
-    """Creates the necessary output directories for a processing session."""
-    print(f"📂 Setting up output directory: {session_output_dir}")
-    session_output_dir.mkdir(parents=True, exist_ok=True)
-    
-    pointclouds_output_dir = session_output_dir / "forearm_pointclouds"
-    pointclouds_output_dir.mkdir(exist_ok=True)
-    print(f"📦 Point clouds will be saved in: {pointclouds_output_dir}")
-    
-    return pointclouds_output_dir
-
-
-def _gather_rgb_video_paths(
-    config_links: List[str], project_data_root: Path
-) -> List[Path]:
-    """Loads linked Kinect configs to find all associated RGB video files."""
-    rgb_video_paths: List[Path] = []
-    print("🔍 Loading linked Kinect configurations to find RGB videos...")
-    
-    for config_link in config_links:
-        try:
-            config_data = KinectConfigFileHandler.load_and_resolve_config(config_link)
-            kinect_inputs = KinectConfig(config_data=config_data, database_path=project_data_root)
-            
-            # The corresponding RGB video is expected to be an .mp4 file
-            rgb_video_path = kinect_inputs.source_video.with_suffix('.mp4')
-            
-            if not rgb_video_path.exists():
-                print(f"⚠️ Warning: Corresponding RGB video not found, skipping: {rgb_video_path}")
-                continue
-                
-            rgb_video_paths.append(rgb_video_path)
-        except Exception as e:
-            print(f"❌ Error loading Kinect config from '{config_link}': {e}")
-
-    if not rgb_video_paths:
-        raise FileNotFoundError("Could not find any valid RGB video paths for ROI definition.")
-        
-    print(f"📹 Found {len(rgb_video_paths)} RGB videos for ROI definition.")
-    return rgb_video_paths
-
-
-def _process_single_forearm_frame(
-    params: ForearmParameters,
-    rgb_video_paths: List[Path],
-    pointclouds_output_dir: Path
-) -> Optional[Tuple[Path, Path]]:
-    """
-    Extracts, processes, and saves the point cloud for a single frame.
-    
-    Returns a tuple of (normals_path, normals_metadata_path) on success, else None.
-    """
-    # Find the source video corresponding to the parameters
-    matching_rgb_path = next((p for p in rgb_video_paths if p.name == params.video_filename), None)
-
-    if not matching_rgb_path:
-        print(f"⚠️ Warning: Could not find source for '{params.video_filename}', skipping frame {params.frame_id}.")
-        return None
-
-    # The depth video (.mkv) is assumed to share the same stem as the RGB video (.mp4)
-    primary_source_video = matching_rgb_path.with_suffix('.mkv')
-    if not primary_source_video.exists():
-        print(f"⚠️ Warning: Depth video not found, skipping: {primary_source_video}")
-        return None
-
-    # --- Generate unique filenames for this frame's outputs ---
-    video_stem = primary_source_video.stem
-    base_filename = f"{video_stem}_frame_{params.frame_id:04d}" # Zero-padded for sorting
-
-    forearm_ply_path = pointclouds_output_dir / f"{base_filename}.ply"
-    output_params_path = pointclouds_output_dir / f"{base_filename}_extraction_params.json"
-
-    # --- Step 1: Extract the raw forearm point cloud ---
-    print(f"🔎 Extracting forearm from: {primary_source_video.name} [Frame: {params.frame_id}]")
-    extract_forearm(
-        video_path=primary_source_video,
-        video_config=params,
-        output_ply_path=forearm_ply_path,
-        output_params_path=output_params_path,
-        interactive=True
-    )
-    print(f"💾 Raw forearm point cloud saved to: {forearm_ply_path.name}")
-
-    # --- Step 2: Clean the forearm point cloud ---
-    cleaned_forearm_ply_path = pointclouds_output_dir / f"{base_filename}_cleaned.ply"
-    
-    # Optional: Define metadata path for cleaning stats if the function supports it
-    cleaned_metadata_path = pointclouds_output_dir / f"{base_filename}_cleaning_stats.json"
-
-    print("🧹 Cleaning the extracted forearm point cloud...")
-    clean_forearm_pointcloud(
-        input_ply_path=forearm_ply_path,
-        output_ply_path=cleaned_forearm_ply_path,
-        output_metadata_path=cleaned_metadata_path
-    )
-    print(f"💾 Cleaned point cloud saved to: {cleaned_forearm_ply_path.name}")
-
-    # --- Step 3: Calculate and save normals for the extracted point cloud ---
-    # NOTE: Now using the CLEANED point cloud as input
-    forearm_ply_normals_path = pointclouds_output_dir / f"{base_filename}_with_normals.ply"
-    forearm_metadata_normals_path = pointclouds_output_dir / f"{base_filename}_with_normals_metadata.json"
-
-    print("🧠 Calculating normals for the point cloud...")
-    define_normals(cleaned_forearm_ply_path, forearm_ply_normals_path, forearm_metadata_normals_path)
-    print(f"💾 Point cloud with normals saved to: {forearm_ply_normals_path.name}")
-
-    # --- Step 4: Define Forearm Mesh (NEW STEP) ---
-    # NOTE: Uses the point cloud with normals as input
-    forearm_mesh_path = pointclouds_output_dir / f"{base_filename}_mesh.obj"
-
-    print("🕸️ Generating mesh from oriented point cloud...")
-    define_forearm_mesh(
-        source=forearm_ply_normals_path,
-        output_path=forearm_mesh_path,
-        show=True
-    )
-    print(f"💾 Forearm mesh saved to: {forearm_mesh_path.name}")
-
-    return forearm_ply_normals_path, forearm_metadata_normals_path
-
-
-# --- 3. Main Processing Pipeline ---
-
-def generate_forearm_pointcloud(
-    inputs: 'ForearmConfig',
-    project_data_root: Path
-) -> Tuple[Path, Path]:
-    """
-    Processes a forearm session to generate a point cloud with normals.
-    
-    This function orchestrates the pipeline:
-    1. Sets up output directories.
-    2. Gathers source video files.
-    3. Initiates interactive ROI (Region of Interest) definition.
-    4. Loops through each defined ROI to extract and process the forearm point cloud.
-    """
-    print(f"🚀 Starting pipeline for session: {inputs.session_id}")
-
-    # STEP 1: Setup session-specific output directories
-    pointclouds_output_dir = _setup_session_directories(inputs.session_processed_path)
-
-    flag_file = pointclouds_output_dir / ".SUCCESS"
-    if not FORCE_PROCESSING and os.path.exists(flag_file):
-        print(f"⚠️ Flag file found in '{pointclouds_output_dir}'. Skip this session.")
-        return True
-    
-    # STEP 2: Gather all RGB video paths needed for ROI definition
-    rgb_video_paths = _gather_rgb_video_paths(inputs.config_file_links, project_data_root)
-
-    # STEP 3: Interactively define the forearm extraction parameters (ROI)
-    metadata_path = pointclouds_output_dir / f"{inputs.session_id}_arm_roi_metadata.json"
-    print("✍️ Please define the forearm ROI in the upcoming interactive session...")
-    define_forearm_extraction_parameters(rgb_video_paths, metadata_path)
-    
-    forearm_parameters_list: List[ForearmParameters] = ForearmFrameParametersFileHandler.load(metadata_path)
-
-    # STEP 4: Process each defined frame parameter
-    for params in forearm_parameters_list:
-        try:
-            print(f"🚀 Starting forearm extraction for: {params.video_filename}, frame {params.frame_id}")
-            _process_single_forearm_frame(
-                params, rgb_video_paths, pointclouds_output_dir
-            )
-        except Exception as e:
-            print(f"❌ An unexpected error occurred while processing frame {params.frame_id}: {e}")
-            continue
-    
-    # Act based on the user's response
-    if create_confirmation_flag():
-        Path(flag_file).touch()
-        print(f"✅ Confirmation received. Flag file created at: {flag_file.resolve()}")
-        print("✅ Pipeline finished successfully.")
-    else:
-        Path(flag_file).unlink()
-        print(f"🧹 Removed old flag file from previous run.")
-
-    return True
-
-
-def batch_process_all_sessions(configs_forearm_dir: Path, project_data_root: Path):
-    """Finds all session YAML files and runs the processing pipeline for each one."""
-    if not configs_forearm_dir.is_dir():
-        raise FileNotFoundError(f"Configuration directory not found: {configs_forearm_dir}")
-
-    session_files = sorted(list(configs_forearm_dir.glob("*.yaml")))
-    if not session_files:
-        print(f"⚠️ No session *.yaml files found in '{configs_forearm_dir}'. Nothing to do.")
-        return
-    
-    total_sessions = len(session_files)
-    print(f"Found {total_sessions} session(s) to process in '{configs_forearm_dir}'.")
-
-    for i, session_file in enumerate(session_files):
-        print(f"\n{'='*20} Processing Session {i + 1}/{total_sessions}: {session_file.name} {'='*20}")
-        try:
-            forearm_config: ForearmConfig = ForearmConfigFileHandler.load(session_file)
-            generate_forearm_pointcloud(inputs=forearm_config, project_data_root=project_data_root)
-        except Exception as e:
-            print(f"❌ FATAL ERROR processing session {session_file.name}: {e}")
-            print("🛑 Skipping to the next session.")
-            continue
-
-    print(f"\n🎉 All {total_sessions} sessions processed.")
-
-
-# --- 4. Script Execution ---
 if __name__ == "__main__":
-    print("🛠️ Initializing batch processing script...")
-    
-    # Define project paths relative to this script's location
+    print("🛠️  Initialising batch processing script...\n")
     try:
-        project_root = Path(__file__).resolve().parents[2]
-        configs_dir = project_root / "configs"
-        configs_forearm_dir = configs_dir / "forearm_configs"
-        
-        # Use the utility function to find the data root
-        project_data_root = path_tools.get_project_data_root()
+        project_root        = Path(__file__).resolve().parents[2]
+        configs_forearm_dir = project_root / "configs" / "forearm_configs"
+        project_data_root   = path_tools.get_project_data_root()
 
-        print(f"Project Root: {project_root}")
-        print(f"Data Root: {project_data_root}")
-        print(f"Forearm Configs: {configs_forearm_dir}")
-        
-        # Launch the main batch processing function
+        print(f"  Project root   : {project_root}")
+        print(f"  Data root      : {project_data_root}")
+        print(f"  Forearm configs: {configs_forearm_dir}\n")
+
         batch_process_all_sessions(
             configs_forearm_dir=configs_forearm_dir,
-            project_data_root=project_data_root
+            project_data_root=project_data_root,
         )
-    except Exception as e:
-        print(f"An error occurred during script setup or execution: {e}")
+    except Exception as exc:
+        print(f"❌ Setup / execution error: {exc}")
