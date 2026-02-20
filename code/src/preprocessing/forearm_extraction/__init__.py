@@ -15,6 +15,8 @@ from .models.forearm_parameters import (
     sort_forearm_parameters_by_video_and_frame
 )
 
+from .depth_averaging import FrameDepthAverager
+
 from .gui.multivideo_frames_selector import MultiVideoFramesSelector
 
 from .models.forearm_catalog import (
@@ -34,5 +36,6 @@ __all__ = [
     "ForearmParameters",
     "RegionOfInterest",
     "Point",
-    "ForearmSegmentationParamsFileHandler"
+    "ForearmSegmentationParamsFileHandler",
+    "FrameDepthAverager",
 ]

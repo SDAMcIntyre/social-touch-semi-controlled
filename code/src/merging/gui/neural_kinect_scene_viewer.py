@@ -608,9 +608,10 @@ class NeuralKinectViewer(QMainWindow):
         self._total_frames: int = len(self._point_cloud_view)
 
         # ------------------------------------------------------------------
-        # 7. Background preloader (32-frame ring buffer)
+        # 7. Background preloader (512-frame ring buffer)
         # ------------------------------------------------------------------
-        self._preloader = FramePreloader(self._point_cloud_view, buffer_size=32)
+        self._preloader_buf_size = 512
+        self._preloader = FramePreloader(self._point_cloud_view, buffer_size=self._preloader_buf_size)
         self._preloader.seek(0)
         self._preloader.start()
 
@@ -888,7 +889,7 @@ class NeuralKinectViewer(QMainWindow):
         self.frame_label.setFixedWidth(100)
         layout.addWidget(self.frame_label)
 
-        self._buffer_label = QLabel("Buf: 0/32")
+        self._buffer_label = QLabel(f"Buf: 0/{self._preloader_buf_size}")
         self._buffer_label.setFixedWidth(75)
         self._buffer_label.setStyleSheet("font-family: monospace; font-size: 8pt; color: gray;")
         layout.addWidget(self._buffer_label)

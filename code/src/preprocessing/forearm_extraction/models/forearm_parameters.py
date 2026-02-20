@@ -23,13 +23,24 @@ class RegionOfInterest:
 class ForearmParameters:
     """A comprehensive container for all video-related metadata."""
     video_filename: str
-    frame_id: int
+    frame_ids: List[int]
+    representative_frame_id: int
     region_of_interest: RegionOfInterest
     frame_width: int
     frame_height: int
     fps: float
     nframes: int
     fourcc_str: str
+
+    @property
+    def frame_id(self) -> int:
+        """Backward-compatible accessor — returns representative_frame_id."""
+        return self.representative_frame_id
+
+    @property
+    def is_averaged(self) -> bool:
+        """True when this capture was derived from more than one depth frame."""
+        return len(self.frame_ids) > 1
 
 
 # Define a generic TypeVar bound to the base class
@@ -39,6 +50,6 @@ def sort_forearm_parameters_by_video_and_frame(
     parameters_list: List[T]
 ) -> List[T]:
     """
-    Sorts a list of ForearmParameters objects by video_filename and frame_id.
+    Sorts a list of ForearmParameters objects by video_filename and representative_frame_id.
     """
-    return sorted(parameters_list, key=lambda p: (p.video_filename, p.frame_id))
+    return sorted(parameters_list, key=lambda p: (p.video_filename, p.representative_frame_id))
