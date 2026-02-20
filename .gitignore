@@ -126,8 +126,8 @@ test/
 #R project files
 .Rproj.user
 
-#C++ project files
-.vscode/launch.json
+#C++ / VS Code editor settings
+.vscode/
 
 # user config file with project path
 # 1. Ignore all .yaml files inside configs/ and all its subdirectories
@@ -153,6 +153,6 @@ reports/
 /code/scripts/__misc
 /demo_out
 /example_data
-/demo_out
-/demo_out
-/example_data
+
+# temporary files and videos
+temp_videos/
