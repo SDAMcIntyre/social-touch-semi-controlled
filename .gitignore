@@ -142,6 +142,9 @@ semi_controlled_project_data_config.json
 GEMINI.md
 CLAUDE.md
 
+# VS Code workspace files
+*.code-workspace
+
 # Claude Code local settings
 .claude/
 
