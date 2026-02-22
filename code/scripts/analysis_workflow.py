@@ -25,8 +25,8 @@ from primary_processing import (
     get_block_files
 )
 
-# Imported from the updated touch_analysis module (assuming path matches 'analyse/touch_analytics')
-from analyse.touch_analytics import (
+# Imported from the updated touch_analysis module (assuming path matches 'analysis/touch_analytics')
+from analysis.touch_analytics import (
     generate_unified_summary,
     generate_touch_summary_matrix,
     generate_ap_efficacy_matrix
