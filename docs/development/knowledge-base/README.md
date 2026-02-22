@@ -1,0 +1,75 @@
+# Knowledge Base
+
+Problem-resolution notes for engineering challenges encountered in this
+codebase.  Each note captures a **specific problem, its root cause, the
+constraints that shaped the fix, and the reusable pattern** that resolves the
+class of problem — not just the single instance.
+
+These are developer-facing documents, not usage guides.
+
+---
+
+## Index
+
+### Engineering notes (`note-*`)
+
+| Note | Problem class | Key files |
+|------|--------------|-----------|
+| [Open3D SceneWidget Layout — Nested Widget Sizing](note-open3d-scenewidget-layout.md) | Embedding a `SceneWidget` inside `gui.Vert` causes it to collapse on first mouse interaction (grey background / widget disappears). | `arm_segmentation.py` — `_make_hue_range_circle`, `_display_pointcloud` |
+| [CuPy Import Order with Preprocessing Packages](note-cupy-import-order.md) | Importing CuPy after the `preprocessing` package tree crashes with `TypeError: Alias 'bool8' was removed in NumPy 2.0`. | Entry-point scripts, `neural_kinect_scene_viewer.py` |
+
+### Bug reports (`bug-*`)
+
+| Report | Summary | Related note |
+|--------|---------|--------------|
+| [bug-cupy-bool8-import-order.md](bug-cupy-bool8-import-order.md) | `bool8` TypeError caused by CuPy import order | [note-cupy-import-order.md](note-cupy-import-order.md) |
+| [bug-neural-kinect-viewer-initial-render.md](bug-neural-kinect-viewer-initial-render.md) | Neural Kinect Viewer initial render issue | — |
+| [bug-hue-circle-drag-not-working.md](bug-hue-circle-drag-not-working.md) | Hue circle drag interaction not working | — |
+
+---
+
+## Structure of each note
+
+1. **Symptom** — observable failure, as it appeared during development.
+2. **Investigation** — what was tried, what was eliminated.
+3. **Root Cause** — the underlying engine/framework constraint.
+4. **Architecture Constraints** — why the naive fix doesn't work.
+5. **Fix Applied** — the minimal code change and the reasoning behind it.
+6. **Reusable Pattern** — a checklist / template for future occurrences.
+7. **References** — related bug reports, plans, and source locations.
+
+---
+
+## Relevance check — subagent pattern
+
+The planning procedure requires a knowledge-base relevance check before any
+plan is finalised.  The check is performed by an Explore subagent launched in
+parallel with other pre-planning research:
+
+**Subagent prompt template:**
+> Read `docs/development/knowledge-base/README.md`. For each note listed in
+> the index, assess whether its problem class overlaps with the feature being
+> planned. Read the full content of any relevant notes and return a concise
+> summary of what applies: which constraints to respect, which approaches were
+> rejected and why, and which code patterns to reuse.
+
+The subagent output feeds directly into the plan's **Technical Design** section
+(Alternatives Considered, Architecture Constraints).  If no notes are relevant,
+the check still satisfies the planning procedure — record "no applicable notes"
+in the plan.
+
+---
+
+## Adding a new note
+
+**Engineering notes** (root-cause analysis and reusable patterns):
+1. Create `docs/development/knowledge-base/note-<slug>.md` using the 7-section
+   structure above.
+2. Add a row to the **Engineering notes** table in this file.
+
+**Bug reports** (incident records):
+1. Create `docs/development/knowledge-base/bug-<slug>.md`.
+2. Add a row to the **Bug reports** table in this file.
+3. If the bug has a corresponding engineering note, add a cross-link in the
+   "Related note" column and link back to the bug from the note's References
+   section.

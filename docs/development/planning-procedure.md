@@ -5,12 +5,11 @@ This document describes the standard planning workflow and document structure fo
 ## Quick Start
 
 Creating a new plan:
-1. Create file in `docs/plans/active/[feature-name].md`
+1. Create file in `docs/development/plans/active/[feature-name].md`
 2. Use the [planning template](#template)
 3. Complete all required sections
-4. Update `docs/plans/README.md` with status
-5. Submit for review
-6. Begin implementation after approval
+4. Submit for review
+5. Begin implementation after approval
 
 ---
 
@@ -26,8 +25,7 @@ pending   build       feature       feature      reference
 ### Directory Structure
 
 ```
-docs/plans/
-├── README.md                          # Index and status of all plans
+docs/development/plans/
 ├── active/                            # Plans currently in progress
 │   ├── feature-name.md               # Primary plan document
 │   └── feature-name/                 # Optional: phase breakdowns
@@ -39,6 +37,15 @@ docs/plans/
 └── archived/                          # Old versions, superseded plans
     └── [old plans]
 ```
+
+**completed/ vs archived/**
+
+- **`completed/`** — Plans for features that were **shipped as designed**. The
+  plan accurately reflects what was built. These are the canonical design
+  records and should be kept indefinitely.
+- **`archived/`** — Plans that were **superseded, abandoned, or substantially
+  rewritten** before completion. They preserve decision history (why an
+  approach was rejected) but do not describe the current system.
 
 ---
 
@@ -358,7 +365,7 @@ Use this template when creating a new plan:
 ## References
 
 - Related Issue: #[number]
-- Related Plans: `docs/plans/[related-plan].md`
+- Related Plans: `docs/development/plans/[related-plan].md`
 
 ---
 ```
@@ -368,6 +375,19 @@ Use this template when creating a new plan:
 ## Best Practices
 
 ### Before Writing the Plan
+
+- **Check knowledge base for relevant patterns** — As one of the first parallel
+  research tasks, spawn an Explore subagent with the following prompt:
+
+  > Read `docs/development/knowledge-base/README.md`. For each note listed in
+  > the index, assess whether its problem class overlaps with the feature being
+  > planned. Read the full content of any relevant notes and return a concise
+  > summary of what applies: which constraints to respect, which approaches
+  > were rejected and why, and which code patterns to reuse.
+
+  Incorporate the findings into the Technical Design section — especially
+  **Alternatives Considered** and **Architecture Constraints** — before the
+  plan is submitted for review.
 
 - **Explore the codebase** — Understand existing patterns, similar features, and constraints
 - **Identify dependencies** — What other systems does this integrate with?
@@ -384,7 +404,7 @@ Use this template when creating a new plan:
 
 ### Naming and Organization
 
-- **File naming:** `feature-name.md` in `active/` directory
+- **File naming:** `feature-name.md` in `docs/development/plans/active/` directory
 - **Branch naming:** `feature/[feature-name]` (use hyphens, lowercase)
 - **Phase breakdown:** Only use phase files if plan is large (3+ phases with significant detail)
 
@@ -451,10 +471,9 @@ Before approving a plan:
 ### Completing a Plan
 
 1. **Mark as completed:** Update `Status: Completed` and add completion date
-2. **Move to archive:** `docs/plans/completed/[feature-name].md`
-3. **Update README:** Move from active to completed in index
-4. **Reference from code:** Link to plan from relevant module docs
-5. **Lessons learned:** Optional note on what went well/differently
+2. **Move to completed:** `docs/development/plans/completed/[feature-name].md`
+3. **Reference from code:** Link to plan from relevant module docs
+4. **Lessons learned:** Optional note on what went well/differently
 
 ### Post-Mortem (Optional)
 
