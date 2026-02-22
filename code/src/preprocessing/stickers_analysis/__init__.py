@@ -1,10 +1,10 @@
-# preprocessing/stickers_analysis/roi/__init__.py
+# preprocessing/stickers_analysis/__init__.py
 
 """
 This file exposes the public API for the ROI analysis sub-package.
 
 By importing the key classes here, we allow users to access them directly
-from he 'roi' namespace, decoupling their code from .roiour internal file structure.
+from the 'roi' namespace, decoupling their code from our internal file structure.
 """
 
 from .roi.data_access.roi_manual_annotation_filehandler import ROIAnnotationFileHandler
@@ -47,7 +47,7 @@ from .xyz.core.xyz_extracting_orchestrator import XYZStickerOrchestrator
 
 from .common.models.tracked_data_interface import TrackedDataInterface
 
-# Define what gets imported with 'from .roi. import *'
+# Define what gets imported with 'from stickers_analysis import *'
 __all__ = [
     "ROIAnnotationFileHandler",
     "ROIAnnotationManager",
