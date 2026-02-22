@@ -1,7 +1,7 @@
 # NeuralKinectViewer — Generated Files
 
 Feature: interactive 3D viewer for merged neural + Kinect recordings.
-Original planning documents: [`docs/plans/active/neural-kinect-viewer/`](../plans/active/neural-kinect-viewer/)
+Original planning documents: [`docs/development/plans/active/neural-kinect-viewer/`](../active/neural-kinect-viewer/)
 
 ---
 
@@ -16,7 +16,7 @@ Original planning documents: [`docs/plans/active/neural-kinect-viewer/`](../plan
 | `gui/neural_kinect_scene_viewer.py` | `FramePreloader`, `NeuralDataPanel`, `NeuralKinectViewer`, `define_custom_colors`, `_parse_contact_points_cell` | Main viewer module (see below) |
 | `gui/sticker_velocity_compass.py` | `StickerVelocityCompass` | QPainter velocity compass widget |
 
-> **Location note:** The plan documents (`docs/plans/active/neural-kinect-viewer/`) originally
+> **Location note:** The plan documents (`docs/development/plans/active/neural-kinect-viewer/`) originally
 > placed the GUI files under `code/src/preprocessing/common/gui/`.  They were moved to
 > `code/src/merging/gui/` before the first commit because the viewer is conceptually part of
 > the merging stage, not the preprocessing stage.
@@ -41,7 +41,7 @@ Original planning documents: [`docs/plans/active/neural-kinect-viewer/`](../plan
 
 | File | Notes |
 |---|---|
-| `code/scripts/view_merged_neural_kinect.py` | Prefect flow that iterates block config files, resolves all paths from `KinectConfig`, and launches `NeuralKinectViewer` sequentially (one viewer at a time). Imports CuPy before any preprocessing package to avoid the NumPy dtype-registry conflict (see `docs/bugs/cupy-bool8-import-order.md`). |
+| `code/scripts/view_merged_neural_kinect.py` | Prefect flow that iterates block config files, resolves all paths from `KinectConfig`, and launches `NeuralKinectViewer` sequentially (one viewer at a time). Imports CuPy before any preprocessing package to avoid the NumPy dtype-registry conflict (see `docs/development/knowledge-base/bug-cupy-bool8-import-order.md`). |
 
 ---
 
@@ -57,13 +57,13 @@ Original planning documents: [`docs/plans/active/neural-kinect-viewer/`](../plan
 
 | File | Notes |
 |---|---|
-| `docs/bugs/cupy-bool8-import-order.md` | Explains the CuPy / NumPy 2.0 `bool8` dtype-registry crash and the early-import fix applied in every entry-point script that uses CuPy alongside preprocessing packages. |
+| `docs/development/knowledge-base/bug-cupy-bool8-import-order.md` | Explains the CuPy / NumPy 2.0 `bool8` dtype-registry crash and the early-import fix applied in every entry-point script that uses CuPy alongside preprocessing packages. |
 | `docs/gpu_cupy_setup_and_viewer_improvements.md` | Environment setup guide for CuPy (CUDA toolkit, pip install) and notes on planned viewer improvements. |
-| `docs/plans/active/neural-kinect-viewer.md` | Feature plan: motivation, parallel work groups, dependency graph, architecture summary, speed improvement table, graceful-degradation table. |
-| `docs/plans/active/neural-kinect-viewer/01-foundation.md` | Detailed spec for `StickerVelocityCompass` (Group 1) and `FramePreloader` (Group 2). |
-| `docs/plans/active/neural-kinect-viewer/02-core.md` | Detailed spec for `NeuralDataPanel` (Group 3) and extraction of `define_custom_colors` (Group 4). |
-| `docs/plans/active/neural-kinect-viewer/03-integration.md` | Detailed spec for `NeuralKinectViewer` main class (Group 5) and `common/__init__.py` update (Group 6). |
-| `docs/plans/active/neural-kinect-viewer/04-entry-point.md` | Detailed spec for the entry-point script (Group 7) and full verification / testing checklist. |
+| `docs/development/plans/active/neural-kinect-viewer.md` | Feature plan: motivation, parallel work groups, dependency graph, architecture summary, speed improvement table, graceful-degradation table. |
+| `docs/development/plans/active/neural-kinect-viewer/01-foundation.md` | Detailed spec for `StickerVelocityCompass` (Group 1) and `FramePreloader` (Group 2). |
+| `docs/development/plans/active/neural-kinect-viewer/02-core.md` | Detailed spec for `NeuralDataPanel` (Group 3) and extraction of `define_custom_colors` (Group 4). |
+| `docs/development/plans/active/neural-kinect-viewer/03-integration.md` | Detailed spec for `NeuralKinectViewer` main class (Group 5) and `common/__init__.py` update (Group 6). |
+| `docs/development/plans/active/neural-kinect-viewer/04-entry-point.md` | Detailed spec for the entry-point script (Group 7) and full verification / testing checklist. |
 
 ---
 

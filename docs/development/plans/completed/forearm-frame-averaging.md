@@ -2,7 +2,7 @@
 
 **Date:** 2026-02-19
 **Author:** Claude (AI-assisted)
-**Status:** Draft
+**Status:** Completed
 **Branch:** `feature/forearm-frame-averaging`
 
 ---
@@ -339,7 +339,7 @@ video_mp4_manager.py
 
 ## Documentation Plan
 
-- [ ] Update `docs/plans/README.md` (create if absent) with this plan listed under Active
+- [ ] Update `docs/development/plans/README.md` (create if absent) with this plan listed under Active
 - [ ] Add changelog entry: `docs/changelogs/forearm-frame-averaging.md` when shipped
 - [ ] No CLAUDE.md changes needed (no new CuPy usage patterns introduced)
 - [ ] No new user guide needed; the GUI changes are self-explanatory with the mode labels
