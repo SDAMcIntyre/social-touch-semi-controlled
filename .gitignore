@@ -149,7 +149,7 @@ CLAUDE.md
 .claude/
 
 # project skeleton / guidelines reference (local only)
-/skeleton/
+/docs/skeleton/
 
 # pipeline reports folder
 reports/

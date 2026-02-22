@@ -489,4 +489,4 @@ If the implementation revealed important learnings:
 
 - [Commit Procedure](../git/commit-procedure.md) — Commit message conventions
 - [Git Workflow](../git/git-workflow.md) — Branch strategy
-- [skeleton/topics/04-planning-process.md](../../../../skeleton/topics/04-planning-process.md) — Full reference material
+- [skeleton/topics/04-planning-process.md](../skeleton/topics/04-planning-process.md) — Full reference material
