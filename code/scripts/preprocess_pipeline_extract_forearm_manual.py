@@ -135,17 +135,14 @@ def plan_frame_batch(
 
 def _build_output_stem(video_stem: str, params: ForearmParameters) -> str:
     """Returns a descriptive, zero-padded filename stem for a frame or frame group."""
-    if params.is_averaged:
-        lo, hi = min(params.frame_ids), max(params.frame_ids)
-        return f"{video_stem}_frames_{lo:04d}-{hi:04d}_avg_N{len(params.frame_ids)}"
-    return f"{video_stem}_frame_{params.frame_id:04d}"
+    return params.build_output_stem(video_stem)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 # COMPUTATION
 # ──────────────────────────────────────────────────────────────────────────────
 
-def execute_frame_batch(batch: FrameBatch) -> None:
+def execute_frame_batch(batch: FrameBatch, interactive: bool = True) -> None:
     """
     Runs the four processing steps for a single FrameBatch in sequence:
 
@@ -153,6 +150,13 @@ def execute_frame_batch(batch: FrameBatch) -> None:
         2. Clean    — remove noise and outliers
         3. Normals  — estimate surface normals on the cleaned cloud
         4. Mesh     — reconstruct a surface mesh from the oriented cloud
+
+    Args:
+        batch: All resolved input/output paths for this frame.
+        interactive: If True, opens the mesh visualization window after step 4.
+            The segmentation GUI (step 1) is always interactive so that HSV
+            parameters can be tuned. Set False in batch mode to suppress the
+            legacy GLFW mesh viewer and avoid spurious warnings at exit.
     """
     print(f"  🔎 [1/4] Extracting forearm  ({batch.depth_video.name}, {batch.description})")
     extract_forearm(
@@ -174,7 +178,7 @@ def execute_frame_batch(batch: FrameBatch) -> None:
     print(f"         → {batch.normals_ply.name}")
 
     print(f"  🕸️  [4/4] Building mesh")
-    define_forearm_mesh(source=batch.normals_ply, output_path=batch.mesh_obj, show=True)
+    define_forearm_mesh(source=batch.normals_ply, output_path=batch.mesh_obj, show=interactive)
     print(f"         → {batch.mesh_obj.name}\n")
 
 
@@ -202,7 +206,9 @@ def run_session(session_config: ForearmConfig, project_data_root: Path) -> None:
     frame_params_list = _annotate_forearm_roi(rgb_video_paths, metadata_path)
 
     batches = _plan_all_batches(frame_params_list, rgb_video_paths, pointclouds_dir)
-    _execute_all_batches(batches)
+    # Batch mode: disable mesh visualization (no interactive inspection needed)
+    # and avoid GLFW context corruption that causes spurious warnings at exit.
+    _execute_all_batches(batches, interactive=False)
 
 
 def _setup_output_directories(session_output_dir: Path) -> Path:
@@ -286,12 +292,20 @@ def _plan_all_batches(
     return batches
 
 
-def _execute_all_batches(batches: List[FrameBatch]) -> None:
-    """Executes each FrameBatch in sequence, catching and logging per-batch errors."""
+def _execute_all_batches(batches: List[FrameBatch], interactive: bool = True) -> None:
+    """
+    Executes each FrameBatch in sequence, catching and logging per-batch errors.
+
+    Args:
+        batches: List of planned FrameBatches to process.
+        interactive: Passed through to each batch; False (default) disables
+            mesh visualization windows, which prevents GLFW context corruption
+            and the spurious warnings it causes at script exit.
+    """
     for batch in batches:
         print(f"── {batch.depth_video.name}  |  {batch.description}")
         try:
-            execute_frame_batch(batch)
+            execute_frame_batch(batch, interactive=interactive)
         except Exception as exc:
             print(f"  ❌ Error processing {batch.description}: {exc}\n")
 

@@ -42,6 +42,17 @@ class ForearmParameters:
         """True when this capture was derived from more than one depth frame."""
         return len(self.frame_ids) > 1
 
+    def build_output_stem(self, video_stem: str) -> str:
+        """Returns the filename stem for outputs produced from this capture.
+
+        Single-frame:  {video_stem}_frame_{id:04d}
+        Averaged:      {video_stem}_frames_{lo:04d}-{hi:04d}_avg_N{count}
+        """
+        if self.is_averaged:
+            lo, hi = min(self.frame_ids), max(self.frame_ids)
+            return f"{video_stem}_frames_{lo:04d}-{hi:04d}_avg_N{len(self.frame_ids)}"
+        return f"{video_stem}_frame_{self.representative_frame_id:04d}"
+
 
 # Define a generic TypeVar bound to the base class
 T = TypeVar('T', bound=ForearmParameters)
