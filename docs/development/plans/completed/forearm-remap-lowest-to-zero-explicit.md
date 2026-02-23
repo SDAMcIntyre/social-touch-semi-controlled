@@ -1,7 +1,7 @@
 # Plan: Explicit `remap_lowest_to_zero` parameter in `get_forearms_with_fallback`
 
 **Date:** 2026-02-23
-**Status:** Shipped
+**Status:** Draft
 
 ---
 
