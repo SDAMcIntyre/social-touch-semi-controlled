@@ -226,6 +226,16 @@ Only use `--no-verify` for genuine emergencies and document why in the message.
 
 ---
 
+## Authorship
+
+All commits are authored by **Basil Duvernoy <basil.duvernoy@gmail.com>**.
+
+- **Never** add a `Co-Authored-By: Claude` (or any AI assistant) trailer to commit messages.
+- **Never** add a `Co-Authored-By:` line attributing GitHub Actions, bots, or any non-human entity unless explicitly requested.
+- Git operations (commits, branch creation, merges, pushes) must reflect only the human author.
+
+---
+
 ## Related Documentation
 
 - [Git Workflow](../git-workflow.md) — Branch strategy and protection
