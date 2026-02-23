@@ -66,7 +66,7 @@ def view_somatosensory_3d_scene(
     
     # Collect the forearms pointclouds for the specific video
     catalog = ForearmCatalog(forearm_params, forearm_pointcloud_dir)
-    forearms_dict = get_forearms_with_fallback(catalog, rgb_video_path)
+    forearms_dict = get_forearms_with_fallback(catalog, rgb_video_path, remap_lowest_to_zero=True)
 
     # 3. Load Hand Motion Data (Refactored to use HandMotionManager)
     try:

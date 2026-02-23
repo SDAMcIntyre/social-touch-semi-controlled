@@ -250,7 +250,7 @@ def view_xyz_stickers_on_depth_data(
         return None
     # Collect the forearms pointclouds for the specific video
     catalog = ForearmCatalog(forearm_params, forearm_pointcloud_dir)
-    forearms_dict = get_forearms_with_fallback(catalog, rgb_video_path)
+    forearms_dict = get_forearms_with_fallback(catalog, rgb_video_path, remap_lowest_to_zero=True)
 
     app = QApplication.instance() or QApplication(sys.argv)
     
