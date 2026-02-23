@@ -2,7 +2,7 @@
 
 **Date:** 2026-02-23
 **Author:** Basil Duvernoy
-**Status:** Draft
+**Status:** In Progress
 **Branch:** `feature/sticker-depth-edge-gradient-bias`
 
 ---
@@ -49,7 +49,11 @@ this effect.
 - [ ] New extractor registered as `ExtractorChoice.ELLIPSE_DEPTH` (`"ellipse_depth"`)
 - [ ] Extractor correctly falls back to single-pixel when ellipse columns are absent
 - [ ] Output CSV contains `z_std` and `n_depth_pixels` monitor columns
+- [ ] Output CSV contains `z_range_clipped` monitor column indicating when the
+      sticker-size guard fired
+- [ ] No frame produces a z-range > 10 mm in the output (guard fires and corrects it)
 - [ ] On a known edge-heavy recording, z-bias is visibly reduced vs. `centroid` extractor
+- [ ] `sticker_diameter_mm` can be overridden at instantiation without touching defaults
 - [ ] Existing `centroid` and `roi_centroid` extractors are unchanged
 
 ---
@@ -137,6 +141,20 @@ extraction identical to `CentroidPointCloudExtractor.get_xyz_from_point_cloud()`
 **Spread threshold**: Default 10 mm. This is ~2x the Kinect v2 depth noise at typical
 hand-distance ranges (0.5–1.0 m). Configurable via constructor parameter.
 
+**Sticker physical diameter**: The stickers used in all recordings have a known diameter
+of approximately **10 mm**. The ellipse fit will typically produce an ellipse *smaller*
+than the physical sticker due to detection noise and partial occlusion at the boundary.
+This physical size acts as a hard upper bound on legitimate depth variation within the
+sticker area: if the observed z-range within the ellipse mask exceeds this diameter,
+some sampled pixels must be capturing the background depth gradient rather than the
+sticker surface. In that case the aggregation must be refined to retain only the
+upper-Z (closest-to-camera, minimum-Z) values.
+
+A module-level constant `STICKER_DIAMETER_MM = 10.0` is introduced in the new extractor
+file and passed as a default argument to `EllipseDepthExtractor.__init__()`, keeping
+it easy to override per-instantiation without touching call sites that rely on the
+default.
+
 ---
 
 ## Implementation Plan
@@ -145,17 +163,17 @@ hand-distance ranges (0.5–1.0 m). Configurable via constructor parameter.
 **Goal:** Implement `EllipseDepthExtractor` with ellipse-mask depth sampling
 
 **Tasks:**
-- [ ] Task 1.1 — Create `xyz_extractor_ellipse_depth.py` with `EllipseDepthExtractor`
+- [x] Task 1.1 — Create `xyz_extractor_ellipse_depth.py` with `EllipseDepthExtractor`
       class implementing `XYZExtractorInterface`
-- [ ] Task 1.2 — Implement `_build_ellipse_mask()`: static method that returns a boolean
+- [x] Task 1.2 — Implement `_build_ellipse_mask()`: static method that returns a boolean
       2D array from ellipse centre, axes, and angle
-- [ ] Task 1.3 — Implement `_sample_depth_within_mask()`: extract z values from point
+- [x] Task 1.3 — Implement `_sample_depth_within_mask()`: extract z values from point
       cloud using the mask; return arrays of (x, y, z) for valid (non-zero) pixels
-- [ ] Task 1.4 — Implement `_aggregate_depth()`: homogeneity check + adaptive aggregation
+- [x] Task 1.4 — Implement `_aggregate_depth()`: homogeneity check + adaptive aggregation
       (median vs. shallow-cluster percentile); return (x_mm, y_mm, z_mm, z_std, n_pixels)
-- [ ] Task 1.5 — Implement `extract()`: orchestrate mask → sample → aggregate pipeline,
+- [x] Task 1.5 — Implement `extract()`: orchestrate mask → sample → aggregate pipeline,
       with fallback to single-pixel when ellipse unavailable
-- [ ] Task 1.6 — Implement `can_process()`, `should_process_row()`, `get_empty_result()`
+- [x] Task 1.6 — Implement `can_process()`, `should_process_row()`, `get_empty_result()`
       matching the interface contract
 
 **Files Modified:**
@@ -163,13 +181,53 @@ hand-distance ranges (0.5–1.0 m). Configurable via constructor parameter.
 
 **Dependencies:** None
 
+### Phase 3: Sticker-Size-Constrained Depth Validation
+**Goal:** Use the known 10 mm sticker diameter as a physical plausibility guard and
+refine depth estimation when the observed z-spread exceeds it
+
+**Context:**
+The sticker diameter (~10 mm) is a physical constant known before any processing begins.
+When the z-range across the ellipse mask exceeds this value, at least part of the sampled
+area is contaminated by the background depth ramp.  The fix is to discard those far
+pixels and keep only the upper-Z (nearest-to-camera) values — i.e. the lowest-Z subset,
+since Kinect Z increases with distance from the sensor.
+
+**Tasks:**
+- [x] Task 3.1 — Define `STICKER_DIAMETER_MM: float = 10.0` as a module-level constant
+      in `xyz_extractor_ellipse_depth.py`
+- [x] Task 3.2 — Add `sticker_diameter_mm: float = STICKER_DIAMETER_MM` parameter to
+      `EllipseDepthExtractor.__init__()`; store as `self._sticker_diameter_mm`
+- [x] Task 3.3 — In `_aggregate_depth()`, add a post-homogeneity-check step: compute
+      `z_range = z_max - z_min` for the current candidate z array; if
+      `z_range > self._sticker_diameter_mm`, override the chosen cluster with the upper-Z
+      (minimum-Z) subset — e.g., all z values ≤ `z_min + self._sticker_diameter_mm`
+- [x] Task 3.4 — Emit a boolean or float monitor column `z_range_clipped` (or include it
+      in existing monitor columns) so the caller can tell when the size-guard fired
+- [x] Task 3.5 — Update `get_empty_result()` and `extract()` to include the new monitor
+      column with the correct NaN / False default
+
+**Where the constant lives (design decision):**
+The first step is a module-level default (`STICKER_DIAMETER_MM = 10.0`) in the new
+extractor file, which is then wired in as the default constructor argument.  This avoids
+a global config dependency while still being easy to override at the call site (e.g.,
+when different sticker sizes are used in a future study).  A central config file can be
+considered once multiple classes need the same value.
+
+**Files Modified:**
+- `code/src/preprocessing/stickers_analysis/xyz/core/xyz_extractor_ellipse_depth.py`
+  — new constant, new constructor param, refined aggregation logic, new monitor field
+
+**Dependencies:** Phase 1
+
+---
+
 ### Phase 2: Factory Registration
 **Goal:** Make the new extractor selectable via the factory
 
 **Tasks:**
-- [ ] Task 2.1 — Add `ELLIPSE_DEPTH = "ellipse_depth"` to `ExtractorChoice` enum
-- [ ] Task 2.2 — Add registry entry mapping `ELLIPSE_DEPTH` → `EllipseDepthExtractor`
-- [ ] Task 2.3 — Update `__init__.py` exports to include `EllipseDepthExtractor`
+- [x] Task 2.1 — Add `ELLIPSE_DEPTH = "ellipse_depth"` to `ExtractorChoice` enum
+- [x] Task 2.2 — Add registry entry mapping `ELLIPSE_DEPTH` → `EllipseDepthExtractor`
+- [x] Task 2.3 — Update `__init__.py` exports to include `EllipseDepthExtractor`
 
 **Files Modified:**
 - `code/src/preprocessing/stickers_analysis/xyz/core/xyz_extractor_factory.py` — add enum
@@ -184,13 +242,13 @@ hand-distance ranges (0.5–1.0 m). Configurable via constructor parameter.
 ## Testing Plan
 
 ### Unit Tests
-- [ ] `_build_ellipse_mask()` returns correct mask shape and approximate pixel count for
+- [x] `_build_ellipse_mask()` returns correct mask shape and approximate pixel count for
       known ellipse parameters
-- [ ] `_aggregate_depth()` returns median z when all z values are within threshold
-- [ ] `_aggregate_depth()` returns shallow-cluster z when z values span a wide range
-- [ ] `extract()` falls back to single-pixel when ellipse columns are missing
-- [ ] `extract()` falls back to single-pixel when mask yields < 3 valid depth pixels
-- [ ] `get_empty_result()` returns NaN for all fields including z_std, n_depth_pixels
+- [x] `_aggregate_depth()` returns median z when all z values are within threshold
+- [x] `_aggregate_depth()` returns shallow-cluster z when z values span a wide range
+- [x] `extract()` falls back to single-pixel when ellipse columns are missing
+- [x] `extract()` falls back to single-pixel when mask yields < 3 valid depth pixels
+- [x] `get_empty_result()` returns NaN for all fields including z_std, n_depth_pixels
 
 ### Manual Verification
 - [ ] Run XYZ extraction on a known recording using `method="ellipse_depth"` and compare
@@ -200,11 +258,17 @@ hand-distance ranges (0.5–1.0 m). Configurable via constructor parameter.
 - [ ] Check that `z_std` column is populated and correlates with visually ambiguous frames
 
 ### Edge Cases
-- [ ] Ellipse entirely outside point cloud bounds → fallback to single-pixel
-- [ ] Very small ellipse (< 3 valid pixels) → fallback to single-pixel
-- [ ] All depth values within ellipse are zero (sensor dropout) → NaN result
-- [ ] `score` below threshold in consolidated tracks (ROI centre used, no ellipse) →
+- [x] Ellipse entirely outside point cloud bounds → fallback to single-pixel
+- [x] Very small ellipse (< 3 valid pixels) → fallback to single-pixel
+- [x] All depth values within ellipse are zero (sensor dropout) → NaN result
+- [x] `score` below threshold in consolidated tracks (ROI centre used, no ellipse) →
       fallback works correctly
+- [x] z-range within ellipse exceeds `sticker_diameter_mm` → size guard fires, upper-Z
+      subset selected, `z_range_clipped` is True in output
+- [x] z-range within ellipse is within `sticker_diameter_mm` → size guard does not fire,
+      `z_range_clipped` is False
+- [x] Custom `sticker_diameter_mm` passed at construction → guard uses the overridden
+      value instead of the module-level default
 
 ---
 
@@ -232,6 +296,8 @@ hand-distance ranges (0.5–1.0 m). Configurable via constructor parameter.
 | Percentile approach selects noise rather than surface | Low | Med | Use 25th percentile (not 10th) as default; make configurable |
 | Performance overhead of per-frame mask construction | Low | Low | Mask is tiny (~100-500 pixels); cv2.ellipse is fast |
 | Ellipse columns sometimes missing in old CSVs | Med | Low | Explicit column check with graceful fallback |
+| z-range guard too aggressive on curved hand surfaces | Low | Med | Guard uses known physical diameter (10 mm) as threshold; curved surfaces won't span more than the sticker itself |
+| Sticker sizes differ across studies | Low | Low | `sticker_diameter_mm` is a constructor parameter; different values can be passed per-study without changing defaults |
 
 ---
 

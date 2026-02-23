@@ -35,3 +35,7 @@ package-dir = {"" = "code/src"}
 [tool.setuptools.packages.find]
 # Instruct setuptools to scan the nested src folder
 where = ["code/src"]
+
+[tool.pytest.ini_options]
+testpaths = ["code/tests"]
+pythonpath = ["code/src"]
