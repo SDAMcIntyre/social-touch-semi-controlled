@@ -548,7 +548,7 @@ class NeuralKinectViewer(QMainWindow):
         forearm_params = ForearmFrameParametersFileHandler.load(forearm_metadata_path)
         catalog = ForearmCatalog(forearm_params, forearm_pointcloud_dir)
         # get_forearms_with_fallback expects a str filename (or Path converted to str)
-        self._forearms_dict = get_forearms_with_fallback(catalog, str(rgb_video_path))
+        self._forearms_dict = get_forearms_with_fallback(catalog, str(rgb_video_path), remap_lowest_to_zero=True)
         self._sorted_forearm_keys: List[int] = sorted(self._forearms_dict.keys())
 
         # ------------------------------------------------------------------

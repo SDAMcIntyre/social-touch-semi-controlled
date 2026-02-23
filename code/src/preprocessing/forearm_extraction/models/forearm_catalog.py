@@ -69,14 +69,16 @@ class ForearmCatalog:
     def _load_pointcloud(self, params: ForearmParameters) -> Optional[o3d.geometry.PointCloud]:
         """Loads a single point cloud, handling file existence and errors."""
         video_stem = Path(params.video_filename).stem
-        pointcloud_filename = f"{video_stem}_frame_{params.frame_id:04}_with_normals.ply"
+        stem = params.build_output_stem(video_stem)
+        pointcloud_filename = f"{stem}_with_normals.ply"
         path = self._pointcloud_dir / pointcloud_filename
         return PointCloudDataHandler.load(path)
 
     def _load_mesh(self, params: ForearmParameters) -> Optional[o3d.geometry.TriangleMesh]:
         """Loads a single mesh, handling file existence and errors."""
         video_stem = Path(params.video_filename).stem
-        mesh_filename = f"{video_stem}_frame_{params.frame_id:04}_mesh.obj"
+        stem = params.build_output_stem(video_stem)
+        mesh_filename = f"{stem}_mesh.obj"
         path = self._pointcloud_dir / mesh_filename
         
         if not path.exists():
@@ -197,10 +199,11 @@ class ForearmCatalog:
     
     
 def get_forearms_with_fallback(
-    catalog: ForearmCatalog, 
+    catalog: ForearmCatalog,
     current_video_filename: str,
     *,
-    use_mesh: bool = False
+    use_mesh: bool = False,
+    remap_lowest_to_zero: bool = False
 ) -> Dict[int, Union[o3d.geometry.PointCloud, o3d.geometry.TriangleMesh]]:
     """
     Gets forearm point clouds or meshes for a video, with intelligent fallback.
@@ -214,6 +217,9 @@ def get_forearms_with_fallback(
         catalog: An initialized ForearmCatalog instance.
         current_video_filename: The filename of the video to process.
         use_mesh: If True, loads '_mesh.obj' meshes. If False (default), loads point clouds.
+        remap_lowest_to_zero: If True, the lowest representative_frame_id key is remapped to 0
+            so the first forearm reference is active from frame 0 of the hand-motion sequence.
+            Defaults to False (keys are returned unchanged).
 
     Returns:
         A dictionary mapping frame IDs to open3d geometry objects.
@@ -240,11 +246,12 @@ def get_forearms_with_fallback(
             forearms = {frame_id: geometry}
 
     if forearms:
-        # Find the lowest key and rebuild the dict, replacing that key with 0.
-        min_key = min(forearms.keys())
-        forearms_adjusted = {0 if k == min_key else k: v for k, v in forearms.items()}
-        return forearms_adjusted
-    
+        if remap_lowest_to_zero:
+            # Find the lowest key and rebuild the dict, replacing that key with 0.
+            min_key = min(forearms.keys())
+            forearms = {0 if k == min_key else k: v for k, v in forearms.items()}
+        return forearms
+
     # 4. If nothing was found, return an empty dictionary.
     logging.warning(f"Could not find any data or suitable reference for '{current_video_filename}'.")
     return {}
