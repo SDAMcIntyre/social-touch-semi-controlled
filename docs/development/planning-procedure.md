@@ -4,34 +4,50 @@ This document describes the standard planning workflow and document structure fo
 
 ## Quick Start
 
-Creating a new plan:
-1. Create file in `docs/development/plans/active/[feature-name].md`
+### Capturing an idea
+
+1. Create file in `docs/development/plans/ideas/[idea-name].md`
+2. Use the [idea template](#idea-template) — keep it short
+3. No review required; ideas are informal captures
+
+### Creating a full plan
+
+1. Create file in `docs/development/plans/pending/[feature-name].md`
 2. Use the [planning template](#template)
 3. Complete all required sections
 4. Submit for review
-5. Begin implementation after approval
+5. Begin implementation after approval — then move plan to `active/`
 
 ---
 
 ## Planning Document Lifecycle
 
 ```
-Draft  →  Approved  →  In Progress  →  Completed  →  Archived
-  ↓         ↓            ↓               ↓            ↓
-Review    Ready to    Building      Shipped      Historical
-pending   build       feature       feature      reference
+Idea  →  Draft  →  Approved  →  In Progress  →  Completed  →  Archived
+  ↓        ↓          ↓              ↓               ↓             ↓
+ideas/  pending/   pending/       active/        completed/    archived/
 ```
+
+- **ideas/** — Lightweight captures. No phases, no testing plan. Just enough to not lose the thought.
+- **pending/** — Fully drafted plans that are approved and queued but not yet being worked on.
+- **active/** — Plans with an open branch and active commits. Only move here when work has started.
+- **completed/** — Plans for features that were shipped as designed. Canonical design records.
+- **archived/** — Plans that were superseded, abandoned, or substantially rewritten before completion.
 
 ### Directory Structure
 
 ```
 docs/development/plans/
-├── active/                            # Plans currently in progress
+├── ideas/                             # Lightweight idea captures
+│   └── idea-name.md
+├── pending/                           # Drafted/approved plans awaiting implementation
 │   ├── feature-name.md               # Primary plan document
 │   └── feature-name/                 # Optional: phase breakdowns
 │       ├── 01-foundation.md
 │       ├── 02-core.md
 │       └── 03-integration.md
+├── active/                            # Plans currently being implemented
+│   └── feature-name.md
 ├── completed/                         # Successfully shipped features
 │   └── [shipped feature plans]
 └── archived/                          # Old versions, superseded plans
@@ -46,6 +62,33 @@ docs/development/plans/
 - **`archived/`** — Plans that were **superseded, abandoned, or substantially
   rewritten** before completion. They preserve decision history (why an
   approach was rejected) but do not describe the current system.
+
+---
+
+## <a id="idea-template"></a>Idea Template
+
+Use this for quick captures — do not spend more than a few minutes on it:
+
+```markdown
+# Idea: [Short Title]
+
+**Date:** YYYY-MM-DD
+**Status:** Idea
+
+## Summary
+
+[1-3 sentences — what it is and why it matters]
+
+## Rough Approach
+
+[Optional: which area of code, high-level sketch of how it might work]
+
+## Notes
+
+[Constraints, prior art, related ideas, open questions]
+```
+
+To promote an idea to a full plan: create a new file in `pending/` using the full planning template below, then delete or archive the idea file.
 
 ---
 
@@ -404,7 +447,8 @@ Use this template when creating a new plan:
 
 ### Naming and Organization
 
-- **File naming:** `feature-name.md` in `docs/development/plans/active/` directory
+- **Ideas:** `idea-name.md` in `docs/development/plans/ideas/` directory
+- **Plans:** `feature-name.md` in `docs/development/plans/pending/` directory
 - **Branch naming:** `feature/[feature-name]` (use hyphens, lowercase)
 - **Phase breakdown:** Only use phase files if plan is large (3+ phases with significant detail)
 
