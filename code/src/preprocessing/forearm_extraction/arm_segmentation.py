@@ -34,6 +34,10 @@ class ArmSegmentation:
 
     The processing parameters are provided during initialization. An optional interactive
     mode allows for real-time parameter tuning and visualization at each step.
+
+    Skin-colour filtering uses a cyclic hue range (``hsv_h_range``) so that
+    wrap-around ranges spanning the 0°/360° boundary — e.g. ``[330, 30]`` for
+    pink/red hues — are fully supported without any special-casing by the caller.
     """
     # --- Default parameters for all processing steps ---
     _DEFAULT_PARAMS: Dict[str, Dict[str, Any]] = {
@@ -48,12 +52,13 @@ class ArmSegmentation:
         },
         'color_skin_filter': {
             'enabled': True,
-            'hsv_lower_bound': [0, 0, 0],   # H: 0-360, S: 0-1, V: 0-1
-            'hsv_upper_bound': [25, 1.0, 1.0]
+            'hsv_h_range': [0, 25],         # [H_start, H_end] degrees, cyclic (0-360)
+            'hsv_s_range': [0.0, 1.0],      # [S_low, S_high]
+            'hsv_v_range': [0.0, 1.0],      # [V_low, V_high]
         },
         'region_growing': {
             'dbscan_eps': 10.0,
-            'min_cluster_size': 100
+            'min_cluster_size': 50
         }
     }
 
@@ -72,16 +77,21 @@ class ArmSegmentation:
             'leaf_size': {'min': 0.5, 'max': 20.0, 'type': 'float'},
         },
         'color_skin_filter': {
-            'hsv_lower_bound': [
-                {'min': 0,   'max': 360, 'type': 'int',   'label': 'H'},
-                {'min': 0.0, 'max': 1.0, 'type': 'float', 'label': 'S'},
-                {'min': 0.0, 'max': 1.0, 'type': 'float', 'label': 'V'},
-            ],
-            'hsv_upper_bound': [
-                {'min': 0,   'max': 360, 'type': 'int',   'label': 'H'},
-                {'min': 0.0, 'max': 1.0, 'type': 'float', 'label': 'S'},
-                {'min': 0.0, 'max': 1.0, 'type': 'float', 'label': 'V'},
-            ],
+            'hsv_h_range': {'is_hue_circle': True},
+            'hsv_s_range': {
+                'is_range': True,
+                'cfgs': [
+                    {'min': 0.0, 'max': 1.0, 'type': 'float', 'label': 'S low'},
+                    {'min': 0.0, 'max': 1.0, 'type': 'float', 'label': 'S high'},
+                ],
+            },
+            'hsv_v_range': {
+                'is_range': True,
+                'cfgs': [
+                    {'min': 0.0, 'max': 1.0, 'type': 'float', 'label': 'V low'},
+                    {'min': 0.0, 'max': 1.0, 'type': 'float', 'label': 'V high'},
+                ],
+            },
         },
         'region_growing': {
             'dbscan_eps':       {'min': 1.0,  'max': 100.0, 'type': 'float'},
@@ -99,8 +109,17 @@ class ArmSegmentation:
         """
         # Start with a deep copy of the default parameters
         self.params = copy.deepcopy(self._DEFAULT_PARAMS)
-        # Recursively update with user-provided parameters
+        # Warn callers that pass the old flat-bound keys
         if params:
+            csf = params.get('color_skin_filter', {})
+            if 'hsv_lower_bound' in csf or 'hsv_upper_bound' in csf:
+                import warnings
+                warnings.warn(
+                    "ArmSegmentation: 'hsv_lower_bound' and 'hsv_upper_bound' were removed. "
+                    "Use 'hsv_h_range', 'hsv_s_range', and 'hsv_v_range' instead.",
+                    DeprecationWarning,
+                    stacklevel=2,
+                )
             deep_update(self.params, params)
 
         self.interactive = interactive
@@ -222,26 +241,41 @@ class ArmSegmentation:
         return pcd_all_clusters, arm_pcd
 
     def _apply_skin_color_filter(self, pcd: o3d.geometry.PointCloud, params: Dict) -> o3d.geometry.PointCloud:
-        """Applies an HSV-based color filter to isolate skin tones."""
+        """Applies an HSV-based color filter to isolate skin tones.
+
+        Reads hsv_h_range, hsv_s_range, and hsv_v_range from params.
+        Hue is handled cyclically so wrap-around ranges (e.g. [330, 30]) work correctly.
+        """
         points_color_rgb = np.asarray(pcd.colors)
         if points_color_rgb.shape[0] == 0:
             return o3d.geometry.PointCloud()
 
         hsv = np.array([colorsys.rgb_to_hsv(c[0], c[1], c[2]) for c in points_color_rgb])
+        hsv[:, 0] *= 360  # scale hue to 0-360 degrees
 
-        # scale hue to 0-360 for user-friendliness, but internal logic often uses 0-179 or 0-255
-        hsv[:, 0] *= 360
+        h_start, h_end = params['hsv_h_range']
+        s_lo,   s_hi   = params['hsv_s_range']
+        v_lo,   v_hi   = params['hsv_v_range']
 
-        lb, ub = params['hsv_lower_bound'], params['hsv_upper_bound']
-        mask = (hsv[:, 0] >= lb[0]) & (hsv[:, 0] <= ub[0]) & \
-               (hsv[:, 1] >= lb[1]) & (hsv[:, 1] <= ub[1]) & \
-               (hsv[:, 2] >= lb[2]) & (hsv[:, 2] <= ub[2])
+        mask = self._hue_in_range(hsv[:, 0], h_start, h_end) & \
+               (hsv[:, 1] >= s_lo) & (hsv[:, 1] <= s_hi) & \
+               (hsv[:, 2] >= v_lo) & (hsv[:, 2] <= v_hi)
 
         return pcd.select_by_index(np.where(mask)[0])
 
     # ------------------------------------------------------------------
     # Slider helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _hue_in_range(H: np.ndarray, h_start: float, h_end: float) -> np.ndarray:
+        """Returns a boolean mask: True where H (degrees, 0–360) falls within the
+        clockwise arc from h_start to h_end.  Handles wrap-around correctly, so
+        _hue_in_range(H, 330, 30) selects red hues that span the 0°/360° boundary."""
+        if h_start <= h_end:
+            return (H >= h_start) & (H <= h_end)
+        else:  # wrap-around (e.g. 330°–30° spans the red/pink end)
+            return (H >= h_start) | (H <= h_end)
 
     @staticmethod
     def _make_slider(cfg: dict, initial_value) -> 'gui.Slider':
@@ -254,6 +288,395 @@ class ArmSegmentation:
         else:
             s.double_value = float(initial_value)
         return s
+
+    @staticmethod
+    def _make_range_slider_row(
+            label_text: str,
+            lo_cfg: dict,
+            hi_cfg: dict,
+            lo_init,
+            hi_init,
+            em: float,
+    ) -> Tuple['gui.Widget', Callable[[], list]]:
+        """Creates a coupled lo/hi range control enforcing lo ≤ hi.
+
+        Builds a vertical group labelled *label_text* containing two paired-slider
+        rows.  Dragging lo above hi clamps hi upward; dragging hi below lo clamps
+        lo downward.  Direct text entry is similarly clamped.
+
+        Returns ``(container, get_range_fn)`` where
+        ``get_range_fn() -> [lo_value, hi_value]``.
+        """
+        type_str = lo_cfg.get('type', 'float')
+        lo_slider = ArmSegmentation._make_slider(lo_cfg, lo_init)
+        lo_text   = gui.NumberEdit(gui.NumberEdit.DOUBLE)
+        lo_text.double_value = float(lo_init)
+        lo_text.set_preferred_width(4 * em)
+
+        hi_slider = ArmSegmentation._make_slider(hi_cfg, hi_init)
+        hi_text   = gui.NumberEdit(gui.NumberEdit.DOUBLE)
+        hi_text.double_value = float(hi_init)
+        hi_text.set_preferred_width(4 * em)
+
+        syncing = [False]
+
+        def _get_lo_raw():
+            return lo_slider.int_value if type_str == 'int' else lo_slider.double_value
+
+        def _get_hi_raw():
+            return hi_slider.int_value if type_str == 'int' else hi_slider.double_value
+
+        def _set_lo(v):
+            if type_str == 'int':
+                lo_slider.int_value = int(round(v))
+            else:
+                lo_slider.double_value = v
+            lo_text.double_value = float(v)
+
+        def _set_hi(v):
+            if type_str == 'int':
+                hi_slider.int_value = int(round(v))
+            else:
+                hi_slider.double_value = v
+            hi_text.double_value = float(v)
+
+        def _on_lo_slider(new_v):
+            if syncing[0]:
+                return
+            syncing[0] = True
+            lo_text.double_value = float(int(round(new_v)) if type_str == 'int' else new_v)
+            if new_v > _get_hi_raw():
+                _set_hi(new_v)
+            syncing[0] = False
+
+        def _on_hi_slider(new_v):
+            if syncing[0]:
+                return
+            syncing[0] = True
+            hi_text.double_value = float(int(round(new_v)) if type_str == 'int' else new_v)
+            if new_v < _get_lo_raw():
+                _set_lo(new_v)
+            syncing[0] = False
+
+        def _on_lo_text(new_v):
+            if syncing[0]:
+                return
+            syncing[0] = True
+            clamped = max(lo_cfg['min'], min(lo_cfg['max'], new_v))
+            _set_lo(clamped)
+            if clamped > _get_hi_raw():
+                _set_hi(clamped)
+            syncing[0] = False
+
+        def _on_hi_text(new_v):
+            if syncing[0]:
+                return
+            syncing[0] = True
+            clamped = max(hi_cfg['min'], min(hi_cfg['max'], new_v))
+            _set_hi(clamped)
+            if clamped < _get_lo_raw():
+                _set_lo(clamped)
+            syncing[0] = False
+
+        lo_slider.set_on_value_changed(_on_lo_slider)
+        hi_slider.set_on_value_changed(_on_hi_slider)
+        lo_text.set_on_value_changed(_on_lo_text)
+        hi_text.set_on_value_changed(_on_hi_text)
+
+        lo_row = gui.Horiz(0.25 * em)
+        lo_row.add_child(gui.Label(f"  {lo_cfg.get('label', 'lo')}:"))
+        lo_row.add_child(lo_slider)
+        lo_row.add_child(lo_text)
+
+        hi_row = gui.Horiz(0.25 * em)
+        hi_row.add_child(gui.Label(f"  {hi_cfg.get('label', 'hi')}:"))
+        hi_row.add_child(hi_slider)
+        hi_row.add_child(hi_text)
+
+        container = gui.Vert(0.25 * em)
+        container.add_child(gui.Label(label_text))
+        container.add_child(lo_row)
+        container.add_child(hi_row)
+
+        def get_range() -> list:
+            lo = lo_slider.int_value if type_str == 'int' else lo_slider.double_value
+            hi = hi_slider.int_value if type_str == 'int' else hi_slider.double_value
+            return [lo, hi]
+
+        return container, get_range
+
+    @staticmethod
+    def _render_hue_wheel(size_px: int) -> np.ndarray:
+        """Renders a full hue wheel as an RGB uint8 image of *size_px* × *size_px* pixels.
+
+        Layout:
+        - Ring occupying radii [32 %, 48 %] × size_px, coloured HSV(h, 1, 1).
+        - Inner disc (r < 32 %) in dark grey — provides contrast for the handles.
+        - Exterior corners (r > 48 %) in black.
+
+        Hue 0° (red) is placed at the top (12 o'clock), increasing clockwise.
+        """
+        cx = cy = size_px / 2.0
+        ring_outer = size_px * 0.48
+        ring_inner = size_px * 0.32
+
+        ys, xs = np.mgrid[0:size_px, 0:size_px]
+        dx = (xs + 0.5) - cx
+        dy = (ys + 0.5) - cy
+        r = np.sqrt(dx * dx + dy * dy)
+
+        # Hue angle: atan2 with -dy gives standard-math angle (CCW, 0 = right).
+        # Subtracting from 90° flips to CW with 0° at top.
+        theta_deg = np.degrees(np.arctan2(-dy, dx))
+        hue_deg   = (90.0 - theta_deg) % 360.0
+        hue_norm  = hue_deg / 360.0
+
+        # Vectorised HSV(h, 1, 1) → RGB.
+        h6 = hue_norm * 6.0
+        i  = h6.astype(int) % 6
+        f  = h6 - np.floor(h6)
+        one  = np.ones_like(f)
+        zero = np.zeros_like(f)
+        R = np.select([i == 0, i == 1, i == 2, i == 3, i == 4, i == 5],
+                      [one,     1 - f,  zero,   zero,   f,      one])
+        G = np.select([i == 0, i == 1, i == 2, i == 3, i == 4, i == 5],
+                      [f,      one,    one,    1 - f,  zero,   zero])
+        B = np.select([i == 0, i == 1, i == 2, i == 3, i == 4, i == 5],
+                      [zero,   zero,   f,      one,    one,    1 - f])
+
+        ring_mask  = (r >= ring_inner) & (r <= ring_outer)
+        inner_mask = r < ring_inner
+
+        img = np.zeros((size_px, size_px, 3), dtype=np.uint8)
+        img[ring_mask,  0] = (R[ring_mask]  * 255).astype(np.uint8)
+        img[ring_mask,  1] = (G[ring_mask]  * 255).astype(np.uint8)
+        img[ring_mask,  2] = (B[ring_mask]  * 255).astype(np.uint8)
+        img[inner_mask]    = 45  # dark grey inner disc
+        return img
+
+    @staticmethod
+    def _render_hue_arc_overlay(
+            base_img: np.ndarray,
+            h_start: float,
+            h_end: float,
+            handle_radius: int = 8,
+    ) -> np.ndarray:
+        """Returns a copy of *base_img* (RGB uint8) with the selected arc at full
+        saturation and the rest of the ring darkened, plus two circular drag
+        handles drawn on the mid-ring track.
+
+        The selected arc is the clockwise arc from *h_start* to *h_end*; wrap-around
+        ranges (e.g. 330°–30°) are fully supported.
+        h_start handle → white fill; h_end handle → light-grey fill.
+        """
+        img = base_img.copy()
+        size_px = img.shape[0]
+        cx = cy = size_px / 2.0
+        ring_outer    = size_px * 0.48
+        ring_inner    = size_px * 0.32
+        handle_track_r = (ring_inner + ring_outer) / 2.0
+
+        ys, xs = np.mgrid[0:size_px, 0:size_px]
+        dx = (xs + 0.5) - cx
+        dy = (ys + 0.5) - cy
+        r  = np.sqrt(dx * dx + dy * dy)
+
+        theta_deg = np.degrees(np.arctan2(-dy, dx))
+        hue_deg   = (90.0 - theta_deg) % 360.0
+        ring_mask = (r >= ring_inner) & (r <= ring_outer)
+
+        if h_start <= h_end:
+            in_arc = ring_mask & (hue_deg >= h_start) & (hue_deg <= h_end)
+        else:  # wrap-around
+            in_arc = ring_mask & ((hue_deg >= h_start) | (hue_deg <= h_end))
+
+        # Darken out-of-arc ring pixels; the selected arc keeps its full HSV colours.
+        out_arc = ring_mask & ~in_arc
+        img[out_arc] = (img[out_arc].astype(np.float32) * 0.25).astype(np.uint8)
+
+        # Draw handles (h_start = white, h_end = light grey), both with black border.
+        for h_angle, fill_col in ((h_start, (255, 255, 255)), (h_end, (200, 200, 200))):
+            theta_rad = np.radians(90.0 - h_angle)
+            hx = cx + handle_track_r * np.cos(theta_rad)
+            hy = cy - handle_track_r * np.sin(theta_rad)
+            dist_sq     = (xs + 0.5 - hx) ** 2 + (ys + 0.5 - hy) ** 2
+            fill_mask   = dist_sq <= handle_radius ** 2
+            border_mask = (dist_sq > handle_radius ** 2) & \
+                          (dist_sq <= (handle_radius + 1.5) ** 2)
+            img[fill_mask]   = fill_col
+            img[border_mask] = (0, 0, 0)
+
+        return img
+
+    @staticmethod
+    def _make_hue_range_circle(
+            h_start_init: float,
+            h_end_init: float,
+            em: float,
+            renderer: 'rendering.Renderer',
+            size_px: int = 200,
+    ) -> Tuple[Dict[str, 'gui.Widget'], Callable[[], list]]:
+        """Creates a circular hue-range selector widget.
+
+        Displays a hue wheel with two drag handles — one for *h_start* (white)
+        and one for *h_end* (grey) — defining a clockwise arc.  Wrap-around
+        ranges (e.g. 330°–30°) are fully supported.  Two companion
+        ``NumberEdit`` boxes provide a precise text-entry alternative.
+
+        Implementation note: the wheel is rendered as a 2-D background image on
+        a ``SceneWidget`` (empty 3-D scene).  ``ImageWidget`` was not used
+        because it never delivers ``DRAG`` events in Open3D 0.19.
+        ``SceneWidget`` does deliver them; the 3-D camera is locked out by
+        returning ``HANDLED`` for every mouse event so it never receives input.
+
+        Returns ``(fragments_dict, get_hue_range_fn)`` where fragments_dict contains
+        the independent UI elements ("top", "scene", "bottom") so the caller can place
+        them in a split-panel layout, avoiding Open3D's nested auto-layout bugs.
+        ``fragments_dict["refresh"]`` is the ``_refresh`` closure; call it after any
+        layout change that resizes ``scene`` to re-apply the correct hue overlay.
+        """
+        state = {
+            'h_start':  float(h_start_init),
+            'h_end':    float(h_end_init),
+            'dragging': None,   # None | 'start' | 'end'
+        }
+
+        base_wheel   = ArmSegmentation._render_hue_wheel(size_px)
+        ring_outer_r = size_px * 0.48
+        ring_inner_r = size_px * 0.32
+        handle_r     = max(4, int(size_px * 0.040))
+        handle_tr    = (ring_inner_r + ring_outer_r) / 2.0
+        cx = cy      = size_px / 2.0
+
+        def _to_bg_image(rgb_arr: np.ndarray) -> 'o3d.geometry.Image':
+            rgba = np.dstack([rgb_arr, np.full(rgb_arr.shape[:2], 255, dtype=np.uint8)])
+            return o3d.geometry.Image(np.ascontiguousarray(rgba))
+
+        def _fresh_overlay() -> np.ndarray:
+            return ArmSegmentation._render_hue_arc_overlay(
+                base_wheel, state['h_start'], state['h_end'],
+                handle_radius=handle_r,
+            )
+
+        # SceneWidget with an empty 3-D scene — display is via set_background,
+        # which renders a flat 2-D quad unaffected by camera position.
+        scene_widget = gui.SceneWidget()
+        scene_widget.scene = rendering.Open3DScene(renderer)
+        scene_widget.enable_scene_caching(False)
+        scene_widget.scene.set_background([0, 0, 0, 1], _to_bg_image(_fresh_overlay()))
+
+        # --- Companion NumberEdit boxes ---
+        start_edit = gui.NumberEdit(gui.NumberEdit.DOUBLE)
+        start_edit.double_value = float(h_start_init)
+        end_edit   = gui.NumberEdit(gui.NumberEdit.DOUBLE)
+        end_edit.double_value   = float(h_end_init)
+
+        syncing = [False]
+
+        def _refresh() -> None:
+            scene_widget.scene.set_background([0, 0, 0, 1], _to_bg_image(_fresh_overlay()))
+
+        def _on_start_edit(v: float):
+            if syncing[0]:
+                return
+            syncing[0] = True
+            state['h_start'] = float(max(0.0, min(360.0, v)))
+            start_edit.double_value = state['h_start']
+            _refresh()
+            syncing[0] = False
+
+        def _on_end_edit(v: float):
+            if syncing[0]:
+                return
+            syncing[0] = True
+            state['h_end'] = float(max(0.0, min(360.0, v)))
+            end_edit.double_value = state['h_end']
+            _refresh()
+            syncing[0] = False
+
+        start_edit.set_on_value_changed(_on_start_edit)
+        end_edit.set_on_value_changed(_on_end_edit)
+
+        # --- Mouse handler ---
+        def _handle_image_pos(h_angle: float):
+            """Return (hx, hy) in image-space pixels for hue angle h_angle."""
+            theta_rad = np.radians(90.0 - h_angle)
+            return (cx + handle_tr * np.cos(theta_rad),
+                    cy - handle_tr * np.sin(theta_rad))
+
+        def _on_mouse(event):
+            fr = scene_widget.frame
+            px = event.x - fr.x
+            py = event.y - fr.y
+            fw, fh = fr.width, fr.height
+
+            if event.type == gui.MouseEvent.BUTTON_DOWN:
+                if fw > 0 and fh > 0:
+                    ix = px / fw * size_px
+                    iy = py / fh * size_px
+                    if 0 <= ix <= size_px and 0 <= iy <= size_px:
+                        hx_s, hy_s = _handle_image_pos(state['h_start'])
+                        hx_e, hy_e = _handle_image_pos(state['h_end'])
+                        d_start = (ix - hx_s) ** 2 + (iy - hy_s) ** 2
+                        d_end   = (ix - hx_e) ** 2 + (iy - hy_e) ** 2
+                        grab_r2 = (handle_r * 2.5) ** 2
+                        if d_start <= grab_r2 or d_end <= grab_r2:
+                            state['dragging'] = 'start' if d_start <= d_end else 'end'
+                # Re-apply background: clicking on a SceneWidget triggers an
+                # internal scene reset that clears the set_background image.
+                _refresh()
+                # Always HANDLED — the 3-D camera must never receive mouse input.
+                return gui.Widget.EventCallbackResult.HANDLED
+
+            if event.type in (gui.MouseEvent.DRAG, gui.MouseEvent.MOVE):
+                if state['dragging'] is not None and fw > 0 and fh > 0:
+                    ix = px / fw * size_px
+                    iy = py / fh * size_px
+                    ddx = ix - cx
+                    ddy = iy - cy
+                    if ddx * ddx + ddy * ddy >= 1.0:
+                        hue = (90.0 - np.degrees(np.arctan2(-ddy, ddx))) % 360.0
+                        if state['dragging'] == 'start':
+                            state['h_start'] = hue
+                            syncing[0] = True
+                            start_edit.double_value = round(hue, 1)
+                            syncing[0] = False
+                        else:
+                            state['h_end'] = hue
+                            syncing[0] = True
+                            end_edit.double_value = round(hue, 1)
+                            syncing[0] = False
+                        _refresh()
+                return gui.Widget.EventCallbackResult.HANDLED
+
+            if event.type == gui.MouseEvent.BUTTON_UP:
+                state['dragging'] = None
+                _refresh()
+                return gui.Widget.EventCallbackResult.HANDLED
+
+            # Catch scroll, right-drag, etc. — camera must not respond.
+            return gui.Widget.EventCallbackResult.HANDLED
+
+        scene_widget.set_on_mouse(_on_mouse)
+
+        # --- Layout ---
+        edit_row = gui.Horiz(0.25 * em)
+        edit_row.add_child(gui.Label(" H start:"))
+        edit_row.add_child(start_edit)
+        edit_row.add_child(gui.Label(" end:"))
+        edit_row.add_child(end_edit)
+
+        title_lbl = gui.Label("H range (drag handles, wrap-around supported):")
+
+        def get_hue_range() -> list:
+            return [state['h_start'], state['h_end']]
+
+        return {
+            "top": title_lbl,
+            "scene": scene_widget,
+            "bottom": edit_row,
+            "refresh": _refresh,
+        }, get_hue_range
 
     @staticmethod
     def _get_screen_size() -> Tuple[int, int]:
@@ -318,10 +741,17 @@ class ArmSegmentation:
         scene.scene.set_background([0.1, 0.2, 0.3, 1.0]) # Dark background
         w.add_child(scene)
 
-        # --- GUI Controls Layout ---
+        # --- GUI Controls Layout (Strategy C: Split Panel) ---
         em = w.theme.font_size
-        layout = gui.Vert(0.25 * em, gui.Margins(0.5 * em))
-        w.add_child(layout)
+        panel_top = gui.Vert(0.25 * em, gui.Margins(0.5 * em, 0.5 * em, 0.5 * em, 0.0))
+        panel_bottom = gui.Vert(0.25 * em, gui.Margins(0.5 * em, 0.0, 0.5 * em, 0.5 * em))
+        hue_scene_widget = None
+
+        current_panel = panel_top
+        
+        # Add the split panels directly to the window (hue_scene_widget added conditionally later)
+        w.add_child(panel_top)
+        w.add_child(panel_bottom)
 
         # --- Retrieve slider config for this step (may be empty) ---
         step_params = self.params[params_key]
@@ -392,7 +822,7 @@ class ArmSegmentation:
                 if key_cfg is not None:
                     # --- Slider ---
                     row, get_value = _make_paired_row(f"{key}:", key_cfg, value)
-                    layout.add_child(row)
+                    current_panel.add_child(row)
                     widgets[key] = (None, get_value)
                 else:
                     # --- Fallback: NumberEdit ---
@@ -402,34 +832,64 @@ class ArmSegmentation:
                     widget = gui.NumberEdit(gui.NumberEdit.DOUBLE)
                     widget.double_value = value
                     row.add_child(widget)
-                    layout.add_child(row)
+                    current_panel.add_child(row)
                     widgets[key] = (widget, lambda w=widget: w.double_value)
 
             elif isinstance(value, list) and all(isinstance(i, (float, int)) for i in value):
-                layout.add_child(gui.Label(f"{key}:"))
-                widgets[key] = []
+                # --- Circular hue range selector ---
+                if (key_cfg is not None and isinstance(key_cfg, dict)
+                        and key_cfg.get('is_hue_circle') and len(value) == 2):
+                    hue_elements, get_range = self._make_hue_range_circle(
+                        value[0], value[1], em=em, renderer=w.renderer
+                    )
+                    
+                    panel_top.add_child(hue_elements["top"])
+                    
+                    hue_scene_widget = hue_elements["scene"]
+                    hue_refresh_fn = hue_elements["refresh"]
+                    w.add_child(hue_scene_widget) # Added directly to window
 
-                for i, v in enumerate(value):
-                    if key_cfg is not None and isinstance(key_cfg, list) and i < len(key_cfg):
-                        item_cfg = key_cfg[i]
-                        component_label = item_cfg.get('label', str(i))
-                        row, get_value = _make_paired_row(f"  {component_label}:", item_cfg, v)
-                        layout.add_child(row)
-                        widgets[key].append((None, get_value))
-                    else:
-                        # --- Fallback: NumberEdit ---
-                        row = gui.Horiz(0.25 * em)
-                        row.add_child(gui.Label(f"  [{i}]"))
-                        row.add_stretch()
-                        widget = gui.NumberEdit(gui.NumberEdit.DOUBLE)
-                        widget.double_value = v
-                        row.add_child(widget)
-                        layout.add_child(row)
-                        widgets[key].append((widget, lambda w=widget: w.double_value))
+                    # Redirect any future components into the bottom panel
+                    current_panel = panel_bottom
+                    current_panel.add_child(hue_elements["bottom"])
+
+                    widgets[key] = (None, get_range)
+
+                # --- Coupled range slider (lo ≤ hi enforced) ---
+                elif (key_cfg is not None and isinstance(key_cfg, dict)
+                        and key_cfg.get('is_range') and len(value) == 2):
+                    cfgs = key_cfg['cfgs']
+                    container, get_range = self._make_range_slider_row(
+                        f"{key}:", cfgs[0], cfgs[1], value[0], value[1], em
+                    )
+                    current_panel.add_child(container)
+                    widgets[key] = (None, get_range)
+                else:
+                    # --- Individual sliders (or fallback NumberEdits) per element ---
+                    current_panel.add_child(gui.Label(f"{key}:"))
+                    widgets[key] = []
+
+                    for i, v in enumerate(value):
+                        if key_cfg is not None and isinstance(key_cfg, list) and i < len(key_cfg):
+                            item_cfg = key_cfg[i]
+                            component_label = item_cfg.get('label', str(i))
+                            row, get_value = _make_paired_row(f"  {component_label}:", item_cfg, v)
+                            current_panel.add_child(row)
+                            widgets[key].append((None, get_value))
+                        else:
+                            # --- Fallback: NumberEdit ---
+                            row = gui.Horiz(0.25 * em)
+                            row.add_child(gui.Label(f"  [{i}]"))
+                            row.add_stretch()
+                            widget = gui.NumberEdit(gui.NumberEdit.DOUBLE)
+                            widget.double_value = v
+                            row.add_child(widget)
+                            current_panel.add_child(row)
+                            widgets[key].append((widget, lambda w=widget: w.double_value))
 
         # --- HSV hover readout label (updated by on_hover) ---
         hsv_label = gui.Label("HSV: —")
-        layout.add_child(hsv_label)
+        current_panel.add_child(hsv_label)
 
         def on_process():
             """Callback to update parameters and re-run processing."""
@@ -534,7 +994,14 @@ class ArmSegmentation:
             actual_idx = int(np.where(visible)[0][best_local])
             rgb = pcd_colors[actual_idx]
             h, s, v = colorsys.rgb_to_hsv(float(rgb[0]), float(rgb[1]), float(rgb[2]))
-            hsv_label.text = f"H: {h * 360:.1f}°  S: {s:.3f}  V: {v:.3f}"
+            h_deg = h * 360.0
+            if params_key == 'color_skin_filter':
+                h_start, h_end = self.params['color_skin_filter']['hsv_h_range']
+                in_h = bool(self._hue_in_range(np.array([h_deg]), h_start, h_end)[0])
+                indicator = "\u2713" if in_h else "\u2717"
+                hsv_label.text = f"H: {h_deg:.1f}\u00b0 ({indicator})  S: {s:.3f}  V: {v:.3f}"
+            else:
+                hsv_label.text = f"H: {h_deg:.1f}\u00b0  S: {s:.3f}  V: {v:.3f}"
 
             return gui.Widget.EventCallbackResult.IGNORED
 
@@ -543,11 +1010,11 @@ class ArmSegmentation:
         # --- Add Buttons ---
         process_button = gui.Button("Process")
         process_button.set_on_clicked(on_process)
-        layout.add_child(process_button)
+        current_panel.add_child(process_button)
 
         continue_button = gui.Button("Continue")
         continue_button.set_on_clicked(gui.Application.instance.quit)
-        layout.add_child(continue_button)
+        current_panel.add_child(continue_button)
 
         # --- Space-bar shortcut → Process ---
         def on_key(key_event):
@@ -558,16 +1025,52 @@ class ArmSegmentation:
             return gui.Widget.EventCallbackResult.IGNORED
 
         scene.set_on_key(on_key)
-        layout.set_on_key(on_key)   # also fires when a panel widget has focus
 
         # --- Set window layout and run ---
-        # The right-hand panel always occupies exactly 1/5 of the window width.
-        # The 3D scene fills the remaining 4/5.
         def on_layout(layout_context):
             r = w.content_rect
             panel_w = max(1, r.width // 5)
-            scene.frame = gui.Rect(r.x, r.y, r.width - panel_w, r.height)
-            layout.frame = gui.Rect(r.get_right() - panel_w, r.y, panel_w, r.height)
+            scene_w = r.width - panel_w
+            px = r.get_right() - panel_w
+            
+            scene.frame = gui.Rect(r.x, r.y, scene_w, r.height)
+
+            if hue_scene_widget is not None:
+                # 1. Top Panel
+                try:
+                    top_pref = panel_top.calc_preferred_size(layout_context, gui.Widget.Constraints())
+                    top_h = top_pref.height
+                except Exception:
+                    top_h = int(3.5 * em)
+                    
+                panel_top.frame = gui.Rect(px, r.y, panel_w, top_h)
+
+                # 2. Hue Circle (Perfect Square)
+                avail_h = max(10, r.height - top_h)
+                bottom_min_h = int(10 * em) # Reserve space for bottom sliders/buttons
+                max_sq = max(10, avail_h - bottom_min_h)
+                
+                sq = min(panel_w, max_sq)
+                x_offset = px + (panel_w - sq) // 2
+                
+                hue_scene_widget.frame = gui.Rect(x_offset, r.y + top_h, sq, sq)
+
+                # 3. Bottom Panel
+                bottom_y = r.y + top_h + sq
+                panel_bottom.frame = gui.Rect(px, bottom_y, panel_w, max(1, r.height - bottom_y))
+
+                hue_refresh_fn()
+            else:
+                # Fallback to standard layout if no hue circle is rendered for this step
+                try:
+                    top_pref = panel_top.calc_preferred_size(layout_context, gui.Widget.Constraints())
+                    top_h = top_pref.height
+                except Exception:
+                    top_h = r.height // 2
+                
+                panel_top.frame = gui.Rect(px, r.y, panel_w, r.height)
+                # Bottom panel stays at 0-size so it doesn't conflict
+                panel_bottom.frame = gui.Rect(px, r.y, 0, 0)
 
         w.set_on_layout(on_layout)
 
@@ -603,12 +1106,12 @@ if __name__ == '__main__':
             'leaf_size': 2.5  # Override default leaf size
         },
         'color_skin_filter': {
-            # Widen the hue range slightly
-            'hsv_upper_bound': [35, 255, 255]
+            # Widen the hue range slightly (H 0°–35°, full S/V range)
+            'hsv_h_range': [0, 35],
         },
         'region_growing': { # Changed from 'clustering' to match internal key
             'dbscan_eps': 6.0,
-            'min_cluster_size': 150
+            'min_cluster_size': 50
         }
     }
 
