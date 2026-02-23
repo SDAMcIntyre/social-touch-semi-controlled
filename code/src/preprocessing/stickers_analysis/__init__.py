@@ -42,7 +42,8 @@ from .common.gui.consolidated_tracks_gui import ConsolidatedTracksReviewGUI
 from .xyz.models.xyz_metadata_model import XYZMetadataModel
 from .xyz.data_access.xyz_metadata_filehandler import XYZMetadataFileHandler
 from .xyz.data_access.xyz_data_filehandler import XYZDataFileHandler
-from .xyz.core.xyz_extractor_factory import XYZExtractorFactory
+from .xyz.core.xyz_extractor_factory import XYZExtractorFactory, ExtractorChoice
+from .xyz.core.xyz_extractor_ellipse_depth import EllipseDepthExtractor
 from .xyz.core.xyz_extracting_orchestrator import XYZStickerOrchestrator
 
 from .common.models.tracked_data_interface import TrackedDataInterface

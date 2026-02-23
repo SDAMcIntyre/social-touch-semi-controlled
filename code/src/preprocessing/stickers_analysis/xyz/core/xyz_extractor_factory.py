@@ -5,6 +5,7 @@ from .xyz_extractor_interface import XYZExtractorInterface
 
 from .xyz_extractor_centroid import CentroidPointCloudExtractor
 from .xyz_extractor_roi_centroid import ROICentroidPointCloudExtractor
+from .xyz_extractor_ellipse_depth import EllipseDepthExtractor
 
 
 class ExtractorChoice(Enum):
@@ -12,8 +13,7 @@ class ExtractorChoice(Enum):
 
     CENTROID_3D = "centroid"
     ROI_CENTROID_3D = "roi_centroid"
-    # To add a new extractor, first add its key here.
-    # e.g., SKELETAL_POSE = "skeletal_pose"
+    ELLIPSE_DEPTH = "ellipse_depth"
 
     def __str__(self):
         return self.value
@@ -27,7 +27,7 @@ class XYZExtractorFactory:
     _EXTRACTOR_REGISTRY: dict[ExtractorChoice, Type[XYZExtractorInterface]] = {
         ExtractorChoice.CENTROID_3D: CentroidPointCloudExtractor,
         ExtractorChoice.ROI_CENTROID_3D: ROICentroidPointCloudExtractor,
-        # Add mappings for new extractors here.
+        ExtractorChoice.ELLIPSE_DEPTH: EllipseDepthExtractor,
     }
 
     @staticmethod
