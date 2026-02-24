@@ -47,7 +47,7 @@ tasks:
   generate_xyz_stickers:
     enabled: true
     options:
-      force_processing: false
+      force_processing: true
     depends_on: [refine_sticker_features]
 
   # ---------------------------------------------------------------------------
@@ -70,7 +70,6 @@ tasks:
   # STAGE 4: Feature Extraction
   # Hands, touch characteristic analysis, and derived 3D motion.
   # ---------------------------------------------------------------------------
-  
   # --- Hand Model Tracking ---
   track_hands_model:
     enabled: true
@@ -103,7 +102,8 @@ tasks:
     options:
       force_processing: false
     # Requires 3D motion, trial context, and stimuli metadata
-    depends_on: [generate_3d_hand_in_motion, define_trial_id, generate_stimuli_metadata]
+    depends_on: [generate_3d_hand_in_motion, define_trial_id, 
+        generate_stimuli_metadata]
 
   # ---------------------------------------------------------------------------
   # STAGE 5: Final Unification
@@ -113,9 +113,9 @@ tasks:
     options:
       force_processing: false
     # Aggregates all processed streams into the final dataset.
-    depends_on: 
-      - compute_somatosensory_characteristics  # Contact Data
-      - track_led_blinking                     # LED Signal
-      - define_trial_id                        # Trial Definitions
-      - find_single_touches                    # Single Touch Definition
-      - generate_stimuli_metadata              # Metadata
+    depends_on:
+    - compute_somatosensory_characteristics    # Contact Data
+    - track_led_blinking                       # LED Signal
+    - define_trial_id                          # Trial Definitions
+    - find_single_touches                      # Single Touch Definition
+    - generate_stimuli_metadata                # Metadata

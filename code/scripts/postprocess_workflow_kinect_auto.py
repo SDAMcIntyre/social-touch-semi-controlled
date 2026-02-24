@@ -234,7 +234,11 @@ def run_batch_postprocessing(
     Loads all block configurations, groups them by session_id, and triggers postprocessing per session.
     """
     # 1. Load Configs
+    dag_handler_template = DagConfigHandler(dag_config_path)
     block_files = get_block_files(kinect_configs_dir)
+    exclude_files = set(dag_handler_template.get_parameter('exclude_files', []) or [])
+    if exclude_files:
+        block_files = [f for f in block_files if f.name not in exclude_files]
     if not block_files:
         logging.warning(f"No config files found in {kinect_configs_dir}")
         return

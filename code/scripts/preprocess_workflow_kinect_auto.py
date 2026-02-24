@@ -560,7 +560,10 @@ def run_batch_processing(
 ):
     dag_handler_template = DagConfigHandler(dag_config_path)
     block_files = get_block_files(kinect_configs_dir)
-    
+    exclude_files = set(dag_handler_template.get_parameter('exclude_files', []) or [])
+    if exclude_files:
+        block_files = [f for f in block_files if f.name not in exclude_files]
+
     mode = "PARALLEL" if parallel else "SEQUENTIAL"
     logging.info(f"🚀 Starting batch processing for {len(block_files)} sessions in {mode} mode.")
 

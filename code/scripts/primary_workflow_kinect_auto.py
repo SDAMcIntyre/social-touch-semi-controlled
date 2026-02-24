@@ -126,7 +126,10 @@ def run_batch_primary(
 ):
     dag_template = DagConfigHandler(dag_config_path)
     block_files = get_block_files(kinect_configs_dir)
-    
+    exclude_files = set(dag_template.get_parameter('exclude_files', []) or [])
+    if exclude_files:
+        block_files = [f for f in block_files if f.name not in exclude_files]
+
     submitted_runs = []
     for block_file in block_files:
         config_data = KinectConfigFileHandler.load_and_resolve_config(block_file)

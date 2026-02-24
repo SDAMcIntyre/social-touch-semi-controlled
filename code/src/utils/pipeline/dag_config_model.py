@@ -1,0 +1,170 @@
+"""Round-trip YAML model for GUI editing of DAG configuration files.
+
+Uses ruamel.yaml to preserve comments, ordering, and formatting when
+loading, modifying, and saving DAG workflow YAML files.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any, Literal
+
+from ruamel.yaml import YAML
+
+
+class DagConfigModel:
+    """In-memory representation of a DAG YAML config with round-trip fidelity.
+
+    Unlike :class:`DagConfigHandler` (which uses ``yaml.safe_load`` and
+    discards comments), this class uses ``ruamel.yaml`` in round-trip mode
+    so that save → reload cycles preserve section headers, inline comments,
+    and key ordering.
+    """
+
+    def __init__(self, config_path: Path) -> None:
+        self._path = config_path
+        self._yaml = YAML()
+        self._yaml.preserve_quotes = True
+        with open(config_path, "r") as fh:
+            self._data = self._yaml.load(fh)
+        self._dirty = False
+
+    # ------------------------------------------------------------------
+    # Properties
+    # ------------------------------------------------------------------
+
+    @property
+    def path(self) -> Path:
+        return self._path
+
+    @property
+    def dirty(self) -> bool:
+        return self._dirty
+
+    # ------------------------------------------------------------------
+    # Parameters — kinect directories
+    # ------------------------------------------------------------------
+
+    def get_kinect_dir_mode(self) -> Literal["single", "multi", "none"]:
+        """Detect whether the YAML uses the singular or plural directory key."""
+        params = self._data.get("parameters", {}) or {}
+        if "kinect_configs_directories" in params:
+            return "multi"
+        if "kinect_configs_directory" in params:
+            return "single"
+        return "none"
+
+    def get_kinect_directories(self) -> list[str]:
+        """Return the configured kinect config directories as a list."""
+        params = self._data.get("parameters", {}) or {}
+        mode = self.get_kinect_dir_mode()
+        if mode == "multi":
+            val = params.get("kinect_configs_directories", [])
+            return list(val) if val else []
+        if mode == "single":
+            val = params.get("kinect_configs_directory", "")
+            return [val] if val else []
+        return []
+
+    def set_kinect_directories(self, dirs: list[str]) -> None:
+        """Update the kinect directory parameter(s), respecting the existing key."""
+        params = self._data.get("parameters", {}) or {}
+        mode = self.get_kinect_dir_mode()
+        if mode == "multi":
+            params["kinect_configs_directories"] = dirs
+        elif mode == "single":
+            params["kinect_configs_directory"] = dirs[0] if dirs else ""
+        self._dirty = True
+
+    # ------------------------------------------------------------------
+    # Parameters — exclude files
+    # ------------------------------------------------------------------
+
+    def get_exclude_files(self) -> list[str]:
+        params = self._data.get("parameters", {}) or {}
+        return list(params.get("exclude_files", []) or [])
+
+    def set_exclude_files(self, filenames: list[str]) -> None:
+        params = self._data.get("parameters")
+        if params is None:
+            return
+        if filenames:
+            params["exclude_files"] = filenames
+        else:
+            # Remove the key entirely when the list is empty
+            params.pop("exclude_files", None)
+        self._dirty = True
+
+    # ------------------------------------------------------------------
+    # Parameters — generic
+    # ------------------------------------------------------------------
+
+    def get_parameter(self, name: str, default: Any = None) -> Any:
+        params = self._data.get("parameters", {}) or {}
+        return params.get(name, default)
+
+    # ------------------------------------------------------------------
+    # Tasks
+    # ------------------------------------------------------------------
+
+    def get_task_names(self) -> list[str]:
+        """Return task names in YAML-defined order."""
+        tasks = self._data.get("tasks", {}) or {}
+        return list(tasks.keys())
+
+    def _get_task(self, task_name: str) -> dict:
+        tasks = self._data.get("tasks", {}) or {}
+        task = tasks.get(task_name)
+        if task is None:
+            raise KeyError(f"Task '{task_name}' not found in config")
+        return task
+
+    def is_task_enabled(self, task_name: str) -> bool:
+        return bool(self._get_task(task_name).get("enabled", False))
+
+    def set_task_enabled(self, task_name: str, enabled: bool) -> None:
+        self._get_task(task_name)["enabled"] = enabled
+        self._dirty = True
+
+    def get_task_options(self, task_name: str) -> dict[str, Any]:
+        return dict(self._get_task(task_name).get("options", {}) or {})
+
+    def get_task_option(self, task_name: str, option: str) -> Any:
+        opts = self._get_task(task_name).get("options", {}) or {}
+        return opts.get(option)
+
+    def set_task_option(self, task_name: str, option: str, value: Any) -> None:
+        task = self._get_task(task_name)
+        if "options" not in task or task["options"] is None:
+            task["options"] = {}
+        task["options"][option] = value
+        self._dirty = True
+
+    def get_task_dependencies(self, task_name: str) -> list[str]:
+        deps = self._get_task(task_name).get("depends_on", [])
+        return list(deps) if deps else []
+
+    def get_task_description(self, task_name: str) -> str | None:
+        return self._get_task(task_name).get("description")
+
+    # ------------------------------------------------------------------
+    # Persistence
+    # ------------------------------------------------------------------
+
+    def save(self) -> None:
+        """Write back to the original file, preserving comments."""
+        self.save_as(self._path)
+        self._dirty = False
+
+    def save_as(self, path: Path) -> None:
+        """Write the current state to *path*."""
+        with open(path, "w") as fh:
+            self._yaml.dump(self._data, fh)
+        if path == self._path:
+            self._dirty = False
+
+    def reload(self) -> None:
+        """Re-read the file from disk, discarding in-memory changes."""
+        with open(self._path, "r") as fh:
+            self._data = self._yaml.load(fh)
+        self._dirty = False

@@ -185,21 +185,24 @@ def _collect_unified_files(input_items: List[Tuple[Path, Path]]) -> List[Path]:
 # --- Batch Processing Logic (Main) ---
 
 def collect_unique_session_dirs(
-    config_dir_names: List[str], 
-    root_configs_path: Path, 
-    project_data_root: Path
+    config_dir_names: List[str],
+    root_configs_path: Path,
+    project_data_root: Path,
+    exclude_files: set | None = None,
 ) -> Dict[Path, Path]:
     session_dir_map = {}
     total_files_scanned = 0
 
     for dir_name in config_dir_names:
         full_config_dir = root_configs_path / dir_name
-        
+
         if not full_config_dir.exists():
             logging.warning(f"Config directory not found: {full_config_dir}")
             continue
-            
+
         block_files = get_block_files(full_config_dir)
+        if exclude_files:
+            block_files = [f for f in block_files if f.name not in exclude_files]
         logging.info(f"Scanning {len(block_files)} files in {dir_name}...")
         
         for block_file in block_files:
@@ -226,10 +229,12 @@ def run_batch_analysis(
     dag_handler: DagConfigHandler,
     report_file_path: Path
 ):
+    exclude_files = set(dag_handler.get_parameter('exclude_files', []) or [])
     session_map = collect_unique_session_dirs(
-        kinect_config_dirs, 
-        configs_root_path, 
-        project_data_root
+        kinect_config_dirs,
+        configs_root_path,
+        project_data_root,
+        exclude_files=exclude_files or None,
     )
 
     if not session_map:

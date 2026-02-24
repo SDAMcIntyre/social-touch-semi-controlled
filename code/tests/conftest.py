@@ -38,3 +38,11 @@ def _stub_package(dotted: str) -> None:
 # Stub the one heavyweight package root whose __init__.py pulls in
 # pyk4a / open3d / PyQt5 and other SDK dependencies.
 _stub_package("preprocessing.stickers_analysis")
+
+# utils/__init__.py eagerly imports PipelineMonitor, DagConfigHandler,
+# TaskExecutor, and signal-processing helpers that pull in openpyxl,
+# PyYAML, and other optional deps.  Stub the root so individual modules
+# (e.g. utils.pipeline.dag_config_model) can still be imported directly.
+_stub_package("utils")
+_stub_package("utils.pipeline")
+_stub_package("utils.pipeline.monitoring")
