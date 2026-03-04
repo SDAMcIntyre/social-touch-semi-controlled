@@ -126,15 +126,24 @@ class KinectDirectorySelector(QWidget):
 
         kind = item.data(0, Qt.UserRole + 1)
 
-        # In single-select mode, uncheck other directories
         if kind == "dir" and self._model:
+            self._populating = True
+
+            # Propagate parent check state to all children
+            new_state = item.checkState(0)
+            for i in range(item.childCount()):
+                item.child(i).setCheckState(0, new_state)
+
+            # In single-select mode, uncheck other directories (and their children)
             mode = self._model.get_kinect_dir_mode()
-            if mode == "single" and item.checkState(0) == Qt.Checked:
-                self._populating = True
+            if mode == "single" and new_state == Qt.Checked:
                 for i in range(self._tree.topLevelItemCount()):
                     other = self._tree.topLevelItem(i)
                     if other is not item:
                         other.setCheckState(0, Qt.Unchecked)
-                self._populating = False
+                        for j in range(other.childCount()):
+                            other.child(j).setCheckState(0, Qt.Unchecked)
+
+            self._populating = False
 
         self.selection_changed.emit()
