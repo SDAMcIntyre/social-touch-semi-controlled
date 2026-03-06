@@ -8,7 +8,7 @@ from typing import Optional
 # Imports from the provided file structure
 from preprocessing.common import (
     VideoMP4Manager,
-    FrameROISquare
+    FrameROIRotatable
 )
 
 from preprocessing.forearm_extraction import (
@@ -133,6 +133,27 @@ def _log_selected_groups(selected_groups: dict) -> None:
 # ROI SELECTION (STEP 2)
 # ----------------------------------------------------------------------------
 
+def _find_existing_params_for_group(
+    parameters_list: list[ForearmParameters],
+    video_filename: str,
+    representative_frame_id: int,
+) -> Optional[ForearmParameters]:
+    """
+    Searches a list of saved ForearmParameters for an entry matching the given
+    video filename and representative frame id.
+
+    Returns the matching ForearmParameters, or None if not found.
+    """
+    return next(
+        (
+            p for p in parameters_list
+            if p.video_filename == video_filename
+            and p.representative_frame_id == representative_frame_id
+        ),
+        None,
+    )
+
+
 def _find_existing_roi_for_group(
     parameters_list: list[ForearmParameters],
     video_filename: str,
@@ -142,18 +163,12 @@ def _find_existing_roi_for_group(
     Searches a list of saved ForearmParameters for a previously defined ROI
     that matches the given video and representative frame.
 
-    Returns a ``predefined_roi`` dict compatible with FrameROISquare, or None
+    Returns a ``predefined_roi`` dict compatible with FrameROIRotatable, or None
     if no match is found.
     """
-    matching = next(
-        (
-            p for p in parameters_list
-            if p.video_filename == video_filename
-            and p.representative_frame_id == representative_frame_id
-        ),
-        None,
+    matching = _find_existing_params_for_group(
+        parameters_list, video_filename, representative_frame_id
     )
-
     if matching is None:
         return None
 
@@ -163,6 +178,7 @@ def _find_existing_roi_for_group(
         "y": roi.top_left_corner.y,
         "width":  roi.bottom_right_corner.x - roi.top_left_corner.x,
         "height": roi.bottom_right_corner.y - roi.top_left_corner.y,
+        "angle_deg": roi.angle_deg,
     }
 
 
@@ -195,11 +211,11 @@ def _select_roi_for_group(
         predefined_roi: Optional prior ROI to pre-draw in the UI.
 
     Returns:
-        A dict with keys ``x``, ``y``, ``width``, ``height``, or None if the
-        user cancelled the selection.
+        A dict with keys ``cx``, ``cy``, ``width``, ``height``, ``angle_deg``,
+        or None if the user cancelled the selection.
     """
     window_title = _build_roi_window_title(video_filename, representative, group_size)
-    roi_ui = FrameROISquare(
+    roi_ui = FrameROIRotatable(
         frame,
         is_rgb=True,
         window_title=window_title,
@@ -219,11 +235,32 @@ def _build_forearm_parameters(
 ) -> ForearmParameters:
     """
     Constructs a ForearmParameters object from raw ROI data and video metadata.
+
+    ``roi_data`` is the centre-based dict returned by FrameROIRotatable:
+    ``{cx, cy, width, height, angle_deg}``.  The axis-aligned bounding box of
+    the rotated rectangle is stored in the RegionOfInterest so that downstream
+    extraction code (box filter) receives a conservative crop that always
+    contains the full rotated selection.
     """
-    x, y, w, h = roi_data["x"], roi_data["y"], roi_data["width"], roi_data["height"]
+    cx, cy = roi_data["cx"], roi_data["cy"]
+    w, h   = roi_data["width"], roi_data["height"]
+    angle  = roi_data["angle_deg"]
+
+    # Compute the four corners of the rotated rectangle and take the AABB.
+    a = np.deg2rad(angle)
+    cos_a, sin_a = np.cos(a), np.sin(a)
+    hw, hh = w / 2.0, h / 2.0
+    local_corners = np.array([[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]])
+    rot = np.array([[cos_a, -sin_a], [sin_a, cos_a]])
+    corners = (rot @ local_corners.T).T + np.array([cx, cy])
+
+    x1, y1 = int(corners[:, 0].min()), int(corners[:, 1].min())
+    x2, y2 = int(corners[:, 0].max()), int(corners[:, 1].max())
+
     roi = RegionOfInterest(
-        top_left_corner=Point(x=x, y=y),
-        bottom_right_corner=Point(x=x + w, y=y + h),
+        top_left_corner=Point(x=x1, y=y1),
+        bottom_right_corner=Point(x=x2, y=y2),
+        angle_deg=angle,
     )
     return ForearmParameters(
         video_filename=video_filename,
@@ -243,6 +280,7 @@ def _collect_parameters_for_video(
     groups: list[list[int]],
     representatives: list[int],
     saved_parameters: Optional[list[ForearmParameters]],
+    force_processing: bool = False,
 ) -> list[ForearmParameters]:
     """
     Iterates over each frame group for a single video and collects the user's
@@ -284,6 +322,16 @@ def _collect_parameters_for_video(
         )
         print(f"  - Group {i + 1}: {group_label}")
 
+        existing_params = (
+            _find_existing_params_for_group(saved_parameters, video_filename, representative)
+            if saved_parameters else None
+        )
+
+        if existing_params is not None and not force_processing:
+            print(f"    ✅ ROI already defined for group {i + 1} — using saved parameters.")
+            collected.append(existing_params)
+            continue
+
         predefined_roi = (
             _find_existing_roi_for_group(saved_parameters, video_filename, representative)
             if saved_parameters else None
@@ -296,8 +344,10 @@ def _collect_parameters_for_video(
             print(f"    🟡 ROI selection cancelled — skipping group {i + 1}.")
             continue
 
-        x, y, w, h = roi_data["x"], roi_data["y"], roi_data["width"], roi_data["height"]
-        print(f"    ✅ ROI at (x={x}, y={y}), size (w={w}, h={h}).")
+        cx, cy = roi_data["cx"], roi_data["cy"]
+        w, h   = roi_data["width"], roi_data["height"]
+        angle  = roi_data["angle_deg"]
+        print(f"    ✅ ROI at (cx={cx:.0f}, cy={cy:.0f}), size (w={w:.0f}, h={h:.0f}), angle={angle:.1f}°.")
 
         params = _build_forearm_parameters(
             roi_data, video_filename, group, representative, video_manager, fourcc_str
@@ -310,6 +360,7 @@ def _collect_parameters_for_video(
 def _collect_all_parameters(
     selected_groups: dict,
     saved_parameters: Optional[list[ForearmParameters]],
+    force_processing: bool = False,
 ) -> list[ForearmParameters]:
     """
     Iterates over every video and group returned by the frame selector and
@@ -332,6 +383,7 @@ def _collect_all_parameters(
             groups=group_data["groups"],
             representatives=group_data["representatives"],
             saved_parameters=saved_parameters,
+            force_processing=force_processing,
         )
         all_parameters.extend(parameters)
 
@@ -394,6 +446,8 @@ def select_frame_groups(
 def define_rois_for_frame_groups(
     selected_groups: dict,
     saved_parameters: Optional[list[ForearmParameters]] = None,
+    *,
+    force_processing: bool = False,
 ) -> list[ForearmParameters]:
     """
     Prompts the user to draw an ROI for each frame group and returns the
@@ -413,7 +467,7 @@ def define_rois_for_frame_groups(
         All successfully collected ForearmParameters, across all videos and groups.
     """
     print("\n🖱️  Draw a Region of Interest (ROI) for each frame group.")
-    return _collect_all_parameters(selected_groups, saved_parameters)
+    return _collect_all_parameters(selected_groups, saved_parameters, force_processing)
 
 
 def save_forearm_parameters(

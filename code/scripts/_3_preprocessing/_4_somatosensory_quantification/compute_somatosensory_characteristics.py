@@ -82,7 +82,7 @@ def compute_somatosensory_characteristics(
     
     forearm_params: List[ForearmParameters] = ForearmFrameParametersFileHandler.load(forearm_metadata_path)
     catalog = ForearmCatalog(forearm_params, forearm_pointcloud_dir)
-    forearms_dict = get_forearms_with_fallback(catalog, current_video_filename, use_mesh=True, remap_lowest_to_zero=True)
+    forearms_dict = get_forearms_with_fallback(catalog, current_video_filename, use_mesh=True)
 
     # 3. PREPARE MESH SEQUENCE (ADAPTER LAYER)
     # Convert Manager (Sequence of Trimesh) -> List of Open3D Meshes

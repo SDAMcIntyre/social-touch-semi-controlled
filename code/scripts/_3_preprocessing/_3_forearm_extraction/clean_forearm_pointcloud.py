@@ -7,16 +7,18 @@ import json
 from pathlib import Path
 from typing import Optional, Union
 
+from utils.should_process_task import should_process_task
 from utils.gui.visualize_point_cloud_comparison import visualize_point_cloud_comparison
 
 # --- Main Processing Function ---
 
 def clean_forearm_pointcloud(
-    input_ply_path: Union[str, Path], 
-    output_ply_path: Union[str, Path], 
-    output_metadata_path: Optional[Union[str, Path]] = None, 
+    input_ply_path: Union[str, Path],
+    output_ply_path: Union[str, Path],
+    output_metadata_path: Optional[Union[str, Path]] = None,
     *,
-    interactive: bool = False
+    interactive: bool = False,
+    force_processing: bool = False,
 ) -> None:
     """
     Loads a pointcloud, filters points with duplicate X,Y coordinates by keeping 
@@ -31,10 +33,18 @@ def clean_forearm_pointcloud(
     """
     input_path = Path(input_ply_path)
     output_path = Path(output_ply_path)
-    
+
+    output_paths = [output_path]
+    if output_metadata_path:
+        output_paths.append(Path(output_metadata_path))
+    if not should_process_task(
+        output_paths=output_paths,
+        input_paths=[input_path],
+        force=force_processing,
+    ):
+        return
+
     # 1. Load the Point Cloud
-    if not input_path.exists():
-        raise FileNotFoundError(f"Input file not found: {input_path}")
 
     pcd = o3d.io.read_point_cloud(str(input_path))
     

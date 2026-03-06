@@ -24,6 +24,17 @@ from .models.forearm_catalog import (
     get_forearms_with_fallback
 )
 
+from .registration import (
+    ForearmRegistrator,
+    register_session_forearms,
+    transform_unified_csv,
+)
+
+from .curation import (
+    CurationMetadataFileHandler,
+    ForearmCurationGUI,
+)
+
 
 __all__ = [
     "PointCloudController",
@@ -38,4 +49,11 @@ __all__ = [
     "Point",
     "ForearmSegmentationParamsFileHandler",
     "FrameDepthAverager",
+
+    "ForearmRegistrator",
+    "register_session_forearms",
+    "transform_unified_csv",
+
+    "CurationMetadataFileHandler",
+    "ForearmCurationGUI",
 ]

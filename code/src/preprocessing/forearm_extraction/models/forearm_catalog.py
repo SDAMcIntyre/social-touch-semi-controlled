@@ -1,9 +1,11 @@
+import json
 import re
 import logging
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple, Union
 from dataclasses import dataclass
 
+import numpy as np
 import open3d as o3d
 # from bisect import bisect_left # For a highly optimized search
 
@@ -155,6 +157,47 @@ class ForearmCatalog:
         logging.warning("Catalog is empty or no mesh files could be loaded.")
         return None
 
+    # ------------------------------------------------------------------
+    # Registration-aware accessors
+    # ------------------------------------------------------------------
+
+    def get_unified_pointcloud(
+        self, session_id: str
+    ) -> Optional[o3d.geometry.PointCloud]:
+        """Load the unified registered point cloud for *session_id*.
+
+        Returns ``None`` when the file does not exist (single-forearm
+        session or registration has not been run yet).
+        """
+        path = self._pointcloud_dir / f"{session_id}_unified_registered.ply"
+        if not path.exists():
+            return None
+        return PointCloudDataHandler.load(path)
+
+    def load_registration_transforms(
+        self, session_id: str
+    ) -> Optional[Dict[str, Tuple[np.ndarray, float]]]:
+        """Load persisted per-snapshot registration transforms.
+
+        Returns a mapping ``{snapshot_key: (4x4_matrix, fitness)}`` where
+        each key is a composite string ``"video_stem:frame_id"``, or
+        ``None`` if the transforms file does not exist.
+        """
+        path = self._pointcloud_dir / f"{session_id}_registration_transforms.json"
+        if not path.exists():
+            return None
+
+        with open(path) as fh:
+            raw = json.load(fh)
+
+        transforms: Dict[str, Tuple[np.ndarray, float]] = {}
+        for key, entry in raw["transforms"].items():
+            transforms[key] = (
+                np.asarray(entry["matrix_4x4"]),
+                entry["fitness"],
+            )
+        return transforms
+
     def find_closest_reference(
         self, 
         video_filename: str, 
@@ -203,55 +246,80 @@ def get_forearms_with_fallback(
     current_video_filename: str,
     *,
     use_mesh: bool = False,
-    remap_lowest_to_zero: bool = False
 ) -> Dict[int, Union[o3d.geometry.PointCloud, o3d.geometry.TriangleMesh]]:
     """
-    Gets forearm point clouds or meshes for a video, with intelligent fallback.
+    Gets forearm geometries for a video based on its block number.
 
-    This function first attempts to find all geometry that exactly matches the
-    video filename. If none are found, it uses the catalog's reference-finding
-    logic to locate and load the single closest forearm from another video
-    based on the 'block-order' number.
+    1. Extracts block number *N* from *current_video_filename*.
+    2. Loads every forearm whose video shares that block number, keyed by
+       ``representative_frame_id``.
+    3. If no entry has ``representative_frame_id == 0``:
+       a. Searches blocks *N − 1*, *N − 2*, … down to **1** for the forearm
+          with the **highest** ``representative_frame_id`` and inserts it as
+          key ``0``.
+       b. If no previous block yields a result, the forearm with the lowest
+          ``representative_frame_id`` already in the dict is duplicated under
+          key ``0`` so that a reference is available from frame 0.
 
     Args:
         catalog: An initialized ForearmCatalog instance.
         current_video_filename: The filename of the video to process.
-        use_mesh: If True, loads '_mesh.obj' meshes. If False (default), loads point clouds.
-        remap_lowest_to_zero: If True, the lowest representative_frame_id key is remapped to 0
-            so the first forearm reference is active from frame 0 of the hand-motion sequence.
-            Defaults to False (keys are returned unchanged).
+        use_mesh: If True, loads meshes; otherwise loads point clouds.
 
     Returns:
-        A dictionary mapping frame IDs to open3d geometry objects.
+        A dictionary mapping representative frame IDs to Open3D geometry
+        objects, with key ``0`` guaranteed when at least one forearm exists.
     """
-    # 1. Attempt the primary, explicit search first.
-    if use_mesh:
-        forearms = catalog.get_meshes_for_video(current_video_filename)
-    else:
-        forearms = catalog.get_pointclouds_for_video(current_video_filename)
+    identifier = VideoIdentifier.from_filename(current_video_filename)
+    if not identifier:
+        logging.warning(f"Could not parse block number from '{current_video_filename}'.")
+        return {}
+
+    candidates = catalog._refs_by_prefix.get(identifier.prefix)
+    if not candidates:
+        logging.warning(f"No forearm references found with prefix '{identifier.prefix}'.")
+        return {}
+
+    load_fn = catalog._load_mesh if use_mesh else catalog._load_pointcloud
+
+    # -- Step 1: collect all forearms for block N --------------------------
+    forearms: Dict[int, Union[o3d.geometry.PointCloud, o3d.geometry.TriangleMesh]] = {}
+    for block_num, params in candidates:
+        if block_num == identifier.block_number:
+            geometry = load_fn(params)
+            if geometry:
+                forearms[params.representative_frame_id] = geometry
+
+    # -- Step 2: ensure a frame-0 entry exists -----------------------------
+    if 0 not in forearms:
+        # 2a. Walk backwards through previous blocks (N-1 … 1)
+        for prev_block in range(identifier.block_number - 1, 0, -1):
+            prev_params_list = [
+                params for block_num, params in candidates
+                if block_num == prev_block
+            ]
+            if not prev_params_list:
+                continue
+            best = max(prev_params_list, key=lambda p: p.representative_frame_id)
+            geometry = load_fn(best)
+            if geometry:
+                logging.info(
+                    f"No frame_id 0 in block {identifier.block_number}; "
+                    f"using '{best.video_filename}' frame {best.representative_frame_id} "
+                    f"from block {prev_block} as fallback."
+                )
+                forearms[0] = geometry
+                break
+
+        # 2b. No earlier block had a loadable forearm — duplicate the earliest
+        if 0 not in forearms and forearms:
+            min_key = min(forearms)
+            logging.info(
+                f"No previous-block fallback found; duplicating frame {min_key} as frame 0."
+            )
+            forearms[0] = forearms[min_key]
 
     if not forearms:
-        # 2. If the primary search returned nothing, trigger the fallback.
-        type_str = "mesh" if use_mesh else "point cloud"
-        logging.info(
-            f"No direct forearm {type_str} match for '{current_video_filename}'. "
-            "Attempting to find a fallback reference."
-        )
-        # Pass the use_mesh flag to the reference finder
-        reference_data = catalog.find_closest_reference(current_video_filename, use_mesh=use_mesh)
+        logging.warning(f"Could not find any forearm data for '{current_video_filename}'.")
 
-        # 3. If a reference was found, format it.
-        if reference_data:
-            frame_id, geometry = reference_data
-            forearms = {frame_id: geometry}
-
-    if forearms:
-        if remap_lowest_to_zero:
-            # Find the lowest key and rebuild the dict, replacing that key with 0.
-            min_key = min(forearms.keys())
-            forearms = {0 if k == min_key else k: v for k, v in forearms.items()}
-        return forearms
-
-    # 4. If nothing was found, return an empty dictionary.
-    logging.warning(f"Could not find any data or suitable reference for '{current_video_filename}'.")
-    return {}
+    return forearms

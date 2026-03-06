@@ -56,7 +56,8 @@ class ForearmFrameParametersFileHandler:
                 roi_data = data["region_of_interest"]
                 roi = RegionOfInterest(
                     top_left_corner=Point(**roi_data["top_left_corner"]),
-                    bottom_right_corner=Point(**roi_data["bottom_right_corner"])
+                    bottom_right_corner=Point(**roi_data["bottom_right_corner"]),
+                    angle_deg=roi_data.get("angle_deg", 0.0),
                 )
 
                 # Remove the processed ROI dict to unpack the rest of the keys

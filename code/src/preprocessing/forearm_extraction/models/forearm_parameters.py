@@ -15,9 +15,10 @@ class Point:
 
 @dataclass
 class RegionOfInterest:
-    """Defines a rectangular region using two corner points."""
+    """Defines a rectangular region using two corner points (axis-aligned bounding box) and an optional rotation angle."""
     top_left_corner: Point
     bottom_right_corner: Point
+    angle_deg: float = 0.0
 
 @dataclass
 class ForearmParameters:
