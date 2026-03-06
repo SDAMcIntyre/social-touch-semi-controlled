@@ -9,6 +9,7 @@ import sys
 
 # Assume it exists
 import utils.path_tools as path_tools
+from utils.should_process_task import should_process_task
 
 def trimesh_to_open3d(src_mesh: trimesh.Trimesh) -> o3d.geometry.TriangleMesh:
     """
@@ -32,9 +33,11 @@ def trimesh_to_open3d(src_mesh: trimesh.Trimesh) -> o3d.geometry.TriangleMesh:
         
     return dst_mesh
 
-def define_forearm_mesh(source: Union[np.ndarray, str, Path], 
-                                output_path: Optional[Union[str, Path]] = None, 
-                                show: bool = False) -> trimesh.Trimesh:
+def define_forearm_mesh(source: Union[np.ndarray, str, Path],
+                        output_path: Optional[Union[str, Path]] = None,
+                        show: bool = False,
+                        *,
+                        force_processing: bool = False) -> trimesh.Trimesh:
     """
     Converts a topographical point cloud to a mesh using 2.5D Delaunay Triangulation.
     
@@ -45,6 +48,14 @@ def define_forearm_mesh(source: Union[np.ndarray, str, Path],
     4. Visualization logic migrated to Open3D to fix COM MTA errors and blank GUI on Windows.
     5. Added persistence logic to save the mesh to `output_path`.
     """
+    if output_path is not None and isinstance(source, (str, Path)):
+        if not should_process_task(
+            output_paths=[output_path],
+            input_paths=[source],
+            force=force_processing,
+        ):
+            return None
+
     # 1. Input Parsing and Data Loading via Open3D
     points = None
     input_normals = None
