@@ -152,10 +152,10 @@ def _parse_contact_points_cell(cell) -> Optional[np.ndarray]:
     # the first inner [...] starts at position 1, so the outer [ is skipped
     # automatically because its immediate neighbour is another [ (not a digit
     # or whitespace), failing the character-class match.
-    rows = re.findall(r'\[\s*([-\d\s.eE+]+)\s*\]', s)
+    rows = re.findall(r'\[\s*([-\d\s.,eE+]+)\s*\]', s)
     points: List[List[float]] = []
     for row in rows:
-        parts = row.split()
+        parts = row.replace(",", " ").split()
         if len(parts) == 3:
             try:
                 points.append([float(p) for p in parts])
@@ -343,7 +343,7 @@ class NeuralDataPanel(QWidget):
 
         # Zoom state — zoomed ±5 s window is the default
         self._neural_fps: int = neural_fps
-        self._zoom_half_window: int = 5 * neural_fps  # samples (5 000 at 1 kHz)
+        self._zoom_half_window: int = 1.0 * neural_fps  # samples 1 kHz, default value at _window_spinbox.setValue
         self._max_half_window: int = self._total_samples // 2
         self._current_sample: int = 0
 
@@ -368,7 +368,7 @@ class NeuralDataPanel(QWidget):
         _max_secs = min(self._total_samples / self._neural_fps / 2.0, 3600.0)
         self._window_spinbox.setMaximum(_max_secs)
         self._window_spinbox.setSingleStep(0.5)
-        self._window_spinbox.setValue(5.0)
+        self._window_spinbox.setValue(15.0)
         self._window_spinbox.setSuffix(" s")
         self._window_spinbox.setFixedWidth(70)
         self._window_spinbox.setFixedHeight(18)
@@ -547,8 +547,7 @@ class NeuralKinectViewer(QMainWindow):
         # ------------------------------------------------------------------
         forearm_params = ForearmFrameParametersFileHandler.load(forearm_metadata_path)
         catalog = ForearmCatalog(forearm_params, forearm_pointcloud_dir)
-        # get_forearms_with_fallback expects a str filename (or Path converted to str)
-        self._forearms_dict = get_forearms_with_fallback(catalog, str(rgb_video_path), remap_lowest_to_zero=True)
+        self._forearms_dict = get_forearms_with_fallback(catalog, str(rgb_video_path))
         self._sorted_forearm_keys: List[int] = sorted(self._forearms_dict.keys())
 
         # ------------------------------------------------------------------
@@ -852,7 +851,7 @@ class NeuralKinectViewer(QMainWindow):
         _add_object_group("Forearms",        "forearms",           has_slider=True)
         _add_object_group("Hand Mesh",       "hand_meshes",        has_slider=False)
         if self._contact_pts_by_frame is not None:
-            _add_object_group("Contact Points", "contact_points", has_slider=True, point_size=6)
+            _add_object_group("Contact Points", "contact_points", has_slider=True, point_size=15)
 
         for sticker_name in self._stickers_xyz_dict:
             _add_object_group(sticker_name, sticker_name)

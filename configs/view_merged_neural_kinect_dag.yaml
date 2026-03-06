@@ -6,12 +6,17 @@
 # ==============================================================================
 
 parameters:
-  kinect_configs_directory: "kinect_configs/valid_configs_ST16-05"
+  kinect_configs_directory: "kinect_configs/valid_configs_ST13-01"
 
+  exclude_files:
+  - kinect_config_2022-06-14_ST13-01_semicontrolled_block-order01.yaml
+  - kinect_config_2022-06-14_ST13-01_semicontrolled_block-order03.yaml
+  - kinect_config_2022-06-14_ST13-01_semicontrolled_block-order04.yaml
 tasks:
   view_neural_kinect_scene:
     enabled: true
-    description: "Launch the NeuralKinectViewer for the merged neural + Kinect 3D scene."
+    description: "Launch the NeuralKinectViewer for the merged neural + Kinect 3D
+      scene."
     options:
       crop_half_size_mm: 400.0   # AABB half-size in mm around the contact centroid
     depends_on: []

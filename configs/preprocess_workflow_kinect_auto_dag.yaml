@@ -10,6 +10,10 @@ parameters:
   kinect_configs_directory: "kinect_configs/valid_configs_ST13-01"
   #kinect_configs_directory: "kinect_configs/valid_configs_all"
 
+  exclude_files:
+  - kinect_config_2022-06-14_ST13-01_semicontrolled_block-order01.yaml
+  - kinect_config_2022-06-14_ST13-01_semicontrolled_block-order03.yaml
+  - kinect_config_2022-06-14_ST13-01_semicontrolled_block-order04.yaml
 tasks:
   # ---------------------------------------------------------------------------
   # STAGE 1: LED Signal Extraction
