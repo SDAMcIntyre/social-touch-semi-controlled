@@ -64,7 +64,7 @@ class FrameBatch:
 
 def setup_environment():
     project_root      = Path(__file__).resolve().parents[2]
-    dag_config_path   = project_root / "configs" / "preprocess_forearm_manual_dag.yaml"
+    dag_config_path   = project_root / "configs" / "preprocess_pipeline_extract_forearm_manual_dag.yaml"
     project_data_root = path_tools.get_project_data_root()
     return project_root, project_data_root, dag_config_path
 
