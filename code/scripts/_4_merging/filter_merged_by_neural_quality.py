@@ -76,20 +76,27 @@ def parse_neural_quality_xlsx(xlsx_path: Path) -> Dict[Tuple[str, int], Set[int]
 def filter_block_by_neural_quality(
     input_csv: Path,
     output_csv: Path,
-    not2use_trials: Set[int],
+    xlsx_path: Path,
     *,
     force_processing: bool = False
 ) -> Path:
     """
     Filters a single block's merged CSV by removing rows belonging to Not2Use trials.
 
+    Parses the xlsx annotation file, extracts unit and block_order from input_csv's
+    filename, and looks up which trial IDs are marked Not2Use for that block.
+
     NaN trial_id rows (nerve-rate interpolation) are forward-filled to assign them to
     their preceding trial. Rows with trial_id == 0 (inter-trial gaps) are always kept.
-    If not2use_trials is empty the file is copied as-is.
+    If no Not2Use trials exist for this block the file is copied as-is.
 
     Returns the output path.
     """
     output_csv.parent.mkdir(parents=True, exist_ok=True)
+
+    unit, block_order = extract_unit_and_block_order(input_csv.name)
+    not2use_map = parse_neural_quality_xlsx(xlsx_path)
+    not2use_trials: Set[int] = not2use_map.get((unit, block_order), set())
 
     if not not2use_trials:
         if not output_csv.exists() or force_processing:
@@ -126,8 +133,8 @@ def filter_block_by_neural_quality(
         f"({not2use_trials} Not2Use) -> {rows_after} rows remaining"
     )
 
-    if not2use_trials - set(filled_trial_id.unique()):
-        unmatched = not2use_trials - set(filled_trial_id.unique())
+    unmatched = not2use_trials - set(filled_trial_id.unique())
+    if unmatched:
         logger.warning(
             f"Some Not2Use trial IDs not found in data and had no effect: {unmatched}"
         )

@@ -1,7 +1,7 @@
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional
 from multiprocessing import freeze_support
 
 from prefect import flow, get_run_logger
@@ -18,9 +18,7 @@ from primary_processing import (
 from _4_merging import (
     align_and_merge_neural_and_kinect,
     aggregate_session_blocks,
-    parse_neural_quality_xlsx,
     filter_block_by_neural_quality,
-    extract_unit_and_block_order,
 )
 
 # --- Data Structures ---
@@ -137,7 +135,7 @@ def aggregate_blocks(
 def filter_by_neural_quality_flow(
     merged_csv: Path,
     output_csv: Path,
-    not2use_trials: Set[int],
+    xlsx_path: Path,
     *,
     force_processing: bool = False,
 ) -> Path:
@@ -145,11 +143,11 @@ def filter_by_neural_quality_flow(
     Flow to filter a single block's merged CSV by removing Not2Use trials.
     """
     logger = get_run_logger()
-    logger.info(f"[{merged_csv.name}] Filtering Not2Use trials: {not2use_trials or 'none'}")
+    logger.info(f"[{merged_csv.name}] Filtering by neural quality xlsx: {xlsx_path.name}")
     return filter_block_by_neural_quality(
         input_csv=merged_csv,
         output_csv=output_csv,
-        not2use_trials=not2use_trials,
+        xlsx_path=xlsx_path,
         force_processing=force_processing,
     )
 
@@ -200,7 +198,7 @@ def run_single_session_pipeline(
         if dag_handler.can_run(task_name):
             logger.info(f"[{block_name}] ==> Running task: {task_name}")
 
-            xlsx_param = dag_handler.get_parameter('neural_quality_xlsx', '')
+            xlsx_param = dag_handler.get_parameter('neural_quality_xlsx')
             if not xlsx_param:
                 raise ValueError(f"neural_quality_xlsx parameter is not configured in DAG YAML")
 
@@ -213,17 +211,13 @@ def run_single_session_pipeline(
             options = dag_handler.get_task_options(task_name)
             force = options.get('force_processing', False)
 
-            not2use_map = parse_neural_quality_xlsx(xlsx_path)
-            unit, block_order = extract_unit_and_block_order(block_name)
-            not2use_trials: Set[int] = not2use_map.get((unit, block_order), set())
-
             filtered_output = (
                 config.session_merged_output_dir / "sessions_filtered" / output_file_path.name
             )
             filter_by_neural_quality_flow(
                 merged_csv=output_file_path,
                 output_csv=filtered_output,
-                not2use_trials=not2use_trials,
+                xlsx_path=xlsx_path,
                 force_processing=force,
             )
 
