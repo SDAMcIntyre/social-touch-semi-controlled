@@ -46,15 +46,21 @@ def resolve_filenames(config: KinectConfig) -> Dict[str, Path]:
     # Input: Nerve Data
     nerve_name = f"{config.session_id}_semicontrolled_{config.block_id}_nerve.csv"
     
-    # Input: Kinect Data
-    kinect_name = f"{config.source_video.stem}_unified.csv"
-    
+    # Input: Kinect Data — prefer registered version when available
+    registered_name = f"{config.source_video.stem}_unified_registered.csv"
+    registered_path = config.video_processed_output_dir / registered_name
+    if registered_path.exists():
+        kinect_path = registered_path
+    else:
+        kinect_name = f"{config.source_video.stem}_unified.csv"
+        kinect_path = config.video_processed_output_dir / kinect_name
+
     # Output: Merged Block Data
     output_name = f"{config.session_id}_semicontrolled_{config.block_id}_merged_data.csv"
-    
+
     return {
         "nerve_path": config.nerve_processed_dir / nerve_name,
-        "kinect_path": config.video_processed_output_dir / kinect_name,
+        "kinect_path": kinect_path,
         "output_path": config.session_merged_output_dir / "sessions" / output_name
     }
 
