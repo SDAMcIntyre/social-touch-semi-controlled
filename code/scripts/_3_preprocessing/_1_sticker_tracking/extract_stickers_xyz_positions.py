@@ -29,16 +29,17 @@ def extract_stickers_xyz_positions(
     """
     Extracts 3D sticker positions using a dynamically selected method.
     """
-    if not source_video_path.exists():
-        raise FileNotFoundError(f"Source video not found: {source_video_path}")
-
-    if not input_csv_path.exists():
-        raise FileNotFoundError(f"Center CSV not found: {input_csv_path}")
     
     if not should_process_task(
         output_paths=[output_csv_path, output_metadata_path], 
         input_paths=[source_video_path, input_csv_path], 
         force=force_processing):
+        if not source_video_path.exists():
+            raise FileNotFoundError(f"Source video not found: {source_video_path}")
+
+        if not input_csv_path.exists():
+            raise FileNotFoundError(f"Center CSV not found: {input_csv_path}")
+        
         print(f"✅ Output file '{output_csv_path}' and {output_metadata_path} already exist. Use --force to overwrite.")
         return
 
