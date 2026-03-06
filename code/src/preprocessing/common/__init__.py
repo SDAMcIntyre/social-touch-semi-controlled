@@ -13,6 +13,7 @@ from .data_access.video_mp4_manager import VideoMP4Manager, ColorFormat
 # --- GUI Layer ---
 # For visualizing data and interacting with it through graphical components.
 from .gui.frame_roi_square import FrameROISquare
+from .gui.frame_roi_rotatable import FrameROIRotatable
 from .gui.scene_viewer import (
     LazyPointCloudSequence,
     PersistentOpen3DPointCloudSequence,
@@ -41,6 +42,7 @@ __all__ = [
     
     # GUI Classes
     "FrameROISquare",
+    "FrameROIRotatable",
     "SceneViewer",
     "VideoFrameSelector",
     "VideoFramesSelector",
