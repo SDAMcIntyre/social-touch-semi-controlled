@@ -815,7 +815,7 @@ class NeuralKinectViewer(QMainWindow):
         self._point_sizes: Dict[str, float] = {
             'kinect_point_cloud': 2.0,
             'forearms': 8.0,
-            'contact_points': 3.0,
+            'contact_points': 15.0,
         }
         self._compass_widgets: Dict[str, StickerVelocityCompass] = {}
 
@@ -851,7 +851,7 @@ class NeuralKinectViewer(QMainWindow):
         _add_object_group("Forearms",        "forearms",           has_slider=True)
         _add_object_group("Hand Mesh",       "hand_meshes",        has_slider=False)
         if self._contact_pts_by_frame is not None:
-            _add_object_group("Contact Points", "contact_points", has_slider=True, point_size=15)
+            _add_object_group("Contact Points", "contact_points", has_slider=True)
 
         for sticker_name in self._stickers_xyz_dict:
             _add_object_group(sticker_name, sticker_name)
