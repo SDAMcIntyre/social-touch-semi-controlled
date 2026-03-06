@@ -202,30 +202,30 @@ def run_single_session_pipeline(
 
             xlsx_param = dag_handler.get_parameter('neural_quality_xlsx', '')
             if not xlsx_param:
-                logger.warning(f"[{block_name}] neural_quality_xlsx not configured; skipping {task_name}")
-            else:
-                xlsx_path = Path(xlsx_param)
-                if not xlsx_path.is_absolute():
-                    xlsx_path = config.session_merged_output_dir.parents[1] / xlsx_path
-                if not xlsx_path.exists():
-                    logger.warning(f"[{block_name}] xlsx not found: {xlsx_path}; skipping {task_name}")
-                else:
-                    options = dag_handler.get_task_options(task_name)
-                    force = options.get('force_processing', False)
+                raise ValueError(f"neural_quality_xlsx parameter is not configured in DAG YAML")
 
-                    not2use_map = parse_neural_quality_xlsx(xlsx_path)
-                    unit, block_order = extract_unit_and_block_order(block_name)
-                    not2use_trials: Set[int] = not2use_map.get((unit, block_order), set())
+            xlsx_path = Path(xlsx_param)
+            if not xlsx_path.is_absolute():
+                xlsx_path = config.session_merged_output_dir.parents[1] / xlsx_path
+            if not xlsx_path.exists():
+                raise FileNotFoundError(f"neural_quality_xlsx not found: {xlsx_path}")
 
-                    filtered_output = (
-                        config.session_merged_output_dir / "sessions_filtered" / output_file_path.name
-                    )
-                    filter_by_neural_quality_flow(
-                        merged_csv=output_file_path,
-                        output_csv=filtered_output,
-                        not2use_trials=not2use_trials,
-                        force_processing=force,
-                    )
+            options = dag_handler.get_task_options(task_name)
+            force = options.get('force_processing', False)
+
+            not2use_map = parse_neural_quality_xlsx(xlsx_path)
+            unit, block_order = extract_unit_and_block_order(block_name)
+            not2use_trials: Set[int] = not2use_map.get((unit, block_order), set())
+
+            filtered_output = (
+                config.session_merged_output_dir / "sessions_filtered" / output_file_path.name
+            )
+            filter_by_neural_quality_flow(
+                merged_csv=output_file_path,
+                output_csv=filtered_output,
+                not2use_trials=not2use_trials,
+                force_processing=force,
+            )
 
             dag_handler.mark_completed(task_name)
 

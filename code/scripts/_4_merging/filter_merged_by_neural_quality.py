@@ -107,12 +107,9 @@ def filter_block_by_neural_quality(
         logger.info(f"Already up-to-date: {output_csv.name}")
         return output_csv
 
-    if 'trial_id' not in (df := pd.read_csv(input_csv)).columns:
-        logger.warning(
-            f"'trial_id' column missing in {input_csv.name}; copying as-is to {output_csv.name}"
-        )
-        shutil.copy2(input_csv, output_csv)
-        return output_csv
+    df = pd.read_csv(input_csv)
+    if 'trial_id' not in df.columns:
+        raise KeyError(f"'trial_id' column missing in {input_csv.name}")
 
     # Forward-fill to assign NaN nerve-rate rows to their preceding trial.
     # Rows before the first Kinect frame have no trial yet — fill with 0 (kept).
