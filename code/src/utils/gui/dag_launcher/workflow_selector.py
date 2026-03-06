@@ -19,10 +19,12 @@ from PyQt5.QtWidgets import (
 # Any file not listed here is appended alphabetically at the end.
 _ORDERED_STEMS = [
     "primary_workflow_kinect_auto",
+    "preprocess_pipeline_extract_forearm_manual",
     "preprocess_workflow_kinect_auto",
     "preprocess_workflow_kinect_manual",
     "preprocess_workflow_kinect_visualisation",
     "merging_pipeline_neuron_to_kinect_auto",
+    "merging_view_neural_kinect",
     "postprocess_workflow_kinect_auto",
     "analysis_workflow",
 ]
