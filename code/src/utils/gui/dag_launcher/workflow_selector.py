@@ -7,7 +7,9 @@ from pathlib import Path
 from PyQt5.QtCore import pyqtSignal
 from PyQt5.QtWidgets import (
     QButtonGroup,
+    QFrame,
     QGroupBox,
+    QLabel,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -24,6 +26,11 @@ _ORDERED_STEMS = [
     "postprocess_workflow_kinect_auto",
     "analysis_workflow",
 ]
+
+
+def _category_prefix(stem: str) -> str:
+    """Return the category prefix (text before the first ``_``) of a DAG stem."""
+    return stem.split("_")[0]
 
 
 class WorkflowSelector(QWidget):
@@ -67,9 +74,24 @@ class WorkflowSelector(QWidget):
                 return (len(_ORDERED_STEMS), stem)
 
         self._paths = sorted(all_paths, key=_order_key)
+        current_category: str | None = None
         for i, p in enumerate(self._paths):
+            stem = p.stem.replace("_dag", "")
+            category = _category_prefix(stem)
+            if category != current_category:
+                current_category = category
+                header = QLabel(category.title())
+                header.setStyleSheet(
+                    "QLabel { font-size: 10px; font-weight: bold; color: #888888;"
+                    " margin-top: 6px; margin-bottom: 1px; }"
+                )
+                self._btn_layout.addWidget(header)
+                sep = QFrame()
+                sep.setFrameShape(QFrame.HLine)
+                sep.setFrameShadow(QFrame.Sunken)
+                self._btn_layout.addWidget(sep)
             # Derive a short human-readable label from the stem
-            label = p.stem.replace("_dag", "").replace("_", " ").title()
+            label = stem.replace("_", " ").title()
             btn = QPushButton(label)
             btn.setCheckable(True)
             btn.setToolTip(p.name)
