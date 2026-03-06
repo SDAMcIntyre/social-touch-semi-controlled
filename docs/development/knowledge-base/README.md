@@ -17,6 +17,8 @@ These are developer-facing documents, not usage guides.
 |------|--------------|-----------|
 | [Open3D SceneWidget Layout — Nested Widget Sizing](note-open3d-scenewidget-layout.md) | Embedding a `SceneWidget` inside `gui.Vert` causes it to collapse on first mouse interaction (grey background / widget disappears). | `arm_segmentation.py` — `_make_hue_range_circle`, `_display_pointcloud` |
 | [CuPy Import Order with Preprocessing Packages](note-cupy-import-order.md) | Importing CuPy after the `preprocessing` package tree crashes with `TypeError: Alias 'bool8' was removed in NumPy 2.0`. | Entry-point scripts, `neural_kinect_scene_viewer.py` |
+| [ICP Registration Constraints for Forearm Point Clouds](note-forearm-icp-registration.md) | Aligning multiple forearm point cloud snapshots to a common reference frame using point-to-plane ICP. | `forearm_registrator.py`, `csv_spatial_transformer.py` |
+| [Somatosensory Metric Units and Calculations](note-somatosensory-units-and-calculations.md) | Coordinate system (mm from Kinect SDK), velocity (mm/frame), contact depth (mm), and contact area (mm²) derivations and known labeling bug. | `objects_interaction_processor.py`, `touch_analysis.py` |
 
 ### Bug reports (`bug-*`)
 
