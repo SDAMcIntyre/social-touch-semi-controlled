@@ -42,9 +42,11 @@ def parse_neural_quality_xlsx(xlsx_path: Path) -> Dict[Tuple[str, int], Set[int]
         Dict mapping (unit, block_order) -> set of Not2Use trial IDs (int).
     """
     df = pd.read_excel(xlsx_path)
+    unit_label ='Unit'
+    block_label ='Block order'
 
-    trial_columns = [str(i) for i in range(1, 13)]
-    missing = [c for c in ['unit', 'block_order'] + trial_columns if c not in df.columns]
+    trial_columns = [i for i in range(1, 13)]
+    missing = [c for c in [unit_label, block_label] + trial_columns if c not in df.columns]
     if missing:
         raise ValueError(
             f"xlsx is missing expected columns: {missing}. "
@@ -54,11 +56,11 @@ def parse_neural_quality_xlsx(xlsx_path: Path) -> Dict[Tuple[str, int], Set[int]
     not2use_map: Dict[Tuple[str, int], Set[int]] = {}
 
     for _, row in df.iterrows():
-        unit = str(row['unit']).strip()
+        unit = str(row[unit_label]).strip()
         try:
-            block_order = int(row['block_order'])
+            block_order = int(row[block_label])
         except (ValueError, TypeError):
-            logger.warning(f"Skipping row with invalid block_order: {row['block_order']!r}")
+            logger.warning(f"Skipping row with invalid block_order: {row[block_label]!r}")
             continue
 
         bad_trials: Set[int] = set()
@@ -123,8 +125,22 @@ def filter_block_by_neural_quality(
     filled_trial_id = df['trial_id'].ffill().fillna(0).astype(int)
 
     rows_before = len(df)
-    mask = ~filled_trial_id.isin(not2use_trials)
-    df_filtered = df[mask]
+    min_not2use = min(not2use_trials)
+    is_trailing_suffix = not2use_trials == set(range(min_not2use, 13))
+
+    if is_trailing_suffix:
+        # All remaining trials from min_not2use to 12 are Not2Use: truncate at the
+        # first row whose filled trial_id reaches that threshold.
+        suffix_mask = filled_trial_id >= min_not2use
+        if suffix_mask.any():
+            cutoff = int(suffix_mask.values.argmax())
+            df_filtered = df.iloc[:cutoff]
+        else:
+            df_filtered = df
+    else:
+        mask = ~filled_trial_id.isin(not2use_trials)
+        df_filtered = df[mask]
+
     rows_after = len(df_filtered)
 
     removed = rows_before - rows_after
