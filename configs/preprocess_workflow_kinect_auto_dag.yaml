@@ -7,7 +7,7 @@
 
 parameters:
   parallel_execution: false
-  kinect_configs_directory: "kinect_configs/valid_configs_ST13-02"
+  kinect_configs_directory: "kinect_configs/valid_configs_ST13-01"
   #kinect_configs_directory: "kinect_configs/valid_configs_all"
 
 tasks:
@@ -47,7 +47,7 @@ tasks:
   generate_xyz_stickers:
     enabled: true
     options:
-      force_processing: true
+      force_processing: false
     depends_on: [refine_sticker_features]
 
   # ---------------------------------------------------------------------------
@@ -97,6 +97,12 @@ tasks:
     # Requires forearm validation and 3D hand data
     depends_on: [validate_forearm_extraction, generate_3d_hand_in_motion]
 
+  transform_to_registered_frame:
+    enabled: true
+    options:
+      force_processing: false
+    depends_on: [compute_somatosensory_characteristics]
+
   find_single_touches:
     enabled: true
     options:
@@ -114,7 +120,7 @@ tasks:
       force_processing: false
     # Aggregates all processed streams into the final dataset.
     depends_on:
-    - compute_somatosensory_characteristics    # Contact Data
+    - transform_to_registered_frame            # Contact Data (registered)
     - track_led_blinking                       # LED Signal
     - define_trial_id                          # Trial Definitions
     - find_single_touches                      # Single Touch Definition

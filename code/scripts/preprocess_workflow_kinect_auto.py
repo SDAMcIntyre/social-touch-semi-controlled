@@ -50,7 +50,8 @@ from _3_preprocessing._2_hand_tracking import (
 )
 
 from _3_preprocessing._3_forearm_extraction import (
-    is_forearm_valid
+    is_forearm_valid,
+    apply_registration_transform as _apply_registration_transform,
 )
 
 from _3_preprocessing._4_somatosensory_quantification import (
@@ -70,6 +71,7 @@ from _3_preprocessing._6_metadata_matching import (
 )
 
 from _3_preprocessing._7_unification import unify_datasets
+
 
 # --- 3. Sub-Flows (Formerly Tasks) ---
 
@@ -316,6 +318,27 @@ def compute_somatosensory_characteristics_flow(
     )
     return contact_characteristics_path
 
+@flow(name="8b. Transform to Registered Frame")
+def transform_to_registered_frame(
+    somatosensory_chars_path: Path,
+    session_processed_dir: Path,
+    session_id: str,
+    current_video_filename: str,
+    output_dir: Path,
+    *,
+    force_processing: bool = False
+) -> Path:
+    print(f"[{output_dir.name}] Transforming to registered frame...")
+    return _apply_registration_transform(
+        somatosensory_chars_path=somatosensory_chars_path,
+        session_processed_dir=session_processed_dir,
+        session_id=session_id,
+        current_video_filename=current_video_filename,
+        output_dir=output_dir,
+        force_processing=force_processing,
+    )
+
+
 @flow(name="10. Define Trial IDs")
 def define_trial_ids_flow(rgb_video_path: Path, output_dir: Path, *, force_processing: bool = False) -> Path:
     print(f"[{output_dir.name}] Defining Trial IDs...")
@@ -479,17 +502,26 @@ def run_single_session_pipeline(
                             "output_dir": config.video_processed_output_dir / "kinematics_analysis"},
          "outputs": []},
 
-        {"name": "compute_somatosensory_characteristics", 
-         "func": compute_somatosensory_characteristics_flow, 
-         "params": lambda: {"hand_motion_npz_path": context.get("hand_motion_npz_path"), 
-                            "hand_metadata_path": context.get("hand_metadata_path"), 
-                            "session_processed_dir": config.session_processed_output_dir, 
-                            "session_id": config.session_id, 
-                            "current_video_filename": context.get("rgb_video_path").name, 
+        {"name": "compute_somatosensory_characteristics",
+         "func": compute_somatosensory_characteristics_flow,
+         "params": lambda: {"hand_motion_npz_path": context.get("hand_motion_npz_path"),
+                            "hand_metadata_path": context.get("hand_metadata_path"),
+                            "session_processed_dir": config.session_processed_output_dir,
+                            "session_id": config.session_id,
+                            "current_video_filename": context.get("rgb_video_path").name,
                             "output_dir": config.video_processed_output_dir / "kinematics_analysis"},
          "outputs": ["somatosensory_chars_path"]},
 
-        {"name": "find_single_touches", 
+        {"name": "transform_to_registered_frame",
+         "func": transform_to_registered_frame,
+         "params": lambda: {"somatosensory_chars_path": context.get("somatosensory_chars_path"),
+                            "session_processed_dir": config.session_processed_output_dir,
+                            "session_id": config.session_id,
+                            "current_video_filename": context.get("rgb_video_path").name,
+                            "output_dir": config.video_processed_output_dir / "kinematics_analysis"},
+         "outputs": ["registered_somatosensory_path"]},
+
+        {"name": "find_single_touches",
          "func": find_single_touches_flow,
          "params": lambda: {"stickers_xyz_path": context.get("sticker_3d_tracking_path"), 
                             "trial_data_path": context.get("trial_data_path"),
@@ -498,10 +530,10 @@ def run_single_session_pipeline(
          "outputs": ["single_touches_path"]},
 
         # --- Stage 5: Final Unification ---
-        {"name": "unify_processed_data", 
+        {"name": "unify_processed_data",
          "func": unify_processed_data_flow,
          "params": lambda: {"led_path": context.get("led_tracking_path"),
-                            "contact_path": context.get("somatosensory_chars_path"),
+                            "contact_path": context.get("registered_somatosensory_path"),
                             "trial_path": context.get("trial_data_path"),
                             "single_touch_path": context.get("single_touches_path"),
                             "stimuli_path": context.get("stimuli_metadata_aligned_path"),
