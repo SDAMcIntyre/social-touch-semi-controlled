@@ -6,28 +6,24 @@ import tkinter as tk
 from tkinter import messagebox
 
 import utils.path_tools as path_tools
+from utils import DagConfigHandler, TaskExecutor
 from primary_processing import (
     ForearmConfigFileHandler, ForearmConfig,
     KinectConfigFileHandler, KinectConfig,
 )
 from preprocessing.forearm_extraction import ForearmFrameParametersFileHandler, ForearmParameters
+from preprocessing.forearm_extraction import register_session_forearms
 from _3_preprocessing._3_forearm_extraction import (
     load_saved_parameters,
     select_frame_groups,
     define_rois_for_frame_groups,
     save_forearm_parameters,
     extract_forearm,
+    curate_forearm_pointcloud,
     clean_forearm_pointcloud,
     define_normals,
     define_forearm_mesh,
 )
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# CONFIGURATION
-# ──────────────────────────────────────────────────────────────────────────────
-
-FORCE_PROCESSING = True  # Set False to skip sessions that already have a .SUCCESS flag
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -45,6 +41,8 @@ class FrameBatch:
     # Outputs — one path per processing stage
     raw_ply      : Path
     raw_params   : Path
+    curated_ply  : Path
+    curated_meta : Path
     cleaned_ply  : Path
     cleaned_meta : Path
     normals_ply  : Path
@@ -58,6 +56,17 @@ class FrameBatch:
         if p.is_averaged:
             return f"frames {p.frame_ids} (representative: {p.representative_frame_id})"
         return f"frame {p.frame_id}"
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# ENVIRONMENT SETUP
+# ──────────────────────────────────────────────────────────────────────────────
+
+def setup_environment():
+    project_root      = Path(__file__).resolve().parents[2]
+    dag_config_path   = project_root / "configs" / "preprocess_forearm_manual_dag.yaml"
+    project_data_root = path_tools.get_project_data_root()
+    return project_root, project_data_root, dag_config_path
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -125,6 +134,8 @@ def plan_frame_batch(
         frame_params = params,
         raw_ply      = pointclouds_dir / f"{base}.ply",
         raw_params   = pointclouds_dir / f"{base}_extraction_params.json",
+        curated_ply  = pointclouds_dir / f"{base}_curated.ply",
+        curated_meta = pointclouds_dir / f"{base}_curation_metadata.json",
         cleaned_ply  = pointclouds_dir / f"{base}_cleaned.ply",
         cleaned_meta = pointclouds_dir / f"{base}_cleaning_stats.json",
         normals_ply  = pointclouds_dir / f"{base}_with_normals.ply",
@@ -142,51 +153,92 @@ def _build_output_stem(video_stem: str, params: ForearmParameters) -> str:
 # COMPUTATION
 # ──────────────────────────────────────────────────────────────────────────────
 
-def execute_frame_batch(batch: FrameBatch, interactive: bool = True) -> None:
+def execute_frame_batch(batch: FrameBatch, dag_handler: DagConfigHandler, interactive: bool = True) -> None:
     """
-    Runs the four processing steps for a single FrameBatch in sequence:
+    Runs the five processing steps for a single FrameBatch in sequence:
 
         1. Extract  — pull the raw forearm point cloud from the depth video
-        2. Clean    — remove noise and outliers
-        3. Normals  — estimate surface normals on the cleaned cloud
-        4. Mesh     — reconstruct a surface mesh from the oriented cloud
+        2. Curate   — manual interactive removal of artifacts via GUI
+        3. Clean    — remove noise and outliers
+        4. Normals  — estimate surface normals on the cleaned cloud
+        5. Mesh     — reconstruct a surface mesh from the oriented cloud
+
+    Each step is controlled by the DAG config: skipped when its primary output
+    already exists and ``force_processing`` is ``false``, or when the step is
+    disabled (``enabled: false``) or its upstream dependency was not completed.
 
     Args:
         batch: All resolved input/output paths for this frame.
-        interactive: If True, opens the mesh visualization window after step 4.
+        dag_handler: DAG config handler (a per-batch copy is made internally so
+            completion state is independent across frames).
+        interactive: If True, opens the mesh visualization window after step 5.
             The segmentation GUI (step 1) is always interactive so that HSV
             parameters can be tuned. Set False in batch mode to suppress the
             legacy GLFW mesh viewer and avoid spurious warnings at exit.
     """
-    print(f"  🔎 [1/4] Extracting forearm  ({batch.depth_video.name}, {batch.description})")
-    extract_forearm(
-        video_path=batch.depth_video, video_config=batch.frame_params,
-        output_ply_path=batch.raw_ply, output_params_path=batch.raw_params,
-        interactive=True,
-    )
-    print(f"         → {batch.raw_ply.name}")
+    batch_dag = dag_handler.copy()
 
-    print(f"  🧹 [2/4] Cleaning point cloud")
-    clean_forearm_pointcloud(
-        input_ply_path=batch.raw_ply, output_ply_path=batch.cleaned_ply,
-        output_metadata_path=batch.cleaned_meta,
-    )
-    print(f"         → {batch.cleaned_ply.name}")
+    # Step 1: Extract
+    executor = TaskExecutor('extract_forearm', batch.depth_video.stem, batch_dag, monitor=None)
+    with executor:
+        if executor.can_run:
+            force = batch_dag.get_task_options('extract_forearm').get('force_processing', False)
+            print(f"  🔎 [1/5] Extracting forearm  ({batch.depth_video.name}, {batch.description})")
+            extract_forearm(
+                video_path=batch.depth_video, video_config=batch.frame_params,
+                output_ply_path=batch.raw_ply, output_params_path=batch.raw_params,
+                interactive=True,
+                force_processing=force,
+            )
 
-    print(f"  🧠 [3/4] Computing normals")
-    define_normals(batch.cleaned_ply, batch.normals_ply, batch.normals_meta)
-    print(f"         → {batch.normals_ply.name}")
+    # Step 2: Curate
+    executor = TaskExecutor('curate_forearm', batch.depth_video.stem, batch_dag, monitor=None)
+    with executor:
+        if executor.can_run:
+            force = batch_dag.get_task_options('curate_forearm').get('force_processing', False)
+            print(f"  ✂️  [2/5] Curating point cloud (manual artifact removal)")
+            curate_forearm_pointcloud(
+                input_ply_path=batch.raw_ply,
+                output_ply_path=batch.curated_ply,
+                output_metadata_path=batch.curated_meta,
+                force_processing=force,
+            )
 
-    print(f"  🕸️  [4/4] Building mesh")
-    define_forearm_mesh(source=batch.normals_ply, output_path=batch.mesh_obj, show=interactive)
-    print(f"         → {batch.mesh_obj.name}\n")
+    # Step 3: Clean
+    executor = TaskExecutor('clean_forearm', batch.depth_video.stem, batch_dag, monitor=None)
+    with executor:
+        if executor.can_run:
+            force = batch_dag.get_task_options('clean_forearm').get('force_processing', False)
+            print(f"  🧹 [3/5] Cleaning point cloud")
+            clean_input = batch.curated_ply if batch.curated_ply.exists() else batch.raw_ply
+            clean_forearm_pointcloud(
+                input_ply_path=clean_input, output_ply_path=batch.cleaned_ply,
+                output_metadata_path=batch.cleaned_meta,
+                force_processing=force,
+            )
+
+    # Step 4: Normals
+    executor = TaskExecutor('define_normals', batch.depth_video.stem, batch_dag, monitor=None)
+    with executor:
+        if executor.can_run:
+            force = batch_dag.get_task_options('define_normals').get('force_processing', False)
+            print(f"  🧠 [4/5] Computing normals")
+            define_normals(batch.cleaned_ply, batch.normals_ply, batch.normals_meta, force_processing=force)
+
+    # Step 5: Mesh
+    executor = TaskExecutor('build_mesh', batch.depth_video.stem, batch_dag, monitor=None)
+    with executor:
+        if executor.can_run:
+            force = batch_dag.get_task_options('build_mesh').get('force_processing', False)
+            print(f"  🕸️  [5/5] Building mesh")
+            define_forearm_mesh(source=batch.normals_ply, output_path=batch.mesh_obj, show=interactive, force_processing=force)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 # ORCHESTRATION
 # ──────────────────────────────────────────────────────────────────────────────
 
-def run_session(session_config: ForearmConfig, project_data_root: Path) -> None:
+def run_session(session_config: ForearmConfig, project_data_root: Path, dag_handler: DagConfigHandler) -> None:
     """
     Orchestrates the full forearm extraction pipeline for one recording session:
 
@@ -195,7 +247,9 @@ def run_session(session_config: ForearmConfig, project_data_root: Path) -> None:
         3. Prompt the user to draw a forearm ROI for each group
         4. Save the resulting parameters to disk
         5. Plan one FrameBatch per defined frame (resolves all paths up front)
-        6. Execute each FrameBatch in sequence
+        6. Execute each FrameBatch in sequence (per-step control via DAG config)
+        7. Register all forearm snapshots (skipped when outputs exist and
+           ``force_processing`` is ``false``, or when upstream steps are disabled)
     """
     print(f"\n🚀 Session: {session_config.session_id}")
 
@@ -203,12 +257,33 @@ def run_session(session_config: ForearmConfig, project_data_root: Path) -> None:
     rgb_video_paths = resolve_rgb_video_paths(session_config.config_file_links, project_data_root)
     metadata_path   = _build_metadata_path(session_config, pointclouds_dir)
 
-    frame_params_list = _annotate_forearm_roi(rgb_video_paths, metadata_path)
+    force_annotate = dag_handler.get_task_options('extract_forearm').get('force_processing', False)
+    frame_params_list = _annotate_forearm_roi(rgb_video_paths, metadata_path, force_processing=force_annotate)
 
     batches = _plan_all_batches(frame_params_list, rgb_video_paths, pointclouds_dir)
     # Batch mode: disable mesh visualization (no interactive inspection needed)
     # and avoid GLFW context corruption that causes spurious warnings at exit.
-    _execute_all_batches(batches, interactive=False)
+    _execute_all_batches(batches, dag_handler, interactive=False)
+
+    # Build a session-level DAG copy to check whether register_forearms should run.
+    # Simulate frame-level task completions in dependency order so that
+    # depends_on: [build_mesh] propagates correctly when upstream steps are disabled.
+    session_dag = dag_handler.copy()
+    for task in ['extract_forearm', 'curate_forearm', 'clean_forearm', 'define_normals', 'build_mesh']:
+        task_config = session_dag.tasks.get(task, {})
+        if not task_config.get('enabled', True):
+            break
+        deps_met = all(d in session_dag.completed_tasks for d in task_config.get('depends_on', []))
+        if deps_met:
+            session_dag.completed_tasks.add(task)
+        else:
+            break
+
+    executor = TaskExecutor('register_forearms', session_config.session_id, session_dag, monitor=None)
+    with executor:
+        if executor.can_run:
+            force = session_dag.get_task_options('register_forearms').get('force_processing', False)
+            register_session_forearms(session_config.session_id, pointclouds_dir, metadata_path, force_processing=force)
 
 
 def _setup_output_directories(session_output_dir: Path) -> Path:
@@ -230,6 +305,8 @@ def _build_metadata_path(session_config: ForearmConfig, pointclouds_dir: Path) -
 def _annotate_forearm_roi(
     rgb_video_paths: List[Path],
     metadata_path: Path,
+    *,
+    force_processing: bool = False,
 ) -> List[ForearmParameters]:
     """
     Guides the user through the two interactive annotation steps and persists
@@ -267,7 +344,7 @@ def _annotate_forearm_roi(
     if selected_groups is None:
         raise RuntimeError("Frame group selection was cancelled — cannot continue.")
 
-    parameters = define_rois_for_frame_groups(selected_groups, saved_parameters)
+    parameters = define_rois_for_frame_groups(selected_groups, saved_parameters, force_processing=force_processing)
     if not parameters:
         raise RuntimeError("No ROIs were defined — cannot continue.")
 
@@ -292,12 +369,13 @@ def _plan_all_batches(
     return batches
 
 
-def _execute_all_batches(batches: List[FrameBatch], interactive: bool = True) -> None:
+def _execute_all_batches(batches: List[FrameBatch], dag_handler: DagConfigHandler, interactive: bool = True) -> None:
     """
     Executes each FrameBatch in sequence, catching and logging per-batch errors.
 
     Args:
         batches: List of planned FrameBatches to process.
+        dag_handler: DAG config handler passed to each batch (a copy is made per batch).
         interactive: Passed through to each batch; False (default) disables
             mesh visualization windows, which prevents GLFW context corruption
             and the spurious warnings it causes at script exit.
@@ -305,7 +383,7 @@ def _execute_all_batches(batches: List[FrameBatch], interactive: bool = True) ->
     for batch in batches:
         print(f"── {batch.depth_video.name}  |  {batch.description}")
         try:
-            execute_frame_batch(batch, interactive=interactive)
+            execute_frame_batch(batch, dag_handler, interactive=interactive)
         except Exception as exc:
             print(f"  ❌ Error processing {batch.description}: {exc}\n")
 
@@ -314,12 +392,12 @@ def _execute_all_batches(batches: List[FrameBatch], interactive: bool = True) ->
 # BATCH RUNNER
 # ──────────────────────────────────────────────────────────────────────────────
 
-def batch_process_all_sessions(configs_forearm_dir: Path, project_data_root: Path) -> None:
+def batch_process_all_sessions(configs_forearm_dir: Path, project_data_root: Path, dag_handler: DagConfigHandler) -> None:
     """
     Discovers all *.yaml session configs and runs the pipeline for each one.
     After each session, prompts the user to confirm quality and writes (or
     removes) a .SUCCESS flag accordingly. Sessions with an existing flag are
-    skipped unless FORCE_PROCESSING is True.
+    skipped unless ``force_session_processing`` is ``true`` in the DAG config.
     """
     session_files = _discover_session_configs(configs_forearm_dir)
     total = len(session_files)
@@ -332,10 +410,10 @@ def batch_process_all_sessions(configs_forearm_dir: Path, project_data_root: Pat
         try:
             session_config: ForearmConfig = ForearmConfigFileHandler.load(session_file)
 
-            if _should_skip_session(session_config):
+            if _should_skip_session(session_config, dag_handler):
                 continue
 
-            run_session(session_config, project_data_root)
+            run_session(session_config, project_data_root, dag_handler)
             _handle_session_confirmation(session_config)
 
         except Exception as exc:
@@ -357,9 +435,9 @@ def _discover_session_configs(configs_forearm_dir: Path) -> List[Path]:
     return session_files
 
 
-def _should_skip_session(session_config: ForearmConfig) -> bool:
+def _should_skip_session(session_config: ForearmConfig, dag_handler: DagConfigHandler) -> bool:
     """Returns True (and logs a message) if this session already has a .SUCCESS flag."""
-    if FORCE_PROCESSING:
+    if dag_handler.get_parameter('force_session_processing', True):
         return False
 
     flag_file = _get_flag_file_path(session_config)
@@ -404,17 +482,18 @@ def _ask_user_confirmation() -> bool:
 if __name__ == "__main__":
     print("🛠️  Initialising batch processing script...\n")
     try:
-        project_root        = Path(__file__).resolve().parents[2]
-        configs_forearm_dir = project_root / "configs" / "forearm_configs"
-        project_data_root   = path_tools.get_project_data_root()
+        project_root, project_data_root, dag_config_path = setup_environment()
+        dag_handler = DagConfigHandler(dag_config_path)
+        forearm_configs_dir = project_root / "configs" / dag_handler.get_parameter('forearm_configs_directory')
 
         print(f"  Project root   : {project_root}")
         print(f"  Data root      : {project_data_root}")
-        print(f"  Forearm configs: {configs_forearm_dir}\n")
+        print(f"  Forearm configs: {forearm_configs_dir}\n")
 
         batch_process_all_sessions(
-            configs_forearm_dir=configs_forearm_dir,
+            configs_forearm_dir=forearm_configs_dir,
             project_data_root=project_data_root,
+            dag_handler=dag_handler,
         )
     except Exception as exc:
         print(f"❌ Setup / execution error: {exc}")
