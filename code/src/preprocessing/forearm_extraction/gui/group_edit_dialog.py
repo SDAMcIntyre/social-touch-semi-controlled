@@ -173,9 +173,9 @@ class GroupEditDialog:
             self.feedback_lbl.config(text="Representative frame must be an integer.")
             return None
 
-        if rep not in unique_frames:
+        if not (0 <= rep < self.total_frames):
             self.feedback_lbl.config(
-                text=f"Representative frame {rep} is not in the updated frame list."
+                text=f"Representative frame {rep} is out of range [0 – {self.total_frames - 1}]."
             )
             return None
 
