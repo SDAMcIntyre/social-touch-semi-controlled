@@ -1,9 +1,11 @@
+import json
 import re
 import logging
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple, Union
 from dataclasses import dataclass
 
+import numpy as np
 import open3d as o3d
 # from bisect import bisect_left # For a highly optimized search
 
@@ -154,6 +156,47 @@ class ForearmCatalog:
         
         logging.warning("Catalog is empty or no mesh files could be loaded.")
         return None
+
+    # ------------------------------------------------------------------
+    # Registration-aware accessors
+    # ------------------------------------------------------------------
+
+    def get_unified_pointcloud(
+        self, session_id: str
+    ) -> Optional[o3d.geometry.PointCloud]:
+        """Load the unified registered point cloud for *session_id*.
+
+        Returns ``None`` when the file does not exist (single-forearm
+        session or registration has not been run yet).
+        """
+        path = self._pointcloud_dir / f"{session_id}_unified_registered.ply"
+        if not path.exists():
+            return None
+        return PointCloudDataHandler.load(path)
+
+    def load_registration_transforms(
+        self, session_id: str
+    ) -> Optional[Dict[str, Tuple[np.ndarray, float]]]:
+        """Load persisted per-snapshot registration transforms.
+
+        Returns a mapping ``{snapshot_key: (4x4_matrix, fitness)}`` where
+        each key is a composite string ``"video_stem:frame_id"``, or
+        ``None`` if the transforms file does not exist.
+        """
+        path = self._pointcloud_dir / f"{session_id}_registration_transforms.json"
+        if not path.exists():
+            return None
+
+        with open(path) as fh:
+            raw = json.load(fh)
+
+        transforms: Dict[str, Tuple[np.ndarray, float]] = {}
+        for key, entry in raw["transforms"].items():
+            transforms[key] = (
+                np.asarray(entry["matrix_4x4"]),
+                entry["fitness"],
+            )
+        return transforms
 
     def find_closest_reference(
         self, 
