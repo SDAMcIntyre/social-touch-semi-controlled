@@ -64,7 +64,7 @@ class FrameBatch:
 
 def setup_environment():
     project_root      = Path(__file__).resolve().parents[2]
-    dag_config_path   = project_root / "configs" / "preprocess_forearm_manual_dag.yaml"
+    dag_config_path   = project_root / "configs" / "preprocess_pipeline_extract_forearm_manual_dag.yaml"
     project_data_root = path_tools.get_project_data_root()
     return project_root, project_data_root, dag_config_path
 
@@ -399,7 +399,7 @@ def batch_process_all_sessions(configs_forearm_dir: Path, project_data_root: Pat
     removes) a .SUCCESS flag accordingly. Sessions with an existing flag are
     skipped unless ``force_session_processing`` is ``true`` in the DAG config.
     """
-    session_files = _discover_session_configs(configs_forearm_dir)
+    session_files = _discover_session_configs(configs_forearm_dir, dag_handler)
     total = len(session_files)
 
     for idx, session_file in enumerate(session_files, start=1):
@@ -422,12 +422,25 @@ def batch_process_all_sessions(configs_forearm_dir: Path, project_data_root: Pat
     print(f"\n🎉 Batch complete — {total} session(s) processed.")
 
 
-def _discover_session_configs(configs_forearm_dir: Path) -> List[Path]:
-    """Returns sorted *.yaml files from the config directory, or raises if none found."""
+def _discover_session_configs(configs_forearm_dir: Path, dag_handler: DagConfigHandler) -> List[Path]:
+    """Returns sorted *.yaml files from the config directory.
+
+    If ``forearm_config_files`` is set in the DAG config, only those files are
+    returned (include-list model). Otherwise all *.yaml files in the directory
+    are returned. Raises if the directory is missing or no files are found.
+    """
     if not configs_forearm_dir.is_dir():
         raise FileNotFoundError(f"Config directory not found: {configs_forearm_dir}")
 
-    session_files = sorted(configs_forearm_dir.glob("*.yaml"))
+    included = dag_handler.get_parameter('forearm_config_files') or []
+    if included:
+        session_files = sorted(
+            configs_forearm_dir / name for name in included
+            if (configs_forearm_dir / name).exists()
+        )
+    else:
+        session_files = sorted(configs_forearm_dir.glob("*.yaml"))
+
     if not session_files:
         raise FileNotFoundError(f"No *.yaml session configs found in: {configs_forearm_dir}")
 

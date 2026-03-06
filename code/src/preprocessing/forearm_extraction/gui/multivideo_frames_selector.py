@@ -422,7 +422,7 @@ class VideoFramesSelector:
         rep = self.range_start
         try:
             entry_val = int(self.range_rep_entry.get().strip())
-            if self.range_start <= entry_val <= self.range_end:
+            if 0 <= entry_val < self.total_frames:
                 rep = entry_val
         except ValueError:
             pass
@@ -456,7 +456,7 @@ class VideoFramesSelector:
         rep = self.pending_group[0]
         try:
             entry_val = int(self.custom_rep_entry.get().strip())
-            if entry_val in deduped:
+            if 0 <= entry_val < self.total_frames:
                 rep = entry_val
         except ValueError:
             pass
@@ -569,9 +569,9 @@ class VideoFramesSelector:
     # =========================================================================
 
     def _update_mark_rep_btn(self) -> None:
-        """Enable the button only when the slider frame is inside the selected group."""
+        """Enable the button whenever a group is selected."""
         sel = self.groups_listbox.curselection()
-        if sel and self.current_frame_idx in self.groups[sel[0]]:
+        if sel:
             self.mark_rep_btn.config(state=tk.NORMAL)
         else:
             self.mark_rep_btn.config(state=tk.DISABLED)
@@ -581,13 +581,6 @@ class VideoFramesSelector:
         if not sel:
             return
         group_idx = sel[0]
-        if self.current_frame_idx not in self.groups[group_idx]:
-            messagebox.showwarning(
-                "Frame Not in Group",
-                f"Frame {self.current_frame_idx} is not a member of Group {group_idx + 1}.",
-                parent=self.parent,
-            )
-            return
         self.group_representatives[group_idx] = self.current_frame_idx
         self._refresh_groups_listbox()
         # Restore selection after refresh

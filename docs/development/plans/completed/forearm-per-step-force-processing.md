@@ -2,7 +2,8 @@
 
 **Date:** 2026-03-04
 **Author:** Basil Duvernoy
-**Status:** Active
+**Status:** Completed
+**Completion Date:** 2026-03-06
 **Branch:** `feature/forearm-per-step-force-processing`
 
 ---
@@ -273,11 +274,11 @@ from utils import DagConfigHandler, TaskExecutor
 
 ### Phase 2 Manual Verification
 
-- [ ] **YAML-driven skip:** Set `force_processing: false` in all YAML tasks, session already processed → all steps skipped (same as Phase 1 full re-run)
-- [ ] **YAML-driven force:** Set `force_processing: true` for `build_mesh` only in YAML → steps 1-3 skipped, step 4 re-runs, step 5 skipped
-- [ ] **Disabled step propagation:** Set `enabled: false` on `clean_forearm` → step 1 runs, steps 2-5 skipped due to unmet `depends_on`
-- [ ] **Directory from YAML:** Change `forearm_configs_directory` in YAML → script discovers sessions from the new directory
-- [ ] **Session-level force from YAML:** Set `force_session_processing: false` → sessions with `.SUCCESS` flag are skipped
+- [x] **YAML-driven skip:** Set `force_processing: false` in all YAML tasks, session already processed → all steps skipped (same as Phase 1 full re-run)
+- [x] **YAML-driven force:** Set `force_processing: true` for `build_mesh` only in YAML → steps 1-3 skipped, step 4 re-runs, step 5 skipped
+- [x] **Disabled step propagation:** Set `enabled: false` on `clean_forearm` → step 1 runs, steps 2-5 skipped due to unmet `depends_on`
+- [x] **Directory from YAML:** Change `forearm_configs_directory` in YAML → script discovers sessions from the new directory
+- [x] **Session-level force from YAML:** Set `force_session_processing: false` → sessions with `.SUCCESS` flag are skipped
 
 ### Edge Cases
 

@@ -42,8 +42,19 @@ class DagConfigModel:
         return self._dirty
 
     # ------------------------------------------------------------------
-    # Parameters — kinect directories
+    # Parameters — config directories (kinect or forearm)
     # ------------------------------------------------------------------
+
+    def get_config_dir_root_name(self) -> str:
+        """Return the subdirectory name under configs/ used for per-subject configs.
+
+        Returns ``"forearm_configs"`` for workflows that use
+        ``forearm_configs_directory``, and ``"kinect_configs"`` for all others.
+        """
+        params = self._data.get("parameters", {}) or {}
+        if "forearm_configs_directory" in params:
+            return "forearm_configs"
+        return "kinect_configs"
 
     def get_kinect_dir_mode(self) -> Literal["single", "multi", "none"]:
         """Detect whether the YAML uses the singular or plural directory key."""
@@ -52,28 +63,59 @@ class DagConfigModel:
             return "multi"
         if "kinect_configs_directory" in params:
             return "single"
+        if "forearm_configs_directory" in params:
+            return "single"
         return "none"
 
     def get_kinect_directories(self) -> list[str]:
-        """Return the configured kinect config directories as a list."""
+        """Return the configured config directories as a list."""
         params = self._data.get("parameters", {}) or {}
         mode = self.get_kinect_dir_mode()
         if mode == "multi":
             val = params.get("kinect_configs_directories", [])
             return list(val) if val else []
         if mode == "single":
-            val = params.get("kinect_configs_directory", "")
+            val = (
+                params.get("kinect_configs_directory")
+                or params.get("forearm_configs_directory")
+                or ""
+            )
             return [val] if val else []
         return []
 
     def set_kinect_directories(self, dirs: list[str]) -> None:
-        """Update the kinect directory parameter(s), respecting the existing key."""
+        """Update the config directory parameter(s), respecting the existing key."""
         params = self._data.get("parameters", {}) or {}
         mode = self.get_kinect_dir_mode()
         if mode == "multi":
             params["kinect_configs_directories"] = dirs
         elif mode == "single":
-            params["kinect_configs_directory"] = dirs[0] if dirs else ""
+            if "forearm_configs_directory" in params:
+                # Only overwrite when a valid directory is selected; never blank the path.
+                if dirs:
+                    params["forearm_configs_directory"] = dirs[0]
+            else:
+                params["kinect_configs_directory"] = dirs[0] if dirs else ""
+        self._dirty = True
+
+    # ------------------------------------------------------------------
+    # Parameters — forearm config files (include list)
+    # ------------------------------------------------------------------
+
+    def get_forearm_config_files(self) -> list[str]:
+        """Return explicitly selected forearm session filenames (empty = run all)."""
+        params = self._data.get("parameters", {}) or {}
+        return list(params.get("forearm_config_files", []) or [])
+
+    def set_forearm_config_files(self, filenames: list[str]) -> None:
+        """Persist the forearm session file selection. Empty list removes the key."""
+        params = self._data.get("parameters")
+        if params is None:
+            return
+        if filenames:
+            params["forearm_config_files"] = filenames
+        else:
+            params.pop("forearm_config_files", None)
         self._dirty = True
 
     # ------------------------------------------------------------------

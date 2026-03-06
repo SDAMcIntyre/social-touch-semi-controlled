@@ -6,6 +6,8 @@ parameters:
   forearm_configs_directory: "forearm_configs"
   force_session_processing: true  # Controls .SUCCESS flag skipping
 
+  forearm_config_files:
+  - session_2022-06-14_ST13-03.yaml
 tasks:
   # Step 1: Interactive forearm segmentation (ROI annotation + point cloud extraction)
   extract_forearm:

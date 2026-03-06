@@ -223,7 +223,13 @@ class LauncherWindow(QMainWindow):
             return
         dirs, excluded = self._kinect_selector.get_selection()
         self._model.set_kinect_directories(dirs)
-        self._model.set_exclude_files(excluded)
+        if self._model.get_config_dir_root_name() == "forearm_configs":
+            # Forearm uses an include-list: checked files → forearm_config_files.
+            self._model.set_forearm_config_files(
+                self._kinect_selector.get_checked_forearm_files()
+            )
+        else:
+            self._model.set_exclude_files(excluded)
         self._mark_dirty()
 
     # ------------------------------------------------------------------
