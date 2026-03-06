@@ -1,11 +1,10 @@
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Dict
+from typing import Dict, List, Optional
 from multiprocessing import freeze_support
 
-import pandas as pd
-from prefect import flow, get_run_logger, task
+from prefect import flow, get_run_logger
 from prefect.futures import PrefectFuture
 
 import utils.path_tools as path_tools
@@ -17,8 +16,9 @@ from primary_processing import (
     get_block_files
 )
 from _4_merging import (
-    align_and_merge_neural_and_kinect, 
-    aggregate_session_blocks
+    align_and_merge_neural_and_kinect,
+    aggregate_session_blocks,
+    filter_block_by_neural_quality,
 )
 
 # --- Data Structures ---
@@ -99,27 +99,24 @@ def aggregate_blocks(
     session_merged_output_dir: Path,
     session_id: str,
     glob_pattern: str = "*_merged_data.csv",
-    force_processing: bool = False
+    force_processing: bool = False,
+    input_subfolder: str = "sessions",
+    output_suffix: str = "",
 ) -> Path:
     """
     Flow to aggregate all block-level merged CSV files within a session into one final CSV.
     Handles path resolution and invokes the aggregation logic.
     """
     logger = get_run_logger()
-    
-    # 1. Define paths
-    # The actual files are in a subdirectory named 'sessions'
-    input_dir = session_merged_output_dir / "sessions"
-    output_filename = f"{session_id}_semicontrolled_aggregated_session.csv"
+
+    input_dir = session_merged_output_dir / input_subfolder
+    output_filename = f"{session_id}_semicontrolled_aggregated_session{output_suffix}.csv"
     output_path = session_merged_output_dir / output_filename
 
     logger.info(f"[{session_id}] Scanning for blocks in {input_dir}...")
 
-    # 2. Find input files (Resolving the glob here)
     input_files = list(input_dir.glob(f"*{session_id}{glob_pattern}"))
-    
-    # 3. Invoke the logic function with explicit paths
-    # Note: We pass the resolved list and the target path
+
     aggregate_session_blocks(
         input_paths=input_files,
         output_path=output_path,
@@ -132,6 +129,27 @@ def aggregate_blocks(
         logger.warning(f"⚠️ No files found matching pattern *{session_id}{glob_pattern}")
 
     return output_path
+
+
+@flow(name="11. Filter by Neural Quality")
+def filter_by_neural_quality_flow(
+    merged_csv: Path,
+    output_csv: Path,
+    xlsx_path: Path,
+    *,
+    force_processing: bool = False,
+) -> Path:
+    """
+    Flow to filter a single block's merged CSV by removing Not2Use trials.
+    """
+    logger = get_run_logger()
+    logger.info(f"[{merged_csv.name}] Filtering by neural quality xlsx: {xlsx_path.name}")
+    return filter_block_by_neural_quality(
+        input_csv=merged_csv,
+        output_csv=output_csv,
+        xlsx_path=xlsx_path,
+        force_processing=force_processing,
+    )
 
 
 @flow(name="Run Single Session Pipeline")
@@ -150,12 +168,12 @@ def run_single_session_pipeline(
     paths = resolve_filenames(config)
     output_file_path = paths["output_path"]
 
-    # --- Stage 5: Data Integration (Block Unification) ---
+    # --- Stage 5: Data Integration (Block Unification) + Neural Quality Filter ---
     try:
         task_name = 'unify_dataset'
         if dag_handler.can_run(task_name):
             logger.info(f"[{block_name}] ==> Running task: {task_name}")
-            
+
             # Validation
             if not paths["kinect_path"].exists():
                 raise FileNotFoundError(f"Kinect data not found: {paths['kinect_path']}")
@@ -165,16 +183,46 @@ def run_single_session_pipeline(
             # Execution
             options = dag_handler.get_task_options(task_name)
             force = options.get('force_processing', False)
-            
+
             unify_dataset(
                 kinect_data_path=paths["kinect_path"],
                 nerve_data_path=paths["nerve_path"],
                 output_file_path=output_file_path,
                 force_processing=force
             )
-            
+
             dag_handler.mark_completed(task_name)
-            
+
+        # --- Filter by Neural Quality ---
+        task_name = 'filter_by_neural_quality'
+        if dag_handler.can_run(task_name):
+            logger.info(f"[{block_name}] ==> Running task: {task_name}")
+
+            xlsx_param = dag_handler.get_parameter('neural_quality_xlsx')
+            if not xlsx_param:
+                raise ValueError(f"neural_quality_xlsx parameter is not configured in DAG YAML")
+
+            xlsx_path = Path(xlsx_param)
+            if not xlsx_path.is_absolute():
+                xlsx_path = config.session_merged_output_dir.parents[1] / xlsx_path
+            if not xlsx_path.exists():
+                raise FileNotFoundError(f"neural_quality_xlsx not found: {xlsx_path}")
+
+            options = dag_handler.get_task_options(task_name)
+            force = options.get('force_processing', False)
+
+            filtered_output = (
+                config.session_merged_output_dir / "sessions_filtered" / output_file_path.name
+            )
+            filter_by_neural_quality_flow(
+                merged_csv=output_file_path,
+                output_csv=filtered_output,
+                xlsx_path=xlsx_path,
+                force_processing=force,
+            )
+
+            dag_handler.mark_completed(task_name)
+
     except Exception as e:
         logger.error(f"❌ Pipeline failed for {block_name}: {e}")
         return PipelineResult(
@@ -282,6 +330,20 @@ def run_batch_processing(
                 session_merged_output_dir=output_dir,
                 session_id=session_id
             )
+
+        # 3b. Aggregate filtered sessions (if sessions_filtered/ exists)
+        logger.info(f"\n--- Starting Filtered Aggregation for {len(session_map)} Sessions ---")
+        for session_id, output_dir in session_map.items():
+            filtered_dir = output_dir / "sessions_filtered"
+            if filtered_dir.exists():
+                aggregate_blocks(
+                    session_merged_output_dir=output_dir,
+                    session_id=session_id,
+                    input_subfolder="sessions_filtered",
+                    output_suffix="_filtered",
+                )
+            else:
+                logger.info(f"[{session_id}] No sessions_filtered/ directory; skipping filtered aggregation")
 
     logger.info("✅ All batch processing tasks have finished.")
 
