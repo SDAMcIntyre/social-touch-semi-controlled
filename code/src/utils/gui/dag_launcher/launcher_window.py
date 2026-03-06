@@ -34,7 +34,7 @@ _SCRIPT_OVERRIDES: dict[str, str] = {
 
 
 class LauncherWindow(QMainWindow):
-    """Three-column GUI: workflow selector (left), kinect dirs (middle), tasks (right)."""
+    """Three-column GUI: workflow selector (left), tasks (center), kinect dirs (right)."""
 
     def __init__(
         self,
@@ -47,6 +47,7 @@ class LauncherWindow(QMainWindow):
         self._initial_sizes_applied = False
         self._process: subprocess.Popen | None = None
         self._poll_timer: QTimer | None = None
+        self._aborting: bool = False
 
         self.setWindowTitle("DAG Config Launcher")
         self.resize(1100, 700)
@@ -84,17 +85,17 @@ class LauncherWindow(QMainWindow):
         self._workflow_selector = WorkflowSelector(self._configs_dir)
         self._splitter.addWidget(self._workflow_selector)
 
-        # --- Middle column: kinect directory selector ---
-        self._kinect_selector = KinectDirectorySelector(self._configs_dir)
-        self._splitter.addWidget(self._kinect_selector)
-
-        # --- Right column: task panel ---
+        # --- Middle column: task panel (50%) ---
         self._task_panel = TaskPanel()
         self._splitter.addWidget(self._task_panel)
 
+        # --- Right column: kinect directory selector (25%) ---
+        self._kinect_selector = KinectDirectorySelector(self._configs_dir)
+        self._splitter.addWidget(self._kinect_selector)
+
         self._splitter.setStretchFactor(0, 1)  # workflow selector  (1/4)
-        self._splitter.setStretchFactor(1, 1)  # kinect selector   (1/4)
-        self._splitter.setStretchFactor(2, 2)  # task panel        (1/2)
+        self._splitter.setStretchFactor(1, 2)  # task panel        (1/2)
+        self._splitter.setStretchFactor(2, 1)  # kinect selector   (1/4)
 
         # --- Wrap splitter + run bar in a central QWidget ---
         central = QWidget()
@@ -129,6 +130,16 @@ class LauncherWindow(QMainWindow):
             " QPushButton:disabled { background-color: #A5D6A7; color: #E8E8E8; }"
         )
         hbox.addWidget(self._run_button)
+
+        self._abort_button = QPushButton("Abort")
+        self._abort_button.setVisible(False)
+        self._abort_button.clicked.connect(self._on_abort)
+        self._abort_button.setStyleSheet(
+            "QPushButton { background-color: #F44336; color: white; font-size: 18px;"
+            " padding: 8px 24px; border-radius: 4px; }"
+            " QPushButton:hover { background-color: #D32F2F; }"
+        )
+        hbox.addWidget(self._abort_button)
 
         return bar
 
@@ -224,10 +235,18 @@ class LauncherWindow(QMainWindow):
         if not self._initial_sizes_applied:
             w = self._splitter.width()
             if w > 0:
-                self._splitter.setSizes([w // 4, w // 4, w // 2])
+                self._splitter.setSizes([w // 4, w // 2, w // 4])
                 self._initial_sizes_applied = True
 
     def closeEvent(self, event) -> None:  # noqa: N802
+        if self._process is not None:
+            self._aborting = True
+            self._process.terminate()
+            self._process.wait()
+            self._process = None
+            if self._poll_timer is not None:
+                self._poll_timer.stop()
+                self._poll_timer = None
         if self._model and self._model.dirty:
             if not self._confirm_discard():
                 event.ignore()
@@ -273,11 +292,13 @@ class LauncherWindow(QMainWindow):
             QMessageBox.critical(self, "Run Error", "Could not find the workflow script.")
             return
         project_root = self._configs_dir.parent
+        self._aborting = False
         self._process = subprocess.Popen(
             [sys.executable, str(script)],
             cwd=str(project_root),
         )
         self._run_button.setEnabled(False)
+        self._abort_button.setVisible(True)
         self.statusBar().showMessage("Running …")
         self._poll_timer = QTimer(self)
         self._poll_timer.setInterval(500)
@@ -292,10 +313,23 @@ class LauncherWindow(QMainWindow):
             return  # still running
         self._poll_timer.stop()
         self._poll_timer = None
-        label = "Finished" if retcode == 0 else "Failed"
-        self.statusBar().showMessage(f"{label} (exit code {retcode})")
+        self._abort_button.setVisible(False)
+        if self._aborting:
+            self.statusBar().showMessage("Aborted")
+        else:
+            label = "Finished" if retcode == 0 else "Failed"
+            self.statusBar().showMessage(f"{label} (exit code {retcode})")
         self._run_button.setEnabled(True)
         self._process = None
+
+    def _on_abort(self) -> None:
+        """Terminate the running subprocess; let the poll timer handle cleanup."""
+        if self._process is None:
+            return
+        self._aborting = True
+        self._abort_button.setVisible(False)
+        self.statusBar().showMessage("Aborting …")
+        self._process.terminate()
 
     def _confirm_discard(self) -> bool:
         reply = QMessageBox.question(
