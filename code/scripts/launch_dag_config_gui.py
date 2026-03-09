@@ -16,17 +16,27 @@ except Exception:
 
 from PyQt5.QtWidgets import QApplication
 
+from utils.gui.dag_launcher.launcher_config import parse_launcher_config
 from utils.gui.dag_launcher.launcher_window import LauncherWindow
 
 
 def main() -> None:
-    configs_dir = Path("configs")
-    if not configs_dir.is_dir():
-        print(f"Error: configs directory not found at {configs_dir.resolve()}")
+    project_root = Path(".").resolve()
+    launcher_yaml = project_root / "configs" / "launcher.yaml"
+
+    if not launcher_yaml.is_file():
+        print(f"Error: launcher config not found at {launcher_yaml}")
         sys.exit(1)
 
+    try:
+        entries = parse_launcher_config(launcher_yaml, project_root)
+    except Exception as exc:
+        print(f"Error: failed to parse {launcher_yaml}: {exc}")
+        sys.exit(1)
+
+    configs_dir = project_root / "configs"
     app = QApplication(sys.argv)
-    window = LauncherWindow(configs_dir)
+    window = LauncherWindow(entries, configs_dir)
     window.showMaximized()
     sys.exit(app.exec_())
 
