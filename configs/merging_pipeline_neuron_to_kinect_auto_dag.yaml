@@ -5,7 +5,18 @@
 parameters:
   # Set to true to run different sessions in parallel, false to run them one by one.
   parallel_execution: false
-  kinect_configs: "valid_configs_ST13-01"
+  kinect_configs: [valid_configs_ST13-01, valid_configs_ST13-02, 
+      valid_configs_ST13-03, valid_configs_ST14-01_ST14-02, 
+      valid_configs_ST14-03_ST14-04, valid_configs_ST15-01_ST15-02, 
+      valid_configs_ST16-02, valid_configs_ST16-03_ST16-04, 
+      valid_configs_ST16-05, 
+      valid_configs_ST18-02_ST18-04/kinect_config_2022-06-22_ST18-04_semicontrolled_block-order01.yaml,
+    valid_configs_ST18-02_ST18-04/kinect_config_2022-06-22_ST18-04_semicontrolled_block-order02.yaml,
+    valid_configs_ST18-02_ST18-04/kinect_config_2022-06-22_ST18-04_semicontrolled_block-order03.yaml,
+    valid_configs_ST18-02_ST18-04/kinect_config_2022-06-22_ST18-04_semicontrolled_block-order05.yaml,
+    valid_configs_ST18-02_ST18-04/kinect_config_2022-06-22_ST18-04_semicontrolled_block-order06.yaml,
+    valid_configs_ST18-02_ST18-04/kinect_config_2022-06-22_ST18-04_semicontrolled_block-order07.yaml,
+    valid_configs_ST18-02_ST18-04/kinect_config_2022-06-22_ST18-04_semicontrolled_block-order08.yaml]
   # Path to the experimenter-maintained xlsx file that annotates unusable trials.
   # Relative paths are resolved from the project data root.
   neural_quality_xlsx: "F:/liu-onedrive-nospecial-carac/_Teams/Social touch Kinect
