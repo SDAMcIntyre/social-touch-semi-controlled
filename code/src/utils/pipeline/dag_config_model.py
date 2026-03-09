@@ -7,9 +7,10 @@ loading, modifying, and saving DAG workflow YAML files.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 from ruamel.yaml import YAML
+from ruamel.yaml.comments import CommentedSeq
 
 
 class DagConfigModel:
@@ -42,99 +43,54 @@ class DagConfigModel:
         return self._dirty
 
     # ------------------------------------------------------------------
-    # Parameters — config directories (kinect or forearm)
+    # Parameters — session config entries (kinect or forearm)
     # ------------------------------------------------------------------
 
-    def get_config_dir_root_name(self) -> str:
-        """Return the subdirectory name under configs/ used for per-subject configs.
+    def get_config_type(self) -> str:
+        """Return the config key type for this workflow.
 
-        Returns ``"forearm_configs"`` for workflows that use
-        ``forearm_configs_directory``, and ``"kinect_configs"`` for all others.
+        Returns ``"forearm_configs"`` for workflows that use ``forearm_configs``,
+        and ``"kinect_configs"`` for all others.
         """
         params = self._data.get("parameters", {}) or {}
-        if "forearm_configs_directory" in params:
+        if "forearm_configs" in params:
             return "forearm_configs"
         return "kinect_configs"
 
-    def get_kinect_dir_mode(self) -> Literal["single", "multi", "none"]:
-        """Detect whether the YAML uses the singular or plural directory key."""
-        params = self._data.get("parameters", {}) or {}
-        if "kinect_configs_directories" in params:
-            return "multi"
-        if "kinect_configs_directory" in params:
-            return "single"
-        if "forearm_configs_directory" in params:
-            return "single"
-        return "none"
+    def get_config_entries(self) -> list[str]:
+        """Return the session config entries as a list of strings.
 
-    def get_kinect_directories(self) -> list[str]:
-        """Return the configured config directories as a list."""
+        Each entry is either a directory name or a relative file path, both
+        relative to the implied config root (``configs/kinect_configs/`` or
+        ``configs/forearm_configs/``).
+        """
         params = self._data.get("parameters", {}) or {}
-        mode = self.get_kinect_dir_mode()
-        if mode == "multi":
-            val = params.get("kinect_configs_directories", [])
-            return list(val) if val else []
-        if mode == "single":
-            val = (
-                params.get("kinect_configs_directory")
-                or params.get("forearm_configs_directory")
-                or ""
-            )
+        config_type = self.get_config_type()
+        val = params.get(config_type)
+        if val is None:
+            return []
+        if isinstance(val, str):
             return [val] if val else []
-        return []
+        return list(val)
 
-    def set_kinect_directories(self, dirs: list[str]) -> None:
-        """Update the config directory parameter(s), respecting the existing key."""
-        params = self._data.get("parameters", {}) or {}
-        mode = self.get_kinect_dir_mode()
-        if mode == "multi":
-            params["kinect_configs_directories"] = dirs
-        elif mode == "single":
-            if "forearm_configs_directory" in params:
-                # Only overwrite when a valid directory is selected; never blank the path.
-                if dirs:
-                    params["forearm_configs_directory"] = dirs[0]
-            else:
-                params["kinect_configs_directory"] = dirs[0] if dirs else ""
-        self._dirty = True
+    def set_config_entries(self, entries: list[str]) -> None:
+        """Persist session config entries, using flow-style list when multiple.
 
-    # ------------------------------------------------------------------
-    # Parameters — forearm config files (include list)
-    # ------------------------------------------------------------------
-
-    def get_forearm_config_files(self) -> list[str]:
-        """Return explicitly selected forearm session filenames (empty = run all)."""
-        params = self._data.get("parameters", {}) or {}
-        return list(params.get("forearm_config_files", []) or [])
-
-    def set_forearm_config_files(self, filenames: list[str]) -> None:
-        """Persist the forearm session file selection. Empty list removes the key."""
+        A single entry is written as a plain string. Multiple entries are
+        written as a flow-style YAML sequence (``[item1, item2]``).
+        """
         params = self._data.get("parameters")
         if params is None:
             return
-        if filenames:
-            params["forearm_config_files"] = filenames
+        config_type = self.get_config_type()
+        if not entries:
+            params[config_type] = ""
+        elif len(entries) == 1:
+            params[config_type] = entries[0]
         else:
-            params.pop("forearm_config_files", None)
-        self._dirty = True
-
-    # ------------------------------------------------------------------
-    # Parameters — exclude files
-    # ------------------------------------------------------------------
-
-    def get_exclude_files(self) -> list[str]:
-        params = self._data.get("parameters", {}) or {}
-        return list(params.get("exclude_files", []) or [])
-
-    def set_exclude_files(self, filenames: list[str]) -> None:
-        params = self._data.get("parameters")
-        if params is None:
-            return
-        if filenames:
-            params["exclude_files"] = filenames
-        else:
-            # Remove the key entirely when the list is empty
-            params.pop("exclude_files", None)
+            seq = CommentedSeq(entries)
+            seq.fa.set_flow_style()
+            params[config_type] = seq
         self._dirty = True
 
     # ------------------------------------------------------------------

@@ -22,7 +22,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from utils.gui.dag_launcher.kinect_directory_selector import KinectDirectorySelector
+from utils.gui.dag_launcher.kinect_directory_selector import SessionConfigSelector
 from utils.gui.dag_launcher.launcher_config import WorkflowEntry
 from utils.gui.dag_launcher.task_panel import TaskPanel
 from utils.gui.dag_launcher.workflow_selector import WorkflowSelector
@@ -88,8 +88,8 @@ class LauncherWindow(QMainWindow):
         self._task_panel = TaskPanel()
         self._splitter.addWidget(self._task_panel)
 
-        # --- Right column: kinect directory selector (25%) ---
-        self._kinect_selector = KinectDirectorySelector(self._configs_dir)
+        # --- Right column: session config selector (25%) ---
+        self._kinect_selector = SessionConfigSelector(self._configs_dir)
         self._splitter.addWidget(self._kinect_selector)
 
         self._splitter.setStretchFactor(0, 1)  # workflow selector  (1/4)
@@ -228,15 +228,7 @@ class LauncherWindow(QMainWindow):
         """Called when the user checks/unchecks a directory or file."""
         if not self._model:
             return
-        dirs, excluded = self._kinect_selector.get_selection()
-        self._model.set_kinect_directories(dirs)
-        if self._model.get_config_dir_root_name() == "forearm_configs":
-            # Forearm uses an include-list: checked files → forearm_config_files.
-            self._model.set_forearm_config_files(
-                self._kinect_selector.get_checked_forearm_files()
-            )
-        else:
-            self._model.set_exclude_files(excluded)
+        self._model.set_config_entries(self._kinect_selector.get_selection())
         self._mark_dirty()
 
     # ------------------------------------------------------------------

@@ -7,8 +7,9 @@ from utils import DagConfigHandler
 from primary_processing import (
     KinectConfigFileHandler,
     KinectConfig,
-    get_block_files
 )
+
+from utils.pipeline.session_config_resolver import resolve_session_configs
 
 from _3_preprocessing._1_sticker_tracking import (
     review_tracked_objects_in_video,
@@ -372,11 +373,10 @@ def run_single_session_pipeline(
 
 # --- The "Dispatcher" Flow ---
 @flow(name="Run Manual Batch Sequentially", log_prints=True)
-def run_batch_sequentially(kinect_configs_dir: Path, project_data_root: Path, dag_config_path: Path):
+def run_batch_sequentially(block_files: list[Path], project_data_root: Path, dag_config_path: Path):
     """Runs all session pipelines one by one."""
     dag_handler_template = DagConfigHandler(dag_config_path)
-    block_files = get_block_files(kinect_configs_dir)
-    
+
     for block_file in block_files:
         print(f"--- Running session: {block_file.name} ---")
         try:
@@ -406,15 +406,15 @@ if __name__ == "__main__":
 
     try:
         main_dag_handler = DagConfigHandler(dag_config_path)
-        kinect_dir = main_dag_handler.get_parameter('kinect_configs_directory')
-        kinect_configs_dir = configs_dir / kinect_dir
+        entries = main_dag_handler.get_parameter('kinect_configs')
+        block_files = resolve_session_configs(entries, configs_dir / "kinect_configs")
     except FileNotFoundError:
         print(f"❌ Error: '{dag_config_path}' not found.")
         exit(1)
 
     print("🚀 Launching manual batch processing SEQUENTIALLY.")
     run_batch_sequentially(
-        kinect_configs_dir=kinect_configs_dir,
+        block_files=block_files,
         project_data_root=project_data_root,
         dag_config_path=dag_config_path
     )
