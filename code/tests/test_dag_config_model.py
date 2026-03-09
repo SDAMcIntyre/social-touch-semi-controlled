@@ -69,83 +69,81 @@ def test_roundtrip_toggle_persists(dag_file: Path, tmp_path: Path) -> None:
 
 
 # ------------------------------------------------------------------
-# Kinect directory mode detection
+# Config type detection
 # ------------------------------------------------------------------
 
 
-def test_singular_kinect_dir_mode() -> None:
+def test_config_type_kinect() -> None:
     cfg = CONFIGS_DIR / "preprocess_workflow_kinect_auto_dag.yaml"
     if not cfg.exists():
         pytest.skip("config not found")
     model = DagConfigModel(cfg)
-    assert model.get_kinect_dir_mode() == "single"
+    assert model.get_config_type() == "kinect_configs"
 
 
-def test_plural_kinect_dir_mode() -> None:
+def test_config_type_forearm() -> None:
+    cfg = CONFIGS_DIR / "preprocess_pipeline_extract_forearm_manual_dag.yaml"
+    if not cfg.exists():
+        pytest.skip("config not found")
+    model = DagConfigModel(cfg)
+    assert model.get_config_type() == "forearm_configs"
+
+
+def test_get_config_entries_single_dir(tmp_path: Path) -> None:
+    cfg = CONFIGS_DIR / "preprocess_workflow_kinect_manual_dag.yaml"
+    if not cfg.exists():
+        pytest.skip("config not found")
+    model = DagConfigModel(cfg)
+    entries = model.get_config_entries()
+    assert len(entries) == 1
+    assert isinstance(entries[0], str)
+
+
+def test_get_config_entries_multi(tmp_path: Path) -> None:
     cfg = CONFIGS_DIR / "analyse_workflow_dag.yaml"
     if not cfg.exists():
         pytest.skip("config not found")
     model = DagConfigModel(cfg)
-    assert model.get_kinect_dir_mode() == "multi"
-
-
-def test_get_kinect_directories_singular(tmp_path: Path) -> None:
-    cfg = CONFIGS_DIR / "preprocess_workflow_kinect_auto_dag.yaml"
-    if not cfg.exists():
-        pytest.skip("config not found")
-    model = DagConfigModel(cfg)
-    dirs = model.get_kinect_directories()
-    assert len(dirs) == 1
-    assert isinstance(dirs[0], str)
-
-
-def test_get_kinect_directories_plural(tmp_path: Path) -> None:
-    cfg = CONFIGS_DIR / "analyse_workflow_dag.yaml"
-    if not cfg.exists():
-        pytest.skip("config not found")
-    model = DagConfigModel(cfg)
-    dirs = model.get_kinect_directories()
-    assert len(dirs) > 1
+    entries = model.get_config_entries()
+    assert len(entries) > 1
 
 
 # ------------------------------------------------------------------
-# Exclude files
+# set_config_entries round-trip
 # ------------------------------------------------------------------
 
 
-def test_set_exclude_files_roundtrip(tmp_path: Path) -> None:
-    cfg = CONFIGS_DIR / "preprocess_workflow_kinect_auto_dag.yaml"
+def test_set_config_entries_single_roundtrip(tmp_path: Path) -> None:
+    cfg = CONFIGS_DIR / "preprocess_workflow_kinect_manual_dag.yaml"
     if not cfg.exists():
         pytest.skip("config not found")
 
     tmp = _copy_to_tmp(cfg, tmp_path)
     model = DagConfigModel(tmp)
 
-    model.set_exclude_files(["a.yaml", "b.yaml"])
+    model.set_config_entries(["valid_configs_ST14-01_ST14-02"])
     model.save()
 
     reloaded = DagConfigModel(tmp)
-    assert reloaded.get_exclude_files() == ["a.yaml", "b.yaml"]
+    assert reloaded.get_config_entries() == ["valid_configs_ST14-01_ST14-02"]
 
 
-def test_set_exclude_files_empty_removes_key(tmp_path: Path) -> None:
-    cfg = CONFIGS_DIR / "preprocess_workflow_kinect_auto_dag.yaml"
+def test_set_config_entries_multi_flow_style(tmp_path: Path) -> None:
+    cfg = CONFIGS_DIR / "preprocess_workflow_kinect_manual_dag.yaml"
     if not cfg.exists():
         pytest.skip("config not found")
 
     tmp = _copy_to_tmp(cfg, tmp_path)
     model = DagConfigModel(tmp)
 
-    # Add then remove
-    model.set_exclude_files(["x.yaml"])
-    model.save()
-    model.set_exclude_files([])
+    model.set_config_entries(["valid_configs_ST13-01", "valid_configs_ST13-02"])
     model.save()
 
     reloaded = DagConfigModel(tmp)
-    assert reloaded.get_exclude_files() == []
-    # Key should be absent from the YAML
-    assert "exclude_files" not in tmp.read_text()
+    assert reloaded.get_config_entries() == ["valid_configs_ST13-01", "valid_configs_ST13-02"]
+    # Flow-style list must be on a single line: [item1, item2]
+    saved_text = tmp.read_text()
+    assert "[valid_configs_ST13-01, valid_configs_ST13-02]" in saved_text
 
 
 # ------------------------------------------------------------------
@@ -210,7 +208,7 @@ def test_model_with_synthetic_yaml(tmp_path: Path) -> None:
     content = textwrap.dedent("""\
         # Test DAG
         parameters:
-          kinect_configs_directory: "kinect_configs/test_dir"
+          kinect_configs: "test_dir"
 
         tasks:
           # Stage 1
@@ -231,8 +229,8 @@ def test_model_with_synthetic_yaml(tmp_path: Path) -> None:
     cfg.write_text(content)
 
     model = DagConfigModel(cfg)
-    assert model.get_kinect_dir_mode() == "single"
-    assert model.get_kinect_directories() == ["kinect_configs/test_dir"]
+    assert model.get_config_type() == "kinect_configs"
+    assert model.get_config_entries() == ["test_dir"]
     assert model.get_task_names() == ["task_a", "task_b"]
     assert model.is_task_enabled("task_a") is True
     assert model.is_task_enabled("task_b") is False
@@ -241,12 +239,12 @@ def test_model_with_synthetic_yaml(tmp_path: Path) -> None:
 
     # Modify and round-trip
     model.set_task_enabled("task_b", True)
-    model.set_kinect_directories(["kinect_configs/new_dir"])
+    model.set_config_entries(["new_dir"])
     model.save()
 
     reloaded = DagConfigModel(cfg)
     assert reloaded.is_task_enabled("task_b") is True
-    assert reloaded.get_kinect_directories() == ["kinect_configs/new_dir"]
+    assert reloaded.get_config_entries() == ["new_dir"]
 
     # Comments preserved
     saved = cfg.read_text()
@@ -255,7 +253,7 @@ def test_model_with_synthetic_yaml(tmp_path: Path) -> None:
 
 
 def test_model_no_parameters_section(tmp_path: Path) -> None:
-    """DAG with no parameters section returns 'none' mode and empty lists."""
+    """DAG with no parameters section returns 'kinect_configs' type and empty entries."""
     content = textwrap.dedent("""\
         tasks:
           task_x:
@@ -266,15 +264,14 @@ def test_model_no_parameters_section(tmp_path: Path) -> None:
     cfg.write_text(content)
 
     model = DagConfigModel(cfg)
-    assert model.get_kinect_dir_mode() == "none"
-    assert model.get_kinect_directories() == []
-    assert model.get_exclude_files() == []
+    assert model.get_config_type() == "kinect_configs"
+    assert model.get_config_entries() == []
 
 
 def test_dirty_flag(tmp_path: Path) -> None:
     content = textwrap.dedent("""\
         parameters:
-          kinect_configs_directory: "test"
+          kinect_configs: "test_dir"
         tasks:
           t1:
             enabled: true
@@ -292,7 +289,7 @@ def test_dirty_flag(tmp_path: Path) -> None:
     model.save()
     assert model.dirty is False
 
-    model.set_exclude_files(["x.yaml"])
+    model.set_config_entries(["other_dir"])
     assert model.dirty is True
 
     model.reload()

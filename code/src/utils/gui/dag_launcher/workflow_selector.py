@@ -1,8 +1,6 @@
-"""Workflow selector widget — toggle buttons to pick a DAG YAML config file."""
+"""Workflow selector widget — toggle buttons driven by launcher.yaml entries."""
 
 from __future__ import annotations
-
-from pathlib import Path
 
 from PyQt5.QtCore import pyqtSignal
 from PyQt5.QtWidgets import (
@@ -15,35 +13,17 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-# Desired display order for workflow buttons (stem without the _dag suffix).
-# Any file not listed here is appended alphabetically at the end.
-_ORDERED_STEMS = [
-    "primary_workflow_kinect_auto",
-    "preprocess_pipeline_extract_forearm_manual",
-    "preprocess_workflow_kinect_auto",
-    "preprocess_workflow_kinect_manual",
-    "preprocess_workflow_kinect_visualisation",
-    "merging_pipeline_neuron_to_kinect_auto",
-    "merging_view_neural_kinect",
-    "postprocess_workflow_kinect_auto",
-    "analysis_workflow",
-]
-
-
-def _category_prefix(stem: str) -> str:
-    """Return the category prefix (text before the first ``_``) of a DAG stem."""
-    return stem.split("_")[0]
+from utils.gui.dag_launcher.launcher_config import WorkflowEntry
 
 
 class WorkflowSelector(QWidget):
-    """Left-column widget with exclusive toggle buttons for each ``*_dag.yaml`` file."""
+    """Left-column widget with exclusive toggle buttons for each workflow entry."""
 
-    workflow_changed = pyqtSignal(Path)  # emits the selected YAML path
+    workflow_changed = pyqtSignal(object)  # emits WorkflowEntry
 
-    def __init__(self, configs_dir: Path, parent: QWidget | None = None) -> None:
+    def __init__(self, entries: list[WorkflowEntry], parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._configs_dir = configs_dir
-        self._paths: list[Path] = []
+        self._entries: list[WorkflowEntry] = []
         self._buttons: list[QPushButton] = []
 
         layout = QVBoxLayout(self)
@@ -60,29 +40,18 @@ class WorkflowSelector(QWidget):
 
         layout.addWidget(group_box)
 
-        self._scan()
+        self._populate(entries)
 
     # ------------------------------------------------------------------
 
-    def _scan(self) -> None:
-        """Populate the button column with all ``*_dag.yaml`` files in defined order."""
-        all_paths = list(self._configs_dir.glob("*_dag.yaml"))
-
-        def _order_key(p: Path) -> tuple[int, str]:
-            stem = p.stem.replace("_dag", "")
-            try:
-                return (_ORDERED_STEMS.index(stem), "")
-            except ValueError:
-                return (len(_ORDERED_STEMS), stem)
-
-        self._paths = sorted(all_paths, key=_order_key)
+    def _populate(self, entries: list[WorkflowEntry]) -> None:
+        """Build buttons grouped by category from *entries*."""
+        self._entries = list(entries)
         current_category: str | None = None
-        for i, p in enumerate(self._paths):
-            stem = p.stem.replace("_dag", "")
-            category = _category_prefix(stem)
-            if category != current_category:
-                current_category = category
-                header = QLabel(category.title())
+        for i, entry in enumerate(self._entries):
+            if entry.category != current_category:
+                current_category = entry.category
+                header = QLabel(current_category)
                 header.setStyleSheet(
                     "QLabel { font-size: 10px; font-weight: bold; color: #888888;"
                     " margin-top: 6px; margin-bottom: 1px; }"
@@ -92,11 +61,10 @@ class WorkflowSelector(QWidget):
                 sep.setFrameShape(QFrame.HLine)
                 sep.setFrameShadow(QFrame.Sunken)
                 self._btn_layout.addWidget(sep)
-            # Derive a short human-readable label from the stem
-            label = stem.replace("_", " ").title()
-            btn = QPushButton(label)
+
+            btn = QPushButton(entry.name)
             btn.setCheckable(True)
-            btn.setToolTip(p.name)
+            btn.setToolTip(str(entry.dag_config) if entry.dag_config else entry.name)
             btn.setStyleSheet(
                 "QPushButton { padding: 4px 10px; }"
                 "QPushButton:checked { background-color: #4a90d9; color: white; "
@@ -109,22 +77,22 @@ class WorkflowSelector(QWidget):
         self._btn_layout.addStretch()
 
     def _on_button_clicked(self, btn_id: int) -> None:
-        if 0 <= btn_id < len(self._paths):
-            self.workflow_changed.emit(self._paths[btn_id])
+        if 0 <= btn_id < len(self._entries):
+            self.workflow_changed.emit(self._entries[btn_id])
 
     # ------------------------------------------------------------------
     # Public helpers
     # ------------------------------------------------------------------
 
-    def current_path(self) -> Path | None:
+    def current_entry(self) -> WorkflowEntry | None:
         btn_id = self._btn_group.checkedId()
-        if 0 <= btn_id < len(self._paths):
-            return self._paths[btn_id]
+        if 0 <= btn_id < len(self._entries):
+            return self._entries[btn_id]
         return None
 
-    def select_path(self, path: Path) -> None:
-        """Programmatically select a workflow by its path."""
-        for i, p in enumerate(self._paths):
-            if p == path:
+    def select_entry(self, entry: WorkflowEntry) -> None:
+        """Programmatically select a workflow by its entry."""
+        for i, e in enumerate(self._entries):
+            if e is entry or (e.script == entry.script and e.dag_config == entry.dag_config):
                 self._buttons[i].setChecked(True)
                 return

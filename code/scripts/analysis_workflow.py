@@ -1,4 +1,5 @@
 # analyse_workflow.py
+import argparse
 import os
 import logging
 from pathlib import Path
@@ -19,10 +20,10 @@ from utils import (
     PipelineMonitor,
     TaskExecutor
 )
+from utils.pipeline.session_config_resolver import resolve_session_configs
 from primary_processing import (
-    KinectConfigFileHandler, 
-    KinectConfig, 
-    get_block_files
+    KinectConfigFileHandler,
+    KinectConfig,
 )
 
 # Imported from the updated touch_analysis module (assuming path matches 'analysis/touch_analytics')
@@ -185,57 +186,32 @@ def _collect_unified_files(input_items: List[Tuple[Path, Path]]) -> List[Path]:
 # --- Batch Processing Logic (Main) ---
 
 def collect_unique_session_dirs(
-    config_dir_names: List[str],
-    root_configs_path: Path,
+    block_files: List[Path],
     project_data_root: Path,
-    exclude_files: set | None = None,
 ) -> Dict[Path, Path]:
     session_dir_map = {}
-    total_files_scanned = 0
+    for block_file in block_files:
+        try:
+            config_data = KinectConfigFileHandler.load_and_resolve_config(block_file)
+            config = KinectConfig(config_data=config_data, database_path=project_data_root)
 
-    for dir_name in config_dir_names:
-        full_config_dir = root_configs_path / dir_name
+            if config.session_merged_output_dir and config.database_path:
+                session_dir_map[config.session_merged_output_dir] = config.database_path
+        except Exception as e:
+            logging.debug(f"Skipping {block_file.name}: {e}")
 
-        if not full_config_dir.exists():
-            logging.warning(f"Config directory not found: {full_config_dir}")
-            continue
-
-        block_files = get_block_files(full_config_dir)
-        if exclude_files:
-            block_files = [f for f in block_files if f.name not in exclude_files]
-        logging.info(f"Scanning {len(block_files)} files in {dir_name}...")
-        
-        for block_file in block_files:
-            try:
-                config_data = KinectConfigFileHandler.load_and_resolve_config(block_file)
-                config = KinectConfig(config_data=config_data, database_path=project_data_root)
-                
-                if config.session_merged_output_dir and config.database_path:
-                    session_dir_map[config.session_merged_output_dir] = config.database_path
-                    
-                total_files_scanned += 1
-            except Exception as e:
-                logging.debug(f"Skipping {block_file.name}: {e}")
-
-    logging.info(f"Scanned {total_files_scanned} config files.")
+    logging.info(f"Scanned {len(block_files)} config files.")
     logging.info(f"Identified {len(session_dir_map)} unique session contexts.")
-    
+
     return session_dir_map
 
 def run_batch_analysis(
-    kinect_config_dirs: List[str],
+    block_files: List[Path],
     project_data_root: Path,
-    configs_root_path: Path,
     dag_handler: DagConfigHandler,
     report_file_path: Path
 ):
-    exclude_files = set(dag_handler.get_parameter('exclude_files', []) or [])
-    session_map = collect_unique_session_dirs(
-        kinect_config_dirs,
-        configs_root_path,
-        project_data_root,
-        exclude_files=exclude_files or None,
-    )
+    session_map = collect_unique_session_dirs(block_files, project_data_root)
 
     if not session_map:
         logging.warning("No valid session directories found. Exiting.")
@@ -292,9 +268,12 @@ def run_batch_analysis(
 
 def main():
     freeze_support()
-    project_data_root = path_tools.get_project_data_root() 
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dag-config", type=Path, required=True)
+    args = parser.parse_args()
+    dag_config_path = args.dag_config
+    project_data_root = path_tools.get_project_data_root()
     configs_dir = Path("configs")
-    dag_config_path = configs_dir / "analyse_workflow_dag.yaml"
     reports_dir = Path("reports")
     reports_dir.mkdir(exist_ok=True)
     report_file_path = reports_dir / "analysis_status.xlsx"
@@ -304,20 +283,12 @@ def main():
         exit(1)
         
     dag_handler = DagConfigHandler(dag_config_path)
-    config_dirs_param = dag_handler.get_parameter('kinect_configs_directories')
-    
-    if isinstance(config_dirs_param, str):
-        kinect_config_dirs = [config_dirs_param]
-    elif isinstance(config_dirs_param, list):
-        kinect_config_dirs = config_dirs_param
-    else:
-        logging.error("Parameter error")
-        exit(1)
+    entries = dag_handler.get_parameter('kinect_configs')
+    block_files = resolve_session_configs(entries, configs_dir / "kinect_configs")
 
     run_batch_analysis(
-        kinect_config_dirs=kinect_config_dirs,
+        block_files=block_files,
         project_data_root=project_data_root,
-        configs_root_path=configs_dir,
         dag_handler=dag_handler,
         report_file_path=report_file_path
     )

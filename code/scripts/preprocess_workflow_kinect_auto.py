@@ -1,3 +1,4 @@
+import argparse
 import os
 import logging
 from pathlib import Path
@@ -19,8 +20,9 @@ from utils import DagConfigHandler, PipelineMonitor, TaskExecutor
 from primary_processing import (
     KinectConfigFileHandler,
     KinectConfig,
-    get_block_files
 )
+
+from utils.pipeline.session_config_resolver import resolve_session_configs
 
 from _2_primary_processing._2_generate_rgb_depth_video import (
     generate_mkv_stream_analysis,
@@ -583,7 +585,7 @@ def run_single_session_pipeline(
 
 
 def run_batch_processing(
-    kinect_configs_dir: Path,
+    block_files: list[Path],
     project_data_root: Path,
     dag_config_path: Path,
     monitor_queue: Queue,
@@ -591,10 +593,6 @@ def run_batch_processing(
     parallel: bool,
 ):
     dag_handler_template = DagConfigHandler(dag_config_path)
-    block_files = get_block_files(kinect_configs_dir)
-    exclude_files = set(dag_handler_template.get_parameter('exclude_files', []) or [])
-    if exclude_files:
-        block_files = [f for f in block_files if f.name not in exclude_files]
 
     mode = "PARALLEL" if parallel else "SEQUENTIAL"
     logging.info(f"🚀 Starting batch processing for {len(block_files)} sessions in {mode} mode.")
@@ -636,7 +634,6 @@ def run_batch_processing(
 def setup_environment():
     project_data_root = path_tools.get_project_data_root()
     configs_dir = Path("configs")
-    dag_config_path = Path(configs_dir / "preprocess_workflow_kinect_auto_dag.yaml")
 
     print("🛠️  Setting up environment...")
     reports_dir = Path("reports")
@@ -646,17 +643,21 @@ def setup_environment():
     if report_file_path.exists():
         shutil.rmtree(report_file_path)
         print("🧹 File with the same name found, removing it.")
-    return project_data_root, configs_dir, dag_config_path, report_file_path
+    return project_data_root, configs_dir, report_file_path
 
 def main():
     freeze_support()
-    project_data_root, configs_dir, dag_config_path, report_file_path = setup_environment()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dag-config", type=Path, required=True)
+    args = parser.parse_args()
+    dag_config_path = args.dag_config
+    project_data_root, configs_dir, report_file_path = setup_environment()
 
     try:
         main_dag_handler = DagConfigHandler(dag_config_path)
         is_parallel = main_dag_handler.get_parameter('parallel_execution', False)
-        kinect_dir_name = main_dag_handler.get_parameter('kinect_configs_directory')
-        kinect_configs_dir = configs_dir / kinect_dir_name
+        entries = main_dag_handler.get_parameter('kinect_configs')
+        block_files = resolve_session_configs(entries, configs_dir / "kinect_configs")
     except FileNotFoundError:
         print(f"❌ Error: Configuration file '{dag_config_path}' not found.")
         exit(1)
@@ -667,7 +668,7 @@ def main():
     main_monitor.show_dashboard()
 
     run_batch_processing(
-        kinect_configs_dir=kinect_configs_dir,
+        block_files=block_files,
         project_data_root=project_data_root,
         dag_config_path=dag_config_path,
         monitor_queue=main_monitor.queue,

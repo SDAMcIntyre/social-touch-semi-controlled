@@ -22,15 +22,11 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from utils.gui.dag_launcher.kinect_directory_selector import KinectDirectorySelector
+from utils.gui.dag_launcher.kinect_directory_selector import SessionConfigSelector
+from utils.gui.dag_launcher.launcher_config import WorkflowEntry
 from utils.gui.dag_launcher.task_panel import TaskPanel
 from utils.gui.dag_launcher.workflow_selector import WorkflowSelector
 from utils.pipeline.dag_config_model import DagConfigModel
-
-# Maps DAG YAML stem (without _dag suffix) to script filename stem when they differ.
-_SCRIPT_OVERRIDES: dict[str, str] = {
-    "analyse_workflow": "analysis_workflow",
-}
 
 
 class LauncherWindow(QMainWindow):
@@ -38,11 +34,14 @@ class LauncherWindow(QMainWindow):
 
     def __init__(
         self,
+        entries: list[WorkflowEntry],
         configs_dir: Path,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
+        self._entries = entries
         self._configs_dir = configs_dir
+        self._current_entry: WorkflowEntry | None = None
         self._model: DagConfigModel | None = None
         self._initial_sizes_applied = False
         self._process: subprocess.Popen | None = None
@@ -82,15 +81,15 @@ class LauncherWindow(QMainWindow):
         self._splitter = QSplitter(Qt.Horizontal)
 
         # --- Left column: workflow selector ---
-        self._workflow_selector = WorkflowSelector(self._configs_dir)
+        self._workflow_selector = WorkflowSelector(self._entries)
         self._splitter.addWidget(self._workflow_selector)
 
         # --- Middle column: task panel (50%) ---
         self._task_panel = TaskPanel()
         self._splitter.addWidget(self._task_panel)
 
-        # --- Right column: kinect directory selector (25%) ---
-        self._kinect_selector = KinectDirectorySelector(self._configs_dir)
+        # --- Right column: session config selector (25%) ---
+        self._kinect_selector = SessionConfigSelector(self._configs_dir)
         self._splitter.addWidget(self._kinect_selector)
 
         self._splitter.setStretchFactor(0, 1)  # workflow selector  (1/4)
@@ -147,12 +146,20 @@ class LauncherWindow(QMainWindow):
     # Workflow loading
     # ------------------------------------------------------------------
 
-    def _load_workflow(self, path: Path) -> None:
+    def _load_workflow(self, entry: WorkflowEntry) -> None:
         if self._model and self._model.dirty:
             if not self._confirm_discard():
                 return
+        self._current_entry = entry
+        if entry.dag_config is None:
+            self._model = None
+            self._save_action.setEnabled(False)
+            self._save_as_action.setEnabled(False)
+            self._update_title()
+            self._update_run_bar()
+            return
         try:
-            self._model = DagConfigModel(path)
+            self._model = DagConfigModel(entry.dag_config)
         except Exception as exc:
             QMessageBox.critical(self, "Load Error", str(exc))
             return
@@ -162,7 +169,7 @@ class LauncherWindow(QMainWindow):
         self._save_as_action.setEnabled(True)
         self._update_title()
         self._update_run_bar()
-        self.statusBar().showMessage(f"Loaded {path.name}", 3000)
+        self.statusBar().showMessage(f"Loaded {entry.dag_config.name}", 3000)
 
     # ------------------------------------------------------------------
     # Dirty-state management
@@ -221,15 +228,7 @@ class LauncherWindow(QMainWindow):
         """Called when the user checks/unchecks a directory or file."""
         if not self._model:
             return
-        dirs, excluded = self._kinect_selector.get_selection()
-        self._model.set_kinect_directories(dirs)
-        if self._model.get_config_dir_root_name() == "forearm_configs":
-            # Forearm uses an include-list: checked files → forearm_config_files.
-            self._model.set_forearm_config_files(
-                self._kinect_selector.get_checked_forearm_files()
-            )
-        else:
-            self._model.set_exclude_files(excluded)
+        self._model.set_config_entries(self._kinect_selector.get_selection())
         self._mark_dirty()
 
     # ------------------------------------------------------------------
@@ -263,46 +262,32 @@ class LauncherWindow(QMainWindow):
     # Run button
     # ------------------------------------------------------------------
 
-    def _resolve_script(self, dag_path: Path) -> Path | None:
-        """Return the script Path for *dag_path*, or None if not found."""
-        stem = dag_path.stem  # e.g. "analyse_workflow_dag"
-        if stem.endswith("_dag"):
-            stem = stem[:-4]  # strip "_dag" suffix → "analyse_workflow"
-        script_stem = _SCRIPT_OVERRIDES.get(stem, stem)
-        project_root = self._configs_dir.parent
-        candidate = project_root / "code" / "scripts" / f"{script_stem}.py"
-        return candidate if candidate.exists() else None
-
     def _update_run_bar(self) -> None:
-        if self._model is None:
+        if self._current_entry is None:
             self._run_label.setText("No workflow selected")
             self._run_label.setStyleSheet("color: gray;")
             self._run_button.setEnabled(False)
             return
-        script = self._resolve_script(self._model.path)
-        if script is None:
+        if not self._current_entry.script.exists():
             self._run_label.setText("Script not found")
             self._run_label.setStyleSheet("color: gray;")
             self._run_button.setEnabled(False)
         else:
-            self._run_label.setText(str(script))
+            self._run_label.setText(str(self._current_entry.script))
             self._run_label.setStyleSheet("")
             self._run_button.setEnabled(True)
 
     def _on_run(self) -> None:
-        if self._model is None:
+        if self._current_entry is None:
             return
-        self._on_save()
-        script = self._resolve_script(self._model.path)
-        if script is None:
-            QMessageBox.critical(self, "Run Error", "Could not find the workflow script.")
-            return
+        if self._model:
+            self._on_save()
         project_root = self._configs_dir.parent
+        cmd = [sys.executable, str(self._current_entry.script)]
+        if self._current_entry.dag_config is not None:
+            cmd += ["--dag-config", str(self._current_entry.dag_config)]
         self._aborting = False
-        self._process = subprocess.Popen(
-            [sys.executable, str(script)],
-            cwd=str(project_root),
-        )
+        self._process = subprocess.Popen(cmd, cwd=str(project_root))
         self._run_button.setEnabled(False)
         self._abort_button.setVisible(True)
         self.statusBar().showMessage("Running …")

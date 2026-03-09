@@ -1,3 +1,4 @@
+import argparse
 from pathlib import Path
 from prefect import flow
 import utils.path_tools as path_tools
@@ -6,8 +7,9 @@ from utils.pipeline.pipeline_config_manager import DagConfigHandler
 from primary_processing import (
     KinectConfigFileHandler,
     KinectConfig,
-    get_block_files
 )
+
+from utils.pipeline.session_config_resolver import resolve_session_configs
 
 from _3_preprocessing._1_sticker_tracking import (
     view_ellipse_tracking,
@@ -208,11 +210,10 @@ def run_single_session_visualization(
 
 # --- The "Dispatcher" Flow ---
 @flow(name="Run Visualization Batch Sequentially", log_prints=True)
-def run_batch_sequentially(kinect_configs_dir: Path, project_data_root: Path, dag_config_path: Path):
+def run_batch_sequentially(block_files: list[Path], project_data_root: Path, dag_config_path: Path):
     """Runs all session pipelines one by one."""
     dag_handler_template = DagConfigHandler(dag_config_path)
-    block_files = get_block_files(kinect_configs_dir)
-    
+
     for block_file in block_files:
         print(f"--- Running session: {block_file.name} ---")
         try:
@@ -232,22 +233,25 @@ def run_batch_sequentially(kinect_configs_dir: Path, project_data_root: Path, da
 
 
 if __name__ == "__main__":
+    _parser = argparse.ArgumentParser()
+    _parser.add_argument("--dag-config", type=Path, required=True)
+    _args = _parser.parse_args()
     print("🛠️  Setting up files for visualization...")
     project_data_root = path_tools.get_project_data_root()
     configs_dir = Path("configs")
-    dag_config_path = configs_dir / "preprocess_workflow_kinect_visualisation_dag.yaml"
+    dag_config_path = _args.dag_config
 
     try:
         main_dag_handler = DagConfigHandler(dag_config_path)
-        kinect_dir = main_dag_handler.get_parameter('kinect_configs_directory')
-        kinect_configs_dir = configs_dir / kinect_dir
+        entries = main_dag_handler.get_parameter('kinect_configs')
+        block_files = resolve_session_configs(entries, configs_dir / "kinect_configs")
     except FileNotFoundError:
         print(f"❌ Error: '{dag_config_path}' not found.")
         exit(1)
 
     print("🚀 Launching visualization batch processing SEQUENTIALLY.")
     run_batch_sequentially(
-        kinect_configs_dir=kinect_configs_dir,
+        block_files=block_files,
         project_data_root=project_data_root,
         dag_config_path=dag_config_path
     )

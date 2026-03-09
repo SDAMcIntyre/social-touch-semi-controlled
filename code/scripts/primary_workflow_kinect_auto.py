@@ -1,3 +1,4 @@
+import argparse
 import os
 import logging
 from pathlib import Path
@@ -23,8 +24,9 @@ from utils import (
 from primary_processing import (
     KinectConfigFileHandler,
     KinectConfig,
-    get_block_files
 )
+
+from utils.pipeline.session_config_resolver import resolve_session_configs
 
 from _2_primary_processing._2_generate_rgb_depth_video import (
     generate_mkv_stream_analysis,
@@ -117,7 +119,7 @@ def run_primary_pipeline_session(
     return {"status": "success"}
 
 def run_batch_primary(
-    kinect_configs_dir: Path,
+    block_files: list[Path],
     project_data_root: Path,
     dag_config_path: Path,
     monitor_queue: Queue,
@@ -125,10 +127,6 @@ def run_batch_primary(
     parallel: bool,
 ):
     dag_template = DagConfigHandler(dag_config_path)
-    block_files = get_block_files(kinect_configs_dir)
-    exclude_files = set(dag_template.get_parameter('exclude_files', []) or [])
-    if exclude_files:
-        block_files = [f for f in block_files if f.name not in exclude_files]
 
     submitted_runs = []
     for block_file in block_files:
@@ -159,18 +157,21 @@ def run_batch_primary(
 def setup_environment():
     project_data_root = path_tools.get_project_data_root()
     configs_dir = Path("configs")
-    dag_config_path = Path(configs_dir / "primary_workflow_kinect_auto_dag.yaml") # Pointing to primary yaml
-    
+
     reports_dir = Path("reports")
     reports_dir.mkdir(exist_ok=True)
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
     report_file_path = reports_dir / f"{timestamp}_PRIMARY_status.xlsx"
-    
-    return project_data_root, configs_dir, dag_config_path, report_file_path
+
+    return project_data_root, configs_dir, report_file_path
 
 def main():
-    freeze_support() 
-    project_data_root, configs_dir, dag_config_path, report_file_path = setup_environment()
+    freeze_support()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dag-config", type=Path, required=True)
+    args = parser.parse_args()
+    dag_config_path = args.dag_config
+    project_data_root, configs_dir, report_file_path = setup_environment()
 
     if not dag_config_path.exists():
          print(f"❌ Config {dag_config_path} missing.")
@@ -178,7 +179,8 @@ def main():
 
     main_dag_handler = DagConfigHandler(dag_config_path)
     is_parallel = main_dag_handler.get_parameter('parallel_execution', False)
-    kinect_configs_dir = configs_dir / main_dag_handler.get_parameter('kinect_configs_directory')
+    entries = main_dag_handler.get_parameter('kinect_configs')
+    block_files = resolve_session_configs(entries, configs_dir / "kinect_configs")
 
     main_monitor = PipelineMonitor(
         report_path=str(report_file_path), 
@@ -188,7 +190,7 @@ def main():
     main_monitor.show_dashboard()
 
     run_batch_primary(
-        kinect_configs_dir=kinect_configs_dir,
+        block_files=block_files,
         project_data_root=project_data_root,
         dag_config_path=dag_config_path,
         monitor_queue=main_monitor.queue,

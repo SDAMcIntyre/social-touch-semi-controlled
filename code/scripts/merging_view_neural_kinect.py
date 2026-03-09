@@ -5,7 +5,7 @@ Workflow script for the NeuralKinectViewer — the high-performance 3D visualiza
 tool for merged neural + Kinect recordings.
 
 Paths are resolved entirely from the standard KinectConfig system; no hardcoded
-paths are required. Point the DAG config to the desired kinect_configs_directory.
+paths are required. Point the DAG config to the desired kinect_configs entry.
 
 Usage:
     python code/scripts/view_merged_neural_kinect.py
@@ -19,6 +19,7 @@ Features:
   - Live Nerve_freq / contact_depth / contact_area time-series panel
   - Camera centered on contact region
 """
+import argparse
 import sys
 from pathlib import Path
 from typing import Optional, Dict
@@ -47,10 +48,10 @@ except Exception:
 import utils.path_tools as path_tools
 from utils.pipeline.pipeline_config_manager import DagConfigHandler
 
+from utils.pipeline.session_config_resolver import resolve_session_configs
 from primary_processing import (
     KinectConfigFileHandler,
     KinectConfig,
-    get_block_files,
 )
 
 from merging.gui.neural_kinect_scene_viewer import NeuralKinectViewer
@@ -165,13 +166,12 @@ def run_single_session_pipeline(
 
 @flow(name="Run Neural-Kinect Viewer Batch Sequentially", log_prints=True)
 def run_batch_sequentially(
-    kinect_configs_dir: Path,
+    block_files: list[Path],
     project_data_root: Path,
     dag_config_path: Path,
 ) -> None:
-    """Runs the viewer for each block config file found in kinect_configs_dir."""
+    """Runs the viewer for each block config file in block_files."""
     dag_handler_template = DagConfigHandler(dag_config_path)
-    block_files = get_block_files(kinect_configs_dir)
 
     for block_file in block_files:
         print(f"--- Opening block: {block_file.name} ---")
@@ -193,21 +193,24 @@ def run_batch_sequentially(
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    _parser = argparse.ArgumentParser()
+    _parser.add_argument("--dag-config", type=Path, required=True)
+    _args = _parser.parse_args()
     project_data_root = path_tools.get_project_data_root()
     configs_dir = Path("configs")
-    dag_config_path = configs_dir / "merging_view_neural_kinect_dag.yaml"
+    dag_config_path = _args.dag_config
 
     try:
         main_dag_handler = DagConfigHandler(dag_config_path)
-        kinect_dir = main_dag_handler.get_parameter("kinect_configs_directory")
-        kinect_configs_dir = configs_dir / kinect_dir
+        entries = main_dag_handler.get_parameter("kinect_configs")
+        block_files = resolve_session_configs(entries, configs_dir / "kinect_configs")
     except FileNotFoundError:
         print(f"DAG config not found at '{dag_config_path}'.")
         sys.exit(1)
 
     print("Launching Neural-Kinect Viewer batch (sequential).")
     run_batch_sequentially(
-        kinect_configs_dir=kinect_configs_dir,
+        block_files=block_files,
         project_data_root=project_data_root,
         dag_config_path=dag_config_path,
     )

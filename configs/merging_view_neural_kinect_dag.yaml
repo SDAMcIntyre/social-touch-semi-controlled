@@ -2,16 +2,11 @@
 # VIEW MERGED NEURAL-KINECT — DAG CONFIGURATION
 # ==============================================================================
 # Drives view_merged_neural_kinect.py.
-# Point kinect_configs_directory at the block configs for the session to view.
+# Point kinect_configs at the block configs for the session to view.
 # ==============================================================================
 
 parameters:
-  kinect_configs_directory: "kinect_configs/valid_configs_ST13-01"
-
-  exclude_files:
-  - kinect_config_2022-06-14_ST13-01_semicontrolled_block-order01.yaml
-  - kinect_config_2022-06-14_ST13-01_semicontrolled_block-order03.yaml
-  - kinect_config_2022-06-14_ST13-01_semicontrolled_block-order04.yaml
+  kinect_configs: "valid_configs_ST13-01/kinect_config_2022-06-14_ST13-01_semicontrolled_block-order02.yaml"
 tasks:
   view_neural_kinect_scene:
     enabled: true
