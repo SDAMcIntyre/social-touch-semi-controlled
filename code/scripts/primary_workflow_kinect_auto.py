@@ -24,8 +24,9 @@ from utils import (
 from primary_processing import (
     KinectConfigFileHandler,
     KinectConfig,
-    get_block_files
 )
+
+from utils.pipeline.session_config_resolver import resolve_session_configs
 
 from _2_primary_processing._2_generate_rgb_depth_video import (
     generate_mkv_stream_analysis,
@@ -118,7 +119,7 @@ def run_primary_pipeline_session(
     return {"status": "success"}
 
 def run_batch_primary(
-    kinect_configs_dir: Path,
+    block_files: list[Path],
     project_data_root: Path,
     dag_config_path: Path,
     monitor_queue: Queue,
@@ -126,10 +127,6 @@ def run_batch_primary(
     parallel: bool,
 ):
     dag_template = DagConfigHandler(dag_config_path)
-    block_files = get_block_files(kinect_configs_dir)
-    exclude_files = set(dag_template.get_parameter('exclude_files', []) or [])
-    if exclude_files:
-        block_files = [f for f in block_files if f.name not in exclude_files]
 
     submitted_runs = []
     for block_file in block_files:
@@ -182,7 +179,8 @@ def main():
 
     main_dag_handler = DagConfigHandler(dag_config_path)
     is_parallel = main_dag_handler.get_parameter('parallel_execution', False)
-    kinect_configs_dir = configs_dir / main_dag_handler.get_parameter('kinect_configs_directory')
+    entries = main_dag_handler.get_parameter('kinect_configs')
+    block_files = resolve_session_configs(entries, configs_dir / "kinect_configs")
 
     main_monitor = PipelineMonitor(
         report_path=str(report_file_path), 
@@ -192,7 +190,7 @@ def main():
     main_monitor.show_dashboard()
 
     run_batch_primary(
-        kinect_configs_dir=kinect_configs_dir,
+        block_files=block_files,
         project_data_root=project_data_root,
         dag_config_path=dag_config_path,
         monitor_queue=main_monitor.queue,

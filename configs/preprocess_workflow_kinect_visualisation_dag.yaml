@@ -10,7 +10,7 @@
 # ==============================================================================
 
 parameters:
-  kinect_configs_directory: "kinect_configs/valid_configs_ST13-03"
+  kinect_configs: "valid_configs_ST13-03"
 
 tasks:
   # PHASE 3: VISUALIZATION & VERIFICATION

@@ -1,4 +1,4 @@
-"""Left-panel widget for selecting kinect config directories and files."""
+"""Left-panel widget for selecting session config directories and files."""
 
 from __future__ import annotations
 
@@ -17,8 +17,17 @@ from PyQt5.QtWidgets import (
 from utils.pipeline.dag_config_model import DagConfigModel
 
 
-class KinectDirectorySelector(QWidget):
-    """Checkable tree of kinect config directories and their YAML files."""
+class SessionConfigSelector(QWidget):
+    """Checkable tree of session config directories and their YAML files.
+
+    Replaces the former ``KinectDirectorySelector``.  The tree works uniformly
+    for both ``kinect_configs`` and ``forearm_configs`` workflows.
+
+    Selection model:
+      - Fully-checked directory → emits the directory name as a single entry.
+      - Partially-checked directory → emits individual ``subdir/file.yaml`` paths.
+      - Unchecked directory / file → not included.
+    """
 
     selection_changed = pyqtSignal()
 
@@ -32,7 +41,7 @@ class KinectDirectorySelector(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        self._group = QGroupBox("Kinect Config Directories")
+        self._group = QGroupBox("Session Configs")
         group_layout = QVBoxLayout(self._group)
 
         self._tree = QTreeWidget()
@@ -52,77 +61,79 @@ class KinectDirectorySelector(QWidget):
         self._populating = True
         self._tree.clear()
 
-        root_name = model.get_config_dir_root_name()
-        self._config_root = self._configs_dir / root_name
+        config_type = model.get_config_type()
+        self._config_root = self._configs_dir / config_type
         _HEADERS = {
-            "forearm_configs": "Forearm Config Directories",
-            "kinect_configs":  "Kinect Config Directories",
+            "forearm_configs": "Forearm Session Configs",
+            "kinect_configs":  "Kinect Session Configs",
         }
-        self._group.setTitle(_HEADERS.get(root_name, f"{root_name} Directories"))
+        self._group.setTitle(_HEADERS.get(config_type, f"{config_type}"))
 
-        mode = model.get_kinect_dir_mode()
-        selected_dirs = {d for d in model.get_kinect_directories()}
-        excluded_files = set(model.get_exclude_files())
+        entries = model.get_config_entries()
+        # Build a set of selected directory names and a set of selected file paths
+        # (relative to config_root).
+        selected_dirs: set[str] = set()
+        selected_files: set[str] = set()
+        for entry in entries:
+            if "/" in entry or entry.endswith(".yaml"):
+                # Looks like a file path (may be "subdir/file.yaml")
+                selected_files.add(entry)
+            else:
+                selected_dirs.add(entry)
 
         if not self._config_root.is_dir():
             self._populating = False
             return
 
+        # --- Subdirectory items ---
         for subdir in sorted(self._config_root.iterdir()):
             if not subdir.is_dir():
                 continue
-            rel = f"{root_name}/{subdir.name}"
             dir_item = QTreeWidgetItem([subdir.name])
-            dir_item.setData(0, Qt.UserRole, rel)
+            dir_item.setData(0, Qt.UserRole, subdir.name)
             dir_item.setData(0, Qt.UserRole + 1, "dir")
+            dir_item.setCheckState(0, Qt.Unchecked)  # derived from children below
 
-            # Check state based on selection
-            if rel in selected_dirs:
-                dir_item.setCheckState(0, Qt.Checked)
-            else:
-                dir_item.setCheckState(0, Qt.Unchecked)
-
-            # Add child YAML files
             yaml_files = sorted(subdir.glob("*.yaml"))
             for yf in yaml_files:
+                file_entry = f"{subdir.name}/{yf.name}"
                 file_item = QTreeWidgetItem([yf.name])
-                file_item.setData(0, Qt.UserRole, yf.name)
+                file_item.setData(0, Qt.UserRole, file_entry)
                 file_item.setData(0, Qt.UserRole + 1, "file")
-                if yf.name in excluded_files:
-                    file_item.setCheckState(0, Qt.Unchecked)
-                else:
-                    file_item.setCheckState(0, Qt.Checked)
+                checked = (
+                    subdir.name in selected_dirs
+                    or file_entry in selected_files
+                )
+                file_item.setCheckState(0, Qt.Checked if checked else Qt.Unchecked)
                 dir_item.addChild(file_item)
 
+            self._update_parent_check_state(dir_item)
             self._tree.addTopLevelItem(dir_item)
 
-            # Expand selected directories so files are visible
-            if rel in selected_dirs:
+            if dir_item.checkState(0) != Qt.Unchecked:
                 dir_item.setExpanded(True)
 
-        # If there are YAML files directly at the root (e.g. forearm_configs/),
-        # show them as children of a top-level item whose rel IS the root name.
-        # Use an include-list model: only files in forearm_config_files are checked;
-        # if the list is empty every file starts unchecked (nothing selected = run all).
+        # --- Root-level YAML files (e.g. forearm_configs/*.yaml) ---
         root_yamls = sorted(self._config_root.glob("*.yaml"))
         if root_yamls:
-            included_files = set(model.get_forearm_config_files())
-            rel = root_name  # matches what the model stores, e.g. "forearm_configs"
-            root_item = QTreeWidgetItem([root_name])
-            root_item.setData(0, Qt.UserRole, rel)
+            root_item = QTreeWidgetItem([config_type])
+            root_item.setData(0, Qt.UserRole, ".")
             root_item.setData(0, Qt.UserRole + 1, "dir")
-            if rel in selected_dirs:
-                root_item.setCheckState(0, Qt.Checked)
-            else:
-                root_item.setCheckState(0, Qt.Unchecked)
+            root_item.setCheckState(0, Qt.Unchecked)  # derived from children
+
             for yf in root_yamls:
+                checked = (
+                    "." in selected_dirs
+                    or yf.name in selected_files
+                    or yf.name in {e.split("/")[-1] for e in selected_files}
+                )
                 file_item = QTreeWidgetItem([yf.name])
                 file_item.setData(0, Qt.UserRole, yf.name)
                 file_item.setData(0, Qt.UserRole + 1, "file")
-                file_item.setCheckState(
-                    0, Qt.Checked if yf.name in included_files else Qt.Unchecked
-                )
+                file_item.setCheckState(0, Qt.Checked if checked else Qt.Unchecked)
                 root_item.addChild(file_item)
+
+            self._update_parent_check_state(root_item)
             self._tree.addTopLevelItem(root_item)
             root_item.setExpanded(True)
 
@@ -132,40 +143,34 @@ class KinectDirectorySelector(QWidget):
     # Selection readout
     # ------------------------------------------------------------------
 
-    def get_checked_forearm_files(self) -> list[str]:
-        """Return filenames of checked file-items that are children of a root dir item.
+    def get_selection(self) -> list[str]:
+        """Return the current selection as a list of config entries.
 
-        Used for the forearm include-list model: only these files will be processed.
-        An empty list means no explicit selection, so the script will run all files.
+        A fully-checked directory emits its directory name as a single entry.
+        A partially-checked directory emits individual ``subdir/file.yaml`` paths
+        for each checked file child.
         """
         result: list[str] = []
+
         for i in range(self._tree.topLevelItemCount()):
             dir_item = self._tree.topLevelItem(i)
-            if dir_item.data(0, Qt.UserRole + 1) != "dir":
+            state = dir_item.checkState(0)
+            if state == Qt.Unchecked:
                 continue
-            for j in range(dir_item.childCount()):
-                file_item = dir_item.child(j)
-                if file_item.checkState(0) == Qt.Checked:
-                    result.append(file_item.data(0, Qt.UserRole))
-        return result
 
-    def get_selection(self) -> tuple[list[str], list[str]]:
-        """Return (selected_dirs, excluded_filenames)."""
-        dirs: list[str] = []
-        excluded: list[str] = []
+            dir_key = dir_item.data(0, Qt.UserRole)  # e.g. "valid_configs_ST13-01" or "."
 
-        for i in range(self._tree.topLevelItemCount()):
-            dir_item = self._tree.topLevelItem(i)
-            rel = dir_item.data(0, Qt.UserRole)
-            if dir_item.checkState(0) == Qt.Checked:
-                dirs.append(rel)
-                # Gather unchecked files within this directory
+            if state == Qt.Checked:
+                # All children selected → emit just the directory name
+                result.append(dir_key)
+            else:
+                # Partial → emit each checked child's file entry
                 for j in range(dir_item.childCount()):
                     file_item = dir_item.child(j)
-                    if file_item.checkState(0) != Qt.Checked:
-                        excluded.append(file_item.data(0, Qt.UserRole))
+                    if file_item.checkState(0) == Qt.Checked:
+                        result.append(file_item.data(0, Qt.UserRole))
 
-        return dirs, excluded
+        return result
 
     # ------------------------------------------------------------------
     # Internal signals
@@ -176,25 +181,37 @@ class KinectDirectorySelector(QWidget):
             return
 
         kind = item.data(0, Qt.UserRole + 1)
+        self._populating = True
 
-        if kind == "dir" and self._model:
-            self._populating = True
-
+        if kind == "dir":
             # Propagate parent check state to all children
             new_state = item.checkState(0)
             for i in range(item.childCount()):
                 item.child(i).setCheckState(0, new_state)
 
-            # In single-select mode, uncheck other directories (and their children)
-            mode = self._model.get_kinect_dir_mode()
-            if mode == "single" and new_state == Qt.Checked:
-                for i in range(self._tree.topLevelItemCount()):
-                    other = self._tree.topLevelItem(i)
-                    if other is not item:
-                        other.setCheckState(0, Qt.Unchecked)
-                        for j in range(other.childCount()):
-                            other.child(j).setCheckState(0, Qt.Unchecked)
+        elif kind == "file":
+            parent = item.parent()
+            if parent is not None:
+                self._update_parent_check_state(parent)
 
-            self._populating = False
-
+        self._populating = False
         self.selection_changed.emit()
+
+    @staticmethod
+    def _update_parent_check_state(parent: QTreeWidgetItem) -> None:
+        """Set parent to Checked/PartiallyChecked/Unchecked based on children."""
+        total = parent.childCount()
+        checked = sum(
+            1 for i in range(total)
+            if parent.child(i).checkState(0) == Qt.Checked
+        )
+        if checked == 0:
+            parent.setCheckState(0, Qt.Unchecked)
+        elif checked == total:
+            parent.setCheckState(0, Qt.Checked)
+        else:
+            parent.setCheckState(0, Qt.PartiallyChecked)
+
+
+# Backward-compatible alias
+KinectDirectorySelector = SessionConfigSelector

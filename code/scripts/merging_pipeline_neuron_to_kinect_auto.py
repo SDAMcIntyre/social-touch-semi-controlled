@@ -11,10 +11,10 @@ from prefect.futures import PrefectFuture
 import utils.path_tools as path_tools
 from utils import DagConfigHandler
 
+from utils.pipeline.session_config_resolver import resolve_session_configs
 from primary_processing import (
     KinectConfigFileHandler,
     KinectConfig,
-    get_block_files
 )
 from _4_merging import (
     align_and_merge_neural_and_kinect,
@@ -248,7 +248,7 @@ def run_single_session_pipeline(
 
 @flow(name="Batch Process All Sessions")
 def run_batch_processing(
-    kinect_configs_dir: Path,
+    block_files: list[Path],
     project_data_root: Path,
     dag_config_path: Path,
     parallel: bool
@@ -259,10 +259,6 @@ def run_batch_processing(
     """
     logger = get_run_logger()
     dag_handler_template = DagConfigHandler(dag_config_path)
-    block_files = get_block_files(kinect_configs_dir)
-    exclude_files = set(dag_handler_template.get_parameter('exclude_files', []) or [])
-    if exclude_files:
-        block_files = [f for f in block_files if f.name not in exclude_files]
 
     mode = "PARALLEL" if parallel else "SEQUENTIAL"
     logger.info(f"🚀 Starting batch processing for {len(block_files)} sessions in {mode} mode.")
@@ -369,18 +365,15 @@ def main():
     try:
         main_dag_handler = DagConfigHandler(dag_config_path)
         is_parallel = main_dag_handler.get_parameter('parallel_execution', False)
-        kinect_dir_name = main_dag_handler.get_parameter('kinect_configs_directory')
-        kinect_configs_dir = configs_dir / kinect_dir_name
-        
-        if not kinect_configs_dir.exists():
-            raise FileNotFoundError(f"Config directory not found: {kinect_configs_dir}")
-            
+        entries = main_dag_handler.get_parameter('kinect_configs')
+        block_files = resolve_session_configs(entries, configs_dir / "kinect_configs")
+
     except Exception as e:
         print(f"❌ Initialization Error: {e}")
         exit(1)
 
     run_batch_processing(
-        kinect_configs_dir=kinect_configs_dir,
+        block_files=block_files,
         project_data_root=project_data_root,
         dag_config_path=dag_config_path,
         parallel=is_parallel

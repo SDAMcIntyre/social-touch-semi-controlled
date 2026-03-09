@@ -27,10 +27,10 @@ from utils import (
     PipelineMonitor,
     TaskExecutor
 )
+from utils.pipeline.session_config_resolver import resolve_session_configs
 from primary_processing import (
-    KinectConfigFileHandler, 
-    KinectConfig, 
-    get_block_files
+    KinectConfigFileHandler,
+    KinectConfig,
 )
 
 from _5_postprocessing import (
@@ -224,7 +224,7 @@ def run_single_session_postprocessing(
     return {"status": "success", "completed_tasks": list(dag_handler.completed_tasks)}
 
 def run_batch_postprocessing(
-    kinect_configs_dir: Path,
+    block_files: list[Path],
     project_data_root: Path,
     dag_config_path: Path,
     monitor_queue: Queue,
@@ -236,12 +236,8 @@ def run_batch_postprocessing(
     """
     # 1. Load Configs
     dag_handler_template = DagConfigHandler(dag_config_path)
-    block_files = get_block_files(kinect_configs_dir)
-    exclude_files = set(dag_handler_template.get_parameter('exclude_files', []) or [])
-    if exclude_files:
-        block_files = [f for f in block_files if f.name not in exclude_files]
     if not block_files:
-        logging.warning(f"No config files found in {kinect_configs_dir}")
+        logging.warning("No config files found.")
         return
 
     # 2. Group by Session ID
@@ -303,33 +299,17 @@ def main():
 
     monitor_queue = Queue()
     
-    # Load the Main DAG handler just to get directory settings if needed,
-    # or hardcode if strictly following local paths.
-    try:
-        # Assuming the DAG config might contain the config directory name
-        # If not, we default to 'kinect_configs' or similar
-        main_dag_handler = DagConfigHandler(dag_config_path)
-        kinect_dir_name = main_dag_handler.get_parameter('kinect_configs_directory')
-        kinect_configs_dir: Path = configs_dir / kinect_dir_name
-        
-        if not kinect_configs_dir.exists():
-             # Fallback for safety if parameter is missing/wrong
-             kinect_configs_dir = configs_dir
-             
-    except Exception:
-        kinect_configs_dir = configs_dir / "kinect_configs"
-
-    if not kinect_configs_dir.exists():
-        logging.error(f"Config directory {kinect_configs_dir} does not exist.")
-        exit(1)
+    main_dag_handler = DagConfigHandler(dag_config_path)
+    entries = main_dag_handler.get_parameter('kinect_configs')
+    block_files = resolve_session_configs(entries, configs_dir / "kinect_configs")
 
     run_batch_postprocessing(
-        kinect_configs_dir=kinect_configs_dir,
+        block_files=block_files,
         project_data_root=project_data_root,
         dag_config_path=dag_config_path,
         monitor_queue=monitor_queue,
         report_file_path=report_file_path,
-        parallel=False 
+        parallel=False
     )
 
 if __name__ == "__main__":

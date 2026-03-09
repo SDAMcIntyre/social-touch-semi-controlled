@@ -8,6 +8,7 @@ from tkinter import messagebox
 
 import utils.path_tools as path_tools
 from utils import DagConfigHandler, TaskExecutor
+from utils.pipeline.session_config_resolver import resolve_session_configs
 from primary_processing import (
     ForearmConfigFileHandler, ForearmConfig,
     KinectConfigFileHandler, KinectConfig,
@@ -392,14 +393,13 @@ def _execute_all_batches(batches: List[FrameBatch], dag_handler: DagConfigHandle
 # BATCH RUNNER
 # ──────────────────────────────────────────────────────────────────────────────
 
-def batch_process_all_sessions(configs_forearm_dir: Path, project_data_root: Path, dag_handler: DagConfigHandler) -> None:
+def batch_process_all_sessions(session_files: list[Path], project_data_root: Path, dag_handler: DagConfigHandler) -> None:
     """
-    Discovers all *.yaml session configs and runs the pipeline for each one.
+    Runs the pipeline for each session config file.
     After each session, prompts the user to confirm quality and writes (or
     removes) a .SUCCESS flag accordingly. Sessions with an existing flag are
     skipped unless ``force_session_processing`` is ``true`` in the DAG config.
     """
-    session_files = _discover_session_configs(configs_forearm_dir, dag_handler)
     total = len(session_files)
 
     for idx, session_file in enumerate(session_files, start=1):
@@ -420,32 +420,6 @@ def batch_process_all_sessions(configs_forearm_dir: Path, project_data_root: Pat
             print(f"  ❌ FATAL — skipping session '{session_file.name}': {exc}")
 
     print(f"\n🎉 Batch complete — {total} session(s) processed.")
-
-
-def _discover_session_configs(configs_forearm_dir: Path, dag_handler: DagConfigHandler) -> List[Path]:
-    """Returns sorted *.yaml files from the config directory.
-
-    If ``forearm_config_files`` is set in the DAG config, only those files are
-    returned (include-list model). Otherwise all *.yaml files in the directory
-    are returned. Raises if the directory is missing or no files are found.
-    """
-    if not configs_forearm_dir.is_dir():
-        raise FileNotFoundError(f"Config directory not found: {configs_forearm_dir}")
-
-    included = dag_handler.get_parameter('forearm_config_files') or []
-    if included:
-        session_files = sorted(
-            configs_forearm_dir / name for name in included
-            if (configs_forearm_dir / name).exists()
-        )
-    else:
-        session_files = sorted(configs_forearm_dir.glob("*.yaml"))
-
-    if not session_files:
-        raise FileNotFoundError(f"No *.yaml session configs found in: {configs_forearm_dir}")
-
-    print(f"Found {len(session_files)} session config(s) in '{configs_forearm_dir}'.")
-    return session_files
 
 
 def _should_skip_session(session_config: ForearmConfig, dag_handler: DagConfigHandler) -> bool:
@@ -501,14 +475,15 @@ if __name__ == "__main__":
         project_root, project_data_root = setup_environment()
         dag_config_path = _args.dag_config
         dag_handler = DagConfigHandler(dag_config_path)
-        forearm_configs_dir = project_root / "configs" / dag_handler.get_parameter('forearm_configs_directory')
+        entries = dag_handler.get_parameter('forearm_configs')
+        session_files = resolve_session_configs(entries, project_root / "configs" / "forearm_configs")
 
         print(f"  Project root   : {project_root}")
         print(f"  Data root      : {project_data_root}")
-        print(f"  Forearm configs: {forearm_configs_dir}\n")
+        print(f"  Forearm sessions: {len(session_files)} config(s)\n")
 
         batch_process_all_sessions(
-            configs_forearm_dir=forearm_configs_dir,
+            session_files=session_files,
             project_data_root=project_data_root,
             dag_handler=dag_handler,
         )

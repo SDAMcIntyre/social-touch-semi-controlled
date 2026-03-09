@@ -10,8 +10,8 @@
 # ==============================================================================
 
 parameters:
-  kinect_configs_directory: "kinect_configs/valid_configs_ST13-01"
-  #kinect_configs_directory: "kinect_configs/valid_configs_ST16-05"
+  kinect_configs: "valid_configs_ST13-01"
+  #kinect_configs: "valid_configs_ST16-05"
 
 tasks:
   # PHASE 1: INITIALIZATION

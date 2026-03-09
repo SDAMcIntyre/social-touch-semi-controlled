@@ -20,8 +20,9 @@ from utils import DagConfigHandler, PipelineMonitor, TaskExecutor
 from primary_processing import (
     KinectConfigFileHandler,
     KinectConfig,
-    get_block_files
 )
+
+from utils.pipeline.session_config_resolver import resolve_session_configs
 
 from _2_primary_processing._2_generate_rgb_depth_video import (
     generate_mkv_stream_analysis,
@@ -584,7 +585,7 @@ def run_single_session_pipeline(
 
 
 def run_batch_processing(
-    kinect_configs_dir: Path,
+    block_files: list[Path],
     project_data_root: Path,
     dag_config_path: Path,
     monitor_queue: Queue,
@@ -592,10 +593,6 @@ def run_batch_processing(
     parallel: bool,
 ):
     dag_handler_template = DagConfigHandler(dag_config_path)
-    block_files = get_block_files(kinect_configs_dir)
-    exclude_files = set(dag_handler_template.get_parameter('exclude_files', []) or [])
-    if exclude_files:
-        block_files = [f for f in block_files if f.name not in exclude_files]
 
     mode = "PARALLEL" if parallel else "SEQUENTIAL"
     logging.info(f"🚀 Starting batch processing for {len(block_files)} sessions in {mode} mode.")
@@ -659,8 +656,8 @@ def main():
     try:
         main_dag_handler = DagConfigHandler(dag_config_path)
         is_parallel = main_dag_handler.get_parameter('parallel_execution', False)
-        kinect_dir_name = main_dag_handler.get_parameter('kinect_configs_directory')
-        kinect_configs_dir = configs_dir / kinect_dir_name
+        entries = main_dag_handler.get_parameter('kinect_configs')
+        block_files = resolve_session_configs(entries, configs_dir / "kinect_configs")
     except FileNotFoundError:
         print(f"❌ Error: Configuration file '{dag_config_path}' not found.")
         exit(1)
@@ -671,7 +668,7 @@ def main():
     main_monitor.show_dashboard()
 
     run_batch_processing(
-        kinect_configs_dir=kinect_configs_dir,
+        block_files=block_files,
         project_data_root=project_data_root,
         dag_config_path=dag_config_path,
         monitor_queue=main_monitor.queue,

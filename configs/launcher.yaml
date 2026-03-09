@@ -15,41 +15,41 @@
 categories:
   - name: Primary
     workflows:
-      - name: Kinect Auto
+      - name: Kinect [Auto]
         script: code/scripts/primary_workflow_kinect_auto.py
         dag_config: configs/primary_workflow_kinect_auto_dag.yaml
 
   - name: Preprocess
     workflows:
-      - name: Extract Forearm Manual
+      - name: Extract Forearm [Manual]
         script: code/scripts/preprocess_pipeline_extract_forearm_manual.py
         dag_config: configs/preprocess_pipeline_extract_forearm_manual_dag.yaml
 
-      - name: Kinect Auto
+      - name: Kinect [Auto]
         script: code/scripts/preprocess_workflow_kinect_auto.py
         dag_config: configs/preprocess_workflow_kinect_auto_dag.yaml
 
-      - name: Kinect Manual
+      - name: Kinect [Manual]
         script: code/scripts/preprocess_workflow_kinect_manual.py
         dag_config: configs/preprocess_workflow_kinect_manual_dag.yaml
 
-      - name: Kinect Visualisation
+      - name: Kinect [Visualisation]
         script: code/scripts/preprocess_workflow_kinect_visualisation.py
         dag_config: configs/preprocess_workflow_kinect_visualisation_dag.yaml
 
   - name: Merging
     workflows:
-      - name: Neuron to Kinect Auto
+      - name: Neural and Kinect [Auto]
         script: code/scripts/merging_pipeline_neuron_to_kinect_auto.py
         dag_config: configs/merging_pipeline_neuron_to_kinect_auto_dag.yaml
 
-      - name: View Neural Kinect
+      - name: Neural and Kinect [Visualisation]
         script: code/scripts/merging_view_neural_kinect.py
         dag_config: configs/merging_view_neural_kinect_dag.yaml
 
   - name: Postprocess
     workflows:
-      - name: Kinect Auto
+      - name: Kinect [Auto]
         script: code/scripts/postprocess_workflow_kinect_auto.py
         dag_config: configs/postprocess_workflow_kinect_auto_dag.yaml
 
