@@ -1,11 +1,12 @@
 # src/pipeline_monitor_live_plotter.py
 
+import multiprocessing
+
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
 from typing import Optional
-import multiprocessing
 from multiprocessing import Queue
 from queue import Empty as QueueEmpty
 
@@ -98,7 +99,12 @@ class LivePlotter:
         if self._plot_process and self._plot_process.is_alive():
             return
         self._plot_process = multiprocessing.Process(target=_plot_process_target, args=(self._queue,))
-        self._plot_process.start()
+        try:
+            self._plot_process.start()
+        except (PermissionError, OSError) as e:
+            print(f"Live dashboard unavailable (process spawn failed: {e}). "
+                  "Pipeline will continue — status is saved to the Excel report.")
+            self._plot_process = None
 
     def stop(self, block: bool = False):
         if not self.is_running():

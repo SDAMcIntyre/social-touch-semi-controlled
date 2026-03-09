@@ -197,14 +197,14 @@ class RegistrationWorkbench:
         self._combo_method = gui.Combobox()
         for meth in _REGISTRATION_METHODS:
             self._combo_method.add_item(meth)
-        self._combo_method.selected_index = 0
+        self._combo_method.selected_index = len(_REGISTRATION_METHODS) - 1
         row.add_child(self._combo_method)
 
         row.add_fixed(int(em * 1.5))
         row.add_child(gui.Label("Max dist (m):"))
         self._edit_max_dist = gui.NumberEdit(gui.NumberEdit.DOUBLE)
-        self._edit_max_dist.double_value = 0.10
-        self._edit_max_dist.set_limits(0.001, 1.0)
+        self._edit_max_dist.double_value = 1.00
+        self._edit_max_dist.set_limits(0.001, 5.000)
         row.add_child(self._edit_max_dist)
 
         row.add_fixed(em)
@@ -250,7 +250,7 @@ class RegistrationWorkbench:
         )
         self._snapshot_panel.add_child(gui.Label("Snapshot:"))
         self._combo_snapshot = gui.Combobox()
-        self._combo_snapshot.add_item("(process first)")
+        self._combo_snapshot.add_item("(process first)" + " " * 150)
         self._combo_snapshot.selected_index = 0
         self._combo_snapshot.set_on_selection_changed(self._on_snapshot_changed)
         self._snapshot_panel.add_child(self._combo_snapshot)

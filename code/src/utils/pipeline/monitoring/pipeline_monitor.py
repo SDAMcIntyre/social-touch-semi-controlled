@@ -4,7 +4,7 @@ import time
 import threading
 from pathlib import Path
 from typing import List, Optional, Tuple
-from multiprocessing import Manager, Process
+from multiprocessing import Queue as _mp_Queue
 from multiprocessing.queues import Queue as MPQueue
 import pandas as pd
 
@@ -44,9 +44,8 @@ class PipelineMonitor:
             return
 
         # --- Server/Controller Mode ---
-        self._manager = Manager()
-        self._input_queue = self._manager.Queue() # Workers write here
-        self._plot_queue = self._manager.Queue()  # Plotter reads here
+        self._input_queue = _mp_Queue()  # Workers write here (cross-process)
+        self._plot_queue = _mp_Queue()   # Plotter reads here (separate process)
         
         self._data_manager = DataManager(Path(report_path))
         self._data_manager.initialize(stages)

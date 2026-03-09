@@ -108,12 +108,22 @@ class FrameROISquare:
         cv2.namedWindow(self.window_name)
 
         try:
-            # Center the window on the screen
-            root = tk.Tk()
-            root.withdraw()
-            screen_width = root.winfo_screenwidth()
-            screen_height = root.winfo_screenheight()
-            root.destroy()
+            # Center the window on the screen.
+            # Reuse an existing tkinter root if one is alive (e.g. when called
+            # from the forearm-extraction pipeline that already owns a Tk
+            # instance).  Creating a second tk.Tk() while one is alive can
+            # corrupt the shared X11/WSLg display connection and make
+            # cv2.imshow() render a black window.
+            existing_root = tk._default_root
+            if existing_root is not None:
+                screen_width = existing_root.winfo_screenwidth()
+                screen_height = existing_root.winfo_screenheight()
+            else:
+                root = tk.Tk()
+                root.withdraw()
+                screen_width = root.winfo_screenwidth()
+                screen_height = root.winfo_screenheight()
+                root.destroy()
 
             center_x = max(0, int(screen_width / 2 - self.window_w / 2))
             center_y = max(0, int(screen_height / 2 - self.window_h / 2))
