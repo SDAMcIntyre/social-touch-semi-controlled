@@ -1,3 +1,4 @@
+import argparse
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -353,12 +354,15 @@ def setup_environment():
     """Handles filesystem setup and configuration path resolution."""
     project_data_root = path_tools.get_project_data_root()
     configs_dir = Path("configs")
-    dag_config_path = Path(configs_dir / "merging_pipeline_neuron_to_kinect_auto_dag.yaml")
-    return project_data_root, configs_dir, dag_config_path
+    return project_data_root, configs_dir
 
 def main():
     freeze_support()
-    project_data_root, configs_dir, dag_config_path = setup_environment()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dag-config", type=Path, required=True)
+    args = parser.parse_args()
+    dag_config_path = args.dag_config
+    project_data_root, configs_dir = setup_environment()
 
     print("🛠️  Initializing Merging Pipeline...")
 

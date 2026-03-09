@@ -1,3 +1,4 @@
+import argparse
 from pathlib import Path
 from prefect import flow
 import utils.path_tools as path_tools
@@ -395,10 +396,13 @@ def run_batch_sequentially(kinect_configs_dir: Path, project_data_root: Path, da
 
 
 if __name__ == "__main__":
+    _parser = argparse.ArgumentParser()
+    _parser.add_argument("--dag-config", type=Path, required=True)
+    _args = _parser.parse_args()
     print("🛠️  Setting up files for manual processing...")
     project_data_root = path_tools.get_project_data_root()
     configs_dir = Path("configs")
-    dag_config_path = configs_dir / "preprocess_workflow_kinect_manual_dag.yaml"
+    dag_config_path = _args.dag_config
 
     try:
         main_dag_handler = DagConfigHandler(dag_config_path)

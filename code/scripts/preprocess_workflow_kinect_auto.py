@@ -1,3 +1,4 @@
+import argparse
 import os
 import logging
 from pathlib import Path
@@ -636,7 +637,6 @@ def run_batch_processing(
 def setup_environment():
     project_data_root = path_tools.get_project_data_root()
     configs_dir = Path("configs")
-    dag_config_path = Path(configs_dir / "preprocess_workflow_kinect_auto_dag.yaml")
 
     print("🛠️  Setting up environment...")
     reports_dir = Path("reports")
@@ -646,11 +646,15 @@ def setup_environment():
     if report_file_path.exists():
         shutil.rmtree(report_file_path)
         print("🧹 File with the same name found, removing it.")
-    return project_data_root, configs_dir, dag_config_path, report_file_path
+    return project_data_root, configs_dir, report_file_path
 
 def main():
     freeze_support()
-    project_data_root, configs_dir, dag_config_path, report_file_path = setup_environment()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dag-config", type=Path, required=True)
+    args = parser.parse_args()
+    dag_config_path = args.dag_config
+    project_data_root, configs_dir, report_file_path = setup_environment()
 
     try:
         main_dag_handler = DagConfigHandler(dag_config_path)

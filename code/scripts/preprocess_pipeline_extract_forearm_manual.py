@@ -1,3 +1,4 @@
+import argparse
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -64,9 +65,8 @@ class FrameBatch:
 
 def setup_environment():
     project_root      = Path(__file__).resolve().parents[2]
-    dag_config_path   = project_root / "configs" / "preprocess_pipeline_extract_forearm_manual_dag.yaml"
     project_data_root = path_tools.get_project_data_root()
-    return project_root, project_data_root, dag_config_path
+    return project_root, project_data_root
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -493,9 +493,13 @@ def _ask_user_confirmation() -> bool:
 # ──────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
+    _parser = argparse.ArgumentParser()
+    _parser.add_argument("--dag-config", type=Path, required=True)
+    _args = _parser.parse_args()
     print("🛠️  Initialising batch processing script...\n")
     try:
-        project_root, project_data_root, dag_config_path = setup_environment()
+        project_root, project_data_root = setup_environment()
+        dag_config_path = _args.dag_config
         dag_handler = DagConfigHandler(dag_config_path)
         forearm_configs_dir = project_root / "configs" / dag_handler.get_parameter('forearm_configs_directory')
 

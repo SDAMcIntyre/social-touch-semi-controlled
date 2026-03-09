@@ -19,6 +19,7 @@ Features:
   - Live Nerve_freq / contact_depth / contact_area time-series panel
   - Camera centered on contact region
 """
+import argparse
 import sys
 from pathlib import Path
 from typing import Optional, Dict
@@ -193,9 +194,12 @@ def run_batch_sequentially(
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    _parser = argparse.ArgumentParser()
+    _parser.add_argument("--dag-config", type=Path, required=True)
+    _args = _parser.parse_args()
     project_data_root = path_tools.get_project_data_root()
     configs_dir = Path("configs")
-    dag_config_path = configs_dir / "merging_view_neural_kinect_dag.yaml"
+    dag_config_path = _args.dag_config
 
     try:
         main_dag_handler = DagConfigHandler(dag_config_path)

@@ -1,3 +1,4 @@
+import argparse
 import os
 import logging
 from pathlib import Path
@@ -287,11 +288,14 @@ def run_batch_postprocessing(
 
 def main():
     freeze_support()
-    
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dag-config", type=Path, required=True)
+    args = parser.parse_args()
+    dag_config_path = args.dag_config
+
     # Configuration
     project_data_root = path_tools.get_project_data_root() # Using path_tools as per reference script
     configs_dir = Path("configs")
-    dag_config_path = configs_dir / "postprocess_workflow_kinect_auto_dag.yaml"
     
     reports_dir = Path("reports")
     reports_dir.mkdir(exist_ok=True)

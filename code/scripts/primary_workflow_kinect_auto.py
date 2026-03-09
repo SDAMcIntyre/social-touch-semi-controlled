@@ -1,3 +1,4 @@
+import argparse
 import os
 import logging
 from pathlib import Path
@@ -159,18 +160,21 @@ def run_batch_primary(
 def setup_environment():
     project_data_root = path_tools.get_project_data_root()
     configs_dir = Path("configs")
-    dag_config_path = Path(configs_dir / "primary_workflow_kinect_auto_dag.yaml") # Pointing to primary yaml
-    
+
     reports_dir = Path("reports")
     reports_dir.mkdir(exist_ok=True)
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
     report_file_path = reports_dir / f"{timestamp}_PRIMARY_status.xlsx"
-    
-    return project_data_root, configs_dir, dag_config_path, report_file_path
+
+    return project_data_root, configs_dir, report_file_path
 
 def main():
-    freeze_support() 
-    project_data_root, configs_dir, dag_config_path, report_file_path = setup_environment()
+    freeze_support()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dag-config", type=Path, required=True)
+    args = parser.parse_args()
+    dag_config_path = args.dag_config
+    project_data_root, configs_dir, report_file_path = setup_environment()
 
     if not dag_config_path.exists():
          print(f"❌ Config {dag_config_path} missing.")
