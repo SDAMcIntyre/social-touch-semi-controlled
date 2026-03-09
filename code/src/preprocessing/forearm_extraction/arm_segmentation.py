@@ -52,12 +52,12 @@ class ArmSegmentation:
         },
         'color_skin_filter': {
             'enabled': True,
-            'hsv_h_range': [0, 25],         # [H_start, H_end] degrees, cyclic (0-360)
-            'hsv_s_range': [0.0, 1.0],      # [S_low, S_high]
+            'hsv_h_range': [335, 25],         # [H_start, H_end] degrees, cyclic (0-360)
+            'hsv_s_range': [0.1, 1.0],      # [S_low, S_high]
             'hsv_v_range': [0.0, 1.0],      # [V_low, V_high]
         },
         'region_growing': {
-            'dbscan_eps': 10.0,
+            'dbscan_eps': 18.0,
             'min_cluster_size': 50
         }
     }

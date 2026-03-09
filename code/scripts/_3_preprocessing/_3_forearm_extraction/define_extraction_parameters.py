@@ -217,7 +217,7 @@ def _select_roi_for_group(
     window_title = _build_roi_window_title(video_filename, representative, group_size)
     roi_ui = FrameROIRotatable(
         frame,
-        is_rgb=True,
+        is_rgb=False,  # VideoMP4Manager returns BGR frames
         window_title=window_title,
         predefined_roi=predefined_roi,
     )
@@ -337,7 +337,7 @@ def _collect_parameters_for_video(
             if saved_parameters else None
         )
 
-        frame = video_manager[representative]
+        frame = video_manager[group[0]]
         roi_data = _select_roi_for_group(frame, video_filename, representative, n, predefined_roi)
 
         if not roi_data:

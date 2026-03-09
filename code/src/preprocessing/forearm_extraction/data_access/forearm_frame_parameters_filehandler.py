@@ -75,12 +75,6 @@ class ForearmFrameParametersFileHandler:
                     frame_ids = [old_frame_id]
                     representative_frame_id = old_frame_id
 
-                # Guard: representative must be a member of frame_ids
-                if representative_frame_id not in frame_ids:
-                    print(f"⚠️  Warning: representative_frame_id {representative_frame_id} not in "
-                          f"frame_ids {frame_ids}. Resetting to min(frame_ids).")
-                    representative_frame_id = min(frame_ids)
-
                 parameter = ForearmParameters(
                     frame_ids=frame_ids,
                     representative_frame_id=representative_frame_id,
