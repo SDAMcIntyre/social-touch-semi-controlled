@@ -80,7 +80,8 @@ def filter_block_by_neural_quality(
     output_csv: Path,
     xlsx_path: Path,
     *,
-    force_processing: bool = False
+    force_processing: bool = False,
+    discard_from_first_not2use: bool = True,
 ) -> Path:
     """
     Filters a single block's merged CSV by removing rows belonging to Not2Use trials.
@@ -91,6 +92,13 @@ def filter_block_by_neural_quality(
     NaN trial_id rows (nerve-rate interpolation) are forward-filled to assign them to
     their preceding trial. Rows with trial_id == 0 (inter-trial gaps) are always kept.
     If no Not2Use trials exist for this block the file is copied as-is.
+
+    Args:
+        discard_from_first_not2use: When True (default), truncate the block at the
+            first row of min(not2use_trials), discarding all subsequent data regardless
+            of trial distribution. When False, use the original two-path logic: truncate
+            only if Not2Use trials form a contiguous trailing suffix, otherwise remove
+            only the individual Not2Use trial rows.
 
     Returns the output path.
     """
@@ -126,27 +134,40 @@ def filter_block_by_neural_quality(
 
     rows_before = len(df)
     min_not2use = min(not2use_trials)
-    is_trailing_suffix = not2use_trials == set(range(min_not2use, 13))
 
-    if is_trailing_suffix:
-        # All remaining trials from min_not2use to 12 are Not2Use: truncate at the
-        # first row whose filled trial_id reaches that threshold.
-        suffix_mask = filled_trial_id >= min_not2use
-        if suffix_mask.any():
-            cutoff = int(suffix_mask.values.argmax())
+    if discard_from_first_not2use:
+        # Truncate at the first row whose filled trial_id reaches min_not2use,
+        # discarding everything from that point onward regardless of trial distribution.
+        cutoff_mask = filled_trial_id >= min_not2use
+        if cutoff_mask.any():
+            cutoff = int(cutoff_mask.values.argmax())
             df_filtered = df.iloc[:cutoff]
         else:
             df_filtered = df
+        mode_label = f"truncated from trial {min_not2use} onward"
     else:
-        mask = ~filled_trial_id.isin(not2use_trials)
-        df_filtered = df[mask]
+        is_trailing_suffix = not2use_trials == set(range(min_not2use, 13))
+        if is_trailing_suffix:
+            # All remaining trials from min_not2use to 12 are Not2Use: truncate at the
+            # first row whose filled trial_id reaches that threshold.
+            suffix_mask = filled_trial_id >= min_not2use
+            if suffix_mask.any():
+                cutoff = int(suffix_mask.values.argmax())
+                df_filtered = df.iloc[:cutoff]
+            else:
+                df_filtered = df
+            mode_label = f"trailing-suffix truncated from trial {min_not2use} onward"
+        else:
+            mask = ~filled_trial_id.isin(not2use_trials)
+            df_filtered = df[mask]
+            mode_label = f"removed trials {not2use_trials} individually"
 
     rows_after = len(df_filtered)
 
     removed = rows_before - rows_after
     logger.info(
-        f"{input_csv.name}: removed {removed} rows "
-        f"({not2use_trials} Not2Use) -> {rows_after} rows remaining"
+        f"{input_csv.name}: {mode_label} "
+        f"({not2use_trials} Not2Use) -> removed {removed} rows, {rows_after} remaining"
     )
 
     unmatched = not2use_trials - set(filled_trial_id.unique())
