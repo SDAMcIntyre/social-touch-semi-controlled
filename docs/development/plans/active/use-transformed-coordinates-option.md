@@ -61,11 +61,11 @@ spatially inconsistent.
 ## Success Criteria
 
 - [ ] `determine_receptive_field` reads `contact_points_transformed` when
-      `use_transformed=True` and the column exists
+      `use_transformed=True`
 - [ ] `_process_touch_analysis` reads `contact_location_x/y/z_transformed`
-      when `use_transformed=True` and the columns exist
-- [ ] Both functions fall back to original columns with a logged warning when
-      `_transformed` columns are absent
+      when `use_transformed=True`
+- [ ] Both functions raise `KeyError` with a clear message when a `_transformed`
+      column is absent and `use_transformed=True` (no silent fallback)
 - [ ] DAG YAML files include `use_transformed: true` under affected tasks
 - [ ] Option appears as a toggleable checkbox in the launcher GUI (automatic)
 - [ ] Existing behaviour is preserved when `use_transformed: false`

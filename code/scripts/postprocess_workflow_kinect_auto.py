@@ -60,10 +60,11 @@ def set_xyz_reference_from_gestures_flow(input_files: List[Path], output_dir: Pa
 
 @flow(name="determine_receptive_field")
 def determine_receptive_field_flow(
-    input_files: List[Path], 
-    configs: List[KinectConfig], 
-    output_dir: Path, 
-    force_processing: bool = False
+    input_files: List[Path],
+    configs: List[KinectConfig],
+    output_dir: Path,
+    force_processing: bool = False,
+    use_transformed: bool = True,
 ) -> Tuple[List[Path], List[Path]]:
     """
     Determine the receptive field based on touch locations for each file.
@@ -79,10 +80,11 @@ def determine_receptive_field_flow(
 
     # Pass configs to the underlying function
     output_files, rf_pc_file = determine_receptive_field(
-        input_files, 
-        arm_roi_metadata_path, 
-        output_dir, 
-        force_processing=force_processing
+        input_files,
+        arm_roi_metadata_path,
+        output_dir,
+        force_processing=force_processing,
+        use_transformed=use_transformed,
     )
 
     return output_files, rf_pc_file
@@ -192,9 +194,11 @@ def run_single_session_postprocessing(
                  # and allowing the __exit__ to handle logging
                  continue
 
-            # Inject force_processing if defined in options
+            # Inject options into params when supported by the flow
             if 'force_processing' in options:
                 params['force_processing'] = options['force_processing']
+            if 'use_transformed' in options:
+                params['use_transformed'] = options['use_transformed']
             
             # Validation: Check if list inputs are empty
             # Note: We must exclude 'configs' from this check if configs are not lists of files, 

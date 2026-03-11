@@ -12,6 +12,7 @@ from dataclasses import dataclass, asdict
 from collections import Counter
 
 from utils.should_process_task import should_process_task
+from preprocessing.forearm_extraction.registration.csv_spatial_transformer import resolve_column
 from preprocessing.forearm_extraction import (
     ForearmFrameParametersFileHandler,
     ForearmParameters,
@@ -137,12 +138,13 @@ def plot_comparison(point_counts: Counter, forearm_pcd: Any = None, log_scale: b
 # --- 3. Core Logic ---
 
 def determine_receptive_field(
-    input_files: List[Path], 
-    arm_roi_metadata_path: Optional[Path], 
+    input_files: List[Path],
+    arm_roi_metadata_path: Optional[Path],
     output_dir: Path,
     *,
     force_processing: bool = False,
-    monitor: bool = True
+    monitor: bool = True,
+    use_transformed: bool = True,
 ) -> Tuple[List[Path], Path]:
     """
     Orchestrates the Receptive Field analysis pipeline.
@@ -186,14 +188,20 @@ def determine_receptive_field(
     
     for input_path in input_files:
         try:
-            # Load necessary columns
-            # Corrected syntax for usecols to list(values())
-            df = pd.read_csv(input_path, usecols=list(config_rf.cols_input.values()))
-            
+            # Probe headers to resolve the points column before restricting usecols
+            header_df = pd.read_csv(input_path, nrows=0)
+            points_col = resolve_column(header_df, config_rf.cols_input["points"], use_transformed)
+            needed_cols = [
+                config_rf.cols_input["touch_id"],
+                config_rf.cols_input["spike"],
+                points_col,
+            ]
+            df = pd.read_csv(input_path, usecols=needed_cols)
+
             # Extract columns to numpy arrays for performance/indexing
             is_spike = df[config_rf.cols_input["spike"]].to_numpy()
             touch_ids = df[config_rf.cols_input["touch_id"]].to_numpy()
-            raw_points_col = df[config_rf.cols_input["points"]]
+            raw_points_col = df[points_col]
             
             for idx, raw_points_str in enumerate(raw_points_col):
                 # Filter: Skip if touch_id is 0 (Background/Noise)
@@ -266,8 +274,8 @@ def determine_receptive_field(
         
         try:
             df = pd.read_csv(input_path)
-            points_col = config_rf.cols_input["points"]
-            
+            points_col = resolve_column(df, config_rf.cols_input["points"], use_transformed)
+
             if points_col not in df.columns:
                 continue
 
