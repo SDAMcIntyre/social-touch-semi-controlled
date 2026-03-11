@@ -44,8 +44,8 @@ categories:
         dag_config: configs/merging_pipeline_neuron_to_kinect_auto_dag.yaml
 
       - name: Neural and Kinect [Visualisation]
-        script: code/scripts/merging_view_neural_kinect.py
-        dag_config: configs/merging_view_neural_kinect_dag.yaml
+        script: code/scripts/merging_pipeline_neuron_to_kinect_visualisation.py
+        dag_config: configs/merging_pipeline_neuron_to_kinect_visualisation_dag.yaml
 
   - name: Postprocess
     workflows:
