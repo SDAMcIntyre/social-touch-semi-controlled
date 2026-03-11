@@ -9,7 +9,7 @@ parameters:
       valid_configs_ST13-03, valid_configs_ST14-01_ST14-02, 
       valid_configs_ST14-03_ST14-04, valid_configs_ST15-01_ST15-02, 
       valid_configs_ST16-02, valid_configs_ST16-03_ST16-04, 
-      valid_configs_ST16-05, 
+      valid_configs_ST16-05, valid_configs_ST18-01, 
       valid_configs_ST18-02_ST18-04/kinect_config_2022-06-22_ST18-04_semicontrolled_block-order01.yaml,
     valid_configs_ST18-02_ST18-04/kinect_config_2022-06-22_ST18-04_semicontrolled_block-order02.yaml,
     valid_configs_ST18-02_ST18-04/kinect_config_2022-06-22_ST18-04_semicontrolled_block-order03.yaml,
@@ -35,4 +35,7 @@ tasks:
     enabled: true
     options:
       force_processing: false
+      # When true, discard all trials from the first Not2Use trial onward (truncate).
+      # When false, remove only the individual Not2Use trial rows (original behaviour).
+      discard_from_first_not2use: true
     depends_on: [unify_dataset]

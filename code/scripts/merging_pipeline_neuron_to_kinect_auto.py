@@ -139,6 +139,7 @@ def filter_by_neural_quality_flow(
     xlsx_path: Path,
     *,
     force_processing: bool = False,
+    discard_from_first_not2use: bool = True,
 ) -> Path:
     """
     Flow to filter a single block's merged CSV by removing Not2Use trials.
@@ -150,6 +151,7 @@ def filter_by_neural_quality_flow(
         output_csv=output_csv,
         xlsx_path=xlsx_path,
         force_processing=force_processing,
+        discard_from_first_not2use=discard_from_first_not2use,
     )
 
 
@@ -211,6 +213,7 @@ def run_single_session_pipeline(
 
             options = dag_handler.get_task_options(task_name)
             force = options.get('force_processing', False)
+            discard_from_first = options.get('discard_from_first_not2use', True)
 
             filtered_output = (
                 config.session_merged_output_dir / "sessions_filtered" / output_file_path.name
@@ -220,6 +223,7 @@ def run_single_session_pipeline(
                 output_csv=filtered_output,
                 xlsx_path=xlsx_path,
                 force_processing=force,
+                discard_from_first_not2use=discard_from_first,
             )
 
             dag_handler.mark_completed(task_name)
