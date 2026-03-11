@@ -30,10 +30,47 @@ from primary_processing import (
 from analysis.touch_analytics import (
     generate_unified_summary,
     generate_touch_summary_matrix,
-    generate_ap_efficacy_matrix
+    generate_ap_efficacy_matrix,
+    generate_session_summary
 )
 
 # --- Analysis Flows ---
+
+@flow(name="generate_session_block_summary")
+def generate_session_summary_flow(
+    input_items: List[Tuple[Path, Path]],
+    force_processing: bool = False,
+) -> List[Path]:
+    """
+    STEP 1: Session Block Summary.
+    Reads all aggregated session CSVs and writes a single combined CSV
+    (``4_analysed/session_block_summary.csv``) with one row per block,
+    describing block IDs, trial counts, and trial ID lists.
+    """
+    print(f"[Batch Analysis] Generating session block summary for {len(input_items)} item(s)...")
+
+    if not input_items:
+        logging.warning("No input items provided for session block summary.")
+        return []
+
+    input_paths = [item[0] for item in input_items]
+    anchor_db_path = input_items[0][1]
+
+    output_dir = anchor_db_path / "4_analysed"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / "session_block_summary.csv"
+
+    try:
+        result_path = generate_session_summary(
+            input_paths=input_paths,
+            output_path=output_path,
+            force=force_processing,
+        )
+        return [result_path]
+    except Exception as exc:
+        logging.error(f"Failed to generate session block summary: {exc}")
+        return []
+
 
 @flow(name="process_unified_touches")
 def process_unified_touches_flow(
@@ -218,6 +255,7 @@ def run_batch_analysis(
         return
 
     available_tasks = [
+        ("generate_session_summary", generate_session_summary_flow),
         ("process_unified_touches", process_unified_touches_flow),
         ("analyse_number_single_touches", analyse_number_single_touches_flow),
         ("analyse_ap_efficacy", analyse_ap_efficacy_flow)
@@ -231,7 +269,7 @@ def run_batch_analysis(
     logging.info(f"Scanning {len(session_map)} sessions for data files...")
     for search_dir in sorted(session_map.keys()):
         database_path_context = session_map[search_dir]
-        candidates = list(search_dir.glob("*_semicontrolled_aggregated_session.csv"))
+        candidates = list(search_dir.glob("*_semicontrolled_aggregated_session_filtered.csv"))
         
         if candidates:
             target_file = candidates[0]
