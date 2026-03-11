@@ -74,8 +74,9 @@ def generate_session_summary_flow(
 
 @flow(name="process_unified_touches")
 def process_unified_touches_flow(
-    input_items: List[Tuple[Path, Path]], 
-    force_processing: bool = False
+    input_items: List[Tuple[Path, Path]],
+    force_processing: bool = False,
+    use_transformed: bool = True,
 ) -> List[Path]:
     """
     STEP 1: Primary Processing.
@@ -102,10 +103,11 @@ def process_unified_touches_flow(
 
             # Delegate processing (and checks) to the function
             result_path = generate_unified_summary(
-                input_file, 
-                output_file_path, 
-                show=False, 
-                force=force_processing
+                input_file,
+                output_file_path,
+                show=False,
+                force=force_processing,
+                use_transformed=use_transformed,
             )
             results.append(result_path)
 
@@ -294,10 +296,13 @@ def run_batch_analysis(
         with executor:
             if executor.can_run:
                 try:
-                    flow_func(
-                        input_items=items_to_process,
-                        force_processing=options.get("force_processing", False)
-                    )
+                    kwargs = {
+                        "input_items": items_to_process,
+                        "force_processing": options.get("force_processing", False),
+                    }
+                    if "use_transformed" in options:
+                        kwargs["use_transformed"] = options["use_transformed"]
+                    flow_func(**kwargs)
                 except Exception as e:
                     executor.error_msg = f"Batch analysis failed: {str(e)}"
                     logging.error(f"Error during {task_name}: {e}")

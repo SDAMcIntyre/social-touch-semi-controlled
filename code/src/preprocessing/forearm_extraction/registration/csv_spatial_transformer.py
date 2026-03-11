@@ -83,6 +83,28 @@ def _apply_rigid_transform(
 
 
 # ------------------------------------------------------------------
+# Column resolution helper
+# ------------------------------------------------------------------
+
+def resolve_column(df: pd.DataFrame, base: str, use_transformed: bool) -> str:
+    """Return ``base + '_transformed'`` if the flag is set, otherwise ``base``.
+
+    Raises ``KeyError`` when ``use_transformed`` is ``True`` but the transformed
+    column is absent — the caller must ensure the CSV has been through the ICP
+    registration step before enabling this flag.
+    """
+    if use_transformed:
+        candidate = base + "_transformed"
+        if candidate not in df.columns:
+            raise KeyError(
+                f"Column '{candidate}' not found in DataFrame. "
+                "Ensure ICP registration has been run, or set use_transformed=False."
+            )
+        return candidate
+    return base
+
+
+# ------------------------------------------------------------------
 # Public API
 # ------------------------------------------------------------------
 

@@ -31,6 +31,7 @@ tasks:
     enabled: true
     options:
       force_processing: true
+      use_transformed: true
     depends_on: []
 
   # Consumes output from process_unified_touches

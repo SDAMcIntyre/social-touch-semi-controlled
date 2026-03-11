@@ -19,6 +19,7 @@ tasks:
     enabled: true
     options:
       force_processing: true
+      use_transformed: true
     depends_on: []
 
   # --- Data Cleaning ---

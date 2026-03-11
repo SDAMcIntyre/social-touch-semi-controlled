@@ -8,12 +8,14 @@ from typing import List, Union
 
 # Architectural Import
 from utils.should_process_task import should_process_task
+from preprocessing.forearm_extraction.registration.csv_spatial_transformer import resolve_column
 
 def generate_unified_summary(
-        input_path: Path, 
-        output_path: Path, 
+        input_path: Path,
+        output_path: Path,
         show: bool = False,
-        force: bool = False
+        force: bool = False,
+        use_transformed: bool = True,
 ) -> Path:
     """
     Unified analysis function.
@@ -31,7 +33,7 @@ def generate_unified_summary(
         return output_path
 
     logging.info(f"Analyzing (Unified): {input_path.name}")
-    return _process_touch_analysis(input_path, output_path, show)
+    return _process_touch_analysis(input_path, output_path, show, use_transformed=use_transformed)
 
 def generate_touch_summary_matrix(
         input_paths: List[Path],
@@ -115,7 +117,7 @@ def generate_ap_efficacy_matrix(
 
     return output_path
 
-def _process_touch_analysis(input_path: Path, output_path: Path, show: bool) -> Path:
+def _process_touch_analysis(input_path: Path, output_path: Path, show: bool, *, use_transformed: bool = True) -> Path:
     """
     Internal shared logic for processing touch kinematics.
     Always includes 'spike_elicited' column.
@@ -125,6 +127,10 @@ def _process_touch_analysis(input_path: Path, output_path: Path, show: bool) -> 
     except Exception as e:
         logging.error(f"Failed to load CSV: {e}")
         raise
+
+    # Resolve contact_location columns — use _transformed variants when available
+    _LOCATION_BASES = ('contact_location_x', 'contact_location_y', 'contact_location_z')
+    loc_cols = {base: resolve_column(df, base, use_transformed) for base in _LOCATION_BASES}
 
     if 'source_block_file' in df.columns:
         df['block_order_id'] = df['source_block_file'].astype(str).str.extract(r'_block-order-(\d+)_', expand=False)
@@ -168,6 +174,11 @@ def _process_touch_analysis(input_path: Path, output_path: Path, show: bool) -> 
         else:
             direction = "static" 
 
+        # --- Contact Location (mean per touch, using resolved columns) ---
+        mean_contact_x = group[loc_cols['contact_location_x']].mean() if loc_cols['contact_location_x'] in group.columns else None
+        mean_contact_y = group[loc_cols['contact_location_y']].mean() if loc_cols['contact_location_y'] in group.columns else None
+        mean_contact_z = group[loc_cols['contact_location_z']].mean() if loc_cols['contact_location_z'] in group.columns else None
+
         # --- Efficacy Logic (Always Run) ---
         # Check if ANY frame in this touch had a spike (1)
         if has_nerve_data:
@@ -185,7 +196,10 @@ def _process_touch_analysis(input_path: Path, output_path: Path, show: bool) -> 
             'max_contact_area': max_contact_area,
             'max_velocity': max_velocity,
             'max_acceleration': max_acceleration,
-            'spike_elicited': spike_elicited
+            'mean_contact_x': mean_contact_x,
+            'mean_contact_y': mean_contact_y,
+            'mean_contact_z': mean_contact_z,
+            'spike_elicited': spike_elicited,
         }
 
         results.append(row_data)
