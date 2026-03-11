@@ -91,9 +91,11 @@ except Exception as _exc:
 from preprocessing.common.data_access.kinect_mkv_manager import KinectMKV
 from preprocessing.common.data_access.kinect_pointcloud_wrapper import KinectPointCloudView
 from preprocessing.forearm_extraction import (
+    apply_rigid_transform,
     ForearmCatalog,
     ForearmFrameParametersFileHandler,
     get_forearms_with_fallback,
+    resolve_column,
 )
 from preprocessing.motion_analysis import HandMotionManager
 from preprocessing.stickers_analysis import XYZDataFileHandler
@@ -341,9 +343,9 @@ class NeuralDataPanel(QWidget):
         self._total_kinect_frames = total_kinect_frames
         self._total_samples: int = len(merged_df)
 
-        # Zoom state — zoomed ±5 s window is the default
+        # Zoom state — zoomed ±15 s window is the default
         self._neural_fps: int = neural_fps
-        self._zoom_half_window: int = 1.0 * neural_fps  # samples 1 kHz, default value at _window_spinbox.setValue
+        self._zoom_half_window: int = 15.0 * neural_fps  # samples; must match _window_spinbox.setValue(15.0) below
         self._max_half_window: int = self._total_samples // 2
         self._current_sample: int = 0
 
@@ -513,6 +515,7 @@ class NeuralKinectViewer(QMainWindow):
         recording_name: str,
         merged_csv_path: Optional[Path] = None,
         crop_half_size_mm: float = 400.0,
+        registration_transforms_by_forearm_key: Optional[Dict[int, np.ndarray]] = None,
         parent=None,
     ):
         super().__init__(parent)
@@ -531,6 +534,13 @@ class NeuralKinectViewer(QMainWindow):
         self._crop_half_size: float = crop_half_size_mm
         self._cupy_available: bool = _CUPY_AVAILABLE
         self.current_index: int = 0
+
+        # ------------------------------------------------------------------
+        # Transformed-mode state
+        # ------------------------------------------------------------------
+        self._transforms_by_forearm_key: Optional[Dict[int, np.ndarray]] = (
+            registration_transforms_by_forearm_key or None
+        )
 
         # ------------------------------------------------------------------
         # 1. Load stickers
@@ -588,15 +598,35 @@ class NeuralKinectViewer(QMainWindow):
             and 'time_kinect' in self.merged_df.columns
         ):
             kinect_rows = self.merged_df.dropna(subset=['time_kinect'])
+            # Always load raw contact_points; transformation is applied at
+            # render time (section 5 of _update_frame) using the per-snapshot
+            # transform T so that contact points stay consistent with the
+            # kinect cloud and stickers.
             self._contact_pts_by_frame = [
                 _parse_contact_points_cell(cell)
                 for cell in kinect_rows['contact_points']
             ]
 
         # ------------------------------------------------------------------
-        # 5. Contact centroid (used for camera + GPU crop centre)
+        # 5. Contact centroid (used for GPU crop centre)
         # ------------------------------------------------------------------
         self.contact_centroid: np.ndarray = self._compute_contact_centroid()
+
+        # In transformed mode, camera focal point uses the registered frame
+        # centroid.  For crop, contact_centroid stays in the original camera
+        # frame (the MKV cloud is cropped before the transform is applied).
+        _T0: Optional[np.ndarray] = None
+        if self._transforms_by_forearm_key:
+            _T0 = self._transforms_by_forearm_key.get(
+                min(self._transforms_by_forearm_key)
+            )
+        if _T0 is not None:
+            _c = apply_rigid_transform(
+                self.contact_centroid.reshape(1, 3), _T0
+            )[0]
+            self._camera_focal_point: np.ndarray = _c
+        else:
+            self._camera_focal_point = self.contact_centroid
 
         # ------------------------------------------------------------------
         # 6. Open MKV (manual context management — closed in closeEvent)
@@ -1040,7 +1070,7 @@ class NeuralKinectViewer(QMainWindow):
         #                (0, -1,  0)  →  -Y is up  (image-coords style)
         #                (0,  1,  0)  →  +Y is up
         # ------------------------------------------------------------------
-        cx, cy, cz = self.contact_centroid.tolist()
+        cx, cy, cz = self._camera_focal_point.tolist()
         self.plotter.camera.focal_point = [cx, cy, cz]
         self.plotter.camera.position    = [cx, cy, cz - 400.0]
         self.plotter.camera.up          = [0.375, -0.904, -0.201]
@@ -1107,6 +1137,16 @@ class NeuralKinectViewer(QMainWindow):
                 except Exception:
                     pass
 
+        # Resolve active forearm snapshot and its transform for this frame.
+        # This must happen before section 1 (kinect cloud) so that T is
+        # available for all geometry transforms below.
+        forearm_key = self._bisect_forearm(frame_idx)
+        T: Optional[np.ndarray] = (
+            self._transforms_by_forearm_key.get(forearm_key)
+            if self._transforms_by_forearm_key
+            else None
+        )
+
         # 1. Kinect point cloud (GPU-cropped AABB) ----------------------
         # In-place update via DeepCopy() — avoids VTK mapper/actor recreation.
         # DeepCopy updates points + cells + scalars on the same dataset object
@@ -1124,6 +1164,10 @@ class NeuralKinectViewer(QMainWindow):
                     pc_data.points, pc_data.color,
                     self.contact_centroid, self._crop_half_size,
                 )
+                if T is not None and len(pts) > 0:
+                    pts = apply_rigid_transform(
+                        pts.astype(np.float64), T
+                    ).astype(pts.dtype)
                 # During interactive motion (drag / playback) subsample the
                 # cloud by _interactive_stride to cut VTK render time.  A
                 # full-resolution frame is rendered on pause / slider release.
@@ -1143,7 +1187,9 @@ class NeuralKinectViewer(QMainWindow):
         self._mesh_kinect.DeepCopy(_kcloud)
 
         # 2. Forearm (updated only when the bisect key changes) ----------
-        forearm_key = self._bisect_forearm(frame_idx)
+        # In transformed mode the forearm points are mapped into the registered
+        # frame by T (same transform as the kinect cloud) so that both stay
+        # spatially consistent.
         if not self._visibility.get('forearms', True):
             _fa_empty = pv.PolyData(np.empty((0, 3), dtype=np.float32))
             self._mesh_forearm.DeepCopy(_fa_empty)
@@ -1154,6 +1200,10 @@ class NeuralKinectViewer(QMainWindow):
             _fa_cloud: Optional[pv.PolyData] = None
             if o3d_pc is not None and o3d_pc.has_points():
                 pts_fa = np.asarray(o3d_pc.points, dtype=np.float32)
+                if T is not None:
+                    pts_fa = apply_rigid_transform(
+                        pts_fa.astype(np.float64), T
+                    ).astype(np.float32)
                 _fa_cloud = pv.PolyData(pts_fa)
                 if o3d_pc.has_colors():
                     _fa_cloud['colors'] = (
@@ -1180,6 +1230,10 @@ class NeuralKinectViewer(QMainWindow):
             o3d_mesh = self._get_hand_mesh(frame_idx)
             if o3d_mesh is not None and o3d_mesh.has_triangles():
                 verts = np.asarray(o3d_mesh.vertices, dtype=np.float32)
+                if T is not None and len(verts) > 0:
+                    verts = apply_rigid_transform(
+                        verts.astype(np.float64), T
+                    ).astype(np.float32)
                 tris = np.asarray(o3d_mesh.triangles)
                 n_tris = len(tris)
                 if n_tris == self._last_hand_tri_count:
@@ -1206,6 +1260,14 @@ class NeuralKinectViewer(QMainWindow):
         # eliminating per-frame pv.Sphere() creation and plotter.add_mesh().
         for name, positions in self._stickers_xyz_dict.items():
             pos = positions[frame_idx] if frame_idx < len(positions) else None
+            if (
+                T is not None
+                and pos is not None
+                and not np.any(np.isnan(pos))
+            ):
+                pos = apply_rigid_transform(
+                    pos.reshape(1, 3).astype(np.float64), T
+                )[0]
             actor = self._sticker_actors.get(name)
 
             if actor is not None:
@@ -1219,6 +1281,14 @@ class NeuralKinectViewer(QMainWindow):
             # Compass update
             if name in self._compass_widgets and frame_idx > 0:
                 prev_pos = positions[frame_idx - 1]
+                if (
+                    T is not None
+                    and not np.any(np.isnan(prev_pos))
+                ):
+                    prev_pos = apply_rigid_transform(
+                        prev_pos.reshape(1, 3).astype(np.float64),
+                        T,
+                    )[0]
                 if not np.any(np.isnan(prev_pos)) and pos is not None and not np.any(np.isnan(pos)):
                     self._compass_widgets[name].update_velocity(pos - prev_pos)
 
@@ -1232,6 +1302,8 @@ class NeuralKinectViewer(QMainWindow):
                     else None
                 )
             if _cpts is not None and len(_cpts) > 0:
+                if T is not None:
+                    _cpts = apply_rigid_transform(_cpts.astype(np.float64), T).astype(np.float32)
                 self._mesh_contact.DeepCopy(
                     pv.PolyData(_cpts.astype(np.float32))
                 )
@@ -1453,7 +1525,7 @@ class NeuralKinectViewer(QMainWindow):
             pass
 
     def _recenter_view(self) -> None:
-        self.plotter.camera.focal_point = self.contact_centroid.tolist()
+        self.plotter.camera.focal_point = self._camera_focal_point.tolist()
         self.plotter.render()
         self._refresh_cam_pos_label()
 
