@@ -19,11 +19,18 @@ parameters:
 
 tasks:
   # --- Analysis Tasks ---
+  # Step 1: Block/trial structure summary. No dependencies.
+  generate_session_summary:
+    enabled: true
+    options:
+      force_processing: true
+    depends_on: []
+
   # Primary processing flow. Must run first.
   process_unified_touches:
     enabled: true
     options:
-      force_processing: false
+      force_processing: true
     depends_on: []
 
   # Consumes output from process_unified_touches
