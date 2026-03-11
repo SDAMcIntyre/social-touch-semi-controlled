@@ -11,6 +11,9 @@ from .matrix_generation import (
     generate_touch_summary_matrix,
     generate_ap_efficacy_matrix
 )
+from .session_summary import (
+    generate_session_summary
+)
 
 # Define the public API of the package
 __all__ = [
@@ -19,4 +22,5 @@ __all__ = [
     "analyse_ap_generation_efficacy", # Kept if it exists externally
     "generate_touch_summary_matrix",
     "generate_ap_efficacy_matrix",
+    "generate_session_summary",
 ]
