@@ -7,13 +7,19 @@ exploration GUI (:class:`RegistrationWorkbench`).
 """
 
 from .forearm_registrator import ForearmRegistrator
-from .csv_spatial_transformer import transform_unified_csv
+from .csv_spatial_transformer import (
+    apply_rigid_transform,
+    resolve_column,
+    transform_unified_csv,
+)
 from .register_session_forearms import register_session_forearms
 from .registration_workbench import RegistrationWorkbench, RegistrationResult
 
 __all__ = [
+    "apply_rigid_transform",
     "ForearmRegistrator",
     "register_session_forearms",
+    "resolve_column",
     "transform_unified_csv",
     "RegistrationWorkbench",
     "RegistrationResult",

@@ -25,8 +25,10 @@ from .models.forearm_catalog import (
 )
 
 from .registration import (
+    apply_rigid_transform,
     ForearmRegistrator,
     register_session_forearms,
+    resolve_column,
     transform_unified_csv,
 )
 
@@ -50,8 +52,10 @@ __all__ = [
     "ForearmSegmentationParamsFileHandler",
     "FrameDepthAverager",
 
+    "apply_rigid_transform",
     "ForearmRegistrator",
     "register_session_forearms",
+    "resolve_column",
     "transform_unified_csv",
 
     "CurationMetadataFileHandler",
