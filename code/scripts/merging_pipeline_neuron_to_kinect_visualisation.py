@@ -24,6 +24,8 @@ import sys
 from pathlib import Path
 from typing import Optional, Dict
 
+import numpy as np
+
 from prefect import flow
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtCore import QCoreApplication
@@ -45,6 +47,8 @@ try:
 except Exception:
     pass  # GPU unavailable — viewer falls back to NumPy automatically
 
+import re
+
 import utils.path_tools as path_tools
 from utils.pipeline.pipeline_config_manager import DagConfigHandler
 
@@ -55,6 +59,79 @@ from primary_processing import (
 )
 
 from merging.gui.neural_kinect_scene_viewer import NeuralKinectViewer
+from preprocessing.forearm_extraction import (
+    ForearmCatalog,
+    ForearmFrameParametersFileHandler,
+    get_forearms_with_fallback,
+)
+
+
+# ---------------------------------------------------------------------------
+# Transform-key resolution (mirrors get_forearms_with_fallback key structure)
+# ---------------------------------------------------------------------------
+
+def _build_transforms_by_forearm_key(
+    transforms: Dict,
+    current_video_stem: str,
+) -> Dict[int, np.ndarray]:
+    """Build ``{forearm_dict_key: transform_4x4}`` matching the key structure
+    produced by ``get_forearms_with_fallback`` for *current_video_stem*.
+
+    Same-block snapshots are keyed by their ``representative_frame_id``
+    (the integer after ``:`` in the transform key).  The fallback entry at
+    key ``0`` mirrors the fallback logic of ``get_forearms_with_fallback``:
+
+    1. Same-block entries exist but none at frame 0 → duplicate the earliest.
+    2. No same-block entries → use the latest snapshot from the most recent
+       preceding block (walk N-1, N-2, … down to 1, first hit wins).
+    """
+    block_match = re.match(r"(.*_block-order)(\d+)", current_video_stem)
+
+    if block_match is None:
+        # Non-block-order video: single transform keyed at 0
+        for key, (matrix, _) in transforms.items():
+            if key.rsplit(":", 1)[0] == current_video_stem:
+                return {0: matrix}
+        return {}
+
+    current_prefix = block_match.group(1)
+    current_block = int(block_match.group(2))
+
+    result: Dict[int, np.ndarray] = {}
+    by_block: Dict[int, list] = {}  # block_num → [(frame_id, matrix)]
+
+    for key, (matrix, _) in transforms.items():
+        key_stem, _, frame_str = key.rpartition(":")
+        m = re.match(r"(.*_block-order)(\d+)", key_stem)
+        if not m or m.group(1) != current_prefix:
+            continue
+        try:
+            block_num = int(m.group(2))
+            frame_id = int(frame_str)
+        except ValueError:
+            continue
+        by_block.setdefault(block_num, []).append((frame_id, matrix))
+
+    # Add same-block transforms keyed by frame_id
+    for frame_id, matrix in by_block.get(current_block, []):
+        result[frame_id] = matrix
+
+    # Ensure key 0 exists (mirrors get_forearms_with_fallback step 2)
+    if 0 not in result:
+        if result:
+            # Same-block entries exist but none at frame 0 — duplicate earliest
+            result[0] = result[min(result)]
+        else:
+            # No same-block transforms — walk back to the most recent preceding block
+            for prev_block in range(current_block - 1, 0, -1):
+                if prev_block in by_block:
+                    best_frame_id, best_matrix = max(
+                        by_block[prev_block], key=lambda x: x[0]
+                    )
+                    result[0] = best_matrix
+                    break
+
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -160,6 +237,97 @@ def run_single_session_pipeline(
     dag_handler.mark_completed("view_neural_kinect_scene")
 
 
+def run_single_session_pipeline_transformed(
+    config: KinectConfig,
+    dag_handler: DagConfigHandler,
+) -> None:
+    """Launches NeuralKinectViewer in registered-frame mode for a single block.
+
+    Skips (with a warning) when:
+    - The task is disabled in the DAG config.
+    - No unified registered forearm PLY exists (single-forearm session).
+    - No registration transforms file exists.
+    - No applicable transform key can be resolved for this block.
+    """
+    task_name = "view_neural_kinect_scene_transformed"
+    block_name = config.source_video.name
+    print(f"[{block_name}] ==> Checking task: {task_name}")
+
+    if not dag_handler.can_run(task_name):
+        print(f"[{block_name}] Task disabled — skipping.")
+        return
+
+    paths = resolve_viewer_paths(config)
+
+    for key in ("xyz_csv_path", "kinect_mkv_path", "forearm_metadata_path"):
+        p = paths[key]
+        if not p.exists():
+            print(f"[{block_name}] Missing required file '{key}': {p}  — skipping.")
+            return
+
+    # Load registration artifacts via ForearmCatalog
+    forearm_dir = paths["forearm_pointcloud_dir"]
+    forearm_params = ForearmFrameParametersFileHandler.load(paths["forearm_metadata_path"])
+    catalog = ForearmCatalog(forearm_params, forearm_dir)
+
+    registration_transforms = catalog.load_registration_transforms(config.session_id)
+    if registration_transforms is None:
+        print(
+            f"[{block_name}] No registration transforms found "
+            f"('{config.session_id}_registration_transforms.json' missing).  Skipping."
+        )
+        return
+
+    transforms_by_forearm_key = _build_transforms_by_forearm_key(
+        registration_transforms, config.source_video.stem
+    )
+    if not transforms_by_forearm_key:
+        print(
+            f"[{block_name}] Could not resolve any registration transforms for "
+            f"stem '{config.source_video.stem}'.  Skipping."
+        )
+        return
+
+    for fk, T in sorted(transforms_by_forearm_key.items()):
+        R = T[:3, :3]
+        cos_angle = np.clip((np.trace(R) - 1.0) / 2.0, -1.0, 1.0)
+        rotation_deg = np.degrees(np.arccos(cos_angle))
+        t = T[:3, 3]
+        print(
+            f"[{block_name}]   forearm_key={fk}: rotation={rotation_deg:.2f}°  "
+            f"translation=({t[0]:.1f}, {t[1]:.1f}, {t[2]:.1f}) mm"
+        )
+
+    options = dag_handler.get_task_options(task_name)
+    crop_half_size = float(options.get("crop_half_size_mm", 400.0))
+
+    if paths["merged_csv_path"] is None:
+        print(f"[{block_name}] No merged CSV found — launching in pure-3D transformed mode.")
+    else:
+        print(f"[{block_name}] Merged CSV found — neural overlay enabled (transformed mode).")
+
+    print(f"[{block_name}] Launching NeuralKinectViewer (transformed mode)...")
+    app = QApplication.instance() or QApplication(sys.argv)
+
+    viewer = NeuralKinectViewer(
+        xyz_csv_path=paths["xyz_csv_path"],
+        kinect_mkv_path=paths["kinect_mkv_path"],
+        forearm_pointcloud_dir=paths["forearm_pointcloud_dir"],
+        forearm_metadata_path=paths["forearm_metadata_path"],
+        rgb_video_path=paths["rgb_video_path"],
+        hand_motion_path=paths["hand_motion_path"],
+        recording_name=paths["recording_name"],
+        merged_csv_path=paths["merged_csv_path"],
+        crop_half_size_mm=crop_half_size,
+        registration_transforms_by_forearm_key=transforms_by_forearm_key,
+    )
+    viewer.show()
+    app.exec_()
+
+    QCoreApplication.processEvents()
+    dag_handler.mark_completed(task_name)
+
+
 # ---------------------------------------------------------------------------
 # Batch dispatcher (sequential — one viewer at a time, matching visualisation workflow)
 # ---------------------------------------------------------------------------
@@ -181,6 +349,7 @@ def run_batch_sequentially(
             dag_handler_instance = dag_handler_template.copy()
 
             run_single_session_pipeline(config, dag_handler_instance)
+            run_single_session_pipeline_transformed(config, dag_handler_instance)
         except Exception as exc:
             print(f"Failed to initialise session {block_file.name}: {exc}")
             continue

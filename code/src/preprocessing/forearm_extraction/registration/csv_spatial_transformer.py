@@ -73,7 +73,7 @@ def _serialize_contact_points(
 # Rigid transform helpers
 # ------------------------------------------------------------------
 
-def _apply_rigid_transform(
+def apply_rigid_transform(
     points: np.ndarray, T: np.ndarray
 ) -> np.ndarray:
     """Apply a 4x4 rigid transform to an (N, 3) array of points."""
@@ -143,7 +143,7 @@ def transform_unified_csv(
         if not is_identity:
             mask = ~np.isnan(loc).any(axis=1)
             if mask.any():
-                loc[mask] = _apply_rigid_transform(loc[mask], transform_4x4)
+                loc[mask] = apply_rigid_transform(loc[mask], transform_4x4)
         for i, col in enumerate(_LOCATION_COLS):
             df[col + "_transformed"] = loc[:, i]
 
@@ -154,7 +154,7 @@ def transform_unified_csv(
             pts = _parse_contact_points(cell)
             if pts and not is_identity:
                 arr = np.asarray(pts, dtype=np.float64)
-                arr = _apply_rigid_transform(arr, transform_4x4)
+                arr = apply_rigid_transform(arr, transform_4x4)
                 new_points_col.append(
                     _serialize_contact_points(
                         [tuple(row) for row in arr.tolist()]
