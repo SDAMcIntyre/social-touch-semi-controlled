@@ -26,9 +26,15 @@ from .models.forearm_catalog import (
 
 from .registration import (
     apply_rigid_transform,
+    find_applicable_transform_key,
     ForearmRegistrator,
+    get_transform_schedule,
+    parse_contact_points,
     register_session_forearms,
     resolve_column,
+    serialize_contact_points,
+    transform_spatial_columns_in_place,
+    transform_spatial_columns_scheduled,
     transform_unified_csv,
 )
 
@@ -53,9 +59,15 @@ __all__ = [
     "FrameDepthAverager",
 
     "apply_rigid_transform",
+    "find_applicable_transform_key",
     "ForearmRegistrator",
+    "get_transform_schedule",
+    "parse_contact_points",
     "register_session_forearms",
     "resolve_column",
+    "serialize_contact_points",
+    "transform_spatial_columns_in_place",
+    "transform_spatial_columns_scheduled",
     "transform_unified_csv",
 
     "CurationMetadataFileHandler",

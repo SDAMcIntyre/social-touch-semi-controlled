@@ -1,2 +1,3 @@
+from .apply_icp_registration import apply_icp_registration
 from .determine_receptive_field import determine_receptive_field
 from .set_xyz_reference_from_gestures import set_xyz_reference_from_gestures

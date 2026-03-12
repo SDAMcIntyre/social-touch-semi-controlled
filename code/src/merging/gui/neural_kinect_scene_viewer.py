@@ -95,7 +95,6 @@ from preprocessing.forearm_extraction import (
     ForearmCatalog,
     ForearmFrameParametersFileHandler,
     get_forearms_with_fallback,
-    resolve_column,
 )
 from preprocessing.motion_analysis import HandMotionManager
 from preprocessing.stickers_analysis import XYZDataFileHandler

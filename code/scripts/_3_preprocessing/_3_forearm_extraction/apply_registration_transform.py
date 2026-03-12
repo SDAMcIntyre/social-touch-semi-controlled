@@ -1,78 +1,13 @@
-import re
 from pathlib import Path
-from typing import Dict, Optional
 
 from utils.should_process_task import should_process_task
 from preprocessing.forearm_extraction import (
     ForearmRegistrator,
     transform_unified_csv,
 )
-
-
-def _find_applicable_transform_key(
-    transforms: Dict,
-    current_video_stem: str,
-) -> Optional[str]:
-    """Return the most applicable transform key for *current_video_stem*.
-
-    Each transform key ``"<video_stem>:<frame_id>"`` defines a forearm snapshot
-    that is valid from its capture point **forward** in the session timeline.
-    Block-order ordering determines the timeline (``_block-order01`` precedes
-    ``_block-order02``, etc.).
-
-    Selection rules:
-    1. If the current video has one or more snapshot keys, return the **earliest**
-       (lowest frame_id) one — it covers the widest range of the block.
-    2. Otherwise, return the key from the **most recent preceding** block (largest
-       block-order number still less than the current one, and within that block
-       the largest frame_id).  This correctly propagates a snapshot forward across
-       subsequent blocks that have no snapshot of their own.
-    3. If no preceding snapshot exists (current block is before all snapshots),
-       return ``None`` — the caller will pass through unchanged.
-
-    For non-block-order videos an exact stem match is attempted instead.
-    """
-    block_match = re.match(r"(.*_block-order)(\d+)", current_video_stem)
-
-    if block_match is None:
-        # Non-block-order video: look for an exact stem match
-        for key in transforms:
-            key_stem = key.rsplit(":", 1)[0]
-            if key_stem == current_video_stem:
-                return key
-        return None
-
-    current_prefix = block_match.group(1)
-    current_block = int(block_match.group(2))
-
-    # Parse all keys that share the same session/block-order prefix
-    candidates = []  # (block_num, frame_num, key)
-    for key in transforms:
-        key_stem, _, frame_str = key.rpartition(":")
-        m = re.match(r"(.*_block-order)(\d+)", key_stem)
-        if m and m.group(1) == current_prefix:
-            try:
-                candidates.append((int(m.group(2)), int(frame_str), key))
-            except ValueError:
-                continue
-
-    if not candidates:
-        return None
-
-    candidates.sort()  # ascending by (block_num, frame_num)
-
-    # Rule 1: same block — use the earliest snapshot
-    same_block = [(b, f, k) for b, f, k in candidates if b == current_block]
-    if same_block:
-        return same_block[0][2]
-
-    # Rule 2: most recent preceding block — latest snapshot within that block
-    preceding = [(b, f, k) for b, f, k in candidates if b < current_block]
-    if preceding:
-        return preceding[-1][2]  # latest (block_num, frame_num) before current
-
-    # Rule 3: no preceding snapshot — cannot apply a transform
-    return None
+from preprocessing.forearm_extraction.registration.csv_spatial_transformer import (
+    find_applicable_transform_key as _find_applicable_transform_key,
+)
 
 
 def apply_registration_transform(
