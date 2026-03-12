@@ -34,11 +34,26 @@ from primary_processing import (
 )
 
 from _5_postprocessing import (
+    apply_icp_registration,
     determine_receptive_field,
     set_xyz_reference_from_gestures
 )
 
 # --- Post-Processing Sub-Flows ---
+
+@flow(name="apply_icp_registration")
+def apply_icp_registration_flow(
+    input_files: List[Path],
+    session_configs: List[KinectConfig],
+    output_dir: Path,
+    force_processing: bool = False,
+) -> List[Path]:
+    """Apply ICP registration transforms to merged CSVs."""
+    print(f"[{output_dir.name}] Applying ICP registration to {len(input_files)} files...")
+    return apply_icp_registration(
+        input_files, session_configs, output_dir,
+        force_processing=force_processing,
+    )
 
 @flow(name="analyze_pca_components")
 def set_xyz_reference_from_gestures_flow(input_files: List[Path], output_dir: Path, force_processing: bool = False) -> Tuple[List[Path], Path]:
@@ -47,15 +62,14 @@ def set_xyz_reference_from_gestures_flow(input_files: List[Path], output_dir: Pa
     Iterates over a list of files and produces a distinct output for each.
     """
     print(f"[{output_dir.name}] Performing PCA analysis on {len(input_files)} files...")
-    
-    output_dir = output_dir / "session_xyz_reference_from_gestures"
+
     output_files = set_xyz_reference_from_gestures(
         input_files, output_dir,
         monitor=False,
         monitor_segment=False,
         force_processing=force_processing
     )
-    
+
     return output_files
 
 @flow(name="determine_receptive_field")
@@ -138,13 +152,34 @@ def run_single_session_postprocessing(
 
     # UPDATED: Pipeline stages using the architecture of function_of_reference
     pipeline_stages = [
+        # Step 1: ICP Registration
+        {
+            "name": "apply_icp_registration",
+            "func": apply_icp_registration_flow,
+            "params": lambda: {
+                "input_files": context.get("source_files"),
+                "session_configs": context.get("session_configs"),
+                "output_dir": session_output_dir / "sessions_registered",
+            },
+            "outputs": ["registered_files"]
+        },
+        # Step 2: PCA XYZ Reference Calibration
+        {
+            "name": "set_xyz_reference_from_gestures",
+            "func": set_xyz_reference_from_gestures_flow,
+            "params": lambda: {
+                "input_files": context.get("registered_files"),
+                "output_dir": session_output_dir / "sessions_pca_calibrated",
+            },
+            "outputs": ["pca_data_files", "pca_report"]
+        },
         # Receptive Field
         {
             "name": "determine_receptive_field",
             "func": determine_receptive_field_flow,
             "params": lambda: {
                 "input_files": context.get("source_files"),
-                "configs": context.get("session_configs"),  # Configs propagated here
+                "configs": context.get("session_configs"),
                 "output_dir": session_output_dir / "sessions_receptive-field"
             },
             "outputs": ["segmented_data_files", "rf_metadata_files"]
@@ -160,17 +195,6 @@ def run_single_session_postprocessing(
             },
             "outputs": ["final_data_files"]
         },
-        
-        # PCA Analysis
-        {
-            "name": "set_xyz_reference_from_gestures",
-            "func": set_xyz_reference_from_gestures_flow,
-            "params": lambda: {
-                "input_files": context.get("source_files"),
-                "output_dir": session_output_dir  / "session_xyz_reference_from_gestures"
-            },
-            "outputs": ["pca_data_files", "pca_report"]
-        }
     ]
 
     for stage in pipeline_stages:

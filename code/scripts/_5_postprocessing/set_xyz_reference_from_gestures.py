@@ -16,6 +16,10 @@ from postprocessing.xyz_reference_from_gestures import (
     CalibrationVisualizer,
     Trajectory3DVisualizer
 )
+from preprocessing.forearm_extraction.registration.csv_spatial_transformer import (
+    parse_contact_points,
+    serialize_contact_points,
+)
 
 # Setup module-level logger
 logger = logging.getLogger(__name__)
@@ -25,21 +29,17 @@ logger = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class CalibrationConfig:
     """Immutable configuration for gesture calibration."""
-    # Primary columns used for calculating the calibration (PCA)
-    col_x: str = 'sticker_blue_position_x'
-    col_y: str = 'sticker_blue_position_y'
-    col_z: str = 'sticker_blue_position_z'
     col_type: str = 'type_metadata'
-    col_trial: str = 'trial_id'
-    col_contact: str = 'contact_detected'
-    
+    col_touch_id: str = 'single_touch_id'
+    col_contact_area: str = 'contact_area_metadata'
+
     val_tapping: str = 'tap'
     val_stroking: str = 'stroke'
-    
+    val_one_finger_tip: str = 'one finger tip'
+
     output_json_name: str = "pca-xyz_transformation-matrices.json"
     output_csv_suffix: str = "_pca-xyz.csv"
 
-    # Colors to apply the transformation to in the final step
     target_colors: Tuple[str, ...] = ('blue', 'yellow', 'green')
 
 # --- 2. Data Ingestion Layer ---
@@ -68,28 +68,21 @@ class GestureDataLoader:
                 data_cols.append(f"sticker_{color}_position_z")
 
             meta_cols = [
-                self.config.col_type, 
-                self.config.col_contact, 
-                self.config.col_trial
+                self.config.col_type,
+                self.config.col_touch_id,
+                self.config.col_contact_area,
             ]
-            
-            usecols = data_cols + meta_cols
-            
-            df = pd.read_csv(file_path, usecols=usecols)
-            
-            # Drop NaNs only in CRITICAL columns used for calibration (Blue/Primary)
-            # If we drop based on all columns, a flicker in Yellow might delete a valid Blue calibration row.
-            critical_cols = [
-                self.config.col_x, self.config.col_y, self.config.col_z,
-                self.config.col_type, self.config.col_contact, self.config.col_trial
-            ]
-            
-            # Note: This preserves the original index, which is crucial for merging back later.
-            df_clean = df.dropna(subset=critical_cols)
-            
+
+            df = pd.read_csv(file_path, usecols=data_cols + meta_cols)
+
+            # Drop rows missing the columns required for every subsequent operation.
+            df_clean = df.dropna(subset=[self.config.col_type, self.config.col_touch_id])
+
+            # single_touch_id == 0 → no valid touch (codebase convention).
+            df_clean = df_clean[df_clean[self.config.col_touch_id] != 0]
+
             if df_clean.empty:
                 return None
-                
             return df_clean
             
         except ValueError as ve:
@@ -99,29 +92,43 @@ class GestureDataLoader:
             logger.error(f"Error reading {file_path.name}: {e}")
             return None
 
-    def extract_active_segments(self, df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Groups by trial_id and slices from first to last detected contact.
-        """
-        valid_segments = []
-        
-        for _, group in df.groupby(self.config.col_trial):
-            contact_rows = group[group[self.config.col_contact] == 1]
-            
-            if contact_rows.empty:
-                continue
-                
-            start_idx = contact_rows.index[0]
-            end_idx = contact_rows.index[-1]
-            
-            # Slice includes the end index in pandas loc
-            segment = group.loc[start_idx:end_idx]
-            valid_segments.append(segment)
-            
-        if not valid_segments:
-            return pd.DataFrame(columns=df.columns)
-            
-        return pd.concat(valid_segments)
+
+
+def _extract_touch_data(
+    touch_group: pd.DataFrame,
+    config: CalibrationConfig,
+) -> Optional[np.ndarray]:
+    """
+    Extracts mean-centred 3-D coordinates from one touch event.
+
+    Sticker selection is driven by contact_area_metadata:
+      - 'one finger tip'  →  blue sticker only
+      - anything else     →  green + yellow stickers (concatenated)
+
+    Each sticker's contribution is independently mean-centred before
+    concatenation so that absolute position differences between stickers
+    do not bias the PCA.
+
+    Returns an (N, 3) ndarray, or None if no valid rows exist.
+    """
+    contact_type_series = touch_group[config.col_contact_area].dropna()
+    if contact_type_series.empty:
+        return None
+    contact_type = contact_type_series.iloc[0]
+
+    colors_to_use = ['blue'] if contact_type == config.val_one_finger_tip else ['green', 'yellow']
+
+    centered_arrays = []
+    for color in colors_to_use:
+        cx, cy, cz = (f"sticker_{color}_position_{ax}" for ax in 'xyz')
+        if not all(c in touch_group.columns for c in [cx, cy, cz]):
+            continue
+        coords = touch_group[[cx, cy, cz]].dropna().values
+        if len(coords) == 0:
+            continue
+        centered_arrays.append(coords - coords.mean(axis=0))
+
+    return np.vstack(centered_arrays) if centered_arrays else None
 
 
 # --- 5. Orchestrator ---
@@ -139,7 +146,6 @@ def set_xyz_reference_from_gestures(
     """
     logger.info(f"[{output_dir.name}] Starting Global PCA pipeline on {len(input_files)} files.")
     
-    output_dir.mkdir(parents=True, exist_ok=True)
     config = CalibrationConfig()
     
     # Prepare expected outputs for idempotency
@@ -156,6 +162,8 @@ def set_xyz_reference_from_gestures(
         logger.info(f"[{output_dir.name}] Task up-to-date. Skipping.")
         return expected_output_files, output_dir
 
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
     # Initialize Components
     loader = GestureDataLoader(config)
     
@@ -172,23 +180,18 @@ def set_xyz_reference_from_gestures(
         if df is not None:
             loaded_data[input_path] = df
             
-            # Filter specific types for calibration calculation
             df_tap = df[df[config.col_type] == config.val_tapping]
             df_stroke = df[df[config.col_type] == config.val_stroking]
-            
-            # Apply segmentation logic
-            tap_seg = loader.extract_active_segments(df_tap)
-            stroke_seg = loader.extract_active_segments(df_stroke)
-            
-            # Store raw segments individually before grouping
-            # Note: We strictly use the Primary columns (Blue) for calculating the Calibration Matrix
-            if not tap_seg.empty:
-                for _, group in tap_seg.groupby(config.col_trial):
-                    tapping_segments.append(group[[config.col_x, config.col_y, config.col_z]].values)
-            
-            if not stroke_seg.empty:
-                for _, group in stroke_seg.groupby(config.col_trial):
-                    stroking_segments.append(group[[config.col_x, config.col_y, config.col_z]].values)
+
+            for _, group in df_tap.groupby(config.col_touch_id):
+                data = _extract_touch_data(group, config)
+                if data is not None:
+                    tapping_segments.append(data)
+
+            for _, group in df_stroke.groupby(config.col_touch_id):
+                data = _extract_touch_data(group, config)
+                if data is not None:
+                    stroking_segments.append(data)
             
 
     if not tapping_segments or not stroking_segments:
@@ -248,37 +251,57 @@ def set_xyz_reference_from_gestures(
         
         try:
             # 1. Read the full original file to preserve original structure (and NaNs)
-            df_out = pd.read_csv(input_path) 
-            
+            df_out = pd.read_csv(input_path)
+
             # 2. Apply transformation to each color defined in config
             for color in config.target_colors:
                 c_x = f"sticker_{color}_position_x"
                 c_y = f"sticker_{color}_position_y"
                 c_z = f"sticker_{color}_position_z"
 
-                # Check if columns exist in the loaded dataframe
-                if not all(col in df.columns for col in [c_x, c_y, c_z]):
+                if not all(c in df_out.columns for c in [c_x, c_y, c_z]):
                     logger.warning(f"Skipping color '{color}' for {input_path.name}: Columns missing.")
                     continue
 
-                # Extract coords for this specific color
-                # df matches the row count of transformed_coords (aligned by index)
-                coords = df[[c_x, c_y, c_z]].values
-                
-                # Handle NaNs in secondary colors (Yellow/Green might have drops where Blue doesn't)
-                # If the input row has NaNs, the transform result will be NaN, which is fine.
-                # However, to prevent PCA engine errors, we can check or fill. 
-                # Assuming PCACalibrationEngine handles or propagates NaNs gracefully via numpy.
-                # If not, we would need to mask NaNs. Assuming standard Matmul behavior here.
-                
-                # Apply Full Transform (Using the same calibration matrix for all colors)
-                transformed_coords = PCACalibrationEngine.apply_full_transform(coords, calib_result)
-                
-                # Update DataFrame using index-based assignment
-                df_out.loc[df.index, c_x] = transformed_coords[:, 0]
-                df_out.loc[df.index, c_y] = transformed_coords[:, 1]
-                df_out.loc[df.index, c_z] = transformed_coords[:, 2]
-            
+                coords = df_out[[c_x, c_y, c_z]].to_numpy(dtype=np.float64)
+                mask = ~np.isnan(coords).any(axis=1)
+                if mask.any():
+                    coords_transformed = coords.copy()
+                    coords_transformed[mask] = PCACalibrationEngine.apply_full_transform(
+                        coords[mask], calib_result
+                    )
+                    df_out[c_x] = coords_transformed[:, 0]
+                    df_out[c_y] = coords_transformed[:, 1]
+                    df_out[c_z] = coords_transformed[:, 2]
+
+            # 3. Apply transformation to contact_location_x/y/z
+            loc_cols = ["contact_location_x", "contact_location_y", "contact_location_z"]
+            if all(c in df_out.columns for c in loc_cols):
+                loc = df_out[loc_cols].to_numpy(dtype=np.float64)
+                mask = ~np.isnan(loc).any(axis=1)
+                if mask.any():
+                    loc_transformed = loc.copy()
+                    loc_transformed[mask] = PCACalibrationEngine.apply_full_transform(
+                        loc[mask], calib_result
+                    )
+                    for i, col in enumerate(loc_cols):
+                        df_out[col] = loc_transformed[:, i]
+
+            # 4. Apply transformation to contact_points
+            if "contact_points" in df_out.columns:
+                new_contact_points = []
+                for cell in df_out["contact_points"]:
+                    pts = parse_contact_points(cell)
+                    if pts:
+                        arr = np.asarray(pts, dtype=np.float64).copy()
+                        arr = PCACalibrationEngine.apply_full_transform(arr, calib_result)
+                        new_contact_points.append(
+                            serialize_contact_points([tuple(row) for row in arr.tolist()])
+                        )
+                    else:
+                        new_contact_points.append(cell)
+                df_out["contact_points"] = new_contact_points
+
             df_out.to_csv(output_path, index=False)
             generated_files.append(output_path)
             
