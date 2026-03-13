@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 import subprocess
 import sys
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import (
@@ -277,11 +280,25 @@ class LauncherWindow(QMainWindow):
             self._run_label.setStyleSheet("")
             self._run_button.setEnabled(True)
 
+    @staticmethod
+    def _clear_prefect_db() -> None:
+        """Remove the Prefect SQLite database to avoid stale 'database is locked' errors."""
+        prefect_dir = Path.home() / ".prefect"
+        for suffix in ("prefect.db", "prefect.db-wal", "prefect.db-shm"):
+            db_file = prefect_dir / suffix
+            if db_file.exists():
+                try:
+                    db_file.unlink()
+                    logger.info("Removed %s", db_file)
+                except OSError as exc:
+                    logger.warning("Could not remove %s: %s", db_file, exc)
+
     def _on_run(self) -> None:
         if self._current_entry is None:
             return
         if self._model:
             self._on_save()
+        self._clear_prefect_db()
         project_root = self._configs_dir.parent
         cmd = [sys.executable, str(self._current_entry.script)]
         if self._current_entry.dag_config is not None:
