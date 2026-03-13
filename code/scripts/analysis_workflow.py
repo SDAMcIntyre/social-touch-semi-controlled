@@ -60,7 +60,7 @@ def generate_session_summary_flow(
     input_paths = [item[0] for item in input_items]
     anchor_db_path = input_items[0][1]
 
-    output_dir = anchor_db_path / "4_analysed"
+    output_dir = anchor_db_path / "4_analysed" / "session_summary"
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / "session_block_summary.csv"
 
@@ -80,7 +80,6 @@ def generate_session_summary_flow(
 def process_unified_touches_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
-    use_transformed: bool = True,
 ) -> List[Path]:
     """
     STEP 1: Primary Processing.
@@ -92,9 +91,9 @@ def process_unified_touches_flow(
     
     for input_file, database_path in input_items:
         try:
-            output_dir = database_path / "4_analysed"
+            output_dir = database_path / "4_analysed" / "unified_touches"
             filename = input_file.name
-            
+
             # Standardized Filename
             if "_semicontrolled_" in filename:
                 prefix = filename.split("_semicontrolled_")[0]
@@ -111,7 +110,7 @@ def process_unified_touches_flow(
                 output_file_path,
                 show=False,
                 force=force_processing,
-                use_transformed=use_transformed,
+                use_transformed=False,
             )
             results.append(result_path)
 
@@ -206,7 +205,6 @@ def analyse_ap_efficacy_flow(
 def map_receptive_fields_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
-    use_transformed: bool = True,
     grouping_columns: List[str] = None,
     monitor: bool = False,
 ) -> List[Path]:
@@ -227,7 +225,7 @@ def map_receptive_fields_flow(
     for input_file, database_path in input_items:
         try:
             # Locate unified summary
-            output_dir = database_path / "4_analysed"
+            unified_dir = database_path / "4_analysed" / "unified_touches"
             filename = input_file.name
             if "_semicontrolled_" in filename:
                 prefix = filename.split("_semicontrolled_")[0]
@@ -235,7 +233,7 @@ def map_receptive_fields_flow(
             else:
                 summary_name = f"{input_file.stem}_touch_summary.csv"
 
-            summary_path = output_dir / summary_name
+            summary_path = unified_dir / summary_name
             if not summary_path.exists():
                 logging.warning(
                     f"Unified summary not found: {summary_path}. "
@@ -244,7 +242,7 @@ def map_receptive_fields_flow(
                 continue
 
             # Output directory for RF maps
-            rf_output_dir = output_dir / "receptive_field_maps"
+            rf_output_dir = database_path / "4_analysed" / "receptive_field_maps"
             rf_output_dir.mkdir(parents=True, exist_ok=True)
 
             # Collect raw merged CSVs (same session dir as input_file)
@@ -270,7 +268,7 @@ def map_receptive_fields_flow(
                 summary_csv_path=summary_path,
                 grouping_columns=grouping_columns,
                 config=config,
-                use_transformed=use_transformed,
+                use_transformed=False,
             )
 
             if not grouped_data:
@@ -297,10 +295,8 @@ def map_receptive_fields_flow(
 
                 # Visualize if requested
                 if monitor and rf_result.clusters:
-                    try:
-                        forearm_pcd = _load_forearm_pcd(database_path)
-                    except Exception:
-                        forearm_pcd = None
+                    session_id = filename.split("_semicontrolled_")[0]
+                    forearm_pcd = _load_forearm_pcd(input_file.parent, session_id)
                     RFVisualizer.visualize_rf_map(rf_result, forearm_pcd)
 
                 all_results[group_label] = {
@@ -319,7 +315,6 @@ def map_receptive_fields_flow(
                 json.dump(
                     {
                         "grouping_columns": grouping_columns,
-                        "use_transformed": use_transformed,
                         "algorithm_config": {
                             "selectivity_threshold": config.algorithm.selectivity_threshold,
                             "dbscan_eps": config.algorithm.dbscan_eps,
@@ -368,15 +363,14 @@ def _save_group_csv(rf_result, output_dir: Path) -> Optional[Path]:
     return csv_path
 
 
-def _load_forearm_pcd(database_path: Path):
-    """Try to load forearm reference point cloud for visualization."""
-    from preprocessing.forearm_extraction import ForearmCatalog
+def _load_forearm_pcd(session_merged_output_dir: Path, session_id: str):
+    """Load PCA-calibrated forearm PLY from postprocessing output for visualization."""
     import open3d as o3d
 
-    catalog = ForearmCatalog(database_path)
-    pcd_path = catalog.get_forearm_pcd_path()
-    if pcd_path and pcd_path.exists():
+    pcd_path = session_merged_output_dir / "forearm_pca_calibrated" / f"{session_id}_forearm_pca_calibrated.ply"
+    if pcd_path.exists():
         return o3d.io.read_point_cloud(str(pcd_path))
+    logging.warning(f"Forearm PLY not found: {pcd_path}")
     return None
 
 
@@ -387,15 +381,15 @@ def _collect_unified_files(input_items: List[Tuple[Path, Path]]) -> List[Path]:
     """
     unified_files = []
     for input_file, database_path in input_items:
-        output_dir = database_path / "4_analysed"
+        output_dir = database_path / "4_analysed" / "unified_touches"
         filename = input_file.name
-        
+
         if "_semicontrolled_" in filename:
             prefix = filename.split("_semicontrolled_")[0]
             new_filename = f"{prefix}_semicontrolled_touch_summary.csv"
         else:
             new_filename = f"{input_file.stem}_touch_summary.csv"
-            
+
         expected_path = output_dir / new_filename
         if expected_path.exists():
             unified_files.append(expected_path)
@@ -483,8 +477,6 @@ def run_batch_analysis(
                         "input_items": items_to_process,
                         "force_processing": options.get("force_processing", False),
                     }
-                    if "use_transformed" in options:
-                        kwargs["use_transformed"] = options["use_transformed"]
                     if "grouping_columns" in options:
                         kwargs["grouping_columns"] = options["grouping_columns"]
                     if "monitor" in options:
