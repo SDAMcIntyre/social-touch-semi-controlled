@@ -96,6 +96,17 @@ To promote an idea to a full plan: create a new file in `pending/` using the ful
 
 Every planning document must include these sections:
 
+### Header Fields
+
+| Field | Format | When to fill |
+|-------|--------|-------------|
+| **Created** | `YYYY-MM-DD HH:MM` | When the plan document is first created |
+| **Approved** | `YYYY-MM-DD HH:MM` | When the plan is approved for implementation (use `—` until then) |
+| **Completed** | `YYYY-MM-DD HH:MM` | When all phases are done and the plan moves to `completed/` (use `—` until then) |
+| **Author** | Name | Plan author |
+| **Status** | `Draft` / `Approved` / `In Progress` / `Completed` | Updated at each lifecycle transition |
+| **Branch** | Branch name | Feature branch |
+
 ### 1. Overview (2-3 sentences)
 **What:** High-level description of what is being built
 **Why:** Problem being solved or improvement being made
@@ -154,10 +165,15 @@ src/new_module/
 
 ### 6. Implementation Plan
 
-Break into logical phases with clear dependencies:
+Break into logical phases with clear dependencies.
+
+Each phase must include **Started** and **Completed** timestamps (`YYYY-MM-DD HH:MM`),
+filled in as work progresses (use `—` until then):
 
 #### Phase 1: [Foundation]
 **Goal:** What this phase accomplishes
+**Started:** —
+**Completed:** —
 
 **Tasks:**
 - [ ] Task 1.1 — Description
@@ -257,7 +273,9 @@ Use this template when creating a new plan:
 ```markdown
 # Plan: [Feature Name]
 
-**Date:** YYYY-MM-DD
+**Created:** YYYY-MM-DD HH:MM
+**Approved:** —
+**Completed:** —
 **Author:** [Your Name]
 **Status:** Draft | Approved | In Progress | Completed
 **Branch:** `feature/[branch-name]`
@@ -318,6 +336,8 @@ Use this template when creating a new plan:
 
 ### Phase 1: [Foundation]
 **Goal:** [What this phase achieves]
+**Started:** —
+**Completed:** —
 
 - [ ] [Task 1.1]
 - [ ] [Task 1.2]
@@ -330,6 +350,8 @@ Use this template when creating a new plan:
 
 ### Phase 2: [Core Feature]
 **Goal:** [What this phase achieves]
+**Started:** —
+**Completed:** —
 
 - [ ] [Task 2.1]
 - [ ] [Task 2.2]
@@ -341,6 +363,8 @@ Use this template when creating a new plan:
 
 ### Phase 3: [Integration]
 **Goal:** [What this phase achieves]
+**Started:** —
+**Completed:** —
 
 - [ ] [Task 3.1]
 - [ ] [Task 3.2]
@@ -514,7 +538,7 @@ Before approving a plan:
 
 ### Completing a Plan
 
-1. **Mark as completed:** Update `Status: Completed` and add completion date
+1. **Mark as completed:** Update `Status: Completed` and fill in the `**Completed:**` header field with the current date and time
 2. **Move to completed:** `docs/development/plans/completed/[feature-name].md`
 3. **Reference from code:** Link to plan from relevant module docs
 4. **Lessons learned:** Optional note on what went well/differently

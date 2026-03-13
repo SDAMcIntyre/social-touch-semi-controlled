@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 from multiprocessing import freeze_support
 
-from prefect import flow, get_run_logger
+from prefect import flow, task, get_run_logger
 from prefect.futures import PrefectFuture
 
 import utils.path_tools as path_tools
@@ -66,7 +66,7 @@ def resolve_filenames(config: KinectConfig) -> Dict[str, Path]:
 
 # --- Individual Flows ---
 
-@flow(name="9. Unify Dataset")
+@task(name="9. Unify Dataset")
 def unify_dataset(
     kinect_data_path: Path,
     nerve_data_path: Path,
@@ -95,7 +95,7 @@ def unify_dataset(
     return output_file_path
 
 
-@flow(name="11. Filter by Neural Quality")
+@task(name="11. Filter by Neural Quality")
 def filter_by_neural_quality_flow(
     merged_csv: Path,
     output_csv: Path,
