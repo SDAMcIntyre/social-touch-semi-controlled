@@ -5,17 +5,45 @@ parameters:
   # List of directories containing Kinect session config files to scan.
   # Paths are relative to configs/kinect_configs/.
   kinect_configs: [valid_configs_ST13-01, valid_configs_ST13-02, 
-      valid_configs_ST13-03, valid_configs_ST14-01_ST14-02, 
-      valid_configs_ST14-03_ST14-04, valid_configs_ST15-01_ST15-02, 
-      valid_configs_ST16-02, valid_configs_ST16-03_ST16-04, 
-      valid_configs_ST16-05, valid_configs_ST18-01, 
-      valid_configs_ST18-02_ST18-04/kinect_config_2022-06-22_ST18-04_semicontrolled_block-order01.yaml,
-    valid_configs_ST18-02_ST18-04/kinect_config_2022-06-22_ST18-04_semicontrolled_block-order02.yaml,
-    valid_configs_ST18-02_ST18-04/kinect_config_2022-06-22_ST18-04_semicontrolled_block-order03.yaml,
-    valid_configs_ST18-02_ST18-04/kinect_config_2022-06-22_ST18-04_semicontrolled_block-order05.yaml,
-    valid_configs_ST18-02_ST18-04/kinect_config_2022-06-22_ST18-04_semicontrolled_block-order06.yaml,
-    valid_configs_ST18-02_ST18-04/kinect_config_2022-06-22_ST18-04_semicontrolled_block-order07.yaml,
-    valid_configs_ST18-02_ST18-04/kinect_config_2022-06-22_ST18-04_semicontrolled_block-order08.yaml]
+      valid_configs_ST13-03, 
+      valid_configs_ST14-01_ST14-02/kinect_config_2022-06-15_ST14-01_semicontrolled_block-order01.yaml,
+    valid_configs_ST14-01_ST14-02/kinect_config_2022-06-15_ST14-01_semicontrolled_block-order02.yaml,
+    valid_configs_ST14-01_ST14-02/kinect_config_2022-06-15_ST14-01_semicontrolled_block-order03.yaml,
+    valid_configs_ST14-01_ST14-02/kinect_config_2022-06-15_ST14-01_semicontrolled_block-order05.yaml,
+    valid_configs_ST14-01_ST14-02/kinect_config_2022-06-15_ST14-01_semicontrolled_block-order06.yaml,
+    valid_configs_ST14-01_ST14-02/kinect_config_2022-06-15_ST14-01_semicontrolled_block-order07.yaml,
+    valid_configs_ST14-01_ST14-02/kinect_config_2022-06-15_ST14-01_semicontrolled_block-order08.yaml,
+    valid_configs_ST14-01_ST14-02/kinect_config_2022-06-15_ST14-01_semicontrolled_block-order09.yaml,
+    valid_configs_ST14-01_ST14-02/kinect_config_2022-06-15_ST14-01_semicontrolled_block-order10.yaml,
+    valid_configs_ST14-01_ST14-02/kinect_config_2022-06-15_ST14-02_semicontrolled_block-order01.yaml,
+    valid_configs_ST14-01_ST14-02/kinect_config_2022-06-15_ST14-02_semicontrolled_block-order02.yaml,
+    valid_configs_ST14-01_ST14-02/kinect_config_2022-06-15_ST14-02_semicontrolled_block-order04.yaml,
+    valid_configs_ST14-01_ST14-02/kinect_config_2022-06-15_ST14-02_semicontrolled_block-order05.yaml,
+    valid_configs_ST14-01_ST14-02/kinect_config_2022-06-15_ST14-02_semicontrolled_block-order06.yaml,
+    valid_configs_ST14-01_ST14-02/kinect_config_2022-06-15_ST14-02_semicontrolled_block-order08.yaml,
+    valid_configs_ST14-03_ST14-04, 
+      valid_configs_ST15-01_ST15-02/kinect_config_2022-06-16_ST15-01_semicontrolled_block-order03.yaml,
+    valid_configs_ST15-01_ST15-02/kinect_config_2022-06-16_ST15-01_semicontrolled_block-order04.yaml,
+    valid_configs_ST15-01_ST15-02/kinect_config_2022-06-16_ST15-01_semicontrolled_block-order05.yaml,
+    valid_configs_ST15-01_ST15-02/kinect_config_2022-06-16_ST15-01_semicontrolled_block-order06.yaml,
+    valid_configs_ST15-01_ST15-02/kinect_config_2022-06-16_ST15-02_semicontrolled_block-order01.yaml,
+    valid_configs_ST16-02/kinect_config_2022-06-17_ST16-02_semicontrolled_block-order01.yaml,
+    valid_configs_ST16-02/kinect_config_2022-06-17_ST16-02_semicontrolled_block-order02.yaml,
+    valid_configs_ST16-02/kinect_config_2022-06-17_ST16-02_semicontrolled_block-order03.yaml,
+    valid_configs_ST16-02/kinect_config_2022-06-17_ST16-02_semicontrolled_block-order04.yaml,
+    valid_configs_ST16-02/kinect_config_2022-06-17_ST16-02_semicontrolled_block-order05.yaml,
+    valid_configs_ST16-02/kinect_config_2022-06-17_ST16-02_semicontrolled_block-order06.yaml,
+    valid_configs_ST16-02/kinect_config_2022-06-17_ST16-02_semicontrolled_block-order07.yaml,
+    valid_configs_ST16-02/kinect_config_2022-06-17_ST16-02_semicontrolled_block-order08.yaml,
+    valid_configs_ST16-02/kinect_config_2022-06-17_ST16-02_semicontrolled_block-order09.yaml,
+    valid_configs_ST16-02/kinect_config_2022-06-17_ST16-02_semicontrolled_block-order10.yaml,
+    valid_configs_ST16-02/kinect_config_2022-06-17_ST16-02_semicontrolled_block-order11.yaml,
+    valid_configs_ST16-02/kinect_config_2022-06-17_ST16-02_semicontrolled_block-order12.yaml,
+    valid_configs_ST16-02/kinect_config_2022-06-17_ST16-02_semicontrolled_block-order13.yaml,
+    valid_configs_ST16-02/kinect_config_2022-06-17_ST16-02_semicontrolled_block-order14.yaml,
+    valid_configs_ST16-02/kinect_config_2022-06-17_ST16-02_semicontrolled_block-order15.yaml,
+    valid_configs_ST16-03_ST16-04, valid_configs_ST16-05, valid_configs_ST18-02, 
+      valid_configs_ST18-04]
 
 tasks:
   # --- Analysis Tasks ---
@@ -31,7 +59,6 @@ tasks:
     enabled: true
     options:
       force_processing: true
-      use_transformed: false
     depends_on: []
 
   # Consumes output from process_unified_touches
@@ -53,7 +80,6 @@ tasks:
     enabled: true
     options:
       grouping_columns: ['type_metadata', 'direction']
-      use_transformed: true
       monitor: false
-      force_processing: false
+      force_processing: true
     depends_on: ["process_unified_touches"]
