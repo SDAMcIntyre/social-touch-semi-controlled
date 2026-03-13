@@ -39,6 +39,7 @@ from _5_postprocessing import (
     export_forearm_pca_calibrated,
     project_contacts_onto_forearm,
 )
+from _4_merging.aggregate_blocks_session import aggregate_session_blocks
 
 # --- Post-Processing Sub-Flows ---
 
@@ -105,6 +106,21 @@ def project_contacts_onto_forearm_flow(
     )
 
 
+@flow(name="aggregate_session_blocks")
+def aggregate_session_blocks_flow(
+    input_files: List[Path],
+    output_path: Path,
+    force_processing: bool = False,
+) -> Path:
+    """Aggregate all fully-processed block CSVs into one session-level CSV."""
+    print(f"[{output_path.name}] Aggregating {len(input_files)} blocks...")
+    return aggregate_session_blocks(
+        input_paths=input_files,
+        output_path=output_path,
+        force_processing=force_processing,
+    )
+
+
 # --- Worker Flow ---
 
 # @flow(name="Run Single Session Postprocessing")
@@ -124,7 +140,7 @@ def run_single_session_postprocessing(
     # We look for the specific file expected from the video processing stage
     session_input_files = []
     for config in session_configs:
-        input_dir = config.session_merged_output_dir / "sessions"
+        input_dir = config.session_merged_output_dir / "blocks_merged"
         input_path = input_dir / f"{config.session_id}_semicontrolled_{config.block_id}_merged_data.csv"
         # Only add if it vaguely looks like a path, validation happens in tasks
         session_input_files.append(input_path)
@@ -151,7 +167,7 @@ def run_single_session_postprocessing(
             "params": lambda: {
                 "input_files": context.get("source_files"),
                 "session_configs": context.get("session_configs"),
-                "output_dir": session_output_dir / "sessions_registered",
+                "output_dir": session_output_dir / "blocks_registered",
             },
             "outputs": ["registered_files"]
         },
@@ -161,7 +177,7 @@ def run_single_session_postprocessing(
             "func": set_xyz_reference_from_gestures_flow,
             "params": lambda: {
                 "input_files": context.get("registered_files"),
-                "output_dir": session_output_dir / "sessions_pca_calibrated",
+                "output_dir": session_output_dir / "blocks_pca_calibrated",
             },
             "outputs": ["pca_data_files", "pca_report"]
         },
@@ -183,10 +199,20 @@ def run_single_session_postprocessing(
             "params": lambda: {
                 "input_files": context.get("pca_data_files"),
                 "forearm_ply_path": context.get("forearm_pca_ply"),
-                "output_dir": session_output_dir / "sessions_contact_projected",
-                "projection_stats_path": session_output_dir / "sessions_contact_projected" / "projection_stats.csv",
+                "output_dir": session_output_dir / "blocks_contact_projected",
+                "projection_stats_path": session_output_dir / "blocks_contact_projected" / "projection_stats.csv",
             },
             "outputs": ["projected_files"]
+        },
+        # Step 5: Aggregate fully-processed blocks into one session-level CSV
+        {
+            "name": "aggregate_session",
+            "func": aggregate_session_blocks_flow,
+            "params": lambda: {
+                "input_files": context.get("projected_files"),
+                "output_path": session_output_dir / f"{session_id}_semicontrolled_aggregated_session.csv",
+            },
+            "outputs": ["aggregated_file"]
         },
     ]
 

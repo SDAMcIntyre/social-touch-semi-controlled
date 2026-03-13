@@ -18,7 +18,6 @@ from primary_processing import (
 )
 from _4_merging import (
     align_and_merge_neural_and_kinect,
-    aggregate_session_blocks,
     filter_block_by_neural_quality,
 )
 
@@ -62,7 +61,7 @@ def resolve_filenames(config: KinectConfig) -> Dict[str, Path]:
     return {
         "nerve_path": config.nerve_processed_dir / nerve_name,
         "kinect_path": kinect_path,
-        "output_path": config.session_merged_output_dir / "sessions" / output_name
+        "output_path": config.session_merged_output_dir / "blocks_merged" / output_name
     }
 
 # --- Individual Flows ---
@@ -94,42 +93,6 @@ def unify_dataset(
         force_processing=force_processing
     )
     return output_file_path
-
-@flow(name="10. Aggregate Session Blocks")
-def aggregate_blocks(
-    session_merged_output_dir: Path,
-    session_id: str,
-    glob_pattern: str = "*_merged_data.csv",
-    force_processing: bool = False,
-    input_subfolder: str = "sessions",
-    output_suffix: str = "",
-) -> Path:
-    """
-    Flow to aggregate all block-level merged CSV files within a session into one final CSV.
-    Handles path resolution and invokes the aggregation logic.
-    """
-    logger = get_run_logger()
-
-    input_dir = session_merged_output_dir / input_subfolder
-    output_filename = f"{session_id}_semicontrolled_aggregated_session{output_suffix}.csv"
-    output_path = session_merged_output_dir / output_filename
-
-    logger.info(f"[{session_id}] Scanning for blocks in {input_dir}...")
-
-    input_files = list(input_dir.glob(f"*{session_id}{glob_pattern}"))
-
-    aggregate_session_blocks(
-        input_paths=input_files,
-        output_path=output_path,
-        force_processing=force_processing
-    )
-
-    if input_files:
-        logger.info(f"✅ Aggregation flow complete. Output: {output_filename}")
-    else:
-        logger.warning(f"⚠️ No files found matching pattern *{session_id}{glob_pattern}")
-
-    return output_path
 
 
 @flow(name="11. Filter by Neural Quality")
@@ -216,7 +179,7 @@ def run_single_session_pipeline(
             discard_from_first = options.get('discard_from_first_not2use', True)
 
             filtered_output = (
-                config.session_merged_output_dir / "sessions_filtered" / output_file_path.name
+                config.session_merged_output_dir / "blocks_filtered" / output_file_path.name
             )
             filter_by_neural_quality_flow(
                 merged_csv=output_file_path,
@@ -295,56 +258,17 @@ def run_batch_processing(
         except Exception as e:
             logger.error(f"Failed to initialize config for {block_file}: {e}")
 
-    # 2. Collect Results
-    # We map session_id -> output_dir for aggregation
-    session_map: Dict[str, Path] = {}
-
+    # 2. Wait for parallel runs to complete and log any failures
     if parallel:
         logger.info("Waiting for parallel runs to complete...")
         for future in futures_or_states:
-            # Wait for completion and get the return value (PipelineResult)
-            # Note: .result() behaves differently depending on Prefect version, 
-            # assume standard behavior here.
             try:
                 if isinstance(future, PrefectFuture):
-                    # Safely extract result from future
                     state = future.wait()
-                    if state.is_completed():
-                        result: PipelineResult = state.result()
-                        if result.status == "success":
-                            session_map[result.session_id] = result.session_merged_output_dir
-                    else:
+                    if not state.is_completed():
                         logger.error(f"Flow run failed: {state}")
             except Exception as e:
                 logger.error(f"Error retrieving future result: {e}")
-    else:
-        # In sequential mode, futures_or_states is just a list of PipelineResult objects
-        for result in futures_or_states:
-            if isinstance(result, PipelineResult) and result.status == "success":
-                session_map[result.session_id] = result.session_merged_output_dir
-
-    # 3. Aggregate Sessions
-    if session_map:
-        logger.info(f"\n--- Starting Aggregation for {len(session_map)} Sessions ---")
-        for session_id, output_dir in session_map.items():
-            aggregate_blocks(
-                session_merged_output_dir=output_dir,
-                session_id=session_id
-            )
-
-        # 3b. Aggregate filtered sessions (if sessions_filtered/ exists)
-        logger.info(f"\n--- Starting Filtered Aggregation for {len(session_map)} Sessions ---")
-        for session_id, output_dir in session_map.items():
-            filtered_dir = output_dir / "sessions_filtered"
-            if filtered_dir.exists():
-                aggregate_blocks(
-                    session_merged_output_dir=output_dir,
-                    session_id=session_id,
-                    input_subfolder="sessions_filtered",
-                    output_suffix="_filtered",
-                )
-            else:
-                logger.info(f"[{session_id}] No sessions_filtered/ directory; skipping filtered aggregation")
 
     logger.info("✅ All batch processing tasks have finished.")
 

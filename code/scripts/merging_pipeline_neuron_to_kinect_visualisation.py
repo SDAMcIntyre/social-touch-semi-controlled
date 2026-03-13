@@ -147,7 +147,7 @@ def resolve_viewer_paths(config: KinectConfig) -> Dict[str, Optional[Path]]:
       - Hand motion      : video_processed_output_dir/kinematics_analysis/<stem>_handmodel_motion.npz
       - Forearm dir      : session_processed_output_dir/forearm_pointclouds/
       - Forearm metadata : <forearm_dir>/<session_id>_arm_roi_metadata.json
-      - Merged CSV       : session_merged_output_dir/sessions/<session_id>_semicontrolled_<block_id>_merged_data.csv
+      - Merged CSV       : session_merged_output_dir/blocks_merged/<session_id>_semicontrolled_<block_id>_merged_data.csv
     """
     stem = config.source_video.stem
     forearm_dir = config.session_processed_output_dir / "forearm_pointclouds"
@@ -155,7 +155,7 @@ def resolve_viewer_paths(config: KinectConfig) -> Dict[str, Optional[Path]]:
     merged_csv: Optional[Path] = None
     if config.session_merged_output_dir:
         merged_name = f"{config.session_id}_semicontrolled_{config.block_id}_merged_data.csv"
-        candidate = config.session_merged_output_dir / "sessions" / merged_name
+        candidate = config.session_merged_output_dir / "blocks_merged" / merged_name
         merged_csv = candidate if candidate.exists() else None
 
     return {

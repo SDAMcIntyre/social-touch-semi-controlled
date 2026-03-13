@@ -18,17 +18,29 @@ tasks:
   apply_icp_registration:
     enabled: true
     options:
-      force_processing: true
+      force_processing: false
     depends_on: []
 
   set_xyz_reference_from_gestures:
     enabled: true
     options:
-      force_processing: true
+      force_processing: false
     depends_on: [apply_icp_registration]
 
   export_forearm_pca_calibrated:
     enabled: true
     options:
-      force_processing: true
+      force_processing: false
     depends_on: [set_xyz_reference_from_gestures]
+
+  project_contacts_onto_forearm:
+    enabled: true
+    options:
+      force_processing: false
+    depends_on: [set_xyz_reference_from_gestures, export_forearm_pca_calibrated]
+
+  aggregate_session:
+    enabled: true
+    options:
+      force_processing: false
+    depends_on: [project_contacts_onto_forearm]

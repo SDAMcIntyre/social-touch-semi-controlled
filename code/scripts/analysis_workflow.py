@@ -249,7 +249,7 @@ def map_receptive_fields_flow(
 
             # Collect raw merged CSVs (same session dir as input_file)
             raw_csv_dir = input_file.parent
-            raw_csv_paths = sorted(raw_csv_dir.glob("*_semicontrolled_aggregated_session_filtered.csv"))
+            raw_csv_paths = sorted(raw_csv_dir.glob("*_semicontrolled_aggregated_session.csv"))
             if not raw_csv_paths:
                 raw_csv_paths = [input_file]
 
@@ -454,7 +454,7 @@ def run_batch_analysis(
     logging.info(f"Scanning {len(session_map)} sessions for data files...")
     for search_dir in sorted(session_map.keys()):
         database_path_context = session_map[search_dir]
-        candidates = list(search_dir.glob("*_semicontrolled_aggregated_session_filtered.csv"))
+        candidates = list(search_dir.glob("*_semicontrolled_aggregated_session.csv"))
         
         if candidates:
             target_file = candidates[0]
