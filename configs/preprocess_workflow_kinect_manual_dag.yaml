@@ -10,7 +10,8 @@
 # ==============================================================================
 
 parameters:
-  kinect_configs: "valid_configs_ST13-01"
+  kinect_configs: 
+    valid_configs_ST13-02/kinect_config_2022-06-14_ST13-02_semicontrolled_block-order04.yaml
   #kinect_configs: "valid_configs_ST16-05"
 
 tasks:
@@ -24,7 +25,8 @@ tasks:
 
   assign_hand_model_metadata:
     enabled: true
-    description: "Manually select the position of the sticks on an arbitrary standard 3d model of hand."
+    description: "Manually select the position of the sticks on an arbitrary standard
+      3d model of hand."
     depends_on: []
     options:
       force_processing: false
