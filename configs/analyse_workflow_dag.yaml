@@ -47,3 +47,13 @@ tasks:
     options:
       force_processing: true
     depends_on: ["process_unified_touches"]
+
+  # RF mapping via selectivity + DBSCAN. Requires unified touch summaries.
+  map_receptive_fields:
+    enabled: true
+    options:
+      grouping_columns: ['type_metadata', 'direction']
+      use_transformed: true
+      monitor: false
+      force_processing: false
+    depends_on: ["process_unified_touches"]

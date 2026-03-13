@@ -35,7 +35,6 @@ from primary_processing import (
 
 from _5_postprocessing import (
     apply_icp_registration,
-    determine_receptive_field,
     set_xyz_reference_from_gestures
 )
 
@@ -71,46 +70,6 @@ def set_xyz_reference_from_gestures_flow(input_files: List[Path], output_dir: Pa
     )
 
     return output_files
-
-@flow(name="determine_receptive_field")
-def determine_receptive_field_flow(
-    input_files: List[Path],
-    configs: List[KinectConfig],
-    output_dir: Path,
-    force_processing: bool = False,
-    use_transformed: bool = True,
-) -> Tuple[List[Path], List[Path]]:
-    """
-    Determine the receptive field based on touch locations for each file.
-    Returns a list of metadata CSV paths corresponding to the input data files.
-    
-    Updated to accept configs.
-    """
-    print(f"[{output_dir.name}] Calculating receptive field for {len(input_files)} files...")
-    
-    kinect_config = configs[0]
-    forearm_pointcloud_dir = kinect_config.session_processed_output_dir / "forearm_pointclouds"
-    arm_roi_metadata_path = forearm_pointcloud_dir / (kinect_config.session_id + "_arm_roi_metadata.json")
-
-    # Pass configs to the underlying function
-    output_files, rf_pc_file = determine_receptive_field(
-        input_files,
-        arm_roi_metadata_path,
-        output_dir,
-        force_processing=force_processing,
-        use_transformed=use_transformed,
-    )
-
-    return output_files, rf_pc_file
-
-@flow(name="filter_by_receptive_field")
-def filter_by_receptive_field(data_files: List[Path], rf_files: List[Path], output_dir: Path, force_processing: bool = False) -> List[Path]:
-    """
-    Filter the data based on the receptive field.
-    Matches data files to RF files by index (assumes strictly ordered 1-to-1 flow).
-    """
-    print(f"[{output_dir.name}] Filtering data for {len(data_files)} files...")
-    return
 
 
 # --- Worker Flow ---
@@ -172,28 +131,6 @@ def run_single_session_postprocessing(
                 "output_dir": session_output_dir / "sessions_pca_calibrated",
             },
             "outputs": ["pca_data_files", "pca_report"]
-        },
-        # Receptive Field
-        {
-            "name": "determine_receptive_field",
-            "func": determine_receptive_field_flow,
-            "params": lambda: {
-                "input_files": context.get("source_files"),
-                "configs": context.get("session_configs"),
-                "output_dir": session_output_dir / "sessions_receptive-field"
-            },
-            "outputs": ["segmented_data_files", "rf_metadata_files"]
-        },
-        # Filtering
-        {
-            "name": "filter_by_receptive_field",
-            "func": filter_by_receptive_field,
-            "params": lambda: {
-                "data_files": context.get("segmented_data_files"),
-                "rf_files": context.get("rf_metadata_files"),
-                "output_dir": session_output_dir
-            },
-            "outputs": ["final_data_files"]
         },
     ]
 

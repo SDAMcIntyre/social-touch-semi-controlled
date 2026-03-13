@@ -4,7 +4,7 @@ import os
 import logging
 from pathlib import Path
 from multiprocessing import Queue, freeze_support
-from typing import List, Set, Dict, Tuple
+from typing import List, Optional, Set, Dict, Tuple
 from collections import defaultdict
 
 # Prefect for workflow management
@@ -33,6 +33,10 @@ from analysis.touch_analytics import (
     generate_ap_efficacy_matrix,
     generate_session_summary
 )
+from analysis.receptive_field_mapping import RFMappingConfig
+from analysis.receptive_field_mapping.rf_mapping_engine import RFMappingEngine
+from analysis.receptive_field_mapping.rf_data_loader import load_grouped_spatial_data
+from analysis.receptive_field_mapping.rf_visualizer import RFVisualizer
 
 # --- Analysis Flows ---
 
@@ -198,6 +202,184 @@ def analyse_ap_efficacy_flow(
         logging.warning("No unified summary files found. Run 'process_unified_touches' first.")
         return []
 
+@flow(name="map_receptive_fields")
+def map_receptive_fields_flow(
+    input_items: List[Tuple[Path, Path]],
+    force_processing: bool = False,
+    use_transformed: bool = True,
+    grouping_columns: List[str] = None,
+    monitor: bool = False,
+) -> List[Path]:
+    """
+    RF Mapping: Compute per-group receptive field maps via selectivity + DBSCAN.
+    Consumes unified touch summaries and raw merged CSVs.
+    """
+    from utils.should_process_task import should_process_task
+
+    if grouping_columns is None:
+        grouping_columns = ["type_metadata", "direction"]
+
+    print(f"[Batch Analysis] Mapping receptive fields for {len(input_items)} item(s)...")
+
+    config = RFMappingConfig()
+    results = []
+
+    for input_file, database_path in input_items:
+        try:
+            # Locate unified summary
+            output_dir = database_path / "4_analysed"
+            filename = input_file.name
+            if "_semicontrolled_" in filename:
+                prefix = filename.split("_semicontrolled_")[0]
+                summary_name = f"{prefix}_semicontrolled_touch_summary.csv"
+            else:
+                summary_name = f"{input_file.stem}_touch_summary.csv"
+
+            summary_path = output_dir / summary_name
+            if not summary_path.exists():
+                logging.warning(
+                    f"Unified summary not found: {summary_path}. "
+                    "Run 'process_unified_touches' first. Skipping."
+                )
+                continue
+
+            # Output directory for RF maps
+            rf_output_dir = output_dir / "receptive_field_maps"
+            rf_output_dir.mkdir(parents=True, exist_ok=True)
+
+            # Collect raw merged CSVs (same session dir as input_file)
+            raw_csv_dir = input_file.parent
+            raw_csv_paths = sorted(raw_csv_dir.glob("*_semicontrolled_aggregated_session_filtered.csv"))
+            if not raw_csv_paths:
+                raw_csv_paths = [input_file]
+
+            # Define expected outputs for idempotency
+            summary_json = rf_output_dir / "rf_mapping_summary.json"
+            if not should_process_task(
+                input_paths=[summary_path] + raw_csv_paths,
+                output_paths=[summary_json],
+                force=force_processing,
+            ):
+                logging.info(f"[{rf_output_dir.name}] RF mapping up-to-date. Skipping.")
+                results.append(summary_json)
+                continue
+
+            # Load and group spatial data
+            grouped_data = load_grouped_spatial_data(
+                raw_csv_paths=raw_csv_paths,
+                summary_csv_path=summary_path,
+                grouping_columns=grouping_columns,
+                config=config,
+                use_transformed=use_transformed,
+            )
+
+            if not grouped_data:
+                logging.warning(f"No grouped data produced for {input_file.name}. Skipping.")
+                continue
+
+            # Process each group
+            import json
+            all_results = {}
+            for group_label, spatial_data in grouped_data.items():
+                selectivity = RFMappingEngine.compute_selectivity(
+                    spatial_data.spike_counts,
+                    spatial_data.total_counts,
+                )
+                rf_result = RFMappingEngine.cluster_receptive_field(
+                    selectivity,
+                    config.algorithm,
+                    group_label,
+                    touch_count=spatial_data.touch_count,
+                )
+
+                # Save per-group CSV
+                _save_group_csv(rf_result, rf_output_dir)
+
+                # Visualize if requested
+                if monitor and rf_result.clusters:
+                    try:
+                        forearm_pcd = _load_forearm_pcd(database_path)
+                    except Exception:
+                        forearm_pcd = None
+                    RFVisualizer.visualize_rf_map(rf_result, forearm_pcd)
+
+                all_results[group_label] = {
+                    "touch_count": rf_result.touch_count,
+                    "total_points_evaluated": rf_result.total_points_evaluated,
+                    "points_above_threshold": rf_result.points_above_threshold,
+                    "num_clusters": len(rf_result.clusters),
+                    "cluster_sizes": [c.point_count for c in rf_result.clusters],
+                    "cluster_mean_selectivity": [
+                        round(c.mean_selectivity, 4) for c in rf_result.clusters
+                    ],
+                }
+
+            # Save summary JSON
+            with open(summary_json, "w") as f:
+                json.dump(
+                    {
+                        "grouping_columns": grouping_columns,
+                        "use_transformed": use_transformed,
+                        "algorithm_config": {
+                            "selectivity_threshold": config.algorithm.selectivity_threshold,
+                            "dbscan_eps": config.algorithm.dbscan_eps,
+                            "dbscan_min_samples": config.algorithm.dbscan_min_samples,
+                            "min_cluster_points": config.algorithm.min_cluster_points,
+                        },
+                        "groups": all_results,
+                    },
+                    f,
+                    indent=2,
+                )
+
+            results.append(summary_json)
+            logging.info(f"RF mapping complete for {input_file.name}: {len(all_results)} groups.")
+
+        except Exception as e:
+            logging.error(f"Failed RF mapping for {input_file.name}: {e}")
+            import traceback
+            traceback.print_exc()
+
+    return results
+
+
+def _save_group_csv(rf_result, output_dir: Path) -> Optional[Path]:
+    """Save per-group RF points with selectivity and cluster assignment."""
+    import pandas as pd
+
+    if not rf_result.clusters:
+        return None
+
+    rows = []
+    for cluster in rf_result.clusters:
+        for i in range(cluster.point_count):
+            rows.append({
+                "x": cluster.points[i, 0],
+                "y": cluster.points[i, 1],
+                "z": cluster.points[i, 2],
+                "selectivity": cluster.selectivity_scores[i],
+                "cluster_id": cluster.cluster_id,
+            })
+
+    df = pd.DataFrame(rows)
+    safe_label = rf_result.group_label.replace("/", "_").replace(" ", "_")
+    csv_path = output_dir / f"rf_map_{safe_label}.csv"
+    df.to_csv(csv_path, index=False)
+    return csv_path
+
+
+def _load_forearm_pcd(database_path: Path):
+    """Try to load forearm reference point cloud for visualization."""
+    from preprocessing.forearm_extraction import ForearmCatalog
+    import open3d as o3d
+
+    catalog = ForearmCatalog(database_path)
+    pcd_path = catalog.get_forearm_pcd_path()
+    if pcd_path and pcd_path.exists():
+        return o3d.io.read_point_cloud(str(pcd_path))
+    return None
+
+
 def _collect_unified_files(input_items: List[Tuple[Path, Path]]) -> List[Path]:
     """
     Helper to reconstruct the expected paths of the unified summary files.
@@ -260,7 +442,8 @@ def run_batch_analysis(
         ("generate_session_summary", generate_session_summary_flow),
         ("process_unified_touches", process_unified_touches_flow),
         ("analyse_number_single_touches", analyse_number_single_touches_flow),
-        ("analyse_ap_efficacy", analyse_ap_efficacy_flow)
+        ("analyse_ap_efficacy", analyse_ap_efficacy_flow),
+        ("map_receptive_fields", map_receptive_fields_flow),
     ]
     
     task_names = [t[0] for t in available_tasks]
@@ -302,6 +485,10 @@ def run_batch_analysis(
                     }
                     if "use_transformed" in options:
                         kwargs["use_transformed"] = options["use_transformed"]
+                    if "grouping_columns" in options:
+                        kwargs["grouping_columns"] = options["grouping_columns"]
+                    if "monitor" in options:
+                        kwargs["monitor"] = options["monitor"]
                     flow_func(**kwargs)
                 except Exception as e:
                     executor.error_msg = f"Batch analysis failed: {str(e)}"
