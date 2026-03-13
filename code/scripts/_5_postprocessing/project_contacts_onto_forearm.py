@@ -124,7 +124,7 @@ def project_contacts_onto_forearm(
         input_files: PCA-calibrated session CSVs (stage 2 outputs).
         forearm_ply_path: Path to the PCA-calibrated forearm PLY (stage 3 output).
             If the path does not exist, the stage is skipped with a warning.
-        output_dir: Destination directory (``sessions_contact_projected/``).
+        output_dir: Destination directory (``blocks_contact_projected/``).
         force_processing: Re-run even if outputs are up-to-date.
         projection_stats_path: Path for a combined CSV summarising per-session
             projection distances (mm).  Treated as an additional output: if it
