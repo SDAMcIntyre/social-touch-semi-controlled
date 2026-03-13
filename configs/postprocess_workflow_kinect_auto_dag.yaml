@@ -26,3 +26,9 @@ tasks:
     options:
       force_processing: true
     depends_on: [apply_icp_registration]
+
+  export_forearm_pca_calibrated:
+    enabled: true
+    options:
+      force_processing: true
+    depends_on: [set_xyz_reference_from_gestures]

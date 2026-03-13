@@ -7,7 +7,7 @@ import shutil
 import time
 import traceback
 from multiprocessing import Queue, freeze_support
-from typing import List, Dict, Tuple, Any
+from typing import List, Dict, Tuple, Any, Optional
 from collections import defaultdict
 
 import pandas as pd
@@ -35,7 +35,8 @@ from primary_processing import (
 
 from _5_postprocessing import (
     apply_icp_registration,
-    set_xyz_reference_from_gestures
+    set_xyz_reference_from_gestures,
+    export_forearm_pca_calibrated,
 )
 
 # --- Post-Processing Sub-Flows ---
@@ -70,6 +71,21 @@ def set_xyz_reference_from_gestures_flow(input_files: List[Path], output_dir: Pa
     )
 
     return output_files
+
+
+@flow(name="export_forearm_pca_calibrated")
+def export_forearm_pca_calibrated_flow(
+    session_configs: List[KinectConfig],
+    pca_output_dir: Path,
+    output_dir: Path,
+    force_processing: bool = False,
+) -> Optional[Path]:
+    """Export the forearm-of-reference PLY transformed into PCA-calibrated space."""
+    print(f"[{output_dir.name}] Exporting PCA-calibrated forearm PLY...")
+    return export_forearm_pca_calibrated(
+        session_configs, pca_output_dir, output_dir,
+        force_processing=force_processing,
+    )
 
 
 # --- Worker Flow ---
@@ -131,6 +147,17 @@ def run_single_session_postprocessing(
                 "output_dir": session_output_dir / "sessions_pca_calibrated",
             },
             "outputs": ["pca_data_files", "pca_report"]
+        },
+        # Step 3: Export forearm PLY in PCA-calibrated space
+        {
+            "name": "export_forearm_pca_calibrated",
+            "func": export_forearm_pca_calibrated_flow,
+            "params": lambda: {
+                "session_configs": context.get("session_configs"),
+                "pca_output_dir": context.get("pca_report"),
+                "output_dir": session_output_dir / "forearm_pca_calibrated",
+            },
+            "outputs": ["forearm_pca_ply"]
         },
     ]
 

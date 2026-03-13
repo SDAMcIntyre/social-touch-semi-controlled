@@ -20,6 +20,15 @@ class CalibrationResult:
             "secondary_rotation_R2": self.R2.tolist()
         }
 
+    @classmethod
+    def from_dict(cls, d: Dict[str, List[float]]) -> "CalibrationResult":
+        return cls(
+            mean_1=np.array(d["primary_mean"]),
+            R1=np.array(d["primary_rotation_R1"]),
+            mean_2=np.array(d["secondary_mean_2d"]),
+            R2=np.array(d["secondary_rotation_R2"]),
+        )
+
 class PCACalibrationEngine:
     """Pure logic for computing and applying PCA transformations."""
     
