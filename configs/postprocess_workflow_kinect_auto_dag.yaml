@@ -26,18 +26,3 @@ tasks:
     options:
       force_processing: true
     depends_on: [apply_icp_registration]
-
-  # --- Spatial Analysis ---
-  determine_receptive_field:
-    enabled: false
-    options:
-      force_processing: false
-      use_transformed: false
-    depends_on: []
-
-  # --- Data Cleaning ---
-  filter_by_receptive_field:
-    enabled: false
-    options:
-      force_processing: false
-    depends_on: [determine_receptive_field]
