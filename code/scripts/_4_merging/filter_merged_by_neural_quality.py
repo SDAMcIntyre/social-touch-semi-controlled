@@ -42,8 +42,16 @@ def parse_neural_quality_xlsx(xlsx_path: Path) -> Dict[Tuple[str, int], Set[int]
         Dict mapping (unit, block_order) -> set of Not2Use trial IDs (int).
     """
     df = pd.read_excel(xlsx_path)
-    unit_label ='Unit'
-    block_label ='Block order'
+    unit_label = 'Unit'
+    block_label = 'Block order'
+
+    # Drop rows where key columns are empty (trailing blank rows, formatting
+    # artifacts, or partial entries common in hand-maintained Excel files).
+    rows_before_clean = len(df)
+    df = df.dropna(subset=[unit_label, block_label])
+    dropped = rows_before_clean - len(df)
+    if dropped:
+        logger.debug(f"Dropped {dropped} rows with empty Unit/Block order from {xlsx_path.name}")
 
     trial_columns = [i for i in range(1, 13)]
     missing = [c for c in [unit_label, block_label] + trial_columns if c not in df.columns]
