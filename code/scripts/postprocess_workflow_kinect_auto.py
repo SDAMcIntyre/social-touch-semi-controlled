@@ -37,6 +37,7 @@ from _5_postprocessing import (
     apply_icp_registration,
     set_xyz_reference_from_gestures,
     export_forearm_pca_calibrated,
+    project_contacts_onto_forearm,
 )
 
 # --- Post-Processing Sub-Flows ---
@@ -84,6 +85,22 @@ def export_forearm_pca_calibrated_flow(
     print(f"[{output_dir.name}] Exporting PCA-calibrated forearm PLY...")
     return export_forearm_pca_calibrated(
         session_configs, pca_output_dir, output_dir,
+        force_processing=force_processing,
+    )
+
+
+@flow(name="project_contacts_onto_forearm")
+def project_contacts_onto_forearm_flow(
+    input_files: List[Path],
+    forearm_ply_path: Optional[Path],
+    output_dir: Path,
+    projection_stats_path: Path,
+    force_processing: bool = False,
+) -> List[Path]:
+    """Project contact points onto the PCA-calibrated forearm surface."""
+    print(f"[{output_dir.name}] Projecting contact points onto forearm surface...")
+    return project_contacts_onto_forearm(
+        input_files, forearm_ply_path, output_dir, projection_stats_path,
         force_processing=force_processing,
     )
 
@@ -158,6 +175,18 @@ def run_single_session_postprocessing(
                 "output_dir": session_output_dir / "forearm_pca_calibrated",
             },
             "outputs": ["forearm_pca_ply"]
+        },
+        # Step 4: Project contact points onto forearm surface
+        {
+            "name": "project_contacts_onto_forearm",
+            "func": project_contacts_onto_forearm_flow,
+            "params": lambda: {
+                "input_files": context.get("pca_data_files"),
+                "forearm_ply_path": context.get("forearm_pca_ply"),
+                "output_dir": session_output_dir / "sessions_contact_projected",
+                "projection_stats_path": session_output_dir / "sessions_contact_projected" / "projection_stats.csv",
+            },
+            "outputs": ["projected_files"]
         },
     ]
 
