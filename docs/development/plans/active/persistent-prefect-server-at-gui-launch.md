@@ -2,7 +2,7 @@
 
 **Date:** 2026-03-14
 **Author:** Basil Duvernoy
-**Status:** Draft
+**Status:** Active
 **Branch:** `feature/persistent-prefect-server-at-gui-launch`
 
 ---
