@@ -175,6 +175,12 @@ def run_single_session_pipeline(
             print(f"[{block_name}] Missing required file '{key}': {p}  — skipping.")
             return
 
+    pca_calib = _load_pca_calib(paths["pca_calib_json"])
+    if pca_calib is not None:
+        print(f"[{block_name}] PCA calibration loaded.")
+    else:
+        print(f"[{block_name}] No PCA calibration — using default camera orientation.")
+
     print(f"[{block_name}] Launching PostprocessedSceneViewer (simple mode)...")
     app = QApplication.instance() or QApplication(sys.argv)
 
@@ -183,6 +189,7 @@ def run_single_session_pipeline(
         forearm_ply_path=paths["forearm_pca_ply"],
         recording_name=paths["recording_name"],
         mode="simple",
+        pca_calib=pca_calib,
     )
     viewer.show()
     app.exec_()

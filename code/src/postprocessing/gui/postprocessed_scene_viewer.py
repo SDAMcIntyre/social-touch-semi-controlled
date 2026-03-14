@@ -516,15 +516,16 @@ class PostprocessedSceneViewer(QMainWindow):
             pickable=False,
         )
 
-        # Default camera — centred on the contact centroid
-        cx, cy, cz = self._contact_centroid.tolist()
-        self.plotter.camera.focal_point = [cx, cy, cz]
-        self.plotter.camera.position    = [cx, cy, cz - 400.0]
-        self.plotter.camera.up          = [0.375, -0.904, -0.201]
+        # Default camera — centred on the contact centroid, PCA-aware when available
+        _cam_pos, _cam_focal, _cam_up = self._compute_camera_params()
+        self.plotter.camera.focal_point = _cam_focal
+        self.plotter.camera.position    = _cam_pos
+        self.plotter.camera.up          = _cam_up
         self.plotter.camera_set = True
 
         # Invisible bounding proxy so VTK has a plausible clipping range on
         # the first frame before real geometry is rendered.
+        cx, cy, cz = self._contact_centroid.tolist()
         _box_half = 400.0
         _bounds_proxy = pv.Box(bounds=(
             cx - _box_half, cx + _box_half,
@@ -710,11 +711,51 @@ class PostprocessedSceneViewer(QMainWindow):
     # Camera
     # ------------------------------------------------------------------
 
+    def _compute_camera_params(self) -> Tuple[List[float], List[float], List[float]]:
+        """Return (position, focal_point, up) for the current data space.
+
+        Transforms the kinect-space camera defaults through R2 @ R1 when PCA
+        calibration is available, so the viewer looks at PCA-calibrated data
+        from the same physical direction as the kinect viewer looks at kinect
+        space.  Falls back to the original hardcoded camera when pca_calib is
+        None.
+        """
+        centroid = self._contact_centroid
+        cx, cy, cz = centroid.tolist()
+
+        _KINECT_VIEW_DIR = np.array([0.0, 0.0, 1.0])
+        _KINECT_UP       = np.array([0.375, -0.904, -0.201])
+
+        if self._pca_calib is not None:
+            # For directions, the full point transform (coords - mean) @ R1.T @ R2.T
+            # reduces to d @ R1.T @ R2.T (translations cancel).
+            R_composite = self._pca_calib.R2 @ self._pca_calib.R1
+            view_dir = R_composite @ _KINECT_VIEW_DIR
+            view_dir /= np.linalg.norm(view_dir)
+            up = R_composite @ _KINECT_UP
+            # Safety guard: if up is nearly parallel to view_dir, substitute an
+            # orthogonal alternative via cross product.
+            if abs(np.dot(view_dir, up / np.linalg.norm(up))) > 0.99:
+                for candidate in (
+                    np.array([0.0, 1.0, 0.0]),
+                    np.array([1.0, 0.0, 0.0]),
+                    np.array([0.0, 0.0, 1.0]),
+                ):
+                    if abs(np.dot(view_dir, candidate)) < 0.99:
+                        up = np.cross(view_dir, candidate)
+                        break
+            position = (centroid - 400.0 * view_dir).tolist()
+        else:
+            position = [cx, cy, cz - 400.0]
+            up = _KINECT_UP
+
+        return position, [cx, cy, cz], up.tolist()
+
     def _recenter_view(self) -> None:
-        cx, cy, cz = self._contact_centroid.tolist()
-        self.plotter.camera.focal_point = [cx, cy, cz]
-        self.plotter.camera.position    = [cx, cy, cz - 400.0]
-        self.plotter.camera.up          = [0.375, -0.904, -0.201]
+        position, focal_point, up = self._compute_camera_params()
+        self.plotter.camera.focal_point = focal_point
+        self.plotter.camera.position    = position
+        self.plotter.camera.up          = up
         self.plotter.render()
 
     # ------------------------------------------------------------------
