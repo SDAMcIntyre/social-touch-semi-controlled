@@ -61,6 +61,88 @@ class RFVisualizer:
         )
 
     @staticmethod
+    def save_rf_map_image(
+        rf_result: RFMapResult,
+        output_dir,
+        forearm_pcd: Optional[o3d.geometry.PointCloud] = None,
+    ) -> Optional["Path"]:
+        """Save a static 2-panel PNG (XY top-down and XZ side-view) for one group.
+
+        Renders forearm reference as a subtle grey background when *forearm_pcd*
+        is provided.  Cluster colours and brightness follow the same HSV scheme
+        as the interactive viewer.
+
+        Args:
+            rf_result: The mapping result for a single group.
+            output_dir: Directory where the PNG will be written.
+            forearm_pcd: Optional forearm reference geometry drawn as background.
+
+        Returns:
+            Path to the saved PNG, or ``None`` if there are no clusters to render.
+        """
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from pathlib import Path
+
+        if not rf_result.clusters:
+            logger.info(
+                "No clusters for group '%s'; skipping image export.",
+                rf_result.group_label,
+            )
+            return None
+
+        # Build per-point colour arrays — same logic as _build_rf_point_cloud.
+        all_points = []
+        all_colors = []
+        for idx, cluster in enumerate(rf_result.clusters):
+            hue = _BASE_HUES[idx % len(_BASE_HUES)]
+            saturation = 0.8
+            scores = cluster.selectivity_scores
+            max_sel = scores.max() if len(scores) > 0 else 1.0
+            if max_sel <= 0:
+                max_sel = 1.0
+            for pt_idx in range(len(cluster.points)):
+                sel = scores[pt_idx]
+                value = 0.3 + 0.7 * (sel / max_sel)
+                all_colors.append(hsv_to_rgb([hue, saturation, value]))
+            all_points.append(cluster.points)
+
+        points_np = np.vstack(all_points)
+        colors_np = np.asarray(all_colors, dtype=np.float64)
+
+        projections = [
+            (0, 1, "X (mm)", "Y (mm)", "XY — top-down"),
+            (0, 2, "X (mm)", "Z (mm)", "XZ — side view"),
+        ]
+
+        fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+        for ax, (xi, yi, xlabel, ylabel, title) in zip(axes, projections):
+            if forearm_pcd is not None:
+                fg_pts = np.asarray(forearm_pcd.points)
+                if len(fg_pts) > 0:
+                    ax.scatter(
+                        fg_pts[:, xi], fg_pts[:, yi],
+                        c="lightgray", s=0.5, alpha=0.3, rasterized=True, zorder=1,
+                    )
+            ax.scatter(points_np[:, xi], points_np[:, yi], c=colors_np, s=8, zorder=2)
+            ax.set_xlabel(xlabel)
+            ax.set_ylabel(ylabel)
+            ax.set_title(title)
+            ax.set_aspect("equal")
+            ax.grid(True, linewidth=0.4, alpha=0.5)
+
+        fig.suptitle(f"RF Map — {rf_result.group_label}", fontsize=12)
+        fig.tight_layout()
+
+        safe_label = rf_result.group_label.replace("/", "_").replace(" ", "_")
+        out_path = Path(output_dir) / f"rf_map_{safe_label}.png"
+        fig.savefig(out_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        logger.info("Saved RF map image: %s", out_path)
+        return out_path
+
+    @staticmethod
     def _build_rf_point_cloud(rf_result: RFMapResult) -> o3d.geometry.PointCloud:
         """Build a colored Open3D point cloud from the clusters in *rf_result*.
 
