@@ -48,6 +48,10 @@ class PCACalibrationEngine:
         # Assign 1st PC to Z-axis: New Z' = PC1, New X' = PC2, New Y' = PC3
         # This forces the axis with most variation (tapping depth) to become Z
         R1 = np.vstack([comps_1[1], comps_1[2], comps_1[0]])
+        # PCA eigenvectors have arbitrary sign; enforce proper rotation (det = +1).
+        # Flip Z (row 2) — tapping depth is the most semantically arbitrary axis.
+        if np.linalg.det(R1) < 0:
+            R1[2] *= -1
 
         # 2. Secondary PCA (XY-Plane) on Stroking
         # Transform stroking data using Phase 1 parameters (Z-align)
@@ -65,7 +69,11 @@ class PCACalibrationEngine:
         # Expand R2 to 3x3 identity for Z preservation
         R2 = np.eye(3)
         R2[:2, :2] = comps_2
-        
+        # PCA eigenvectors have arbitrary sign; enforce proper rotation (det = +1).
+        # Flip Y (row 1) — X is anchored to the primary stroking direction.
+        if np.linalg.det(R2[:2, :2]) < 0:
+            R2[1, :2] *= -1
+
         return CalibrationResult(mean_1, R1, mean_2, R2)
 
     @staticmethod
