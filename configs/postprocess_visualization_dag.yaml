@@ -1,0 +1,30 @@
+# ==============================================================================
+# POSTPROCESSED VISUALIZATION — DAG CONFIGURATION
+# ==============================================================================
+# Drives postprocess_visualization.py.
+# Point kinect_configs at the block configs for the session to view.
+#
+# Two tasks (enable exactly one at a time):
+#   view_postprocessed_simple   — forearm PLY + contact points + neural panels
+#   view_postprocessed_advanced — adds sticker spheres + hand mesh (ICP+PCA)
+# ==============================================================================
+
+parameters:
+  kinect_configs: 
+    valid_configs_ST16-05/kinect_config_2022-06-17_ST16-05_semicontrolled_block-order07.yaml
+
+tasks:
+  view_postprocessed_simple:
+    enabled: true
+    description: "Launch PostprocessedSceneViewer in simple mode: static PCA-calibrated
+      forearm PLY + per-frame projected contact points + NeuralDataPanel."
+    options: {}
+    depends_on: []
+
+  view_postprocessed_advanced:
+    enabled: false
+    description: "Launch PostprocessedSceneViewer in advanced mode: adds per-frame
+      sticker spheres (PCA-calibrated) and a hand mesh with ICP+PCA transform chain.
+      Degrades gracefully when hand motion NPZ, ICP transforms, or PCA calib are missing."
+    options: {}
+    depends_on: []

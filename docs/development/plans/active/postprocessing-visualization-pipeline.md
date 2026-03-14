@@ -4,7 +4,7 @@
 **Approved:** —
 **Completed:** —
 **Author:** Basil Duvernoy
-**Status:** Draft
+**Status:** In Progress
 **Branch:** `feature/postprocessing-visualization-pipeline`
 
 ---
