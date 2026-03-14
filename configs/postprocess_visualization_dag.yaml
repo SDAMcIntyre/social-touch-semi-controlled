@@ -11,18 +11,18 @@
 
 parameters:
   kinect_configs: 
-    valid_configs_ST16-05/kinect_config_2022-06-17_ST16-05_semicontrolled_block-order07.yaml
+    valid_configs_ST18-04/kinect_config_2022-06-22_ST18-04_semicontrolled_block-order01.yaml
 
 tasks:
   view_postprocessed_simple:
-    enabled: true
+    enabled: false
     description: "Launch PostprocessedSceneViewer in simple mode: static PCA-calibrated
       forearm PLY + per-frame projected contact points + NeuralDataPanel."
     options: {}
     depends_on: []
 
   view_postprocessed_advanced:
-    enabled: false
+    enabled: true
     description: "Launch PostprocessedSceneViewer in advanced mode: adds per-frame
       sticker spheres (PCA-calibrated) and a hand mesh with ICP+PCA transform chain.
       Degrades gracefully when hand motion NPZ, ICP transforms, or PCA calib are missing."
