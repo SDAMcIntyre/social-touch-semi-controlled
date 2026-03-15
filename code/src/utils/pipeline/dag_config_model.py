@@ -46,6 +46,11 @@ class DagConfigModel:
     # Parameters — session config entries (kinect or forearm)
     # ------------------------------------------------------------------
 
+    def has_session_configs(self) -> bool:
+        """Return True if this workflow uses session configs (kinect or forearm)."""
+        params = self._data.get("parameters", {}) or {}
+        return "kinect_configs" in params or "forearm_configs" in params
+
     def get_config_type(self) -> str:
         """Return the config key type for this workflow.
 

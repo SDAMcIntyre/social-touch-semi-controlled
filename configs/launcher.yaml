@@ -13,6 +13,12 @@
 # that workflow (reserved for future scripts that don't use DAG configs).
 
 categories:
+  - name: Setup
+    workflows:
+      - name: Prepare Configs
+        script: code/scripts/prepare_configs_workflow.py
+        dag_config: configs/prepare_configs_workflow_dag.yaml
+
   - name: Primary
     workflows:
       - name: Kinect [Auto]
