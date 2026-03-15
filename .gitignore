@@ -123,6 +123,10 @@ test/
 # Mac OS
 .DS_Store
 
+# Office documents (research files; keep on shared drive, not in git)
+*.pptx
+*.docx
+
 #R project files
 .Rproj.user
 
