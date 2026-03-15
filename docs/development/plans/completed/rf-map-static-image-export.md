@@ -2,8 +2,8 @@
 
 **Date:** 2026-03-13
 **Author:** Basil Duvernoy
-**Status:** Draft
-**Branch:** `feature/rf-map-static-image-export`
+**Status:** Completed
+**Branch:** `dev` (commit `afcd3d5`)
 
 ---
 
