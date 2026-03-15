@@ -1,0 +1,28 @@
+# ==============================================================================
+# PREPARE CONFIGS — DAG CONFIGURATION
+# ==============================================================================
+# Drives prepare_configs_workflow.py.
+# Creates kinect block configs and forearm session configs from raw video files.
+#
+# No kinect_configs or forearm_configs parameters — this workflow creates them.
+#
+# Tasks (run in order):
+#   create_kinect_configs   — generates one YAML config per *_kinect.mkv video
+#   create_forearm_configs  — groups kinect configs by session_id into forearm configs
+# ==============================================================================
+
+parameters:
+  parallel_execution: false
+
+tasks:
+  create_kinect_configs:
+    enabled: true
+    options:
+      force_processing: false
+    depends_on: []
+
+  create_forearm_configs:
+    enabled: true
+    options:
+      force_processing: false
+    depends_on: [create_kinect_configs]

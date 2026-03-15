@@ -171,7 +171,10 @@ class LauncherWindow(QMainWindow):
         except Exception as exc:
             QMessageBox.critical(self, "Load Error", str(exc))
             return
-        self._kinect_selector.populate(self._model)
+        has_sessions = self._model.has_session_configs()
+        self._kinect_selector.setVisible(has_sessions)
+        if has_sessions:
+            self._kinect_selector.populate(self._model)
         self._task_panel.populate(self._model)
         self._save_action.setEnabled(True)
         self._save_as_action.setEnabled(True)
