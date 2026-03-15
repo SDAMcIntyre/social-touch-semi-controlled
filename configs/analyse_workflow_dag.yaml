@@ -49,30 +49,30 @@ tasks:
   # --- Analysis Tasks ---
   # Step 1: Block/trial structure summary. No dependencies.
   generate_session_summary:
-    enabled: true
+    enabled: false
     options:
-      force_processing: true
+      force_processing: false
     depends_on: []
 
   # Primary processing flow. Must run first.
   process_unified_touches:
     enabled: true
     options:
-      force_processing: true
+      force_processing: false
     depends_on: []
 
   # Consumes output from process_unified_touches
   analyse_number_single_touches:
-    enabled: true
+    enabled: false
     options:
-      force_processing: true
+      force_processing: false
     depends_on: ["process_unified_touches"]
 
   # Consumes output from process_unified_touches
   analyse_ap_efficacy:
-    enabled: true
+    enabled: false
     options:
-      force_processing: true
+      force_processing: false
     depends_on: ["process_unified_touches"]
 
   # RF mapping via selectivity + DBSCAN. Requires unified touch summaries.

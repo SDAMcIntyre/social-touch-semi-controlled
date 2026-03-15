@@ -2,7 +2,7 @@
 
 **Date:** 2026-03-12
 **Author:** Basil Duvernoy
-**Status:** Active
+**Status:** Completed
 **Branch:** `feature/receptive-field-mapping`
 **Supersedes:** `receptive-field-filtering.md` (archived)
 

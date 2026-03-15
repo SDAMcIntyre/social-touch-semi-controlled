@@ -2,7 +2,7 @@
 
 **Date:** 2026-03-13
 **Author:** Basil Duvernoy
-**Status:** Draft
+**Status:** Completed
 **Branch:** `chore/clean-conda-environment-yml`
 
 ---

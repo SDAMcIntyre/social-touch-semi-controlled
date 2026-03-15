@@ -275,8 +275,12 @@ def map_receptive_fields_flow(
                 logging.warning(f"No grouped data produced for {input_file.name}. Skipping.")
                 continue
 
-            # Process each group
+            # Pre-load forearm for image export (and interactive monitor if requested)
             import json
+            session_id = filename.split("_semicontrolled_")[0]
+            forearm_pcd = _load_forearm_pcd(input_file.parent, session_id)
+
+            # Process each group
             all_results = {}
             for group_label, spatial_data in grouped_data.items():
                 selectivity = RFMappingEngine.compute_selectivity(
@@ -290,13 +294,12 @@ def map_receptive_fields_flow(
                     touch_count=spatial_data.touch_count,
                 )
 
-                # Save per-group CSV
+                # Save per-group CSV and static image
                 _save_group_csv(rf_result, rf_output_dir)
+                RFVisualizer.save_rf_map_image(rf_result, rf_output_dir, forearm_pcd)
 
-                # Visualize if requested
+                # Visualize interactively if requested
                 if monitor and rf_result.clusters:
-                    session_id = filename.split("_semicontrolled_")[0]
-                    forearm_pcd = _load_forearm_pcd(input_file.parent, session_id)
                     RFVisualizer.visualize_rf_map(rf_result, forearm_pcd)
 
                 all_results[group_label] = {

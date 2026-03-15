@@ -27,6 +27,7 @@ from PyQt5.QtWidgets import (
 
 from utils.gui.dag_launcher.kinect_directory_selector import SessionConfigSelector
 from utils.gui.dag_launcher.launcher_config import WorkflowEntry
+from utils.gui.dag_launcher.prefect_server_manager import PrefectServerManager
 from utils.gui.dag_launcher.task_panel import TaskPanel
 from utils.gui.dag_launcher.workflow_selector import WorkflowSelector
 from utils.pipeline.dag_config_model import DagConfigModel
@@ -57,6 +58,10 @@ class LauncherWindow(QMainWindow):
         self._build_toolbar()
         self._build_ui()
         self.setStatusBar(QStatusBar())
+
+        self._server_manager = PrefectServerManager()
+        self._server_manager.start()
+        QTimer.singleShot(0, self._wait_for_prefect_server)
 
     # ------------------------------------------------------------------
     # UI construction
@@ -259,7 +264,19 @@ class LauncherWindow(QMainWindow):
             if not self._confirm_discard():
                 event.ignore()
                 return
+        self._server_manager.stop()
         event.accept()
+
+    def _wait_for_prefect_server(self) -> None:
+        self.statusBar().showMessage("Starting Prefect server…")
+        if self._server_manager.wait_until_ready(timeout_seconds=30.0):
+            self.statusBar().showMessage("Prefect server ready", 5000)
+            logger.info("Prefect server ready at %s", self._server_manager.api_url)
+        else:
+            self.statusBar().showMessage(
+                "Prefect server unavailable — workflows will use ephemeral mode"
+            )
+            logger.warning("Prefect server did not become ready within timeout")
 
     # ------------------------------------------------------------------
     # Run button
@@ -280,31 +297,25 @@ class LauncherWindow(QMainWindow):
             self._run_label.setStyleSheet("")
             self._run_button.setEnabled(True)
 
-    @staticmethod
-    def _clear_prefect_db() -> None:
-        """Remove the Prefect SQLite database to avoid stale 'database is locked' errors."""
-        prefect_dir = Path.home() / ".prefect"
-        for suffix in ("prefect.db", "prefect.db-wal", "prefect.db-shm"):
-            db_file = prefect_dir / suffix
-            if db_file.exists():
-                try:
-                    db_file.unlink()
-                    logger.info("Removed %s", db_file)
-                except OSError as exc:
-                    logger.warning("Could not remove %s: %s", db_file, exc)
-
     def _on_run(self) -> None:
         if self._current_entry is None:
             return
         if self._model:
             self._on_save()
-        self._clear_prefect_db()
+        if not self._server_manager.is_running():
+            self.statusBar().showMessage("Restarting Prefect server…")
+            self._server_manager.start()
+            if not self._server_manager.wait_until_ready(timeout_seconds=30.0):
+                logger.warning(
+                    "Prefect server unavailable — falling back to ephemeral mode"
+                )
         project_root = self._configs_dir.parent
         cmd = [sys.executable, str(self._current_entry.script)]
         if self._current_entry.dag_config is not None:
             cmd += ["--dag-config", str(self._current_entry.dag_config)]
+        env = self._server_manager.get_env() if self._server_manager.is_running() else None
         self._aborting = False
-        self._process = subprocess.Popen(cmd, cwd=str(project_root))
+        self._process = subprocess.Popen(cmd, cwd=str(project_root), env=env)
         self._run_button.setEnabled(False)
         self._abort_button.setVisible(True)
         self.statusBar().showMessage("Running …")
