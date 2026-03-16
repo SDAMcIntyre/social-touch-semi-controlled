@@ -8,6 +8,7 @@ from typing import List, Dict, Optional
 # Import local modules
 from .touch_config import DISCRETIZATION_CONFIG
 from .reporting import VisualReportingStrategy
+from utils.should_process_task import should_process_task
 
 def generate_touch_summary_matrix(
     input_files: List[Path], 
@@ -22,6 +23,14 @@ def generate_touch_summary_matrix(
     """
     Aggregates multiple single-touch analysis CSVs into a single matrix (COUNT aggregation).
     """
+    if not should_process_task(
+        input_paths=input_files,
+        output_paths=[output_file],
+        force=force,
+    ):
+        logging.info(f"Skipping Touch Summary Matrix (up-to-date): {output_file.name}")
+        return output_file
+
     return _generate_matrix_internal(
         input_files, output_file, config, show, log_scale, log_axis, mode="count"
     )
@@ -34,9 +43,17 @@ def generate_ap_efficacy_matrix(
     force: bool = False
 ) -> Path:
     """
-    Generates a matrix showing the RATIO (0.0 to 1.0) of single touches 
+    Generates a matrix showing the RATIO (0.0 to 1.0) of single touches
     that elicited an action potential per condition. (MEAN aggregation).
     """
+    if not should_process_task(
+        input_paths=input_files,
+        output_paths=[output_file],
+        force=force,
+    ):
+        logging.info(f"Skipping AP Efficacy Matrix (up-to-date): {output_file.name}")
+        return output_file
+
     # Note: Log scale is False for efficacy (ratios 0-1 don't work well with log colors)
     return _generate_matrix_internal(
         input_files, output_file, config, show, log_scale=False, log_axis=True, mode="efficacy"
