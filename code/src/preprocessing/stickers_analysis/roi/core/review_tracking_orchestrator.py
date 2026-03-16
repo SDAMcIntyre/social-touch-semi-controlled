@@ -2,7 +2,6 @@ import cv2
 from enum import Enum
 from typing import Dict, List, Any, Optional
 
-
 from preprocessing.common import (
     VideoMP4Manager
 )
@@ -75,7 +74,12 @@ class TrackerReviewOrchestrator:
         """
         self.view.setup_ui()
         self.update_view_full()
+        
+        # Block until the window is closed or quit() is called
         self.view.start_mainloop()
+        
+        # Ensure the window is destroyed after the loop finishes ---
+        self.view.destroy_window()
         
         frames_for_labeling = {}
         frames_for_deleting = {}
@@ -211,20 +215,14 @@ class TrackerReviewOrchestrator:
             return frame
 
         for obj_id, df_history in self.tracking_history.items():
-            # --- MODIFICATION START ---
             # Gracefully handle cases where a tracking history for an object exists as a key
-            # but has no data (e.g., it's None or an empty DataFrame/list). This prevents
-            # crashes during initialization before any tracking data is generated.
-            # getattr is used for safe access to the '.empty' attribute, defaulting to
-            # True if the attribute doesn't exist (e.g., for a list or None).
+            # but has no data (e.g., it's None or an empty DataFrame/list).
             if df_history is None or getattr(df_history, 'empty', True):
-                continue  # Skip to the next object if there's no data to draw.
+                continue
 
-            # Original logic now only proceeds if df_history is valid and non-empty.
             if self.current_frame_num in df_history.index:
                 object_data_at_frame = df_history.loc[self.current_frame_num]
                 self._draw_overlay(frame, object_data_at_frame.to_dict())
-            # --- MODIFICATION END ---
             
         return frame
         

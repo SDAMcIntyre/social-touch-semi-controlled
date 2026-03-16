@@ -28,5 +28,12 @@ def is_2d_stickers_tracking_valid(metadata_path: str):
 
 def is_correlation_videos_threshold_defined(metadata_path: str):
     manager: ColorSpaceManager = ColorSpaceFileHandler.load(metadata_path)
-    return manager.all_objects_with_status(ColorSpaceStatus.REVIEW_COMPLETED)
-
+    
+    for name in manager.colorspace_names:
+        # Skip "discarded" definitions in the main loop; they are only used as helpers
+        # for their parent colors.
+        if "discarded" in name:
+            continue
+        if manager.get_status(name) != ColorSpaceStatus.REVIEW_COMPLETED.value:
+            return False   
+    return True

@@ -8,7 +8,7 @@ from typing import Optional
 # Imports from the provided file structure
 from preprocessing.common import (
     VideoMP4Manager,
-    FrameROISquare
+    FrameROIRotatable
 )
 
 from preprocessing.forearm_extraction import (
@@ -23,227 +23,550 @@ from preprocessing.forearm_extraction import (
 # Global variable to hold the root Tkinter instance, ensuring it's a singleton.
 _tk_root_instance = None
 
-def _get_or_create_tk_root():
-    """
-    Manages a singleton Tkinter root instance.
 
-    On the first call, it creates a tk.Tk() instance and hides it.
-    On subsequent calls, it returns the existing instance.
-    This avoids issues with re-initializing Tkinter, which can lead to errors.
+# ----------------------------------------------------------------------------
+# TKINTER LIFECYCLE
+# ----------------------------------------------------------------------------
+
+def _get_or_create_tk_root() -> tk.Tk:
+    """
+    Returns the singleton Tkinter root, creating and hiding it on the first call.
+
+    A single root is reused across calls to avoid re-initialisation errors.
     """
     global _tk_root_instance
     if _tk_root_instance is None:
         _tk_root_instance = tk.Tk()
-        _tk_root_instance.withdraw()  # Hide the root window
+        _tk_root_instance.withdraw()
     return _tk_root_instance
+
+
+# ----------------------------------------------------------------------------
+# VIDEO HELPERS
+# ----------------------------------------------------------------------------
 
 def _retrieve_fourcc(video_path: str) -> str:
     """
-    Helper function to extract the FourCC string from a video file.
-    Required because VideoMP4Manager does not currently expose this property.
+    Returns the FourCC codec string (e.g. 'mp4v') for the given video file.
+
+    Falls back to 'unknown' if the file cannot be opened or the codec cannot
+    be decoded. This is needed because VideoMP4Manager does not expose FourCC.
     """
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         return "unknown"
-    
+
     try:
-        fourcc_code = int(cap.get(cv2.CAP_PROP_FOURCC))
-        # Convert integer representation to string (e.g., 'mp4v')
-        return "".join([chr((fourcc_code >> 8 * i) & 0xFF) for i in range(4)]).lower()
+        fourcc_int = int(cap.get(cv2.CAP_PROP_FOURCC))
+        return "".join([chr((fourcc_int >> 8 * i) & 0xFF) for i in range(4)]).lower()
     except Exception:
         return "unknown"
     finally:
         cap.release()
 
-# ----------------------------------------------------------------------------
-# MAIN FUNCTION
-# ----------------------------------------------------------------------------
-def define_forearm_extraction_parameters(rgb_video_paths: list[str], metadata_path: str) -> None:
-    """
-    Interactively selects frames and Regions of Interest (ROIs) from multiple
-    videos and saves the combined metadata to a single JSON file.
 
-    This function orchestrates the following steps:
-    1.  Checks if a valid metadata file already exists.
-    2.  Launches a UI to select one or more frames from each provided video.
-    3.  Iterates through each selected frame. For each one, it:
-        a. Loads the corresponding video.
-        b. Displays the selected frame.
-        c. Launches a UI for the user to draw an ROI on that frame.
-    4.  Gathers all metadata into a list of ForearmParameters objects.
-    5.  Saves the list to a single JSON file.
+# ----------------------------------------------------------------------------
+# FRAME GROUP SELECTION (STEP 1)
+# ----------------------------------------------------------------------------
+
+def _build_groups_by_video_from_saved_parameters(
+    parameters_list: list[ForearmParameters],
+) -> dict:
+    """
+    Reconstructs the ``groups_by_video`` dict expected by MultiVideoFramesSelector
+    from a previously saved list of ForearmParameters.
+
+    This allows the selector UI to pre-populate groups from a prior session.
+    """
+    groups_by_video = defaultdict(lambda: {"groups": [], "representatives": []})
+    for params in parameters_list:
+        groups_by_video[params.video_filename]["groups"].append(params.frame_ids)
+        groups_by_video[params.video_filename]["representatives"].append(
+            params.representative_frame_id
+        )
+    return groups_by_video
+
+
+def _open_frame_group_selector(
+    rgb_video_paths: list[str],
+    prefilled_groups: Optional[dict] = None,
+) -> MultiVideoFramesSelector:
+    """
+    Opens the interactive frame-group selector window and blocks until the user
+    closes it.
 
     Args:
-        rgb_video_paths (list[str]): A list of paths to the input RGB video files.
-        metadata_path (str): Path where the output JSON metadata file will be saved.
-    """
-    parameters_list = None
-    if ForearmFrameParametersFileHandler.is_valid_structure(metadata_path):
-        print(f"⚠️ Metadata file '{metadata_path}' already exists and has a valid structure. Loading content...")
-        parameters_list = ForearmFrameParametersFileHandler.load(metadata_path)
+        rgb_video_paths: Paths to all RGB video files to display.
+        prefilled_groups: Optional pre-existing group data to populate the UI
+            (output of ``_build_groups_by_video_from_saved_parameters``).
 
-    # --- Step 1: Select frames from all videos ---
-    print("🖱️ Step 1: Select frames from all videos. Close the window to continue...")
-    # Use a singleton root and a Toplevel window for the UI.
-    # This prevents errors from creating and destroying multiple tk.Tk() instances.
+    Returns:
+        The selector widget, from which ``validated`` and ``all_selected_groups``
+        can be read.
+    """
     root = _get_or_create_tk_root()
     app_window = tk.Toplevel(root)
-    app_window.title("Multi-Video Frame Selector")
+    app_window.title("Multi-Video Frame Group Selector")
 
-    if parameters_list:
-        video_frames_dict = defaultdict(list)
-        for params in parameters_list:
-            video_frames_dict[params.video_filename].append(params.frame_id)
-        multi_selector = MultiVideoFramesSelector(app_window, rgb_video_paths, video_frames_dict)
+    if prefilled_groups:
+        selector = MultiVideoFramesSelector(app_window, rgb_video_paths, prefilled_groups)
     else:
-        multi_selector = MultiVideoFramesSelector(app_window, rgb_video_paths)
-    root.wait_window(app_window) # Script pauses here until the Toplevel window is closed.
+        selector = MultiVideoFramesSelector(app_window, rgb_video_paths)
 
-    if not multi_selector.validated or not multi_selector.all_selected_frames:
-        print("\n🟡 Selection window was closed without validation or no frames were selected. Aborting.")
-        return
+    root.wait_window(app_window)
+    return selector
 
-    print("\n--- Frames Selected for Processing ---")
-    for video_path, frames in multi_selector.all_selected_frames.items():
-        print(f"  - {os.path.basename(video_path)}: Frames {frames}")
 
-    # --- Step 2: Define ROI for each selected frame ---
-    print("\n🖱️ Step 2: Define a Region of Interest (ROI) for each selected frame.")
-    all_forearm_parameters = []
+def _log_selected_groups(selected_groups: dict) -> None:
+    """Prints a summary of selected frame groups to stdout."""
+    print("\n--- Frame Groups Selected for Processing ---")
+    for video_path, group_data in selected_groups.items():
+        n = len(group_data["groups"])
+        print(f"  - {os.path.basename(video_path)}: {n} group(s)")
+        for i, (group, rep) in enumerate(
+            zip(group_data["groups"], group_data["representatives"])
+        ):
+            print(f"      Group {i + 1}: {group} (representative: {rep})")
 
-    # Iterate through each video that has selected frames
-    for video_path, frame_indices in multi_selector.all_selected_frames.items():
-        print(f"\n▶️ Processing video: '{os.path.basename(video_path)}'")
-        try:
-            video_manager = VideoMP4Manager(video_path)
-        except FileNotFoundError as e:
-            print(f"❌ Error loading video: {e}. Skipping this video.")
+
+# ----------------------------------------------------------------------------
+# ROI SELECTION (STEP 2)
+# ----------------------------------------------------------------------------
+
+def _find_existing_params_for_group(
+    parameters_list: list[ForearmParameters],
+    video_filename: str,
+    representative_frame_id: int,
+) -> Optional[ForearmParameters]:
+    """
+    Searches a list of saved ForearmParameters for an entry matching the given
+    video filename and representative frame id.
+
+    Returns the matching ForearmParameters, or None if not found.
+    """
+    return next(
+        (
+            p for p in parameters_list
+            if p.video_filename == video_filename
+            and p.representative_frame_id == representative_frame_id
+        ),
+        None,
+    )
+
+
+def _find_existing_roi_for_group(
+    parameters_list: list[ForearmParameters],
+    video_filename: str,
+    representative_frame_id: int,
+) -> Optional[dict]:
+    """
+    Searches a list of saved ForearmParameters for a previously defined ROI
+    that matches the given video and representative frame.
+
+    Returns a ``predefined_roi`` dict compatible with FrameROIRotatable, or None
+    if no match is found.
+    """
+    matching = _find_existing_params_for_group(
+        parameters_list, video_filename, representative_frame_id
+    )
+    if matching is None:
+        return None
+
+    roi = matching.region_of_interest
+    return {
+        "x": roi.top_left_corner.x,
+        "y": roi.top_left_corner.y,
+        "width":  roi.bottom_right_corner.x - roi.top_left_corner.x,
+        "height": roi.bottom_right_corner.y - roi.top_left_corner.y,
+        "angle_deg": roi.angle_deg,
+    }
+
+
+def _build_roi_window_title(video_filename: str, representative: int, group_size: int) -> str:
+    """Returns a descriptive window title for the ROI selection dialog."""
+    if group_size > 1:
+        return (
+            f"ROI for {video_filename} — rep. frame {representative:04d} "
+            f"(group of {group_size} frames)"
+        )
+    return f"ROI for {video_filename} — frame {representative:04d}"
+
+
+def _select_roi_for_group(
+    frame: np.ndarray,
+    video_filename: str,
+    representative: int,
+    group_size: int,
+    predefined_roi: Optional[dict],
+) -> Optional[dict]:
+    """
+    Displays ``frame`` in an interactive ROI selection window and returns the
+    user's selection.
+
+    Args:
+        frame: The representative video frame (RGB numpy array) to annotate.
+        video_filename: Used only for the window title.
+        representative: Representative frame index, used for the window title.
+        group_size: Number of frames in the group; affects the window title.
+        predefined_roi: Optional prior ROI to pre-draw in the UI.
+
+    Returns:
+        A dict with keys ``cx``, ``cy``, ``width``, ``height``, ``angle_deg``,
+        or None if the user cancelled the selection.
+    """
+    window_title = _build_roi_window_title(video_filename, representative, group_size)
+    roi_ui = FrameROIRotatable(
+        frame,
+        is_rgb=False,  # VideoMP4Manager returns BGR frames
+        window_title=window_title,
+        predefined_roi=predefined_roi,
+    )
+    roi_ui.run()
+    return roi_ui.get_roi_data()
+
+
+def _build_forearm_parameters(
+    roi_data: dict,
+    video_filename: str,
+    group: list[int],
+    representative: int,
+    video_manager: VideoMP4Manager,
+    fourcc_str: str,
+) -> ForearmParameters:
+    """
+    Constructs a ForearmParameters object from raw ROI data and video metadata.
+
+    ``roi_data`` is the centre-based dict returned by FrameROIRotatable:
+    ``{cx, cy, width, height, angle_deg}``.  The axis-aligned bounding box of
+    the rotated rectangle is stored in the RegionOfInterest so that downstream
+    extraction code (box filter) receives a conservative crop that always
+    contains the full rotated selection.
+    """
+    cx, cy = roi_data["cx"], roi_data["cy"]
+    w, h   = roi_data["width"], roi_data["height"]
+    angle  = roi_data["angle_deg"]
+
+    # Compute the four corners of the rotated rectangle and take the AABB.
+    a = np.deg2rad(angle)
+    cos_a, sin_a = np.cos(a), np.sin(a)
+    hw, hh = w / 2.0, h / 2.0
+    local_corners = np.array([[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]])
+    rot = np.array([[cos_a, -sin_a], [sin_a, cos_a]])
+    corners = (rot @ local_corners.T).T + np.array([cx, cy])
+
+    x1, y1 = int(corners[:, 0].min()), int(corners[:, 1].min())
+    x2, y2 = int(corners[:, 0].max()), int(corners[:, 1].max())
+
+    roi = RegionOfInterest(
+        top_left_corner=Point(x=x1, y=y1),
+        bottom_right_corner=Point(x=x2, y=y2),
+        angle_deg=angle,
+    )
+    return ForearmParameters(
+        video_filename=video_filename,
+        frame_ids=group,
+        representative_frame_id=representative,
+        region_of_interest=roi,
+        frame_width=video_manager.width,
+        frame_height=video_manager.height,
+        fps=video_manager.fps,
+        nframes=video_manager.total_frames,
+        fourcc_str=fourcc_str,
+    )
+
+
+def _collect_parameters_for_video(
+    video_path: str,
+    groups: list[list[int]],
+    representatives: list[int],
+    saved_parameters: Optional[list[ForearmParameters]],
+    force_processing: bool = False,
+) -> list[ForearmParameters]:
+    """
+    Iterates over each frame group for a single video and collects the user's
+    ROI selection for each one.
+
+    For each group:
+      - The representative frame is rendered.
+      - Any previously saved ROI is pre-filled in the UI.
+      - The resulting ROI is converted into a ForearmParameters object.
+
+    Groups whose ROI selection is cancelled by the user are skipped.
+
+    Args:
+        video_path: Absolute path to the RGB video file.
+        groups: List of frame-index lists, one per group.
+        representatives: Representative frame index for each group.
+        saved_parameters: Previously saved parameters for pre-populating ROIs.
+
+    Returns:
+        A list of ForearmParameters, one per successfully defined group.
+    """
+    video_filename = os.path.basename(video_path)
+    print(f"\n▶️  Processing video: '{video_filename}'")
+
+    try:
+        video_manager = VideoMP4Manager(video_path)
+    except FileNotFoundError as e:
+        print(f"  ❌ Could not open video: {e}. Skipping.")
+        return []
+
+    fourcc_str = _retrieve_fourcc(video_path)
+    collected: list[ForearmParameters] = []
+
+    for i, (group, representative) in enumerate(zip(groups, representatives)):
+        n = len(group)
+        group_label = (
+            f"frames {group} (representative: {representative})" if n > 1
+            else f"frame {representative}"
+        )
+        print(f"  - Group {i + 1}: {group_label}")
+
+        existing_params = (
+            _find_existing_params_for_group(saved_parameters, video_filename, representative)
+            if saved_parameters else None
+        )
+
+        if existing_params is not None and not force_processing:
+            print(f"    ✅ ROI already defined for group {i + 1} — using saved parameters.")
+            collected.append(existing_params)
             continue
-        
-        # Calculate FourCC once per video
-        fourcc_str = _retrieve_fourcc(video_path)
-        video_filename = os.path.basename(video_path)
-        
-        # Iterate through each frame selected for the current video
-        for frame_idx in frame_indices:
-            print(f"  - Defining ROI for frame {frame_idx}...")
-            # VideoMP4Manager supports index access
-            selected_frame = video_manager[frame_idx]
 
-            if parameters_list:
-                # Find the specific parameter object that matches the video filename and frame index
-                matching_param = next(
-                    (p for p in parameters_list if p.video_filename == video_filename and p.frame_id == frame_idx),
-                    None  # Default to None if no match is found
-                )
+        predefined_roi = (
+            _find_existing_roi_for_group(saved_parameters, video_filename, representative)
+            if saved_parameters else None
+        )
 
-                # Initialize the dictionary as None
-                predefined_roi = None
+        frame = video_manager[group[0]]
+        roi_data = _select_roi_for_group(frame, video_filename, representative, n, predefined_roi)
 
-                # If a matching parameter was found, extract and format the ROI
-                if matching_param:
-                    roi = matching_param.region_of_interest
-                    predefined_roi = {
-                        'x': roi.top_left_corner.x,
-                        'y': roi.top_left_corner.y,
-                        'width': roi.bottom_right_corner.x - roi.top_left_corner.x,
-                        'height': roi.bottom_right_corner.y - roi.top_left_corner.y
-                    }
-                roi_ui = FrameROISquare(
-                    selected_frame,
-                    is_rgb=True,
-                    window_title=f"Draw ROI for {video_filename} - Frame {frame_idx}",
-                    predefined_roi=predefined_roi
-                )
-            else:
-                roi_ui = FrameROISquare(
-                    selected_frame,
-                    is_rgb=True,
-                    window_title=f"Draw ROI for {video_filename} - Frame {frame_idx}"
-                )
-            roi_ui.run()
-            roi_data = roi_ui.get_roi_data()
+        if not roi_data:
+            print(f"    🟡 ROI selection cancelled — skipping group {i + 1}.")
+            continue
 
-            if not roi_data:
-                print(f"    🟡 ROI selection cancelled for frame {frame_idx}. Skipping this frame.")
-                continue
+        cx, cy = roi_data["cx"], roi_data["cy"]
+        w, h   = roi_data["width"], roi_data["height"]
+        angle  = roi_data["angle_deg"]
+        print(f"    ✅ ROI at (cx={cx:.0f}, cy={cy:.0f}), size (w={w:.0f}, h={h:.0f}), angle={angle:.1f}°.")
 
-            x, y, w, h = roi_data["x"], roi_data["y"], roi_data["width"], roi_data["height"]
-            print(f"    ✅ ROI selected at (x={x}, y={y}) with size (w={w}, h={h}).")
+        params = _build_forearm_parameters(
+            roi_data, video_filename, group, representative, video_manager, fourcc_str
+        )
+        collected.append(params)
 
-            # Compile metadata for this specific frame
-            top_left = Point(x=x, y=y)
-            bottom_right = Point(x=x + w, y=y + h)
-            roi = RegionOfInterest(top_left_corner=top_left, bottom_right_corner=bottom_right)
+    return collected
 
-            # CORRECTED: Uses .width, .height properties from VideoMP4Manager
-            # CORRECTED: Uses calculated fourcc_str
-            metadata = ForearmParameters(
-                video_filename=os.path.basename(video_path),
-                frame_id=frame_idx,
-                region_of_interest=roi,
-                frame_width=video_manager.width,  
-                frame_height=video_manager.height,
-                fps=video_manager.fps,
-                nframes=video_manager.total_frames,
-                fourcc_str=fourcc_str
-            )
-            all_forearm_parameters.append(metadata)
 
-    # --- Step 3: Save all collected metadata ---
-    if not all_forearm_parameters:
-        print("\n🟡 No ROIs were defined. No metadata file will be created.")
+def _collect_all_parameters(
+    selected_groups: dict,
+    saved_parameters: Optional[list[ForearmParameters]],
+    force_processing: bool = False,
+) -> list[ForearmParameters]:
+    """
+    Iterates over every video and group returned by the frame selector and
+    collects ForearmParameters for each one.
+
+    Args:
+        selected_groups: Mapping of video path → group data, as returned by
+            MultiVideoFramesSelector.
+        saved_parameters: Previously saved parameters for pre-populating ROIs,
+            or None if this is a fresh session.
+
+    Returns:
+        All successfully collected ForearmParameters across all videos.
+    """
+    all_parameters: list[ForearmParameters] = []
+
+    for video_path, group_data in selected_groups.items():
+        parameters = _collect_parameters_for_video(
+            video_path=video_path,
+            groups=group_data["groups"],
+            representatives=group_data["representatives"],
+            saved_parameters=saved_parameters,
+            force_processing=force_processing,
+        )
+        all_parameters.extend(parameters)
+
+    return all_parameters
+
+
+# ----------------------------------------------------------------------------
+# PUBLIC PIPELINE STAGES
+# ----------------------------------------------------------------------------
+
+def load_saved_parameters(metadata_path: str) -> Optional[list[ForearmParameters]]:
+    """
+    Loads a previously saved metadata file if it exists and has a valid structure.
+
+    Returns the list of ForearmParameters, or None if no valid file is found.
+    This is used to pre-populate the frame-group selector and ROI UI in
+    subsequent sessions, avoiding redundant re-annotation.
+    """
+    if not ForearmFrameParametersFileHandler.is_valid_structure(metadata_path):
+        return None
+
+    print(f"⚠️  Existing metadata found at '{metadata_path}'. Loading for pre-fill...")
+    return ForearmFrameParametersFileHandler.load(metadata_path)
+
+
+def select_frame_groups(
+    rgb_video_paths: list[str],
+    saved_parameters: Optional[list[ForearmParameters]] = None,
+) -> Optional[dict]:
+    """
+    Opens the interactive frame-group selector and returns the user's selection.
+
+    If ``saved_parameters`` are provided, the UI is pre-populated with the
+    previously defined groups so the user can review or adjust them.
+
+    Args:
+        rgb_video_paths: Paths to the RGB video files to display in the UI.
+        saved_parameters: Previously saved parameters used to pre-fill the UI,
+            or None for a blank session.
+
+    Returns:
+        The ``all_selected_groups`` dict from the selector (mapping video path
+        → group data), or None if the user closed the window without confirming.
+    """
+    print("\n🖱️  Select frame groups for all videos. Close the window to continue...")
+    prefilled_groups = (
+        _build_groups_by_video_from_saved_parameters(saved_parameters)
+        if saved_parameters else None
+    )
+    selector = _open_frame_group_selector(rgb_video_paths, prefilled_groups)
+
+    if not selector.validated or not selector.all_selected_groups:
+        print("\n🟡 No groups confirmed.")
+        return None
+
+    _log_selected_groups(selector.all_selected_groups)
+    return selector.all_selected_groups
+
+
+def define_rois_for_frame_groups(
+    selected_groups: dict,
+    saved_parameters: Optional[list[ForearmParameters]] = None,
+    *,
+    force_processing: bool = False,
+) -> list[ForearmParameters]:
+    """
+    Prompts the user to draw an ROI for each frame group and returns the
+    resulting ForearmParameters.
+
+    For each group, the representative frame is displayed. If a matching ROI
+    exists in ``saved_parameters``, it is pre-drawn so the user can accept or
+    adjust it. Groups whose ROI selection is cancelled are silently skipped.
+
+    Args:
+        selected_groups: Mapping of video path → group data, as returned by
+            ``select_frame_groups``.
+        saved_parameters: Previously saved parameters for pre-populating ROIs,
+            or None if this is a fresh session.
+
+    Returns:
+        All successfully collected ForearmParameters, across all videos and groups.
+    """
+    print("\n🖱️  Draw a Region of Interest (ROI) for each frame group.")
+    return _collect_all_parameters(selected_groups, saved_parameters, force_processing)
+
+
+def save_forearm_parameters(
+    parameters: list[ForearmParameters],
+    metadata_path: str,
+) -> None:
+    """
+    Sorts and persists a list of ForearmParameters to a JSON file.
+
+    Args:
+        parameters: The parameters to save. Must be non-empty.
+        metadata_path: Destination path for the JSON file.
+
+    Raises:
+        ValueError: If ``parameters`` is empty, since writing an empty file
+            would silently discard all annotation work.
+    """
+    if not parameters:
+        raise ValueError("No parameters to save — metadata file will not be written.")
+
+    print("\n💾 Saving forearm extraction parameters...")
+    sorted_parameters = sort_forearm_parameters_by_video_and_frame(parameters)
+    ForearmFrameParametersFileHandler.save(sorted_parameters, metadata_path)
+    print(f"   ✅ Saved {len(sorted_parameters)} parameter set(s) to '{metadata_path}'.")
+
+
+# ----------------------------------------------------------------------------
+# CONVENIENCE WRAPPER
+# ----------------------------------------------------------------------------
+
+def define_forearm_extraction_parameters(rgb_video_paths: list[str], metadata_path: str) -> None:
+    """
+    Convenience wrapper that runs all three annotation stages in sequence:
+    load existing parameters → select frame groups → draw ROIs → save.
+
+    Prefer calling the individual stage functions directly when you need finer
+    control over the pipeline (e.g. to interleave logging, validation, or
+    conditional branching between steps).
+
+    Args:
+        rgb_video_paths: Paths to the input RGB video files.
+        metadata_path: Destination path for the output JSON metadata file.
+    """
+    saved_parameters = load_saved_parameters(metadata_path)
+    selected_groups  = select_frame_groups(rgb_video_paths, saved_parameters)
+
+    if selected_groups is None:
+        print("Aborting — no frame groups were selected.")
         return
 
-    print("\n💾 Step 3: Saving all compiled metadata...")
-    all_forearm_parameters_sorted = sort_forearm_parameters_by_video_and_frame(all_forearm_parameters)
-    ForearmFrameParametersFileHandler.save(all_forearm_parameters_sorted, metadata_path)
+    parameters = define_rois_for_frame_groups(selected_groups, saved_parameters)
+
+    if not parameters:
+        print("\n🟡 No ROIs were defined. Metadata file will not be written.")
+        return
+
+    save_forearm_parameters(parameters, metadata_path)
+
 
 # ----------------------------------------------------------------------------
 # EXAMPLE USAGE
 # ----------------------------------------------------------------------------
 
 def create_dummy_video(filename: str, width: int, height: int, num_frames: int, color: tuple):
-    """Helper function to create a sample video file."""
+    """Helper function to create a sample video file for testing."""
     if os.path.exists(filename):
         print(f"Found existing video: '{filename}'")
         return
 
-    print(f"'{filename}' not found. Creating a dummy video for testing...")
+    print(f"'{filename}' not found. Creating a dummy video...")
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     out = cv2.VideoWriter(filename, fourcc, 20.0, (width, height))
 
     for i in range(num_frames):
         frame = np.zeros((height, width, 3), dtype=np.uint8)
-        # Add a moving square with the specified color
-        x_pos = int((width/3) + (width/4) * np.sin(i * 0.1))
-        y_pos = int((height/3) + (height/4) * np.cos(i * 0.15))
+        x_pos = int((width / 3) + (width / 4) * np.sin(i * 0.1))
+        y_pos = int((height / 3) + (height / 4) * np.cos(i * 0.15))
         cv2.rectangle(frame, (x_pos, y_pos), (x_pos + 50, y_pos + 50), color, -1)
-        text = f"Frame {i}"
-        cv2.putText(frame, text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+        cv2.putText(frame, f"Frame {i}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
         out.write(frame)
+
     out.release()
     print(f"Dummy video '{filename}' created.")
 
 
 if __name__ == "__main__":
-    # --- Configuration ---
     VIDEO_FILENAMES = ["sample_video_1.mp4", "sample_video_2.mp4"]
     METADATA_FILENAME = "forearm_extraction_parameters.json"
 
-    # --- Create dummy videos for demonstration ---
-    create_dummy_video(VIDEO_FILENAMES[0], 640, 480, 80, color=(255, 0, 0)) # Blue square
-    create_dummy_video(VIDEO_FILENAMES[1], 800, 600, 60, color=(0, 255, 0)) # Green square
+    create_dummy_video(VIDEO_FILENAMES[0], 640, 480, 80, color=(255, 0, 0))
+    create_dummy_video(VIDEO_FILENAMES[1], 800, 600, 60, color=(0, 255, 0))
 
-    # --- Run the main function ---
     print("\nStarting metadata generation process...")
     try:
         define_forearm_extraction_parameters(
             rgb_video_paths=VIDEO_FILENAMES,
-            metadata_path=METADATA_FILENAME
+            metadata_path=METADATA_FILENAME,
         )
     finally:
-        # Ensure the Tkinter root is destroyed when the script finishes to clean up.
         if _tk_root_instance:
             _tk_root_instance.destroy()
             print("\nTkinter instance destroyed.")

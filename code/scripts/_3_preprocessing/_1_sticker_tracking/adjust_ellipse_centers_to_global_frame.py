@@ -1,6 +1,7 @@
 # main_adjust_coordinates_refactored.py
 
 # Standard library imports
+import sys
 import argparse
 from pathlib import Path
 

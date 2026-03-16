@@ -1,10 +1,10 @@
-# preprocessing/stickers_analysis/roi/__init__.py
+# preprocessing/stickers_analysis/__init__.py
 
 """
 This file exposes the public API for the ROI analysis sub-package.
 
 By importing the key classes here, we allow users to access them directly
-from he 'roi' namespace, decoupling their code from .roiour internal file structure.
+from the 'roi' namespace, decoupling their code from our internal file structure.
 """
 
 from .roi.data_access.roi_manual_annotation_filehandler import ROIAnnotationFileHandler
@@ -29,7 +29,7 @@ from .ellipse.models.color_space_model import ColorSpace, ColorSpaceDefault, Col
 from .ellipse.models.color_family_model import ColorFamilyModel
 from .ellipse.gui.color_correlation_visualiser import ColorCorrelationVisualizer
 from .ellipse.gui.frame_roi_color_gui import FrameROIColor
-from .ellipse.gui.threshold_selector_tool_gui import ThresholdSelectorTool
+from .ellipse.gui.threshold_selector_tool_gui import ThresholdSelectorTool, SelectionState
 # fit ellipses on correlation map
 from .ellipse.data_access.fitted_ellipses_filehandler import FittedEllipsesFileHandler
 from .ellipse.models.fitted_ellipses_manager import FittedEllipsesManager
@@ -42,12 +42,13 @@ from .common.gui.consolidated_tracks_gui import ConsolidatedTracksReviewGUI
 from .xyz.models.xyz_metadata_model import XYZMetadataModel
 from .xyz.data_access.xyz_metadata_filehandler import XYZMetadataFileHandler
 from .xyz.data_access.xyz_data_filehandler import XYZDataFileHandler
-from .xyz.core.xyz_extractor_factory import XYZExtractorFactory
+from .xyz.core.xyz_extractor_factory import XYZExtractorFactory, ExtractorChoice
+from .xyz.core.xyz_extractor_ellipse_depth import EllipseDepthExtractor
 from .xyz.core.xyz_extracting_orchestrator import XYZStickerOrchestrator
 
 from .common.models.tracked_data_interface import TrackedDataInterface
 
-# Define what gets imported with 'from .roi. import *'
+# Define what gets imported with 'from stickers_analysis import *'
 __all__ = [
     "ROIAnnotationFileHandler",
     "ROIAnnotationManager",

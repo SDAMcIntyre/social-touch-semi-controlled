@@ -3,7 +3,9 @@ import sys
 import cv2
 import numpy as np
 import yaml
+from pathlib import Path
 
+from utils.should_process_task import should_process_task
 from preprocessing.common import (
     KinectMKV,
     KinectFrame,
@@ -19,6 +21,7 @@ from preprocessing.forearm_extraction import (
 
     ForearmSegmentationParamsFileHandler
 )
+from preprocessing.forearm_extraction.depth_averaging import FrameDepthAverager
 
 
 DEFAULT_CONFIG_PATH = 'config.yaml'
@@ -204,6 +207,7 @@ def extract_forearm(
         *,
         monitor: str = False,
         interactive: str = False,
+        force_processing: bool = False,
 ):
     """
     Orchestrates the entire processing pipeline for a single file.
@@ -212,8 +216,14 @@ def extract_forearm(
         config (dict): The loaded configuration dictionary.
     """
     
-    # Load configuration
+    if not should_process_task(
+        output_paths=[output_ply_path, output_params_path],
+        input_paths=[video_path],
+        force=force_processing,
+    ):
+        return output_ply_path
 
+    # Load configuration
     if os.path.exists(output_params_path):
         segmentation_params = ForearmSegmentationParamsFileHandler.load(output_params_path)
     else:
@@ -227,9 +237,21 @@ def extract_forearm(
         # 2. Setup Dependencies
         # Dependencies are created here and "injected" into the functions that need them.
         with KinectMKV(video_path) as mkv:
+            # Always load the representative frame for ROI cuboid and monitoring.
             frame: KinectFrame = mkv[video_config.frame_id]
-            point_cloud = frame.generate_o3d_point_cloud()
-            
+
+            if video_config.is_averaged:
+                print(
+                    f"   Averaging {len(video_config.frame_ids)} frames "
+                    f"(representative: {video_config.representative_frame_id})..."
+                )
+                point_cloud = FrameDepthAverager.average(
+                    mkv,
+                    video_config.frame_ids,
+                )
+            else:
+                point_cloud = frame.generate_o3d_point_cloud()
+
             segmenter = ArmSegmentation(segmentation_params, interactive=interactive)
 
             cuboid_oppposed_corners = get_3d_cuboid_from_roi(frame, video_config.region_of_interest)

@@ -1,24 +1,24 @@
+import argparse
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Dict
+from typing import Dict, List, Optional
 from multiprocessing import freeze_support
 
-import pandas as pd
-from prefect import flow, get_run_logger, task
+from prefect import flow, task, get_run_logger
 from prefect.futures import PrefectFuture
 
 import utils.path_tools as path_tools
 from utils import DagConfigHandler
 
+from utils.pipeline.session_config_resolver import resolve_session_configs
 from primary_processing import (
     KinectConfigFileHandler,
     KinectConfig,
-    get_block_files
 )
 from _4_merging import (
-    align_and_merge_neural_and_kinect, 
-    aggregate_session_blocks
+    align_and_merge_neural_and_kinect,
+    filter_block_by_neural_quality,
 )
 
 # --- Data Structures ---
@@ -46,21 +46,27 @@ def resolve_filenames(config: KinectConfig) -> Dict[str, Path]:
     # Input: Nerve Data
     nerve_name = f"{config.session_id}_semicontrolled_{config.block_id}_nerve.csv"
     
-    # Input: Kinect Data
-    kinect_name = f"{config.source_video.stem}_unified.csv"
-    
+    # Input: Kinect Data — prefer registered version when available
+    registered_name = f"{config.source_video.stem}_unified_registered.csv"
+    registered_path = config.video_processed_output_dir / registered_name
+    if registered_path.exists():
+        kinect_path = registered_path
+    else:
+        kinect_name = f"{config.source_video.stem}_unified.csv"
+        kinect_path = config.video_processed_output_dir / kinect_name
+
     # Output: Merged Block Data
     output_name = f"{config.session_id}_semicontrolled_{config.block_id}_merged_data.csv"
-    
+
     return {
         "nerve_path": config.nerve_processed_dir / nerve_name,
-        "kinect_path": config.video_processed_output_dir / kinect_name,
-        "output_path": config.session_merged_output_dir / "sessions" / output_name
+        "kinect_path": kinect_path,
+        "output_path": config.session_merged_output_dir / "blocks_merged" / output_name
     }
 
 # --- Individual Flows ---
 
-@flow(name="9. Unify Dataset")
+@task(name="9. Unify Dataset")
 def unify_dataset(
     kinect_data_path: Path,
     nerve_data_path: Path,
@@ -88,44 +94,28 @@ def unify_dataset(
     )
     return output_file_path
 
-@flow(name="10. Aggregate Session Blocks")
-def aggregate_blocks(
-    session_merged_output_dir: Path,
-    session_id: str,
-    glob_pattern: str = "*_merged_data.csv",
-    force_processing: bool = False
+
+@task(name="11. Filter by Neural Quality")
+def filter_by_neural_quality_flow(
+    merged_csv: Path,
+    output_csv: Path,
+    xlsx_path: Path,
+    *,
+    force_processing: bool = False,
+    discard_from_first_not2use: bool = True,
 ) -> Path:
     """
-    Flow to aggregate all block-level merged CSV files within a session into one final CSV.
-    Handles path resolution and invokes the aggregation logic.
+    Flow to filter a single block's merged CSV by removing Not2Use trials.
     """
     logger = get_run_logger()
-    
-    # 1. Define paths
-    # The actual files are in a subdirectory named 'sessions'
-    input_dir = session_merged_output_dir / "sessions"
-    output_filename = f"{session_id}_semicontrolled_aggregated_session.csv"
-    output_path = session_merged_output_dir / output_filename
-
-    logger.info(f"[{session_id}] Scanning for blocks in {input_dir}...")
-
-    # 2. Find input files (Resolving the glob here)
-    input_files = list(input_dir.glob(f"*{session_id}{glob_pattern}"))
-    
-    # 3. Invoke the logic function with explicit paths
-    # Note: We pass the resolved list and the target path
-    aggregate_session_blocks(
-        input_paths=input_files,
-        output_path=output_path,
-        force_processing=force_processing
+    logger.info(f"[{merged_csv.name}] Filtering by neural quality xlsx: {xlsx_path.name}")
+    return filter_block_by_neural_quality(
+        input_csv=merged_csv,
+        output_csv=output_csv,
+        xlsx_path=xlsx_path,
+        force_processing=force_processing,
+        discard_from_first_not2use=discard_from_first_not2use,
     )
-
-    if input_files:
-        logger.info(f"✅ Aggregation flow complete. Output: {output_filename}")
-    else:
-        logger.warning(f"⚠️ No files found matching pattern *{session_id}{glob_pattern}")
-
-    return output_path
 
 
 @flow(name="Run Single Session Pipeline")
@@ -144,12 +134,12 @@ def run_single_session_pipeline(
     paths = resolve_filenames(config)
     output_file_path = paths["output_path"]
 
-    # --- Stage 5: Data Integration (Block Unification) ---
+    # --- Stage 5: Data Integration (Block Unification) + Neural Quality Filter ---
     try:
         task_name = 'unify_dataset'
         if dag_handler.can_run(task_name):
             logger.info(f"[{block_name}] ==> Running task: {task_name}")
-            
+
             # Validation
             if not paths["kinect_path"].exists():
                 raise FileNotFoundError(f"Kinect data not found: {paths['kinect_path']}")
@@ -159,16 +149,48 @@ def run_single_session_pipeline(
             # Execution
             options = dag_handler.get_task_options(task_name)
             force = options.get('force_processing', False)
-            
+
             unify_dataset(
                 kinect_data_path=paths["kinect_path"],
                 nerve_data_path=paths["nerve_path"],
                 output_file_path=output_file_path,
                 force_processing=force
             )
-            
+
             dag_handler.mark_completed(task_name)
-            
+
+        # --- Filter by Neural Quality ---
+        task_name = 'filter_by_neural_quality'
+        if dag_handler.can_run(task_name):
+            logger.info(f"[{block_name}] ==> Running task: {task_name}")
+
+            xlsx_param = dag_handler.get_parameter('neural_quality_xlsx')
+            if not xlsx_param:
+                raise ValueError(f"neural_quality_xlsx parameter is not configured in DAG YAML")
+
+            xlsx_path = Path(xlsx_param)
+            if not xlsx_path.is_absolute():
+                xlsx_path = config.session_merged_output_dir.parents[1] / xlsx_path
+            if not xlsx_path.exists():
+                raise FileNotFoundError(f"neural_quality_xlsx not found: {xlsx_path}")
+
+            options = dag_handler.get_task_options(task_name)
+            force = options.get('force_processing', False)
+            discard_from_first = options.get('discard_from_first_not2use', True)
+
+            filtered_output = (
+                config.session_merged_output_dir / "blocks_filtered" / output_file_path.name
+            )
+            filter_by_neural_quality_flow(
+                merged_csv=output_file_path,
+                output_csv=filtered_output,
+                xlsx_path=xlsx_path,
+                force_processing=force,
+                discard_from_first_not2use=discard_from_first,
+            )
+
+            dag_handler.mark_completed(task_name)
+
     except Exception as e:
         logger.error(f"❌ Pipeline failed for {block_name}: {e}")
         return PipelineResult(
@@ -193,7 +215,7 @@ def run_single_session_pipeline(
 
 @flow(name="Batch Process All Sessions")
 def run_batch_processing(
-    kinect_configs_dir: Path,
+    block_files: list[Path],
     project_data_root: Path,
     dag_config_path: Path,
     parallel: bool
@@ -204,8 +226,7 @@ def run_batch_processing(
     """
     logger = get_run_logger()
     dag_handler_template = DagConfigHandler(dag_config_path)
-    block_files = get_block_files(kinect_configs_dir)
-    
+
     mode = "PARALLEL" if parallel else "SEQUENTIAL"
     logger.info(f"🚀 Starting batch processing for {len(block_files)} sessions in {mode} mode.")
 
@@ -237,42 +258,17 @@ def run_batch_processing(
         except Exception as e:
             logger.error(f"Failed to initialize config for {block_file}: {e}")
 
-    # 2. Collect Results
-    # We map session_id -> output_dir for aggregation
-    session_map: Dict[str, Path] = {}
-
+    # 2. Wait for parallel runs to complete and log any failures
     if parallel:
         logger.info("Waiting for parallel runs to complete...")
         for future in futures_or_states:
-            # Wait for completion and get the return value (PipelineResult)
-            # Note: .result() behaves differently depending on Prefect version, 
-            # assume standard behavior here.
             try:
                 if isinstance(future, PrefectFuture):
-                    # Safely extract result from future
                     state = future.wait()
-                    if state.is_completed():
-                        result: PipelineResult = state.result()
-                        if result.status == "success":
-                            session_map[result.session_id] = result.session_merged_output_dir
-                    else:
+                    if not state.is_completed():
                         logger.error(f"Flow run failed: {state}")
             except Exception as e:
                 logger.error(f"Error retrieving future result: {e}")
-    else:
-        # In sequential mode, futures_or_states is just a list of PipelineResult objects
-        for result in futures_or_states:
-            if isinstance(result, PipelineResult) and result.status == "success":
-                session_map[result.session_id] = result.session_merged_output_dir
-
-    # 3. Aggregate Sessions
-    if session_map:
-        logger.info(f"\n--- Starting Aggregation for {len(session_map)} Sessions ---")
-        for session_id, output_dir in session_map.items():
-            aggregate_blocks(
-                session_merged_output_dir=output_dir,
-                session_id=session_id
-            )
 
     logger.info("✅ All batch processing tasks have finished.")
 
@@ -282,30 +278,30 @@ def setup_environment():
     """Handles filesystem setup and configuration path resolution."""
     project_data_root = path_tools.get_project_data_root()
     configs_dir = Path("configs")
-    dag_config_path = Path(configs_dir / "merging_pipeline_neuron_to_kinect_auto_dag.yaml")
-    return project_data_root, configs_dir, dag_config_path
+    return project_data_root, configs_dir
 
 def main():
     freeze_support()
-    project_data_root, configs_dir, dag_config_path = setup_environment()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dag-config", type=Path, required=True)
+    args = parser.parse_args()
+    dag_config_path = args.dag_config
+    project_data_root, configs_dir = setup_environment()
 
     print("🛠️  Initializing Merging Pipeline...")
 
     try:
         main_dag_handler = DagConfigHandler(dag_config_path)
         is_parallel = main_dag_handler.get_parameter('parallel_execution', False)
-        kinect_dir_name = main_dag_handler.get_parameter('kinect_configs_directory')
-        kinect_configs_dir = configs_dir / kinect_dir_name
-        
-        if not kinect_configs_dir.exists():
-            raise FileNotFoundError(f"Config directory not found: {kinect_configs_dir}")
-            
+        entries = main_dag_handler.get_parameter('kinect_configs')
+        block_files = resolve_session_configs(entries, configs_dir / "kinect_configs")
+
     except Exception as e:
         print(f"❌ Initialization Error: {e}")
         exit(1)
 
     run_batch_processing(
-        kinect_configs_dir=kinect_configs_dir,
+        block_files=block_files,
         project_data_root=project_data_root,
         dag_config_path=dag_config_path,
         parallel=is_parallel

@@ -1,0 +1,70 @@
+# Launcher configuration — single source of truth for the DAG Config Launcher GUI.
+#
+# Each entry declares a workflow button with a display name, category, script path,
+# and dag_config path. All paths are relative to the project root.
+#
+# To add a new workflow:
+#   1. Add an entry under the appropriate category (or add a new category block).
+#   2. Set `script` to the Python script path (relative to project root).
+#   3. Set `dag_config` to the DAG YAML path (relative to project root).
+#   4. Restart the GUI — no Python code changes required.
+#
+# If `dag_config` is omitted, the task panel and kinect selector are hidden for
+# that workflow (reserved for future scripts that don't use DAG configs).
+
+categories:
+  - name: Setup
+    workflows:
+      - name: Prepare Configs
+        script: code/scripts/prepare_configs_workflow.py
+        dag_config: configs/prepare_configs_workflow_dag.yaml
+
+  - name: Primary
+    workflows:
+      - name: Kinect [Auto]
+        script: code/scripts/primary_workflow_kinect_auto.py
+        dag_config: configs/primary_workflow_kinect_auto_dag.yaml
+
+  - name: Preprocess
+    workflows:
+      - name: Extract Forearm [Manual]
+        script: code/scripts/preprocess_pipeline_extract_forearm_manual.py
+        dag_config: configs/preprocess_pipeline_extract_forearm_manual_dag.yaml
+
+      - name: Kinect [Auto]
+        script: code/scripts/preprocess_workflow_kinect_auto.py
+        dag_config: configs/preprocess_workflow_kinect_auto_dag.yaml
+
+      - name: Kinect [Manual]
+        script: code/scripts/preprocess_workflow_kinect_manual.py
+        dag_config: configs/preprocess_workflow_kinect_manual_dag.yaml
+
+      - name: Kinect [Visualisation]
+        script: code/scripts/preprocess_workflow_kinect_visualisation.py
+        dag_config: configs/preprocess_workflow_kinect_visualisation_dag.yaml
+
+  - name: Merging
+    workflows:
+      - name: Neural and Kinect [Auto]
+        script: code/scripts/merging_pipeline_neuron_to_kinect_auto.py
+        dag_config: configs/merging_pipeline_neuron_to_kinect_auto_dag.yaml
+
+      - name: Neural and Kinect [Visualisation]
+        script: code/scripts/merging_pipeline_neuron_to_kinect_visualisation.py
+        dag_config: configs/merging_pipeline_neuron_to_kinect_visualisation_dag.yaml
+
+  - name: Postprocess
+    workflows:
+      - name: Kinect [Auto]
+        script: code/scripts/postprocess_workflow_kinect_auto.py
+        dag_config: configs/postprocess_workflow_kinect_auto_dag.yaml
+
+      - name: Kinect [Visualisation]
+        script: code/scripts/postprocess_visualization.py
+        dag_config: configs/postprocess_visualization_dag.yaml
+
+  - name: Analysis
+    workflows:
+      - name: Analysis Workflow
+        script: code/scripts/analysis_workflow.py
+        dag_config: configs/analyse_workflow_dag.yaml

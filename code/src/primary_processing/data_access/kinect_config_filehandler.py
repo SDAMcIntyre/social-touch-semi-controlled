@@ -68,7 +68,7 @@ class KinectConfigFileHandler:
 
         variables = KinectConfigFileHandler._flatten_dict_for_resolution(config_data)
         
-        max_iterations = len(variables) + 1 
+        max_iterations = len(variables) + 1
         for i in range(max_iterations):
             changed_in_pass = False
             for key, value in variables.items():
@@ -85,11 +85,10 @@ class KinectConfigFileHandler:
                                 variables[key] = new_value
                                 value = new_value
                                 changed_in_pass = True
-            
+
             if not changed_in_pass:
                 break
-        
-        if i == max_iterations - 1:
+        else:
             raise CircularDependencyError("A circular dependency was detected in the configuration file.")
 
         final_unresolved = [
@@ -102,11 +101,3 @@ class KinectConfigFileHandler:
             raise UnresolvedVariableError(f"Could not resolve variables: {set(final_unresolved)}")
 
         return KinectConfigFileHandler._recursive_substitute(config_data, variables)
-
-def get_block_files(kinect_configs_dir: Path):
-    """Helper to find and validate session configuration files."""
-    if not kinect_configs_dir.is_dir():
-        raise ValueError(f"Sessions folder not found: {kinect_configs_dir}")
-    files = list(kinect_configs_dir.glob("*.yaml"))
-    print(f"Found {len(files)} session(s) to process.")
-    return files

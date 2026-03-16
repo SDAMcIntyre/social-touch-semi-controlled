@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "semi-controlled"
+version = "2.0.1"
+authors = [
+  { name="Basil Duvernoy", email="basil.duvernoy@liu.se" },
+]
+description = "A package for motion preprocessing and analysis."
+readme = "README.md"
+requires-python = ">=3.10"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering",
+]
+# Dependencies updated to include pygltflib
+dependencies = [
+    "numpy",
+    "pandas",
+    "scipy",
+    "pygltflib>=1.16.0",
+    "ruamel.yaml>=0.18",
+]
+
+[project.urls]
+Homepage = "https://github.com/SDAMcIntyre/social-touch-semi-controlled"
+
+[tool.setuptools]
+# Map the root package to the nested directory structure
+package-dir = {"" = "code/src"}
+
+[tool.setuptools.packages.find]
+# Instruct setuptools to scan the nested src folder
+where = ["code/src"]
+
+[tool.pytest.ini_options]
+testpaths = ["code/tests"]
+pythonpath = ["code/src"]

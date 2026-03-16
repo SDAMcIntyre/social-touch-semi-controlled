@@ -24,16 +24,12 @@ class HandMetadataFileHandler:
             logging.error(f"Failed to save metadata to {path}: {e}")
 
     @staticmethod
-    def load(
-        json_path: Path
-    ) -> Optional[HandMetadataManager]:
+    def load(json_path: Path) -> Optional[HandMetadataManager]:
         """
         Loads a JSON file and generates a MetadataManager object from its content.
 
         Args:
             json_path (Path): The path to the JSON metadata file.
-            video_dir (Path): The base directory where source videos are stored.
-            models_dir (Path): The base directory where hand models are stored.
 
         Returns:
             An instance of MetadataManager if successful, otherwise None.
@@ -45,24 +41,29 @@ class HandMetadataFileHandler:
 
             # Step 2: Transform the dictionary data to match the MetadataManager constructor
             
-            # Reconstruct full Path objects from filenames and base directories
-            video_path = data["source_video_name"]
-            model_path = data["selected_hand_model_name"]
+            # Reconstruct Path objects from filenames (assuming relative to some base, 
+            # but storing just the name as per previous structure)
+            video_path = Path(data.get("source_video_name", ""))
+            model_path = Path(data.get("selected_hand_model_name", ""))
 
             # Convert hand orientation string ("left"/"right") to a boolean
-            is_left = data["hand_orientation"] == "left"
+            is_left = data.get("hand_orientation") == "left"
 
             # Convert the list of point dictionaries into a single {label: id} dictionary
             points_list = data.get("selected_points", [])
             selected_points = {item["label"]: item["vertex_id"] for item in points_list}
 
+            # Retrieve excluded vertices (default to empty list if not present)
+            excluded_vertex_ids = data.get("excluded_vertex_ids", [])
+
             # Step 3: Instantiate and return the MetadataManager object
             return HandMetadataManager(
                 source_video_path=video_path,
                 selected_hand_model_path=model_path,
-                selected_frame_number=data["selected_frame_number"],
+                selected_frame_number=data.get("selected_frame_number", 0),
                 is_left_hand=is_left,
-                selected_points=selected_points
+                selected_points=selected_points,
+                excluded_vertex_ids=excluded_vertex_ids
             )
 
         except FileNotFoundError:

@@ -88,6 +88,11 @@ class KinectConfig:
     # Explicit properties for IDE autocompletion on standard and dynamically added fields
     
     @property
+    def database_path(self) -> Path:
+        """Returns the root database path used for resolving relative paths."""
+        return self._database_path
+
+    @property
     def session_id(self) -> str:
         return self.settings.session_id
 

@@ -1,3 +1,4 @@
+import argparse
 from pathlib import Path
 from prefect import flow
 import utils.path_tools as path_tools
@@ -6,8 +7,9 @@ from utils import DagConfigHandler
 from primary_processing import (
     KinectConfigFileHandler,
     KinectConfig,
-    get_block_files
 )
+
+from utils.pipeline.session_config_resolver import resolve_session_configs
 
 from _3_preprocessing._1_sticker_tracking import (
     review_tracked_objects_in_video,
@@ -16,7 +18,9 @@ from _3_preprocessing._1_sticker_tracking import (
 )
 
 from _3_preprocessing._2_hand_tracking import (
-    select_hand_model_characteristics
+    assign_stickers_location,
+    define_hand_mask,
+    curate_hamer_hand_models
 )
 
 from _3_preprocessing._5_led_tracking import (
@@ -45,7 +49,7 @@ def prepare_led_tracking(
 
 
 @flow(name="Manual: Prepare Hand Model")
-def prepare_hand_model(
+def assign_hand_model_metadata_flow(
     rgb_video_path: Path,
     hand_models_dir: Path,
     objects_to_track: list[str],
@@ -56,15 +60,23 @@ def prepare_hand_model(
     """Manually define landmarks for the 3D hand model."""
     print(f"[{output_dir.name}] Preparing hand tracking session...")
     name_baseline = rgb_video_path.stem + "_handmodel"
-    metadata_path = output_dir / (name_baseline + "_metadata.json")
-
-    select_hand_model_characteristics(
+    stickers_loc_metadata_path = output_dir / (name_baseline + "_stickers_location.json")
+    assign_stickers_location(
         rgb_video_path,
         hand_models_dir,
         objects_to_track,
+        stickers_loc_metadata_path,
+        force_processing=force_processing
+    )
+    
+    metadata_path = output_dir / (name_baseline + "_metadata.json")
+    define_hand_mask(
+        stickers_loc_metadata_path,
+        hand_models_dir,
         metadata_path,
         force_processing=force_processing
     )
+    
     return metadata_path
 
 @flow(name="Manual: Review Stickers")
@@ -106,7 +118,6 @@ def prepare_stickers_colorspace(
     name_baseline = rgb_video_path.stem + "_handstickers"
     roi_video_base_path = output_dir / (name_baseline + "_roi_unified.mp4")
     metadata_roi_path = output_dir / (name_baseline + "_roi_metadata.json")
-    
     metadata_colorspace_path = output_dir / (name_baseline + "_colorspace_metadata.json")
     define_handstickers_colorspaces_from_roi(
         roi_video_base_path,
@@ -128,8 +139,11 @@ def review_handstickers_color_threshold(
 
     name_baseline = rgb_video_path.stem + "_handstickers"
     metadata_colorspace_path = output_dir / (name_baseline + "_colorspace_metadata.json")
-    corrmap_video_base_path = output_dir / (name_baseline + "_corrmap.mp4")
+    corrmap_video_base_path = output_dir / (name_baseline + "_corrmap_*.mp4")
+    rgb_video_base_path = output_dir / (name_baseline + "_roi_unified_*.mp4")
+    
     define_handstickers_color_threshold(
+        rgb_video_base_path,
         corrmap_video_base_path, 
         md_path=metadata_colorspace_path,
         force_processing=force_processing
@@ -140,6 +154,7 @@ def review_handstickers_color_threshold(
 def define_trial_chunks_flow(
     rgb_video_path: Path,
     sticker_dir: Path,
+    led_dir: Path,
     output_dir: Path,
     *,
     force_processing: bool = False
@@ -147,15 +162,58 @@ def define_trial_chunks_flow(
     """Define trial chunks based on sticker data."""
     print(f"[{rgb_video_path.name}] Defining trial chunks...")
     xy_csv_path = sticker_dir / (rgb_video_path.stem + "_handstickers_summary_2d_coordinates.csv")
+    led_on_path = led_dir / (rgb_video_path.stem + "_LED.csv")
     output_path = output_dir / (rgb_video_path.stem + '_trial-chunks.csv')
     
     define_trial_chunks(
         xy_csv_path,
+        led_on_path,
         rgb_video_path,
         output_csv_path=output_path,
         force_processing=force_processing
     )
     return True
+
+@flow(name="Manual: Curate Hamer Models")
+def run_curate_hamer_hand_models(
+    rgb_video_path: Path,
+    kinematics_dir: Path,
+    temporal_dir: Path,
+    *,
+    force_processing: bool = False
+) -> Path:
+    """
+    Launch the GUI to curate/validate Hamer hand tracking models.
+    """
+    print(f"[{rgb_video_path.name}] Curating Hamer hand models...")
+    name_baseline = rgb_video_path.stem
+    
+    # Define paths based on naming conventions
+    data_path = kinematics_dir / (name_baseline + "_handmodel_tracked_hands.pkl")
+    csv_path = temporal_dir / (name_baseline + "_trial-chunks.csv")
+
+    output_file_path = kinematics_dir / (name_baseline + "_handmodel_tracked_hands_curated.pkl")
+    output_success_path = Path(str(output_file_path) + ".SUCCESS")
+    
+    # Verify Prerequisites
+    if not data_path.exists():
+        print(f"⚠️ Warning: Input tracking data not found: {data_path}")
+        print("   -> Ensure automatic Hamer tracking has run before this step.")
+        return False
+
+    if not csv_path.exists():
+        print(f"⚠️ Warning: Trial chunks not found: {csv_path}")
+        return False
+
+    curate_hamer_hand_models(
+        video_path=rgb_video_path,
+        data_path=data_path,
+        csv_path=csv_path,
+        output_file_path=output_file_path,
+        output_success_path=output_success_path,
+        force_processing=force_processing
+    )
+    return output_file_path
 
 @flow(name="Manual: Review Single Touches")
 def review_single_touches_flow(
@@ -222,17 +280,17 @@ def run_single_session_pipeline(
             dag_handler.mark_completed('prepare_led_tracking')
 
         # 2. Hand Model
-        if dag_handler.can_run('prepare_hand_model'):
-            print(f"[{block_name}] ==> Running task: prepare_hand_model")
-            force = dag_handler.get_task_options('prepare_hand_model').get('force_processing', False)
-            prepare_hand_model(
+        if dag_handler.can_run('assign_hand_model_metadata'):
+            print(f"[{block_name}] ==> Running task: assign_hand_model_metadata")
+            force = dag_handler.get_task_options('assign_hand_model_metadata').get('force_processing', False)
+            assign_hand_model_metadata_flow(
                 rgb_video_path=rgb_video_path,
                 hand_models_dir=config.hand_models_dir,
                 objects_to_track=config.objects_to_track,
                 output_dir= kin_dir,
                 force_processing=force
             )
-            dag_handler.mark_completed('prepare_hand_model')
+            dag_handler.mark_completed('assign_hand_model_metadata')
 
         # 3. Review Stickers (ROI)
         if dag_handler.can_run('review_2d_stickers'):
@@ -246,7 +304,17 @@ def run_single_session_pipeline(
             )
             dag_handler.mark_completed('review_2d_stickers')
         
-        # 4. Prepare Colorspace
+        # 4. Review Thresholds: Played before prepare colorspace as the result can be discarded, and enriching the model will be necessary
+        if dag_handler.can_run('review_handstickers_color_threshold'):
+            force = dag_handler.get_task_options('review_handstickers_color_threshold').get('force_processing', False)
+            review_handstickers_color_threshold(
+                rgb_video_path=rgb_video_path,
+                output_dir=sticker_dir,
+                force_processing=force
+            )
+            dag_handler.mark_completed('review_handstickers_color_threshold')
+
+        # 5. Prepare Colorspace
         if dag_handler.can_run('prepare_stickers_colorspace'):
             print(f"[{block_name}] ==> Running task: prepare_stickers_colorspace")
             force = dag_handler.get_task_options('prepare_stickers_colorspace').get('force_processing', False)
@@ -257,16 +325,6 @@ def run_single_session_pipeline(
             )
             dag_handler.mark_completed('prepare_stickers_colorspace')
         
-        # 5. Review Thresholds
-        if dag_handler.can_run('review_handstickers_color_threshold'):
-            print(f"[{block_name}] ==> Running task: review_handstickers_color_threshold")
-            force = dag_handler.get_task_options('review_handstickers_color_threshold').get('force_processing', False)
-            review_handstickers_color_threshold(
-                rgb_video_path=rgb_video_path,
-                output_dir=sticker_dir,
-                force_processing=force
-            )
-            dag_handler.mark_completed('review_handstickers_color_threshold')
 
         # 6. Define Trial Chunks
         if dag_handler.can_run('define_trial_chunks'):
@@ -275,12 +333,25 @@ def run_single_session_pipeline(
             define_trial_chunks_flow(
                 rgb_video_path=rgb_video_path,
                 sticker_dir=sticker_dir,
+                led_dir=led_dir,
                 output_dir=temp_seg_dir,
                 force_processing=force
             )
             dag_handler.mark_completed('define_trial_chunks')
 
-        # 7. Review Single Touches
+        # 7. Curate Hamer Models (NEW)
+        if dag_handler.can_run('curate_hamer_hand_models'):
+            print(f"[{block_name}] ==> Running task: curate_hamer_hand_models")
+            force = dag_handler.get_task_options('curate_hamer_hand_models').get('force_processing', False)
+            run_curate_hamer_hand_models(
+                rgb_video_path=rgb_video_path,
+                kinematics_dir=kin_dir,
+                temporal_dir=temp_seg_dir,
+                force_processing=force
+            )
+            dag_handler.mark_completed('curate_hamer_hand_models')
+
+        # 8. Review Single Touches
         if dag_handler.can_run('review_single_touches'):
             print(f"[{block_name}] ==> Running task: review_single_touches")
             force = dag_handler.get_task_options('review_single_touches').get('force_processing', False)
@@ -302,11 +373,10 @@ def run_single_session_pipeline(
 
 # --- The "Dispatcher" Flow ---
 @flow(name="Run Manual Batch Sequentially", log_prints=True)
-def run_batch_sequentially(kinect_configs_dir: Path, project_data_root: Path, dag_config_path: Path):
+def run_batch_sequentially(block_files: list[Path], project_data_root: Path, dag_config_path: Path):
     """Runs all session pipelines one by one."""
     dag_handler_template = DagConfigHandler(dag_config_path)
-    block_files = get_block_files(kinect_configs_dir)
-    
+
     for block_file in block_files:
         print(f"--- Running session: {block_file.name} ---")
         try:
@@ -326,22 +396,25 @@ def run_batch_sequentially(kinect_configs_dir: Path, project_data_root: Path, da
 
 
 if __name__ == "__main__":
+    _parser = argparse.ArgumentParser()
+    _parser.add_argument("--dag-config", type=Path, required=True)
+    _args = _parser.parse_args()
     print("🛠️  Setting up files for manual processing...")
     project_data_root = path_tools.get_project_data_root()
     configs_dir = Path("configs")
-    dag_config_path = configs_dir / "preprocess_workflow_kinect_manual_dag.yaml"
+    dag_config_path = _args.dag_config
 
     try:
         main_dag_handler = DagConfigHandler(dag_config_path)
-        kinect_dir = main_dag_handler.get_parameter('kinect_configs_directory')
-        kinect_configs_dir = configs_dir / kinect_dir
+        entries = main_dag_handler.get_parameter('kinect_configs')
+        block_files = resolve_session_configs(entries, configs_dir / "kinect_configs")
     except FileNotFoundError:
         print(f"❌ Error: '{dag_config_path}' not found.")
         exit(1)
 
     print("🚀 Launching manual batch processing SEQUENTIALLY.")
     run_batch_sequentially(
-        kinect_configs_dir=kinect_configs_dir,
+        block_files=block_files,
         project_data_root=project_data_root,
         dag_config_path=dag_config_path
     )

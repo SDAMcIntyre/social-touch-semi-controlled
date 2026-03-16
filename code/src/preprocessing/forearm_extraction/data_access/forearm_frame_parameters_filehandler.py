@@ -56,13 +56,31 @@ class ForearmFrameParametersFileHandler:
                 roi_data = data["region_of_interest"]
                 roi = RegionOfInterest(
                     top_left_corner=Point(**roi_data["top_left_corner"]),
-                    bottom_right_corner=Point(**roi_data["bottom_right_corner"])
+                    bottom_right_corner=Point(**roi_data["bottom_right_corner"]),
+                    angle_deg=roi_data.get("angle_deg", 0.0),
                 )
-                
+
                 # Remove the processed ROI dict to unpack the rest of the keys
                 del data["region_of_interest"]
-                
-                parameter = ForearmParameters(region_of_interest=roi, **data)
+
+                # Backward-compat: old JSON has "frame_id" (int), new JSON has "frame_ids" (list)
+                if "frame_ids" in data:
+                    frame_ids = data.pop("frame_ids")
+                    if "representative_frame_id" in data:
+                        representative_frame_id = data.pop("representative_frame_id")
+                    else:
+                        representative_frame_id = min(frame_ids)
+                else:
+                    old_frame_id = data.pop("frame_id")
+                    frame_ids = [old_frame_id]
+                    representative_frame_id = old_frame_id
+
+                parameter = ForearmParameters(
+                    frame_ids=frame_ids,
+                    representative_frame_id=representative_frame_id,
+                    region_of_interest=roi,
+                    **data
+                )
                 loaded_parameters.append(parameter)
             
             print(f"✅ Successfully loaded parameters for {len(loaded_parameters)} frames.")
@@ -100,19 +118,32 @@ class ForearmFrameParametersFileHandler:
             # Iterate through and check the structure of EVERY element
             for item in data:
                 # Check for all required keys at every level.
-                # A KeyError or TypeError will be raised if any key is missing or is of the wrong type.
                 _ = item["video_filename"]
-                _ = item["frame_id"]
+
+                # Accept old format ("frame_id": int) or new format ("frame_ids": list)
+                if "frame_ids" in item:
+                    if not isinstance(item["frame_ids"], list) or len(item["frame_ids"]) == 0:
+                        return False
+                    # "representative_frame_id" is optional in new format (defaults to min on load)
+                    if "representative_frame_id" in item:
+                        if not isinstance(item["representative_frame_id"], int):
+                            return False
+                elif "frame_id" in item:
+                    if not isinstance(item["frame_id"], int):
+                        return False
+                else:
+                    return False
+
                 _ = item["frame_width"]
                 _ = item["frame_height"]
                 _ = item["fps"]
                 _ = item["nframes"]
                 _ = item["fourcc_str"]
-                
+
                 roi_data = item["region_of_interest"]
                 top_left = roi_data["top_left_corner"]
                 bottom_right = roi_data["bottom_right_corner"]
-                
+
                 _ = top_left["x"]
                 _ = top_left["y"]
                 _ = bottom_right["x"]

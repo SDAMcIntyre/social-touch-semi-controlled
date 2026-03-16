@@ -1,8 +1,8 @@
+import argparse
 import os
 import logging
 from pathlib import Path
 from datetime import datetime
-import shutil
 import time
 import traceback
 from multiprocessing import Queue, freeze_support
@@ -14,13 +14,15 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 import utils.path_tools as path_tools
 from utils import DagConfigHandler, PipelineMonitor, TaskExecutor
+from utils.pipeline.pipeline_dependency_error import PipelineDependencyError
 
 # Importing primary processing modules
 from primary_processing import (
     KinectConfigFileHandler,
     KinectConfig,
-    get_block_files
 )
+
+from utils.pipeline.session_config_resolver import resolve_session_configs
 
 from _2_primary_processing._2_generate_rgb_depth_video import (
     generate_mkv_stream_analysis,
@@ -44,12 +46,13 @@ from _3_preprocessing._1_sticker_tracking import (
 )
 
 from _3_preprocessing._2_hand_tracking import (
-    generate_hand_motion,
-    is_hand_model_valid
+    track_hands_on_video,
+    is_hand_model_valid,
+    generate_3d_hand_in_motion
 )
 
 from _3_preprocessing._3_forearm_extraction import (
-    is_forearm_valid
+    is_forearm_valid,
 )
 
 from _3_preprocessing._4_somatosensory_quantification import (
@@ -69,6 +72,7 @@ from _3_preprocessing._6_metadata_matching import (
 )
 
 from _3_preprocessing._7_unification import unify_datasets
+
 
 # --- 3. Sub-Flows (Formerly Tasks) ---
 
@@ -117,7 +121,8 @@ def validate_forearm_extraction(session_output_dir: Path) -> Path:
     print(f"[{session_output_dir.name}] Validating forearm extraction...")
     is_valid = is_forearm_valid(session_output_dir / "forearm_pointclouds", verbose=True)
     if not is_valid:
-        raise ValueError("Forearm needs to be manually extracted first.")
+        raise PipelineDependencyError("Forearm needs to be manually extracted first.", "manual (forearm extraction)")
+    # Returning the boolean status directly, as it does not produce a file path for downstream tasks.
     return is_valid
 
 @flow(name="5. Validate Hand Extraction")
@@ -127,21 +132,47 @@ def validate_hand_extraction(rgb_video_path: Path, hand_models_dir: Path, expect
     metadata_path = output_dir / (name_baseline + "_metadata.json")
     is_valid, errors = is_hand_model_valid(metadata_path, hand_models_dir, expected_labels, verbose=True)
     if not is_valid:
-        raise ValueError("Hand model needs to be manually extracted first.")
+        raise PipelineDependencyError("Hand model needs to be manually extracted first (or generation failed).", "manual (hand model assignment)")
     return is_valid
 
-@flow(name="6. Track Stickers (2D)")
-def track_stickers(rgb_video_path: Path, output_dir: Path, *, force_processing: bool = False) -> tuple[Path | None, bool]:
-    print(f"[{output_dir.name}] Tracking stickers (2D)...")
+# --- REFACTORED: Track Stickers Raw Flow ---
+@flow(name="6a. Track Stickers (Raw 2D)")
+def track_stickers_raw_flow(
+    rgb_video_path: Path, 
+    output_dir: Path, 
+    *, 
+    force_processing: bool = False
+) -> tuple[Path, Path]:
+    print(f"[{output_dir.name}] Tracking stickers (Raw 2D)...")
     name_baseline = rgb_video_path.stem + "_handstickers"
     metadata_roi_path = output_dir / (name_baseline + "_roi_metadata.json")
     stickers_roi_csv_path = output_dir / (name_baseline + "_roi_tracking.csv")
-
+    
     track_objects_in_video(rgb_video_path, metadata_roi_path, output_path=stickers_roi_csv_path, force_processing=force_processing)
     
     if not is_2d_stickers_tracking_valid(metadata_roi_path):
-        raise ValueError("❌ --> 2D sticker tracking has not been manually validated. Cannot continue the pipeline.")
+        raise PipelineDependencyError("2D sticker tracking has not been manually validated. Cannot continue the pipeline.", "manual (review 2D stickers)")
+
+    return stickers_roi_csv_path, metadata_roi_path
+
+# --- REFACTORED: Refine Sticker Features Flow ---
+@flow(name="6b. Refine Sticker Features")
+def refine_sticker_features_flow(
+    rgb_video_path: Path,
+    output_dir: Path,
+    stickers_roi_csv_path: Path,
+    *,
+    force_processing: bool = False,
+    monitor: bool = False
+) -> tuple[Path | None, bool]:
+    print(f"[{output_dir.name}] Refining sticker features...")
+    name_baseline = rgb_video_path.stem + "_handstickers"
     
+    # Redundant check, but good for safety if run standalone
+    metadata_roi_path = output_dir / (name_baseline + "_roi_metadata.json")
+    if not metadata_roi_path.exists():
+        raise ValueError("Metadata ROI path missing. Ensure raw tracking is complete.")
+
     roi_unified_csv_path = output_dir / (name_baseline + "_roi_standard_size.csv")
     generate_standard_roi_size_dataset(stickers_roi_csv_path, roi_unified_csv_path)
     corrmap_video_base_path = output_dir / (name_baseline + "_roi_unified.mp4")
@@ -149,11 +180,11 @@ def track_stickers(rgb_video_path: Path, output_dir: Path, *, force_processing: 
     
     metadata_colorspace_path = output_dir / (name_baseline + "_colorspace_metadata.json")
     binary_video_base_path = output_dir / (name_baseline + "_corrmap.mp4")
-    create_color_correlation_videos(corrmap_video_base_path, metadata_colorspace_path, binary_video_base_path, force_processing=force_processing)
+    create_color_correlation_videos(corrmap_video_base_path, metadata_colorspace_path, binary_video_base_path, force_processing=force_processing, monitor=monitor)
     
     if not is_correlation_videos_threshold_defined(metadata_colorspace_path):
-        raise ValueError("❌ --> correlation videos threshold has not been manually validated.")
-    
+        raise PipelineDependencyError("Correlation videos threshold has not been manually validated.", "manual (review color threshold)")
+
     fit_ellipses_path = output_dir / (name_baseline + "_ellipses.csv")
     fit_ellipses_on_correlation_videos(
         video_path=binary_video_base_path,
@@ -168,13 +199,13 @@ def track_stickers(rgb_video_path: Path, output_dir: Path, *, force_processing: 
         output_csv_path=adj_ellipses_path,
         force_processing=force_processing
     )
-    
+
     final_csv_path = output_dir / (name_baseline + "_summary_2d_coordinates.csv")
     consolidate_2d_tracking_data(
         roi_unified_csv_path,
         adj_ellipses_path,
         output_csv_path=final_csv_path,
-        score_threshold=0.7,
+        score_threshold=0.3,
         force_processing=force_processing
     )
 
@@ -186,7 +217,8 @@ def generate_xyz_stickers(
     source_video: Path, 
     output_dir: Path, 
     *, 
-    force_processing: bool = False) -> Path:
+    force_processing: bool = False
+) -> Path:
     print(f"[{output_dir.name}] Generating XYZ sticker positions (3D)...")
     name_baseline = stickers_2d_path.stem.replace('_summary_2d_coordinates', '')
     result_csv_path = output_dir / (name_baseline + "_xyz_tracked.csv")
@@ -203,19 +235,63 @@ def generate_xyz_stickers(
     )
     return result_csv_path
 
-@flow(name="7. Generate 3D Hand Position")
-def generate_3d_hand_motion(rgb_video_path: Path, stickers_xyz_path: Path, hand_models_dir: Path, output_dir: Path, *, force_processing: bool = False) -> Path:
+# --- REFACTORED: Track Hands Model Flow ---
+@flow(name="7a. Track Hands Model")
+def track_hands_model_flow(
+    rgb_video_path: Path,
+    output_dir: Path,
+    *,
+    force_processing: bool = False
+) -> Path:
+    print(f"[{output_dir.name}] Tracking Hands Model...")
+    name_baseline = rgb_video_path.stem + "_handmodel"
+    tracked_hands_path = output_dir / (name_baseline + "_tracked_hands.pkl")
+    
+    track_hands_on_video(rgb_video_path, tracked_hands_path, force_processing=force_processing)
+    
+    return tracked_hands_path
+
+# --- REFACTORED: Generate 3D Hand Motion Flow ---
+@flow(name="7b. Generate 3D Hand in Motion")
+def generate_3d_hand_in_motion_flow(
+    rgb_video_path: Path, 
+    tracked_hands_path: Path, 
+    stickers_xyz_path: Path, 
+    output_dir: Path, 
+    *, 
+    force_processing: bool = False
+) -> tuple[Path, Path]:
     print(f"[{output_dir.name}] Generating 3D hand motion...")
     name_baseline = rgb_video_path.stem + "_handmodel"
-    metadata_path = output_dir / (name_baseline + "_metadata.json")
-    hand_motion_glb_path = output_dir / (name_baseline + "_motion.glb")
-    hand_motion_csv_path = output_dir / (name_baseline + "_motion.csv")
-    generate_hand_motion(stickers_xyz_path, hand_models_dir, metadata_path, hand_motion_glb_path, hand_motion_csv_path, force_processing=force_processing)
-    return hand_motion_glb_path, metadata_path
+    
+    # Check if tracking exists (safety check if run out of order)
+    if not tracked_hands_path.exists():
+        raise PipelineDependencyError(f"Tracked hands file not found: {tracked_hands_path}", "auto (track hands model)")
+
+    hands_curated_path = output_dir / (name_baseline + "_tracked_hands_curated.pkl")
+    if not hands_curated_path.with_name(hands_curated_path.name + ".SUCCESS").exists():
+        raise PipelineDependencyError("Hand models need to be manually assessed first.", "manual (curate hand models)")
+    
+    metadata_path = Path(output_dir / (name_baseline + "_metadata.json"))
+    if not metadata_path.exists():
+        raise PipelineDependencyError("Stickers location on the hand model must be manually assessed first.", "manual (hand model assignment)")
+
+    out_motion_npz_path = output_dir / (name_baseline + "_motion.npz")
+    out_motion_csv_path = output_dir / (name_baseline + "_motion.csv")
+    
+    generate_3d_hand_in_motion(
+        stickers_xyz_path, 
+        hands_curated_path, 
+        metadata_path, 
+        out_motion_npz_path, 
+        out_motion_csv_path, 
+        force_processing=force_processing)
+
+    return out_motion_npz_path, metadata_path
 
 @flow(name="8. Generate Somatosensory Characteristics")
 def compute_somatosensory_characteristics_flow(
-    hand_motion_glb_path: Path,
+    hand_motion_npz_path: Path,
     hand_metadata_path: Path,
     session_processed_dir: Path,
     session_id: str,
@@ -232,7 +308,7 @@ def compute_somatosensory_characteristics_flow(
 
     contact_characteristics_path = output_dir / (name_baseline + "_contact_and_kinematic_data.csv")
     compute_somatosensory_characteristics(
-        hand_motion_glb_path, 
+        hand_motion_npz_path,
         hand_metadata_path,
         forearm_metadata_path, 
         forearm_pointcloud_dir,
@@ -242,6 +318,7 @@ def compute_somatosensory_characteristics_flow(
         force_processing=force_processing
     )
     return contact_characteristics_path
+
 
 @flow(name="10. Define Trial IDs")
 def define_trial_ids_flow(rgb_video_path: Path, output_dir: Path, *, force_processing: bool = False) -> Path:
@@ -259,7 +336,7 @@ def define_trial_ids_flow(rgb_video_path: Path, output_dir: Path, *, force_proce
     return output_path
 
 @flow(name="11. Add Stimuli Metadata")
-def generate_stimuli_metadata_flow(trial_data_path: Path, stimulus_metadata: Path, output_dir: Path, *, force_processing: bool = False) -> Path:
+def generate_stimuli_metadata_flow(trial_data_path: Path, stimulus_metadata: Path, output_dir: Path, *, force_processing: bool = False) -> tuple[Path, Path]:
     print(f"[{output_dir.name}] Adding Stimuli Metadata...")
     name_baseline = Path(trial_data_path).stem.replace("_trial_ids_only", "")
     output_path = output_dir / (name_baseline + "_with-stimuli-data.csv")
@@ -286,7 +363,7 @@ def find_single_touches_flow(trial_data_path: Path, stickers_xyz_path: Path, sti
     final_path = output_dir / (name_baseline + "_single-touches-corrected.csv")
     if not final_path.exists():
         # NOTE: This assumes a manual step exists. If purely automated, this logic flaw persists from original.
-        raise ValueError("❌ --> Automatic single touches has not been manually validated yet.")
+        raise PipelineDependencyError("Automatic single touches has not been manually validated yet.", "manual (review single touches)")
     
     return final_path
     
@@ -297,7 +374,9 @@ def unify_processed_data_flow(led_path: Path,
                               single_touch_path: Path, 
                               stimuli_path: Path, 
                               rgb_video_path: Path,
-                              output_dir: Path, *, force_processing: bool = False) -> Path:
+                              output_dir: Path,
+                              *,
+                              force_processing: bool = False) -> Path:
     print(f"[{output_dir.name}] Unifying all processed data...")
     final_path = output_dir / (Path(rgb_video_path).stem + "_unified.csv")
     unify_datasets(led_path=led_path, contact_path=contact_path, trial_path=trial_path, single_touch_path=single_touch_path, stimuli_path=stimuli_path, output_path=final_path, force_processing=force_processing)
@@ -325,9 +404,10 @@ def run_single_session_pipeline(
         "rgb_video_path": config.video_primary_output_dir / f"{config.source_video.stem}.mp4"
     }
 
-    
+    # REFACTORED PIPELINE STAGES
+    # Ordered Topologically according to preprocess_workflow_kinect_auto_dag.yaml
     pipeline_stages = [
-        # --- Stage 1: LED Tracking ---
+        # --- Stage 1: LED Signal Extraction ---
         {"name": "track_led_blinking", 
          "func": track_led_blinking, 
          "params": lambda: {"video_path": context.get("rgb_video_path"), 
@@ -335,51 +415,38 @@ def run_single_session_pipeline(
                             "output_dir": config.video_processed_output_dir / "temporal_segmentation/LED"}, 
          "outputs": ["led_tracking_path"]},
 
-        # --- Stage 2: Validation ---
+        # --- Stage 2: Tracking Extraction ---
         {"name": "validate_forearm_extraction", 
          "func": validate_forearm_extraction, 
-         "params": lambda: {"session_output_dir": config.session_processed_output_dir}},
-        {"name": "validate_hand_extraction", 
-         "func": validate_hand_extraction, 
-         "params": lambda: {"rgb_video_path": context.get("rgb_video_path"), 
-                            "hand_models_dir": config.hand_models_dir,
-                            "expected_labels": config.objects_to_track, 
-                            "output_dir": config.video_processed_output_dir / "kinematics_analysis"}},
+         "params": lambda: {"session_output_dir": config.session_processed_output_dir},
+         "outputs": []}, 
 
-        # --- Stage 3: 3D Tracking & Reconstruction ---
-        {"name": "track_stickers", 
-         "func": track_stickers, 
+        # --- REFACTORED: Raw Tracking ---
+        {"name": "track_stickers_raw", 
+         "func": track_stickers_raw_flow, 
          "params": lambda: {"rgb_video_path": context.get("rgb_video_path"), 
                             "output_dir": config.video_processed_output_dir / "handstickers"}, 
+         "outputs": ["raw_stickers_roi_csv", "raw_stickers_metadata"]},
+
+        # --- REFACTORED: Feature Refinement ---
+        {"name": "refine_sticker_features", 
+         "func": refine_sticker_features_flow, 
+         "params": lambda: {"rgb_video_path": context.get("rgb_video_path"), 
+                            "output_dir": config.video_processed_output_dir / "handstickers",
+                            "stickers_roi_csv_path": context.get("raw_stickers_roi_csv")}, 
          "outputs": ["sticker_2d_tracking_path", None]},
+         
         {"name": "generate_xyz_stickers", 
          "func": generate_xyz_stickers, 
          "params": lambda: {"stickers_2d_path": context.get("sticker_2d_tracking_path"), 
                             "source_video": config.source_video, 
                             "output_dir": config.video_processed_output_dir / "handstickers"}, 
          "outputs": ["sticker_3d_tracking_path"]},
-        {"name": "generate_3d_hand_motion", 
-         "func": generate_3d_hand_motion, 
-         "params": lambda: {"rgb_video_path": context.get("rgb_video_path"), 
-                            "stickers_xyz_path": context.get("sticker_3d_tracking_path"), 
-                            "hand_models_dir": config.hand_models_dir, 
-                            "output_dir": config.video_processed_output_dir / "kinematics_analysis"}, 
-         "outputs": ["hand_motion_glb_path", "hand_metadata_path"]},
-        {"name": "compute_somatosensory_characteristics", 
-         "func": compute_somatosensory_characteristics_flow, 
-         "params": lambda: {"hand_motion_glb_path": context.get("hand_motion_glb_path"), 
-                            "hand_metadata_path": context.get("hand_metadata_path"), 
-                            "session_processed_dir": config.session_processed_output_dir, 
-                            "session_id": config.session_id, 
-                            "current_video_filename": context.get("rgb_video_path").name, 
-                            "output_dir": config.video_processed_output_dir / "kinematics_analysis"},
-         "outputs": ["somatosensory_chars_path"]},
 
-        # --- Stage 4: Final Data Integration ---
+        # --- Stage 3: Trial Definition & Analysis ---
         {"name": "define_trial_id", 
          "func": define_trial_ids_flow,
          "params": lambda: {"rgb_video_path": context.get("rgb_video_path"), 
-                            #"unified_data_path": context.get("somatosensory_chars_path"),
                             "output_dir": config.video_processed_output_dir / "temporal_segmentation"},
          "outputs": ["trial_data_path"]},
 
@@ -390,7 +457,43 @@ def run_single_session_pipeline(
                             "output_dir": config.video_processed_output_dir / "temporal_segmentation"},
          "outputs": ["stimuli_metadata_path", "stimuli_metadata_aligned_path"]},
 
-        {"name": "find_single_touches", 
+        # --- Stage 4: Feature Extraction ---
+        
+        # --- REFACTORED: Track Hands Model ---
+        {"name": "track_hands_model",
+         "func": track_hands_model_flow,
+         "params": lambda: {"rgb_video_path": context.get("rgb_video_path"),
+                            "output_dir": config.video_processed_output_dir / "kinematics_analysis"},
+         "outputs": ["tracked_hands_path"]},
+
+        # --- REFACTORED: Generate 3D Motion (Consumes Hand Model) ---
+        {"name": "generate_3d_hand_in_motion", 
+         "func": generate_3d_hand_in_motion_flow, 
+         "params": lambda: {"rgb_video_path": context.get("rgb_video_path"), 
+                            "tracked_hands_path": context.get("tracked_hands_path"), 
+                            "stickers_xyz_path": context.get("sticker_3d_tracking_path"),
+                            "output_dir": config.video_processed_output_dir / "kinematics_analysis"}, 
+         "outputs": ["hand_motion_npz_path", "hand_metadata_path"]},
+         
+        {"name": "validate_hand_extraction", 
+         "func": validate_hand_extraction, 
+         "params": lambda: {"rgb_video_path": context.get("rgb_video_path"), 
+                            "hand_models_dir": config.hand_models_dir,
+                            "expected_labels": config.objects_to_track, 
+                            "output_dir": config.video_processed_output_dir / "kinematics_analysis"},
+         "outputs": []},
+
+        {"name": "compute_somatosensory_characteristics",
+         "func": compute_somatosensory_characteristics_flow,
+         "params": lambda: {"hand_motion_npz_path": context.get("hand_motion_npz_path"),
+                            "hand_metadata_path": context.get("hand_metadata_path"),
+                            "session_processed_dir": config.session_processed_output_dir,
+                            "session_id": config.session_id,
+                            "current_video_filename": context.get("rgb_video_path").name,
+                            "output_dir": config.video_processed_output_dir / "kinematics_analysis"},
+         "outputs": ["somatosensory_chars_path"]},
+
+        {"name": "find_single_touches",
          "func": find_single_touches_flow,
          "params": lambda: {"stickers_xyz_path": context.get("sticker_3d_tracking_path"), 
                             "trial_data_path": context.get("trial_data_path"),
@@ -398,7 +501,8 @@ def run_single_session_pipeline(
                             "output_dir": config.video_processed_output_dir / "temporal_segmentation"},
          "outputs": ["single_touches_path"]},
 
-        {"name": "unify_processed_data", 
+        # --- Stage 5: Final Unification ---
+        {"name": "unify_processed_data",
          "func": unify_processed_data_flow,
          "params": lambda: {"led_path": context.get("led_tracking_path"),
                             "contact_path": context.get("somatosensory_chars_path"),
@@ -431,9 +535,12 @@ def run_single_session_pipeline(
         if "outputs" in stage:
             outputs = stage["outputs"]
             if not isinstance(result, tuple):
+                # Ensure result is a tuple if there are outputs to map
                 result = (result,)
+            
+            # Map outputs to context
             for i, key in enumerate(outputs):
-                if key:
+                if key and i < len(result):
                     context[key] = result[i]
         
         if task_name in dag_handler.tasks and executor.error_msg:
@@ -448,7 +555,7 @@ def run_single_session_pipeline(
 
 
 def run_batch_processing(
-    kinect_configs_dir: Path,
+    block_files: list[Path],
     project_data_root: Path,
     dag_config_path: Path,
     monitor_queue: Queue,
@@ -456,8 +563,7 @@ def run_batch_processing(
     parallel: bool,
 ):
     dag_handler_template = DagConfigHandler(dag_config_path)
-    block_files = get_block_files(kinect_configs_dir)
-    
+
     mode = "PARALLEL" if parallel else "SEQUENTIAL"
     logging.info(f"🚀 Starting batch processing for {len(block_files)} sessions in {mode} mode.")
 
@@ -498,7 +604,6 @@ def run_batch_processing(
 def setup_environment():
     project_data_root = path_tools.get_project_data_root()
     configs_dir = Path("configs")
-    dag_config_path = Path(configs_dir / "preprocess_workflow_kinect_auto_dag.yaml")
 
     print("🛠️  Setting up environment...")
     reports_dir = Path("reports")
@@ -506,19 +611,23 @@ def setup_environment():
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
     report_file_path = reports_dir / f"{timestamp}_preprocess_workflow_kinect_auto_status.xlsx"
     if report_file_path.exists():
-        shutil.rmtree(report_file_path)
+        report_file_path.unlink()
         print("🧹 File with the same name found, removing it.")
-    return project_data_root, configs_dir, dag_config_path, report_file_path
+    return project_data_root, configs_dir, report_file_path
 
 def main():
     freeze_support()
-    project_data_root, configs_dir, dag_config_path, report_file_path = setup_environment()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dag-config", type=Path, required=True)
+    args = parser.parse_args()
+    dag_config_path = args.dag_config
+    project_data_root, configs_dir, report_file_path = setup_environment()
 
     try:
         main_dag_handler = DagConfigHandler(dag_config_path)
         is_parallel = main_dag_handler.get_parameter('parallel_execution', False)
-        kinect_dir_name = main_dag_handler.get_parameter('kinect_configs_directory')
-        kinect_configs_dir = configs_dir / kinect_dir_name
+        entries = main_dag_handler.get_parameter('kinect_configs')
+        block_files = resolve_session_configs(entries, configs_dir / "kinect_configs")
     except FileNotFoundError:
         print(f"❌ Error: Configuration file '{dag_config_path}' not found.")
         exit(1)
@@ -528,21 +637,21 @@ def main():
     main_monitor = PipelineMonitor(report_path=str(report_file_path), stages=pipeline_stages, live_plotting=True)
     main_monitor.show_dashboard()
 
-    run_batch_processing(
-        kinect_configs_dir=kinect_configs_dir,
-        project_data_root=project_data_root,
-        dag_config_path=dag_config_path,
-        monitor_queue=main_monitor.queue,
-        report_file_path=report_file_path,
-        parallel=is_parallel,
-    )
-
-    print("\n🏁 All pipeline tasks have completed.")
-    print("✨ Dashboard will close automatically in 10 seconds...")
-    time.sleep(10)
-    
-    main_monitor.close_dashboard(block=True)
-    print(f"👋 Processing finished. Final report saved to {report_file_path}")
+    try:
+        run_batch_processing(
+            block_files=block_files,
+            project_data_root=project_data_root,
+            dag_config_path=dag_config_path,
+            monitor_queue=main_monitor.queue,
+            report_file_path=report_file_path,
+            parallel=is_parallel,
+        )
+        print("\n🏁 All pipeline tasks have completed.")
+        print("✨ Dashboard will close automatically in 10 seconds...")
+        time.sleep(10)
+    finally:
+        main_monitor.close_dashboard(block=True)
+        print(f"👋 Processing finished. Final report saved to {report_file_path}")
 
 if __name__ == "__main__":
     main()

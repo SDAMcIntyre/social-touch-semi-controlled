@@ -5,7 +5,6 @@ related to 3D scenes, point clouds, and video data.
 
 # --- Data Access Layer ---
 # For handling and managing data sources like point clouds, videos, and Kinect captures.
-from .data_access.glb_data_handler import GLBDataHandler
 from .data_access.kinect_mkv_manager import KinectFrame, KinectMKV
 from .data_access.kinect_pointcloud_wrapper import KinectPointCloudView
 from .data_access.pc_data_handler import PointCloudDataHandler
@@ -14,6 +13,7 @@ from .data_access.video_mp4_manager import VideoMP4Manager, ColorFormat
 # --- GUI Layer ---
 # For visualizing data and interacting with it through graphical components.
 from .gui.frame_roi_square import FrameROISquare
+from .gui.frame_roi_rotatable import FrameROIRotatable
 from .gui.scene_viewer import (
     LazyPointCloudSequence,
     PersistentOpen3DPointCloudSequence,
@@ -24,6 +24,8 @@ from .gui.scene_viewer import (
     Trajectory,
     SceneViewer
 )
+from .gui.scene_viewer_video_maker import SceneViewerVideoMaker
+
 from .gui.video_frame_selector import VideoFrameSelector
 from .gui.video_frames_selector import VideoFramesSelector
 
@@ -40,6 +42,7 @@ __all__ = [
     
     # GUI Classes
     "FrameROISquare",
+    "FrameROIRotatable",
     "SceneViewer",
     "VideoFrameSelector",
     "VideoFramesSelector",

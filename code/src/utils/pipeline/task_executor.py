@@ -28,7 +28,11 @@ class TaskExecutor:
         if not self.can_run:
             return 
 
-        if exc_type: 
+        if exc_type:
+            from .pipeline_dependency_error import PipelineDependencyError
+            if isinstance(exc_value, PipelineDependencyError):
+                from .dependency_popup import show_dependency_error_popup
+                show_dependency_error_popup(exc_value)
             self.error_msg = f"Task '{self.task_name}' failed: {exc_value}"
             print(f"❌ {self.error_msg}\n{traceback.format_exc()}")
             if self.monitor is not None:

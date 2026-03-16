@@ -1,5 +1,6 @@
 import os
 
+from utils.should_process_task import should_process_task
 from preprocessing.forearm_extraction import (
     PointCloudController,
     PointCloudModel,
@@ -9,21 +10,19 @@ from preprocessing.forearm_extraction import (
 def define_normals(
         input_ply_path: str,
         output_ply_path: str,
-        output_metadata_path:str,
+        output_metadata_path: str,
         *,
-        force_processing: bool = True
+        force_processing: bool = False,
 ):
     """
     Main function to set up and run the application.
     """
-    if not os.path.exists(input_ply_path): 
-        print(f"Input PLY couldn't be found: {input_ply_path}. Run automatic pipeline first.")
-        return None
-    
-    if not force_processing:
-        if os.path.exists(output_ply_path) and os.path.exists(output_metadata_path):
-            print(f"Normals have already been estimated for file {input_ply_path}.")
-            return output_ply_path, output_metadata_path
+    if not should_process_task(
+        output_paths=[output_ply_path, output_metadata_path],
+        input_paths=[input_ply_path],
+        force=force_processing,
+    ):
+        return output_ply_path, output_metadata_path
     
     # --- MVC Setup ---
     # 1. Create the Model

@@ -123,11 +123,15 @@ test/
 # Mac OS
 .DS_Store
 
+# Office documents (research files; keep on shared drive, not in git)
+*.pptx
+*.docx
+
 #R project files
 .Rproj.user
 
-#C++ project files
-.vscode/launch.json
+#C++ / VS Code editor settings
+.vscode/
 
 # user config file with project path
 # 1. Ignore all .yaml files inside configs/ and all its subdirectories
@@ -140,12 +144,22 @@ semi_controlled_project_data_config.json
 # sandbox scripts
 /code/scripts/misc
 GEMINI.md
+CLAUDE.md
+
+# VS Code workspace files
+*.code-workspace
+
+# Claude Code local settings
+.claude/
+
+# project skeleton / guidelines reference (local only)
+/docs/skeleton/
 
 # pipeline reports folder
 reports/
 /code/scripts/__misc
 /demo_out
 /example_data
-/demo_out
-/demo_out
-/example_data
+
+# temporary files and videos
+temp_videos/

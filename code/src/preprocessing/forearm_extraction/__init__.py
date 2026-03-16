@@ -15,11 +15,30 @@ from .models.forearm_parameters import (
     sort_forearm_parameters_by_video_and_frame
 )
 
+from .depth_averaging import FrameDepthAverager
+
 from .gui.multivideo_frames_selector import MultiVideoFramesSelector
 
 from .models.forearm_catalog import (
     ForearmCatalog,
     get_forearms_with_fallback
+)
+
+from .registration import (
+    apply_rigid_transform,
+    find_applicable_transform_key,
+    ForearmRegistrator,
+    get_transform_schedule,
+    parse_contact_points,
+    register_session_forearms,
+    serialize_contact_points,
+    transform_spatial_columns_in_place,
+    transform_spatial_columns_scheduled,
+)
+
+from .curation import (
+    CurationMetadataFileHandler,
+    ForearmCurationGUI,
 )
 
 
@@ -34,5 +53,19 @@ __all__ = [
     "ForearmParameters",
     "RegionOfInterest",
     "Point",
-    "ForearmSegmentationParamsFileHandler"
+    "ForearmSegmentationParamsFileHandler",
+    "FrameDepthAverager",
+
+    "apply_rigid_transform",
+    "find_applicable_transform_key",
+    "ForearmRegistrator",
+    "get_transform_schedule",
+    "parse_contact_points",
+    "register_session_forearms",
+    "serialize_contact_points",
+    "transform_spatial_columns_in_place",
+    "transform_spatial_columns_scheduled",
+
+    "CurationMetadataFileHandler",
+    "ForearmCurationGUI",
 ]

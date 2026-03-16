@@ -13,9 +13,14 @@ class ROICentroidPointCloudExtractor(XYZExtractorInterface):
     of a tracked ROI's bounding box.
     """
 
-    def __init__(self):
-        """Initializes the extractor."""
-        pass
+    def __init__(self, debug: bool = False):
+            """
+            Initializes the extractor.
+            
+            Args:
+                debug (bool): If True, enables debug mode (e.g., for plotting).
+            """
+            self.debug = debug
 
     def extract(self, tracked_obj_row: pd.Series, point_cloud: np.ndarray) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         """

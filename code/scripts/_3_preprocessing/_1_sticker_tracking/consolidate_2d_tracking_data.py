@@ -1,10 +1,12 @@
 # Standard library imports
+import sys
 from pathlib import Path
 from typing import Optional, Dict
 
 # Third-party imports
 import numpy as np
 import pandas as pd
+
 
 # Local application/library specific imports
 from utils.should_process_task import should_process_task
@@ -41,7 +43,7 @@ def consolidate_2d_tracking_data(
     roi_csv_path: Path,
     ellipse_csv_path: Path,
     output_csv_path: Path,
-    score_threshold: float = 0.7,
+    score_threshold: float = 0.3,
     *,
     force_processing: bool = False
 ) -> Optional[ConsolidatedTracksManager]:

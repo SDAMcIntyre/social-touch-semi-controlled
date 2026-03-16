@@ -9,6 +9,7 @@ if TYPE_CHECKING:
     from preprocessing.stickers_analysis import TrackedDataInterface
 from .xyz_extractor_interface import XYZExtractorInterface
 
+
 class XYZStickerOrchestrator:
     """
     Orchestrates the process of extracting 3D positions by delegating
@@ -21,7 +22,11 @@ class XYZStickerOrchestrator:
         pass
     
     @staticmethod
-    def run(source_video_path: str, data_source: TrackedDataInterface, extractor: XYZExtractorInterface) -> Tuple[pd.DataFrame, int]:
+    def run(
+        source_video_path: str, 
+        data_source: TrackedDataInterface, 
+        extractor: XYZExtractorInterface
+    ) -> Tuple[pd.DataFrame, int]:
         if not isinstance(extractor, XYZExtractorInterface):
             raise TypeError("The provided extractor does not implement the XYZExtractorInterface interface.")
 
@@ -33,10 +38,12 @@ class XYZStickerOrchestrator:
         try:
             with KinectMKV(source_video_path) as mkv:
                 for frame_index, frame in enumerate(mkv):
+                    # if frame_index < 1347: continue  # debug line, could also be 911 for green
                     print(f"--- Processing Frame {frame_index} ---", end='\r')
 
                     # The loop is now generic 🚀
-                    for object_name, tracked_obj_row in data_source.get_items_for_frame(frame_index):
+                    for object_name, tracked_obj_row in data_source.get_items_for_frame(frame_index):                        
+                        # if object_name != "sticker_green": continue  # debug line
                         if extractor.should_process_row(tracked_obj_row):
                             (coords_3d, monitor_data) = extractor.extract(
                                 tracked_obj_row, 

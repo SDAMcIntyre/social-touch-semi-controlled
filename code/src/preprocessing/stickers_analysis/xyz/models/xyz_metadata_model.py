@@ -2,7 +2,10 @@ import os
 from typing import Any, Optional, Dict, Tuple
 from datetime import datetime, timezone
 
-from pyk4a import PyK4APlayback
+try:
+    from pyk4a import PyK4APlayback
+except ImportError:
+    PyK4APlayback = None
 
 
 class XYZMetadataModel:

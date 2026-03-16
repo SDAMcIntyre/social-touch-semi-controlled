@@ -175,7 +175,7 @@ class ObjectsInteractionProcessor:
 
         contact_quantities = {
             "contact_detected": 1,
-            "contact_points": contact_points,
+            "contact_points": contact_points.tolist(),
             "contact_depth": float(contact_depth),
             "contact_area": float(total_contact_area),
             "contact_location_x": float(mean_location[0]),

@@ -18,9 +18,7 @@ class UserInterface:
         This root will be the parent for all subsequent dialogs.
         """
         self.root = tk.Tk()
-        # ❌ Instead of this:
-        # self.root.withdraw()
-        # ✅ Do this: Move the window to an off-screen position.
+        # Move the window to an off-screen position.
         # This keeps it active for managing dialogs without being visible.
         self.root.geometry('+10000+10000')
 
@@ -32,12 +30,12 @@ class UserInterface:
             self.root.destroy()
             self.root = None
 
-    def select_frame_from_video(self, video_source, start_frame: int = 0, initial_frame: int = 0) -> int | None:
+    def select_frame_from_video(self, video_source, start_frame: int = 0, initial_frame: int = 0, title: str = "Video Processor") -> int | None:
         """
         Opens a modal dialog to select a specific frame from a video source.
         This method now uses the persistent root window as the parent.
         """
-        print("✅ Initializing frame selector...")
+        print(f"✅ Initializing frame selector: {title}...")
         
         selected_frame = None
         try:
@@ -47,7 +45,7 @@ class UserInterface:
                 video_source=video_source,
                 first_frame=start_frame,
                 current_frame_num=initial_frame,
-                title="Video Processor"
+                title=title
             )
             selected_frame = selector.select_frame()
         except Exception as e:
@@ -56,14 +54,11 @@ class UserInterface:
             
         return selected_frame
 
-    def select_roi_from_frame(self, frame: np.ndarray, predefined_roi: dict = None) -> dict | None:
+    def select_roi_from_frame(self, frame: np.ndarray, predefined_roi: dict = None, window_title: str = "Define Region of Interest (ROI)") -> dict | None:
         """
         Displays a frame to allow the user to define a Region of Interest (ROI).
-        
-        Note: For optimal architecture, the 'FrameROISquare' class should also be
-        modified to accept a parent window, similar to 'VideoFrameSelector'.
         """
-        print("✅ Initializing ROI selector...")
+        print(f"✅ Initializing ROI selector: {window_title}...")
         if frame is None:
             print("❌ Cannot select ROI from a null frame.")
             return None
@@ -73,7 +68,7 @@ class UserInterface:
             roi_selector = FrameROISquare(
                 image_input=frame,
                 is_rgb=True,
-                window_title="Define Region of Interest (ROI)",
+                window_title=window_title,
                 predefined_roi=predefined_roi
             )
             roi_selector.run()
@@ -91,59 +86,28 @@ class UserInterface:
 
 # --- CORRECTED Example Usage ---
 if __name__ == '__main__':
-    video_path = 'F:\\liu-onedrive-nospecial-carac\\_Teams\\Social touch Kinect MNG\\data\\semi-controlled\\1_primary\\kinect\\2022-06-14_ST13-01\\block-order-03\\2022-06-14_ST13-01_semicontrolled_block-order03_kinect.mp4'
+    video_path = 'path/to/video.mp4'
     cap = cv2.VideoCapture(video_path)
     
     if not cap.isOpened():
-        # Use a messagebox for GUI-based error reporting
         root = tk.Tk()
         root.withdraw()
         messagebox.showerror("File Error", f"Could not open video file at '{video_path}'")
         root.destroy()
     else:
-        # --- STEP 1: Instantiate the UserInterface ONCE ---
         ui = UserInterface()
         
         try:
-            # --- STEP 2: Use the UI instance to select a frame ---
-            selected_frame_num = ui.select_frame_from_video(video_source=cap, initial_frame=100)
+            selected_frame_num = ui.select_frame_from_video(video_source=cap, initial_frame=100, title="Select Analysis Frame")
             
-            # --- STEP 3: If a frame was selected, proceed to select an ROI ---
             if selected_frame_num is not None:
-                print(f"\nProceeding with frame number: {selected_frame_num}")
-                
                 cap.set(cv2.CAP_PROP_POS_FRAMES, selected_frame_num)
                 success, frame_bgr = cap.read()
                 
                 if success:
                     frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-                    
-                    # --- STEP 4: Use the UI instance to get an ROI ---
-                    roi_data = ui.select_roi_from_frame(frame=frame_rgb)
-                    
-                    if roi_data:
-                        print("\n🎉 Final Selection Complete!")
-                        print(f"   - Selected Frame: {selected_frame_num}")
-                        print(f"   - Selected ROI: {roi_data}")
-
-                        if ui.confirm_action(question="Would you like to edit the ROI?"):
-                            print("\nRe-opening ROI editor with previous selection...")
-                            edited_roi_data = ui.select_roi_from_frame(frame=frame_rgb, predefined_roi=roi_data)
-                            
-                            if edited_roi_data:
-                                print("\n🎉 Final Edited Selection:")
-                                print(f"   - Edited ROI: {edited_roi_data}")
-                            else:
-                                print("\nROI editing was cancelled.")
-                    else:
-                        print("\nROI selection was cancelled.")
-                else:
-                    print(f"❌ Failed to read frame {selected_frame_num} from the video.")
-            else:
-                print("\nFrame selection was cancelled. Exiting.")
-                
+                    roi_data = ui.select_roi_from_frame(frame=frame_rgb, window_title="Select Target Object")
+                    print(f"ROI: {roi_data}")
         finally:
-            # --- STEP 5: Clean up ALL resources at the end ---
             cap.release()
-            ui.destroy() # This destroys the single Tkinter root
-            print("\nProgram finished.")
+            ui.destroy()

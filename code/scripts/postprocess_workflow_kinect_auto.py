@@ -1,3 +1,4 @@
+import argparse
 import os
 import logging
 from pathlib import Path
@@ -6,7 +7,7 @@ import shutil
 import time
 import traceback
 from multiprocessing import Queue, freeze_support
-from typing import List, Dict, Tuple, Any
+from typing import List, Dict, Tuple, Any, Optional
 from collections import defaultdict
 
 import pandas as pd
@@ -26,18 +27,35 @@ from utils import (
     PipelineMonitor,
     TaskExecutor
 )
+from utils.pipeline.session_config_resolver import resolve_session_configs
 from primary_processing import (
-    KinectConfigFileHandler, 
-    KinectConfig, 
-    get_block_files
+    KinectConfigFileHandler,
+    KinectConfig,
 )
 
 from _5_postprocessing import (
-    determine_receptive_field,
-    set_xyz_reference_from_gestures
+    apply_icp_registration,
+    set_xyz_reference_from_gestures,
+    export_forearm_pca_calibrated,
+    project_contacts_onto_forearm,
 )
+from _4_merging.aggregate_blocks_session import aggregate_session_blocks
 
 # --- Post-Processing Sub-Flows ---
+
+@flow(name="apply_icp_registration")
+def apply_icp_registration_flow(
+    input_files: List[Path],
+    session_configs: List[KinectConfig],
+    output_dir: Path,
+    force_processing: bool = False,
+) -> List[Path]:
+    """Apply ICP registration transforms to merged CSVs."""
+    print(f"[{output_dir.name}] Applying ICP registration to {len(input_files)} files...")
+    return apply_icp_registration(
+        input_files, session_configs, output_dir,
+        force_processing=force_processing,
+    )
 
 @flow(name="analyze_pca_components")
 def set_xyz_reference_from_gestures_flow(input_files: List[Path], output_dir: Path, force_processing: bool = False) -> Tuple[List[Path], Path]:
@@ -46,54 +64,61 @@ def set_xyz_reference_from_gestures_flow(input_files: List[Path], output_dir: Pa
     Iterates over a list of files and produces a distinct output for each.
     """
     print(f"[{output_dir.name}] Performing PCA analysis on {len(input_files)} files...")
-    
-    output_dir = output_dir / "session_xyz_reference_from_gestures"
+
     output_files = set_xyz_reference_from_gestures(
         input_files, output_dir,
         monitor=False,
         monitor_segment=False,
         force_processing=force_processing
     )
-    
+
     return output_files
 
-@flow(name="determine_receptive_field")
-def determine_receptive_field_flow(
-    input_files: List[Path], 
-    configs: List[KinectConfig], 
-    output_dir: Path, 
-    force_processing: bool = False
-) -> Tuple[List[Path], List[Path]]:
-    """
-    Determine the receptive field based on touch locations for each file.
-    Returns a list of metadata CSV paths corresponding to the input data files.
-    
-    Updated to accept configs.
-    """
-    print(f"[{output_dir.name}] Calculating receptive field for {len(input_files)} files...")
-    
-    kinect_config = configs[0]
-    forearm_pointcloud_dir = kinect_config.session_processed_output_dir / "forearm_pointclouds"
-    arm_roi_metadata_path = forearm_pointcloud_dir / (kinect_config.session_id + "_arm_roi_metadata.json")
 
-    # Pass configs to the underlying function
-    output_files, rf_pc_file = determine_receptive_field(
-        input_files, 
-        arm_roi_metadata_path, 
-        output_dir, 
-        force_processing=force_processing
+@flow(name="export_forearm_pca_calibrated")
+def export_forearm_pca_calibrated_flow(
+    session_configs: List[KinectConfig],
+    pca_output_dir: Path,
+    output_dir: Path,
+    force_processing: bool = False,
+) -> Optional[Path]:
+    """Export the forearm-of-reference PLY transformed into PCA-calibrated space."""
+    print(f"[{output_dir.name}] Exporting PCA-calibrated forearm PLY...")
+    return export_forearm_pca_calibrated(
+        session_configs, pca_output_dir, output_dir,
+        force_processing=force_processing,
     )
 
-    return output_files, rf_pc_file
 
-@flow(name="filter_by_receptive_field")
-def filter_by_receptive_field(data_files: List[Path], rf_files: List[Path], output_dir: Path, force_processing: bool = False) -> List[Path]:
-    """
-    Filter the data based on the receptive field.
-    Matches data files to RF files by index (assumes strictly ordered 1-to-1 flow).
-    """
-    print(f"[{output_dir.name}] Filtering data for {len(data_files)} files...")
-    return
+@flow(name="project_contacts_onto_forearm")
+def project_contacts_onto_forearm_flow(
+    input_files: List[Path],
+    forearm_ply_path: Optional[Path],
+    output_dir: Path,
+    projection_stats_path: Path,
+    force_processing: bool = False,
+) -> List[Path]:
+    """Project contact points onto the PCA-calibrated forearm surface."""
+    print(f"[{output_dir.name}] Projecting contact points onto forearm surface...")
+    return project_contacts_onto_forearm(
+        input_files, forearm_ply_path, output_dir, projection_stats_path,
+        force_processing=force_processing,
+    )
+
+
+@flow(name="aggregate_session_blocks")
+def aggregate_session_blocks_flow(
+    input_files: List[Path],
+    output_path: Path,
+    force_processing: bool = False,
+) -> Path:
+    """Aggregate all fully-processed block CSVs into one session-level CSV."""
+    print(f"[{output_path.name}] Aggregating {len(input_files)} blocks...")
+    return aggregate_session_blocks(
+        input_paths=input_files,
+        output_path=output_path,
+        force_processing=force_processing,
+    )
 
 
 # --- Worker Flow ---
@@ -115,7 +140,7 @@ def run_single_session_postprocessing(
     # We look for the specific file expected from the video processing stage
     session_input_files = []
     for config in session_configs:
-        input_dir = config.session_merged_output_dir / "sessions"
+        input_dir = config.session_merged_output_dir / "blocks_merged"
         input_path = input_dir / f"{config.session_id}_semicontrolled_{config.block_id}_merged_data.csv"
         # Only add if it vaguely looks like a path, validation happens in tasks
         session_input_files.append(input_path)
@@ -135,39 +160,60 @@ def run_single_session_postprocessing(
 
     # UPDATED: Pipeline stages using the architecture of function_of_reference
     pipeline_stages = [
-        # Receptive Field
+        # Step 1: ICP Registration
         {
-            "name": "determine_receptive_field",
-            "func": determine_receptive_field_flow,
+            "name": "apply_icp_registration",
+            "func": apply_icp_registration_flow,
             "params": lambda: {
                 "input_files": context.get("source_files"),
-                "configs": context.get("session_configs"),  # Configs propagated here
-                "output_dir": session_output_dir / "sessions_receptive-field"
+                "session_configs": context.get("session_configs"),
+                "output_dir": session_output_dir / "blocks_registered",
             },
-            "outputs": ["segmented_data_files", "rf_metadata_files"]
+            "outputs": ["registered_files"]
         },
-        # Filtering
-        {
-            "name": "filter_by_receptive_field",
-            "func": filter_by_receptive_field,
-            "params": lambda: {
-                "data_files": context.get("segmented_data_files"),
-                "rf_files": context.get("rf_metadata_files"),
-                "output_dir": session_output_dir
-            },
-            "outputs": ["final_data_files"]
-        },
-        
-        # PCA Analysis
+        # Step 2: PCA XYZ Reference Calibration
         {
             "name": "set_xyz_reference_from_gestures",
             "func": set_xyz_reference_from_gestures_flow,
             "params": lambda: {
-                "input_files": context.get("source_files"),
-                "output_dir": session_output_dir  / "session_xyz_reference_from_gestures"
+                "input_files": context.get("registered_files"),
+                "output_dir": session_output_dir / "blocks_pca_calibrated",
             },
             "outputs": ["pca_data_files", "pca_report"]
-        }
+        },
+        # Step 3: Export forearm PLY in PCA-calibrated space
+        {
+            "name": "export_forearm_pca_calibrated",
+            "func": export_forearm_pca_calibrated_flow,
+            "params": lambda: {
+                "session_configs": context.get("session_configs"),
+                "pca_output_dir": context.get("pca_report"),
+                "output_dir": session_output_dir / "forearm_pca_calibrated",
+            },
+            "outputs": ["forearm_pca_ply"]
+        },
+        # Step 4: Project contact points onto forearm surface
+        {
+            "name": "project_contacts_onto_forearm",
+            "func": project_contacts_onto_forearm_flow,
+            "params": lambda: {
+                "input_files": context.get("pca_data_files"),
+                "forearm_ply_path": context.get("forearm_pca_ply"),
+                "output_dir": session_output_dir / "blocks_contact_projected",
+                "projection_stats_path": session_output_dir / "blocks_contact_projected" / "projection_stats.csv",
+            },
+            "outputs": ["projected_files"]
+        },
+        # Step 5: Aggregate fully-processed blocks into one session-level CSV
+        {
+            "name": "aggregate_session",
+            "func": aggregate_session_blocks_flow,
+            "params": lambda: {
+                "input_files": context.get("projected_files"),
+                "output_path": session_output_dir / f"{session_id}_semicontrolled_aggregated_session.csv",
+            },
+            "outputs": ["aggregated_file"]
+        },
     ]
 
     for stage in pipeline_stages:
@@ -191,7 +237,7 @@ def run_single_session_postprocessing(
                  # and allowing the __exit__ to handle logging
                  continue
 
-            # Inject force_processing if defined in options
+            # Inject options into params when supported by the flow
             if 'force_processing' in options:
                 params['force_processing'] = options['force_processing']
             
@@ -223,7 +269,7 @@ def run_single_session_postprocessing(
     return {"status": "success", "completed_tasks": list(dag_handler.completed_tasks)}
 
 def run_batch_postprocessing(
-    kinect_configs_dir: Path,
+    block_files: list[Path],
     project_data_root: Path,
     dag_config_path: Path,
     monitor_queue: Queue,
@@ -234,9 +280,9 @@ def run_batch_postprocessing(
     Loads all block configurations, groups them by session_id, and triggers postprocessing per session.
     """
     # 1. Load Configs
-    block_files = get_block_files(kinect_configs_dir)
+    dag_handler_template = DagConfigHandler(dag_config_path)
     if not block_files:
-        logging.warning(f"No config files found in {kinect_configs_dir}")
+        logging.warning("No config files found.")
         return
 
     # 2. Group by Session ID
@@ -283,11 +329,14 @@ def run_batch_postprocessing(
 
 def main():
     freeze_support()
-    
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dag-config", type=Path, required=True)
+    args = parser.parse_args()
+    dag_config_path = args.dag_config
+
     # Configuration
     project_data_root = path_tools.get_project_data_root() # Using path_tools as per reference script
     configs_dir = Path("configs")
-    dag_config_path = configs_dir / "postprocess_workflow_kinect_auto_dag.yaml"
     
     reports_dir = Path("reports")
     reports_dir.mkdir(exist_ok=True)
@@ -295,33 +344,17 @@ def main():
 
     monitor_queue = Queue()
     
-    # Load the Main DAG handler just to get directory settings if needed,
-    # or hardcode if strictly following local paths.
-    try:
-        # Assuming the DAG config might contain the config directory name
-        # If not, we default to 'kinect_configs' or similar
-        main_dag_handler = DagConfigHandler(dag_config_path)
-        kinect_dir_name = main_dag_handler.get_parameter('kinect_configs_directory')
-        kinect_configs_dir: Path = configs_dir / kinect_dir_name
-        
-        if not kinect_configs_dir.exists():
-             # Fallback for safety if parameter is missing/wrong
-             kinect_configs_dir = configs_dir
-             
-    except Exception:
-        kinect_configs_dir = configs_dir / "kinect_configs"
-
-    if not kinect_configs_dir.exists():
-        logging.error(f"Config directory {kinect_configs_dir} does not exist.")
-        exit(1)
+    main_dag_handler = DagConfigHandler(dag_config_path)
+    entries = main_dag_handler.get_parameter('kinect_configs')
+    block_files = resolve_session_configs(entries, configs_dir / "kinect_configs")
 
     run_batch_postprocessing(
-        kinect_configs_dir=kinect_configs_dir,
+        block_files=block_files,
         project_data_root=project_data_root,
         dag_config_path=dag_config_path,
         monitor_queue=monitor_queue,
         report_file_path=report_file_path,
-        parallel=False 
+        parallel=False
     )
 
 if __name__ == "__main__":

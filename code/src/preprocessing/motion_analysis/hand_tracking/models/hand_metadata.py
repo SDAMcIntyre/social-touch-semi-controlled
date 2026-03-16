@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import List, Dict, Optional
 
 @dataclass
 class HandMetadataManager:
@@ -13,7 +14,8 @@ class HandMetadataManager:
     selected_hand_model_path: Path
     selected_frame_number: int = 0
     is_left_hand: bool = False
-    selected_points: dict[str, int | None] = field(default_factory=dict)
+    selected_points: Dict[str, Optional[int]] = field(default_factory=dict)
+    excluded_vertex_ids: List[int] = field(default_factory=list)
 
     def generate_output(self) -> dict:
         """
@@ -40,6 +42,7 @@ class HandMetadataManager:
             "selected_hand_model_name": self.selected_hand_model_path.name,
             "selected_frame_number": self.selected_frame_number,
             "hand_orientation": "left" if self.is_left_hand else "right",
-            "selected_points": selected_points_list
+            "selected_points": selected_points_list,
+            "excluded_vertex_ids": self.excluded_vertex_ids
         }
         return metadata

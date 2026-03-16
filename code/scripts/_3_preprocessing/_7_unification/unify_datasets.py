@@ -133,15 +133,19 @@ def unify_datasets(
     """
     # Map inputs to a dictionary for cleaner processing
     inputs = {
-        'contact_path': contact_path, # Primary kinematics usually in contact path
         'led_path': led_path,
+        'contact_path': contact_path, # Primary kinematics usually in contact path
         'trial_path': trial_path,
         'single_touch_path': single_touch_path,
         'stimuli_path': stimuli_path
     }
     
     # Check cache/existence logic using the utility function
-    if not should_process_task([output_path], [contact_path, led_path, trial_path, single_touch_path, stimuli_path], force=force_processing):
+    if not should_process_task(
+        output_paths=[output_path], 
+        input_paths=[contact_path, led_path, trial_path, single_touch_path, stimuli_path], 
+        force=force_processing
+    ):
         logger.info(f"Skipping task: Output '{output_path}' exists.")
         return True
 
@@ -162,10 +166,10 @@ def unify_datasets(
 
     except FileNotFoundError as e:
         logger.error(f"File missing: {e}")
-        return False
+        raise
     except ValueError as e:
         logger.error(f"Data Validation Error: {e}")
-        return False
+        raise
     except Exception as e:
         logger.error(f"Unexpected error: {e}", exc_info=True)
-        return False
+        raise
