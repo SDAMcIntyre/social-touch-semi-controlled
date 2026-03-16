@@ -15,22 +15,22 @@ class FrameDepthAverager:
     def average(
         mkv,
         frame_ids: List[int],
-        color_frame_id: int,
     ) -> o3d.geometry.PointCloud:
         """
-        Computes a per-pixel mean of transformed_depth_point_cloud across the given frames.
+        Computes a per-pixel mean of transformed_depth_point_cloud and color across
+        the given frames.
 
-        Uses a running accumulator (one frame at a time) so memory stays O(H×W×3)
-        regardless of how many frames are averaged.
+        Uses running accumulators (one frame at a time) so memory stays O(H×W×3)
+        regardless of how many frames are averaged.  Color frames that are None are
+        skipped silently; depth frames that are None are also skipped.
 
         Args:
             mkv: An open KinectMKV context (supports __getitem__).
             frame_ids: Frame indices to average (will be sorted internally).
-            color_frame_id: Frame whose color image is used for the output point cloud.
 
         Returns:
-            An o3d.geometry.PointCloud with averaged XYZ points and color from
-            color_frame_id.  Pixels with no valid depth in any frame are excluded.
+            An o3d.geometry.PointCloud with averaged XYZ points and averaged colors.
+            Pixels with no valid depth in any frame are excluded.
 
         Raises:
             ValueError: If no frames yielded valid depth data.
@@ -38,6 +38,8 @@ class FrameDepthAverager:
         sorted_ids = sorted(frame_ids)
         running_sum: np.ndarray | None = None
         valid_count: np.ndarray | None = None
+        running_color_sum: np.ndarray | None = None
+        valid_color_frames: int = 0
 
         for fid in sorted_ids:
             try:
@@ -67,6 +69,14 @@ class FrameDepthAverager:
             running_sum += xyz * mask[:, :, np.newaxis]
             valid_count += mask.astype(np.int32)
 
+            # Accumulate color from the same frame (None frames are skipped)
+            color = frame.color
+            if color is not None:
+                if running_color_sum is None:
+                    running_color_sum = np.zeros((*color.shape[:2], 3), dtype=np.float64)
+                running_color_sum += color.astype(np.float64)
+                valid_color_frames += 1
+
         if running_sum is None:
             raise ValueError(
                 "FrameDepthAverager: no valid frames were loaded; cannot produce a point cloud."
@@ -77,28 +87,16 @@ class FrameDepthAverager:
         avg_xyz = running_sum / np.maximum(valid_count[:, :, np.newaxis], 1)
         final_mask = valid_count >= 1  # (H, W) bool
 
-        # Fetch color from the representative frame
-        try:
-            color_frame = mkv[color_frame_id]
-            color_img = color_frame.color
-        except (IndexError, ValueError) as exc:
-            logger.warning(
-                "FrameDepthAverager: color_frame_id %d could not be loaded (%s); "
-                "using white colors.",
-                color_frame_id,
-                exc,
-            )
-            color_img = None
-
         points_xyz = avg_xyz[final_mask]
 
-        if color_img is not None:
-            points_rgb = color_img[final_mask][:, ::-1] / 255.0  # BGR → RGB
+        if running_color_sum is not None:
+            avg_color = running_color_sum / valid_color_frames  # float64, range 0–255
+            points_rgb = avg_color[final_mask][:, ::-1] / 255.0  # BGR → RGB
         else:
             logger.warning(
-                "FrameDepthAverager: color_frame_id %d returned no color image; "
+                "FrameDepthAverager: no valid color frames found among %d frame(s); "
                 "using white colors.",
-                color_frame_id,
+                len(sorted_ids),
             )
             points_rgb = np.ones((len(points_xyz), 3), dtype=np.float64)
 

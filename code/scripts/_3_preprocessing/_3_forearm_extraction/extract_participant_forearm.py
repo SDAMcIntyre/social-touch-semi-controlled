@@ -248,7 +248,6 @@ def extract_forearm(
                 point_cloud = FrameDepthAverager.average(
                     mkv,
                     video_config.frame_ids,
-                    color_frame_id=video_config.representative_frame_id,
                 )
             else:
                 point_cloud = frame.generate_o3d_point_cloud()
