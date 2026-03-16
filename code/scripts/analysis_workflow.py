@@ -40,8 +40,8 @@ from analysis.receptive_field_mapping.rf_visualizer import RFVisualizer
 
 # --- Analysis Flows ---
 
-@flow(name="generate_session_block_summary")
-def generate_session_summary_flow(
+@flow(name="summarize_session_blocks")
+def summarize_session_blocks_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
 ) -> List[Path]:
@@ -76,8 +76,8 @@ def generate_session_summary_flow(
         return []
 
 
-@flow(name="process_unified_touches")
-def process_unified_touches_flow(
+@flow(name="summarize_touches_per_session")
+def summarize_touches_per_session_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
 ) -> List[Path]:
@@ -159,7 +159,7 @@ def analyse_number_single_touches_flow(
             logging.error(f"Failed to generate aggregate matrix: {e}")
             return []
     else:
-        logging.warning("No unified summary files found. Run 'process_unified_touches' first.")
+        logging.warning("No unified summary files found. Run 'summarize_touches_per_session' first.")
         return []
 
 @flow(name="analyse_ap_efficacy")
@@ -198,7 +198,7 @@ def analyse_ap_efficacy_flow(
             logging.error(f"Failed to generate AP matrix: {e}")
             return []
     else:
-        logging.warning("No unified summary files found. Run 'process_unified_touches' first.")
+        logging.warning("No unified summary files found. Run 'summarize_touches_per_session' first.")
         return []
 
 @flow(name="map_receptive_fields")
@@ -237,7 +237,7 @@ def map_receptive_fields_flow(
             if not summary_path.exists():
                 logging.warning(
                     f"Unified summary not found: {summary_path}. "
-                    "Run 'process_unified_touches' first. Skipping."
+                    "Run 'summarize_touches_per_session' first. Skipping."
                 )
                 continue
 
@@ -436,8 +436,8 @@ def run_batch_analysis(
         return
 
     available_tasks = [
-        ("generate_session_summary", generate_session_summary_flow),
-        ("process_unified_touches", process_unified_touches_flow),
+        ("summarize_session_blocks", summarize_session_blocks_flow),
+        ("summarize_touches_per_session", summarize_touches_per_session_flow),
         ("analyse_number_single_touches", analyse_number_single_touches_flow),
         ("analyse_ap_efficacy", analyse_ap_efficacy_flow),
         ("map_receptive_fields", map_receptive_fields_flow),
