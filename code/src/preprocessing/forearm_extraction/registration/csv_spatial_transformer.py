@@ -1,9 +1,8 @@
 """Spatial transformation utilities for somatosensory CSV files.
 
 Provides helpers for parsing and serialising ``contact_points`` cells,
-resolving transform keys, applying 4x4 rigid transforms to spatial columns
-in-place, and the legacy ``transform_unified_csv`` function that adds
-``*_transformed`` columns alongside the originals.
+resolving transform keys, and applying 4x4 rigid transforms to spatial
+columns in-place.
 """
 
 import logging
@@ -90,28 +89,6 @@ def apply_rigid_transform(
     R = T[:3, :3]
     t = T[:3, 3]
     return points @ R.T + t
-
-
-# ------------------------------------------------------------------
-# Column resolution helper
-# ------------------------------------------------------------------
-
-def resolve_column(df: pd.DataFrame, base: str, use_transformed: bool) -> str:
-    """Return ``base + '_transformed'`` if the flag is set, otherwise ``base``.
-
-    Raises ``KeyError`` when ``use_transformed`` is ``True`` but the transformed
-    column is absent — the caller must ensure the CSV has been through the ICP
-    registration step before enabling this flag.
-    """
-    if use_transformed:
-        candidate = base + "_transformed"
-        if candidate not in df.columns:
-            raise KeyError(
-                f"Column '{candidate}' not found in DataFrame. "
-                "Ensure ICP registration has been run, or set use_transformed=False."
-            )
-        return candidate
-    return base
 
 
 # ------------------------------------------------------------------
@@ -395,68 +372,3 @@ def transform_spatial_columns_scheduled(
     return df
 
 
-# ------------------------------------------------------------------
-# Legacy Public API (adds *_transformed columns alongside originals)
-# ------------------------------------------------------------------
-
-def transform_unified_csv(
-    input_csv: Path,
-    output_csv: Path,
-    transform_4x4: np.ndarray,
-) -> Path:
-    """Apply a rigid transform to the spatial columns of a somatosensory CSV.
-
-    The function reads *input_csv*, adds ``contact_location_x/y/z_transformed``
-    and ``contact_points_transformed`` columns with the transformed coordinates,
-    and writes the result to *output_csv*.  Original columns are preserved
-    unchanged.  The source file is never modified.
-
-    If the transform is the identity matrix the file is still written
-    (to keep the pipeline uniform), but no arithmetic is performed on
-    the data.
-
-    Args:
-        input_csv: Path to the source ``_unified.csv``.
-        output_csv: Path for the transformed output.
-        transform_4x4: A 4x4 rigid-body transformation matrix.
-
-    Returns:
-        *output_csv* for convenient chaining.
-    """
-    df = pd.read_csv(input_csv)
-
-    is_identity = np.allclose(transform_4x4, np.eye(4))
-
-    # --- transform XYZ triplets ---
-    for group in _XYZ_GROUPS:
-        if all(c in df.columns for c in group):
-            xyz = df[list(group)].to_numpy(dtype=np.float64)
-            if not is_identity:
-                mask = ~np.isnan(xyz).any(axis=1)
-                if mask.any():
-                    xyz[mask] = apply_rigid_transform(xyz[mask], transform_4x4)
-            for i, col in enumerate(group):
-                df[col + "_transformed"] = xyz[:, i]
-
-    # --- transform contact_points ---
-    if _POINTS_COL in df.columns:
-        new_points_col = []
-        for cell in df[_POINTS_COL]:
-            pts = parse_contact_points(cell)
-            if pts and not is_identity:
-                arr = np.asarray(pts, dtype=np.float64)
-                arr = apply_rigid_transform(arr, transform_4x4)
-                new_points_col.append(
-                    serialize_contact_points(
-                        [tuple(row) for row in arr.tolist()]
-                    )
-                )
-            else:
-                # Identity transform or empty / NaN — copy original representation
-                new_points_col.append(cell)
-        df[_POINTS_COL + "_transformed"] = new_points_col
-
-    output_csv.parent.mkdir(parents=True, exist_ok=True)
-    df.to_csv(output_csv, index=False)
-    logger.info("Wrote transformed CSV to %s", output_csv)
-    return output_csv

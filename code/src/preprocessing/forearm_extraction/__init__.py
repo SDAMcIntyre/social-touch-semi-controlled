@@ -31,11 +31,9 @@ from .registration import (
     get_transform_schedule,
     parse_contact_points,
     register_session_forearms,
-    resolve_column,
     serialize_contact_points,
     transform_spatial_columns_in_place,
     transform_spatial_columns_scheduled,
-    transform_unified_csv,
 )
 
 from .curation import (
@@ -64,11 +62,9 @@ __all__ = [
     "get_transform_schedule",
     "parse_contact_points",
     "register_session_forearms",
-    "resolve_column",
     "serialize_contact_points",
     "transform_spatial_columns_in_place",
     "transform_spatial_columns_scheduled",
-    "transform_unified_csv",
 
     "CurationMetadataFileHandler",
     "ForearmCurationGUI",
