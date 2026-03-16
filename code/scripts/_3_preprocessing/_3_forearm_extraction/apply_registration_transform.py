@@ -1,9 +1,12 @@
 from pathlib import Path
 
+import numpy as np
+import pandas as pd
+
 from utils.should_process_task import should_process_task
 from preprocessing.forearm_extraction import (
     ForearmRegistrator,
-    transform_unified_csv,
+    transform_spatial_columns_in_place,
 )
 from preprocessing.forearm_extraction.registration.csv_spatial_transformer import (
     find_applicable_transform_key as _find_applicable_transform_key,
@@ -80,6 +83,10 @@ def apply_registration_transform(
     ):
         return output_path
 
-    transform_unified_csv(somatosensory_chars_path, output_path, transform_4x4)
+    df = pd.read_csv(somatosensory_chars_path)
+    T = np.asarray(transform_4x4, dtype=np.float64)
+    transform_spatial_columns_in_place(df, T)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(output_path, index=False)
     print(f"  Registered CSV written to: {output_path.name}")
     return output_path

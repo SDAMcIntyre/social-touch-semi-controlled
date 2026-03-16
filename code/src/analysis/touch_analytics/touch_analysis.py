@@ -7,14 +7,12 @@ from pathlib import Path
 
 # Architectural Import
 from utils.should_process_task import should_process_task
-from preprocessing.forearm_extraction.registration.csv_spatial_transformer import resolve_column
 
 def generate_unified_summary(
         input_path: Path,
         output_path: Path,
         show: bool = False,
         force: bool = False,
-        use_transformed: bool = True,
 ) -> Path:
     """
     Unified analysis function.
@@ -32,9 +30,9 @@ def generate_unified_summary(
         return output_path
 
     logging.info(f"Analyzing (Unified): {input_path.name}")
-    return _process_touch_analysis(input_path, output_path, show, use_transformed=use_transformed)
+    return _process_touch_analysis(input_path, output_path, show)
 
-def _process_touch_analysis(input_path: Path, output_path: Path, show: bool, *, use_transformed: bool = True) -> Path:
+def _process_touch_analysis(input_path: Path, output_path: Path, show: bool) -> Path:
     """
     Internal shared logic for processing touch kinematics.
     Always includes 'spike_elicited' column.
@@ -44,10 +42,6 @@ def _process_touch_analysis(input_path: Path, output_path: Path, show: bool, *, 
     except Exception as e:
         logging.error(f"Failed to load CSV: {e}")
         raise
-
-    # Resolve contact_location columns — use _transformed variants when available
-    _LOCATION_BASES = ('contact_location_x', 'contact_location_y', 'contact_location_z')
-    loc_cols = {base: resolve_column(df, base, use_transformed) for base in _LOCATION_BASES}
 
     if 'source_block_file' in df.columns:
         df['block_order_id'] = df['source_block_file'].astype(str).str.extract(r'_block-order-(\d+)_', expand=False)
@@ -91,10 +85,10 @@ def _process_touch_analysis(input_path: Path, output_path: Path, show: bool, *, 
         else:
             direction = "static" 
 
-        # --- Contact Location (mean per touch, using resolved columns) ---
-        mean_contact_x = group[loc_cols['contact_location_x']].mean() if loc_cols['contact_location_x'] in group.columns else None
-        mean_contact_y = group[loc_cols['contact_location_y']].mean() if loc_cols['contact_location_y'] in group.columns else None
-        mean_contact_z = group[loc_cols['contact_location_z']].mean() if loc_cols['contact_location_z'] in group.columns else None
+        # --- Contact Location (mean per touch) ---
+        mean_contact_x = group['contact_location_x'].mean() if 'contact_location_x' in group.columns else None
+        mean_contact_y = group['contact_location_y'].mean() if 'contact_location_y' in group.columns else None
+        mean_contact_z = group['contact_location_z'].mean() if 'contact_location_z' in group.columns else None
 
         # --- Efficacy Logic (Always Run) ---
         # Check if ANY frame in this touch had a spike (1)

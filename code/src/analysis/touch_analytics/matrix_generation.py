@@ -17,7 +17,6 @@ def generate_touch_summary_matrix(
     show: bool = True,
     log_scale: bool = True,
     log_axis: bool = True,
-    heatmap_only: bool = True, # Parameter kept for signature compatibility
     force: bool = False
 ) -> Path:
     """
