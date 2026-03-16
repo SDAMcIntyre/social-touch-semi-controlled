@@ -155,10 +155,11 @@ def update_ignore_frames_in_metadata(
 
 
 def review_tracking(
-        video_manager: VideoReviewManager, 
-        annotation_manager: ROIAnnotationManager, 
-        tracked_objs: ROITrackedObjects, 
-        title: str
+        video_manager: VideoReviewManager,
+        annotation_manager: ROIAnnotationManager,
+        tracked_objs: ROITrackedObjects,
+        title: str,
+        has_metadata: bool = True
 ) -> tuple[str, Dict[int, List[str]], Dict[int, List[str]], Dict[int, List[str]], Dict[int, List[str]]]:
     """
     Identifies frames that require manual review based on object tracking status.
@@ -177,7 +178,8 @@ def review_tracking(
         annotated_frame_ids = None
 
     print("\nLaunching Tkinter Video Player...")
-    view = TrackerReviewGUI(title=title, landmarks=annotated_frame_ids, windowState='maximized')
+    view = TrackerReviewGUI(title=title, landmarks=annotated_frame_ids, windowState='maximized',
+                            show_valid_button=has_metadata, show_rerun_button=has_metadata)
     controller = TrackerReviewOrchestrator(model=video_manager, view=view, tracking_history=tracked_objs)
     
     # Updated unpacking to handle 5 return values
@@ -204,7 +206,9 @@ def review_tracked_objects_in_video(
     """
     Main pipeline to review tracking, validate, or trigger re-annotation.
     """
-    if metadata_path.exists():
+    has_metadata = metadata_path.exists()
+
+    if has_metadata:
         annotation_data_iohandler = ROIAnnotationFileHandler.load(metadata_path)
         annotation_manager = ROIAnnotationManager(annotation_data_iohandler)
 
@@ -228,7 +232,7 @@ def review_tracked_objects_in_video(
     
     # Call the updated review_tracking function which returns 5 values
     final_status, frames_for_labeling, frames_for_deleting, frames_for_ignore_start, frames_for_ignore_stop = review_tracking(
-        video_manager, annotation_manager, tracked_data, title=os.path.basename(video_path)
+        video_manager, annotation_manager, tracked_data, title=os.path.basename(video_path), has_metadata=has_metadata
     )
     
     if final_status == TrackerReviewStatus.UNDEFINED or final_status == TrackerReviewStatus.UNPERFECT:
