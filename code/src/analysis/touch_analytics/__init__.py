@@ -18,8 +18,7 @@ from .session_summary import (
 # Define the public API of the package
 __all__ = [
     "DISCRETIZATION_CONFIG",
-    "analyse_number_single_touches", # Kept if it exists externally, though not in provided files
-    "analyse_ap_generation_efficacy", # Kept if it exists externally
+    "generate_unified_summary",
     "generate_touch_summary_matrix",
     "generate_ap_efficacy_matrix",
     "generate_session_summary",

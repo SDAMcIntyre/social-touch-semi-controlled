@@ -4,7 +4,6 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
-from typing import List, Union
 
 # Architectural Import
 from utils.should_process_task import should_process_task
@@ -34,88 +33,6 @@ def generate_unified_summary(
 
     logging.info(f"Analyzing (Unified): {input_path.name}")
     return _process_touch_analysis(input_path, output_path, show, use_transformed=use_transformed)
-
-def generate_touch_summary_matrix(
-        input_paths: List[Path],
-        output_path: Path,
-        show: bool = False,
-        force: bool = False
-) -> Path:
-    """
-    Generates a matrix of touch counts/conditions from multiple summary files.
-    Includes internal idempotency check.
-    """
-    # 1. Idempotency Check
-    if not should_process_task(
-        input_paths=input_paths, 
-        output_paths=[output_path], 
-        force=force
-    ):
-        logging.info(f"Skipping Touch Summary Matrix (Up-to-date): {output_path.name}")
-        return output_path
-
-    logging.info(f"Generating Touch Summary Matrix to {output_path}...")
-    
-    # --- Implementation Logic Placeholder ---
-    # (Original implementation logic would go here. 
-    #  Since it was not provided in the source file, this is a structural stub.)
-    try:
-        # Example logic:
-        # df_list = [pd.read_csv(p) for p in input_paths]
-        # combined = pd.concat(df_list)
-        # ... processing ...
-        # combined.to_csv(output_path)
-        
-        # Creating a dummy file to satisfy the architecture if running this code directly
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(output_path, 'w') as f:
-            f.write("trial_id,condition,count\n") # Mock header
-        
-        logging.info(f"Saved matrix to {output_path}")
-        
-    except Exception as e:
-        logging.error(f"Failed to generate touch matrix: {e}")
-        raise
-
-    return output_path
-
-def generate_ap_efficacy_matrix(
-        input_paths: List[Path],
-        output_path: Path,
-        show: bool = False,
-        force: bool = False
-) -> Path:
-    """
-    Generates a matrix of AP efficacy from multiple summary files.
-    Includes internal idempotency check.
-    """
-    # 1. Idempotency Check
-    if not should_process_task(
-        input_paths=input_paths, 
-        output_paths=[output_path], 
-        force=force
-    ):
-        logging.info(f"Skipping AP Efficacy Matrix (Up-to-date): {output_path.name}")
-        return output_path
-
-    logging.info(f"Generating AP Efficacy Matrix to {output_path}...")
-
-    # --- Implementation Logic Placeholder ---
-    try:
-        # Example logic:
-        # ... processing spike_elicited columns ...
-        
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(output_path, 'w') as f:
-            f.write("trial_id,efficacy_score\n") # Mock header
-            
-        logging.info(f"Saved AP matrix to {output_path}")
-        
-    except Exception as e:
-        logging.error(f"Failed to generate AP matrix: {e}")
-        raise
-
-    return output_path
 
 def _process_touch_analysis(input_path: Path, output_path: Path, show: bool, *, use_transformed: bool = True) -> Path:
     """
