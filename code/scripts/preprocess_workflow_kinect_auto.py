@@ -3,7 +3,6 @@ import os
 import logging
 from pathlib import Path
 from datetime import datetime
-import shutil
 import time
 import traceback
 from multiprocessing import Queue, freeze_support
@@ -15,6 +14,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 import utils.path_tools as path_tools
 from utils import DagConfigHandler, PipelineMonitor, TaskExecutor
+from utils.pipeline.pipeline_dependency_error import PipelineDependencyError
 
 # Importing primary processing modules
 from primary_processing import (
@@ -121,7 +121,7 @@ def validate_forearm_extraction(session_output_dir: Path) -> Path:
     print(f"[{session_output_dir.name}] Validating forearm extraction...")
     is_valid = is_forearm_valid(session_output_dir / "forearm_pointclouds", verbose=True)
     if not is_valid:
-        raise ValueError("Forearm needs to be manually extracted first.")
+        raise PipelineDependencyError("Forearm needs to be manually extracted first.", "manual (forearm extraction)")
     # Returning the boolean status directly, as it does not produce a file path for downstream tasks.
     return is_valid
 
@@ -132,7 +132,7 @@ def validate_hand_extraction(rgb_video_path: Path, hand_models_dir: Path, expect
     metadata_path = output_dir / (name_baseline + "_metadata.json")
     is_valid, errors = is_hand_model_valid(metadata_path, hand_models_dir, expected_labels, verbose=True)
     if not is_valid:
-        raise ValueError("Hand model needs to be manually extracted first (or generation failed).")
+        raise PipelineDependencyError("Hand model needs to be manually extracted first (or generation failed).", "manual (hand model assignment)")
     return is_valid
 
 # --- REFACTORED: Track Stickers Raw Flow ---
@@ -151,7 +151,7 @@ def track_stickers_raw_flow(
     track_objects_in_video(rgb_video_path, metadata_roi_path, output_path=stickers_roi_csv_path, force_processing=force_processing)
     
     if not is_2d_stickers_tracking_valid(metadata_roi_path):
-        raise ValueError("❌ --> 2D sticker tracking has not been manually validated. Cannot continue the pipeline.")
+        raise PipelineDependencyError("2D sticker tracking has not been manually validated. Cannot continue the pipeline.", "manual (review 2D stickers)")
 
     return stickers_roi_csv_path, metadata_roi_path
 
@@ -183,7 +183,7 @@ def refine_sticker_features_flow(
     create_color_correlation_videos(corrmap_video_base_path, metadata_colorspace_path, binary_video_base_path, force_processing=force_processing, monitor=monitor)
     
     if not is_correlation_videos_threshold_defined(metadata_colorspace_path):
-        raise ValueError("❌ --> correlation videos threshold has not been manually validated.")
+        raise PipelineDependencyError("Correlation videos threshold has not been manually validated.", "manual (review color threshold)")
 
     fit_ellipses_path = output_dir / (name_baseline + "_ellipses.csv")
     fit_ellipses_on_correlation_videos(
@@ -266,15 +266,15 @@ def generate_3d_hand_in_motion_flow(
     
     # Check if tracking exists (safety check if run out of order)
     if not tracked_hands_path.exists():
-         raise ValueError(f"Tracked hands file not found: {tracked_hands_path}")
+        raise PipelineDependencyError(f"Tracked hands file not found: {tracked_hands_path}", "auto (track hands model)")
 
     hands_curated_path = output_dir / (name_baseline + "_tracked_hands_curated.pkl")
     if not hands_curated_path.with_name(hands_curated_path.name + ".SUCCESS").exists():
-        raise ValueError("Hand models need to be manually assessed first.")
+        raise PipelineDependencyError("Hand models need to be manually assessed first.", "manual (curate hand models)")
     
     metadata_path = Path(output_dir / (name_baseline + "_metadata.json"))
     if not metadata_path.exists():
-        raise ValueError("Stickers location on the hand model must be manually assessed first.")
+        raise PipelineDependencyError("Stickers location on the hand model must be manually assessed first.", "manual (hand model assignment)")
 
     out_motion_npz_path = output_dir / (name_baseline + "_motion.npz")
     out_motion_csv_path = output_dir / (name_baseline + "_motion.csv")
@@ -363,7 +363,7 @@ def find_single_touches_flow(trial_data_path: Path, stickers_xyz_path: Path, sti
     final_path = output_dir / (name_baseline + "_single-touches-corrected.csv")
     if not final_path.exists():
         # NOTE: This assumes a manual step exists. If purely automated, this logic flaw persists from original.
-        raise ValueError("❌ --> Automatic single touches has not been manually validated yet.")
+        raise PipelineDependencyError("Automatic single touches has not been manually validated yet.", "manual (review single touches)")
     
     return final_path
     
@@ -611,7 +611,7 @@ def setup_environment():
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
     report_file_path = reports_dir / f"{timestamp}_preprocess_workflow_kinect_auto_status.xlsx"
     if report_file_path.exists():
-        shutil.rmtree(report_file_path)
+        report_file_path.unlink()
         print("🧹 File with the same name found, removing it.")
     return project_data_root, configs_dir, report_file_path
 
@@ -637,21 +637,21 @@ def main():
     main_monitor = PipelineMonitor(report_path=str(report_file_path), stages=pipeline_stages, live_plotting=True)
     main_monitor.show_dashboard()
 
-    run_batch_processing(
-        block_files=block_files,
-        project_data_root=project_data_root,
-        dag_config_path=dag_config_path,
-        monitor_queue=main_monitor.queue,
-        report_file_path=report_file_path,
-        parallel=is_parallel,
-    )
-
-    print("\n🏁 All pipeline tasks have completed.")
-    print("✨ Dashboard will close automatically in 10 seconds...")
-    time.sleep(10)
-    
-    main_monitor.close_dashboard(block=True)
-    print(f"👋 Processing finished. Final report saved to {report_file_path}")
+    try:
+        run_batch_processing(
+            block_files=block_files,
+            project_data_root=project_data_root,
+            dag_config_path=dag_config_path,
+            monitor_queue=main_monitor.queue,
+            report_file_path=report_file_path,
+            parallel=is_parallel,
+        )
+        print("\n🏁 All pipeline tasks have completed.")
+        print("✨ Dashboard will close automatically in 10 seconds...")
+        time.sleep(10)
+    finally:
+        main_monitor.close_dashboard(block=True)
+        print(f"👋 Processing finished. Final report saved to {report_file_path}")
 
 if __name__ == "__main__":
     main()
