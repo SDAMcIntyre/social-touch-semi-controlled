@@ -240,8 +240,6 @@ def run_single_session_postprocessing(
             # Inject options into params when supported by the flow
             if 'force_processing' in options:
                 params['force_processing'] = options['force_processing']
-            if 'use_transformed' in options:
-                params['use_transformed'] = options['use_transformed']
             
             # Validation: Check if list inputs are empty
             # Note: We must exclude 'configs' from this check if configs are not lists of files, 

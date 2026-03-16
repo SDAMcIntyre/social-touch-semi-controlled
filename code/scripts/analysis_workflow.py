@@ -110,7 +110,6 @@ def summarize_touches_per_session_flow(
                 output_file_path,
                 show=False,
                 force=force_processing,
-                use_transformed=False,
             )
             results.append(result_path)
 
@@ -268,7 +267,6 @@ def map_receptive_fields_flow(
                 summary_csv_path=summary_path,
                 grouping_columns=grouping_columns,
                 config=config,
-                use_transformed=False,
             )
 
             if not grouped_data:

@@ -15,9 +15,6 @@ from typing import Dict, List, Tuple
 import pandas as pd
 
 from analysis.touch_analytics.touch_config import DISCRETIZATION_CONFIG
-from preprocessing.forearm_extraction.registration.csv_spatial_transformer import (
-    resolve_column,
-)
 
 from .rf_mapping_config import GroupedSpatialData, RFMappingConfig
 
@@ -150,7 +147,6 @@ def load_grouped_spatial_data(
     summary_csv_path: Path,
     grouping_columns: List[str],
     config: RFMappingConfig,
-    use_transformed: bool = True,
 ) -> Dict[str, GroupedSpatialData]:
     """Load and group spatial contact-point data for RF mapping.
 
@@ -170,9 +166,6 @@ def load_grouped_spatial_data(
         columns are used as-is.
     config:
         ``RFMappingConfig`` providing column-name mappings.
-    use_transformed:
-        Whether to prefer the ``*_transformed`` variant of the points
-        column (requires ICP registration to have run).
 
     Returns
     -------
@@ -226,14 +219,11 @@ def load_grouped_spatial_data(
             continue
 
         try:
-            # Probe header to resolve the points column
-            header_df = pd.read_csv(csv_path, nrows=0)
-            points_col = resolve_column(header_df, col.points, use_transformed)
-
+            points_col = col.points
             needed_cols = [col.trial_id, col.touch_id, col.spike, points_col]
             # Only read columns that actually exist (trial_id may be absent
             # in very old CSVs — handle gracefully)
-            available_cols = set(header_df.columns)
+            available_cols = set(pd.read_csv(csv_path, nrows=0).columns)
             missing = [c for c in needed_cols if c not in available_cols]
             if missing:
                 logger.warning(
