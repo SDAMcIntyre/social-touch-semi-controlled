@@ -30,14 +30,18 @@ class KinectFrame:
 
     @property
     def color(self) -> np.ndarray | None:
-        """Decoded color image (BGR format). Lazily loaded on first access."""
+        """Decoded color image (BGR, H×W×3). Lazily loaded on first access."""
         if self._color is False:
             if self._capture.color is None:
                 self._color = None
             elif self._color_format == ImageFormat.COLOR_MJPG:
                 self._color = cv2.imdecode(self._capture.color, cv2.IMREAD_COLOR)
             else:
-                self._color = self._capture.color
+                img = self._capture.color
+                if img is not None and img.ndim == 3 and img.shape[2] == 4:
+                    # BGRA32 or similar — drop the alpha channel to produce BGR
+                    img = img[:, :, :3]
+                self._color = img
         return self._color
 
     @property
@@ -69,10 +73,16 @@ class KinectFrame:
         valid_mask = (xyz[:, :, 2] > 0) & ~np.isnan(xyz).any(axis=2)
         points_xyz = xyz[valid_mask]
         points_rgb = color_img[valid_mask][:, ::-1] / 255.0  # BGR to RGB
-        
+
         if len(points_xyz) == 0:
             return None
-            
+
+        if points_rgb.ndim != 2 or points_rgb.shape[1] != 3:
+            raise ValueError(
+                f"generate_o3d_point_cloud: color array has unexpected shape "
+                f"{points_rgb.shape}; expected (N, 3)."
+            )
+
         pcd = o3d.geometry.PointCloud()
         pcd.points = o3d.utility.Vector3dVector(points_xyz)
         pcd.colors = o3d.utility.Vector3dVector(points_rgb)
