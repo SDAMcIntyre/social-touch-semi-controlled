@@ -4,8 +4,17 @@
 parameters:
   # List of directories containing Kinect session config files to scan.
   # Paths are relative to configs/kinect_configs/.
-  kinect_configs: [valid_configs_ST13-01, 
-      valid_configs_ST16-02/kinect_config_2022-06-17_ST16-02_semicontrolled_block-order01.yaml,
+  kinect_configs: [valid_configs_ST13-01, valid_configs_ST13-02, 
+      valid_configs_ST13-03, valid_configs_ST14-01, 
+      valid_configs_ST14-02/kinect_config_2022-06-15_ST14-02_semicontrolled_block-order01.yaml,
+    valid_configs_ST14-02/kinect_config_2022-06-15_ST14-02_semicontrolled_block-order02.yaml,
+    valid_configs_ST14-02/kinect_config_2022-06-15_ST14-02_semicontrolled_block-order04.yaml,
+    valid_configs_ST14-02/kinect_config_2022-06-15_ST14-02_semicontrolled_block-order05.yaml,
+    valid_configs_ST14-02/kinect_config_2022-06-15_ST14-02_semicontrolled_block-order06.yaml,
+    valid_configs_ST14-02/kinect_config_2022-06-15_ST14-02_semicontrolled_block-order08.yaml,
+    valid_configs_ST14-03, valid_configs_ST14-04, valid_configs_ST15-01, 
+      valid_configs_ST15-02/kinect_config_2022-06-16_ST15-02_semicontrolled_block-order01.yaml,
+    valid_configs_ST16-02/kinect_config_2022-06-17_ST16-02_semicontrolled_block-order01.yaml,
     valid_configs_ST16-02/kinect_config_2022-06-17_ST16-02_semicontrolled_block-order02.yaml,
     valid_configs_ST16-02/kinect_config_2022-06-17_ST16-02_semicontrolled_block-order03.yaml,
     valid_configs_ST16-02/kinect_config_2022-06-17_ST16-02_semicontrolled_block-order04.yaml,
@@ -20,7 +29,8 @@ parameters:
     valid_configs_ST16-02/kinect_config_2022-06-17_ST16-02_semicontrolled_block-order13.yaml,
     valid_configs_ST16-02/kinect_config_2022-06-17_ST16-02_semicontrolled_block-order14.yaml,
     valid_configs_ST16-02/kinect_config_2022-06-17_ST16-02_semicontrolled_block-order15.yaml,
-    valid_configs_ST16-05, valid_configs_ST18-02, valid_configs_ST18-04]
+    valid_configs_ST16-03, valid_configs_ST16-04, valid_configs_ST16-05, 
+      valid_configs_ST18-01, valid_configs_ST18-04]
 
 tasks:
   # --- Analysis Tasks ---
@@ -31,32 +41,48 @@ tasks:
       force_processing: false
     depends_on: []
 
-  # Primary processing flow. Must run first.
-  summarize_touches_per_session:
-    enabled: false
+  # Unified extraction + clustering pipeline (replaces summarize_touches_per_session
+  # + analyse_number_single_touches). Configure extraction_profiles and
+  # clustering_profiles to select methods; all profiles run in one flow.
+  unified_touch_analysis:
+    enabled: true
     options:
-      force_processing: false
+      force_processing: true
+      extraction_profiles:
+        max:
+          method: max
+        statistical:
+          method: statistical
+          aggregations: [mean, median, std, min, max, range, skewness]
+        temporal:
+          method: temporal
+        mos:
+          method: mechanics_of_solids
+          youngs_modulus_kpa: 100.0
+          poissons_ratio: 0.45
+          skin_thickness_mm: 1.5
+      clustering_profiles:
+        kmeans:
+          method: kmeans
+          min_touches_per_cluster: 30
+        dbscan:
+          method: dbscan
+          eps: auto
+          min_touches_per_cluster: 30
     depends_on: []
 
-  # Consumes output from summarize_touches_per_session
-  analyse_number_single_touches:
-    enabled: false
-    options:
-      force_processing: false
-    depends_on: ["summarize_touches_per_session"]
-
-  # Consumes output from summarize_touches_per_session
+  # Consumes output from unified_touch_analysis
   analyse_ap_efficacy:
     enabled: false
     options:
       force_processing: false
-    depends_on: ["summarize_touches_per_session"]
+    depends_on: ["unified_touch_analysis"]
 
   # RF mapping via selectivity + DBSCAN. Requires unified touch summaries.
   map_receptive_fields:
-    enabled: true
+    enabled: false
     options:
       grouping_columns: ['type_metadata', 'direction']
       monitor: false
-      force_processing: true
-    depends_on: ["summarize_touches_per_session"]
+      force_processing: false
+    depends_on: ["unified_touch_analysis"]
