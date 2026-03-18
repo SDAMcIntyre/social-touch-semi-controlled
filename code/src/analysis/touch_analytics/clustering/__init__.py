@@ -2,10 +2,12 @@
 from .base import TouchClusterer
 from .kmeans_clusterer import KMeansClusterer
 from .dbscan_clusterer import DBSCANClusterer
+from .binning_clusterer import BinningClusterer
 
 CLUSTERER_REGISTRY: dict[str, type[TouchClusterer]] = {
     'kmeans': KMeansClusterer,
     'dbscan': DBSCANClusterer,
+    'binning': BinningClusterer,
 }
 
 
@@ -30,6 +32,7 @@ __all__ = [
     'TouchClusterer',
     'KMeansClusterer',
     'DBSCANClusterer',
+    'BinningClusterer',
     'CLUSTERER_REGISTRY',
     'get_clusterer',
 ]
