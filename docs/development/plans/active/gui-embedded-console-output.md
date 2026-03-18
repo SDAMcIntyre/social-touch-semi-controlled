@@ -3,7 +3,7 @@
 **Date:** 2026-03-17
 **Author:** Basil Duvernoy
 **Status:** Active
-**Branch:** `feature/gui-embedded-console-output`
+**Branch:** `feature/unified-touch-analysis-pipeline`
 
 ---
 

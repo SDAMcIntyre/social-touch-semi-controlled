@@ -3,7 +3,7 @@
 **Date:** 2026-03-17
 **Author:** Basil Duvernoy
 **Status:** Active
-**Branch:** `feature/per-session-touch-density-heatmaps`
+**Branch:** `feature/unified-touch-analysis-pipeline`
 
 ---
 
