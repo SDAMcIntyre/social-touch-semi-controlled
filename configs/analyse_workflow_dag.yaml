@@ -69,6 +69,11 @@ tasks:
           method: dbscan
           eps: auto
           min_touches_per_cluster: 30
+        binning:
+          method: binning
+          n_bins: 20
+          bin_method: equal_width
+          enabled: false
     depends_on: []
 
   # Consumes output from unified_touch_analysis
