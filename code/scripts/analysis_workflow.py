@@ -28,11 +28,10 @@ from primary_processing import (
 
 # Imported from the updated touch_analysis module (assuming path matches 'analysis/touch_analytics')
 from analysis.touch_analytics import (
-    generate_unified_summary,
-    generate_touch_summary_matrix,
     generate_ap_efficacy_matrix,
     generate_session_summary
 )
+from analysis.touch_analytics.unified_pipeline import run_unified_touch_analysis
 from analysis.receptive_field_mapping import RFMappingConfig
 from analysis.receptive_field_mapping.rf_mapping_engine import RFMappingEngine
 from analysis.receptive_field_mapping.rf_data_loader import load_grouped_spatial_data
@@ -76,90 +75,32 @@ def summarize_session_blocks_flow(
         return []
 
 
-@flow(name="summarize_touches_per_session")
-def summarize_touches_per_session_flow(
+@flow(name="unified_touch_analysis")
+def unified_touch_analysis_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
+    extraction_profiles: dict = None,
+    clustering_profiles: dict = None,
 ) -> List[Path]:
     """
-    STEP 1: Primary Processing.
-    Analyses raw session data and produces a unified summary CSV.
+    Unified extraction + clustering pipeline replacing the old
+    summarize_touches_per_session + analyse_number_single_touches pair.
     """
-    print(f"[Batch Analysis] Generating unified summaries for {len(input_items)} items...")
-    
-    results = []
-    
-    for input_file, database_path in input_items:
-        try:
-            output_dir = database_path / "4_analysed" / "unified_touches"
-            filename = input_file.name
+    print(f"[Batch Analysis] Running unified touch analysis for {len(input_items)} item(s)...")
+    options = {}
+    if extraction_profiles:
+        options['extraction_profiles'] = extraction_profiles
+    if clustering_profiles:
+        options['clustering_profiles'] = clustering_profiles
+    options['force_processing'] = force_processing
+    output_dir = input_items[0][1] / '4_analysed' / 'unified_touches'
+    return run_unified_touch_analysis(
+        input_items=input_items,
+        options=options,
+        output_dir=output_dir,
+        force=force_processing,
+    )
 
-            # Standardized Filename
-            if "_semicontrolled_" in filename:
-                prefix = filename.split("_semicontrolled_")[0]
-                new_filename = f"{prefix}_semicontrolled_touch_summary.csv"
-            else:
-                new_filename = f"{input_file.stem}_touch_summary.csv"
-
-            output_file_path = output_dir / new_filename
-            output_dir.mkdir(parents=True, exist_ok=True)
-
-            # Delegate processing (and checks) to the function
-            result_path = generate_unified_summary(
-                input_file,
-                output_file_path,
-                show=False,
-                force=force_processing,
-            )
-            results.append(result_path)
-
-        except Exception as e:
-            logging.error(f"Failed to process {input_file.name}: {e}")
-            import traceback
-            traceback.print_exc()
-            
-    return results
-
-
-@flow(name="analyse_number_single_touches")
-def analyse_number_single_touches_flow(
-    input_items: List[Tuple[Path, Path]], 
-    force_processing: bool = False
-) -> List[Path]:
-    """
-    STEP 2: Matrix Generation (Counts).
-    Generates a matrix of single touch counts into '4_analysed/touch_count'.
-    """
-    print(f"[Batch Analysis] Generating Count Matrix...")
-    
-    unified_files = _collect_unified_files(input_items)
-    
-    if unified_files:
-        try:
-            # Use the first database path as the anchor for the matrix output
-            anchor_db_path = input_items[0][1]
-            
-            # Define specific subfolder for this analysis flow
-            output_dir = anchor_db_path / "4_analysed" / "touch_count"
-            output_dir.mkdir(parents=True, exist_ok=True)
-            
-            matrix_output_path = output_dir / "batch_condition_matrix.csv"
-            
-            logging.info(f"Calling batch condition matrix generation. Output: {matrix_output_path}")
-            # Delegate processing (and checks) to the function
-            generate_touch_summary_matrix(
-                unified_files, 
-                matrix_output_path, 
-                show=True, 
-                force=force_processing
-            )
-            return [matrix_output_path]
-        except Exception as e:
-            logging.error(f"Failed to generate aggregate matrix: {e}")
-            return []
-    else:
-        logging.warning("No unified summary files found. Run 'summarize_touches_per_session' first.")
-        return []
 
 @flow(name="analyse_ap_efficacy")
 def analyse_ap_efficacy_flow(
@@ -197,7 +138,7 @@ def analyse_ap_efficacy_flow(
             logging.error(f"Failed to generate AP matrix: {e}")
             return []
     else:
-        logging.warning("No unified summary files found. Run 'summarize_touches_per_session' first.")
+        logging.warning("No unified summary files found. Run 'unified_touch_analysis' first.")
         return []
 
 @flow(name="map_receptive_fields")
@@ -236,7 +177,7 @@ def map_receptive_fields_flow(
             if not summary_path.exists():
                 logging.warning(
                     f"Unified summary not found: {summary_path}. "
-                    "Run 'summarize_touches_per_session' first. Skipping."
+                    "Run 'unified_touch_analysis' first. Skipping."
                 )
                 continue
 
@@ -435,8 +376,7 @@ def run_batch_analysis(
 
     available_tasks = [
         ("summarize_session_blocks", summarize_session_blocks_flow),
-        ("summarize_touches_per_session", summarize_touches_per_session_flow),
-        ("analyse_number_single_touches", analyse_number_single_touches_flow),
+        ("unified_touch_analysis", unified_touch_analysis_flow),
         ("analyse_ap_efficacy", analyse_ap_efficacy_flow),
         ("map_receptive_fields", map_receptive_fields_flow),
     ]
@@ -482,6 +422,10 @@ def run_batch_analysis(
                         kwargs["grouping_columns"] = options["grouping_columns"]
                     if "monitor" in options:
                         kwargs["monitor"] = options["monitor"]
+                    if "extraction_profiles" in options:
+                        kwargs["extraction_profiles"] = options["extraction_profiles"]
+                    if "clustering_profiles" in options:
+                        kwargs["clustering_profiles"] = options["clustering_profiles"]
                     flow_func(**kwargs)
                 except Exception as e:
                     executor.error_msg = f"Batch analysis failed: {str(e)}"

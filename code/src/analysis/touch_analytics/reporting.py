@@ -293,3 +293,148 @@ class VisualReportingStrategy:
 
             except Exception as e:
                 logging.error(f"Failed to render heatmap for {pop_id}: {e}")
+
+    def generate_touch_density_heatmap(
+        self,
+        df: pd.DataFrame,
+        x_col: str,
+        y_cols: list,
+        type_col: str = 'type_metadata',
+        num_bins: int = 20,
+        log_axis: bool = False,
+        title_suffix: str = '',
+        filename: str = 'touch_density.png',
+        global_edges: Optional[Dict[str, np.ndarray]] = None,
+        global_max_count: Optional[int] = None,
+    ):
+        """
+        Render an N×2 per-session touch density heatmap and save to disk.
+
+        Layout: N rows (one per entry in *y_cols*) × 2 columns (tap | stroke).
+        The shared X-axis is *x_col* (typically the highest-variance feature).
+        Color encodes touch count with LogNorm scaling; bins with zero touches
+        are masked.
+
+        Args:
+            df:           DataFrame for a single session.
+            x_col:        Feature to use on the shared X-axis.
+            y_cols:       Remaining feature columns (one row per entry).
+            type_col:     Column that distinguishes tap vs. stroke touches.
+            num_bins:     Number of bins per axis.
+            log_axis:     Use geometric (log) bin spacing when True.
+            title_suffix: Appended to the figure suptitle (e.g. session ID).
+            filename:     Output filename passed to ``_save_plot``.
+        """
+        n_rows = len(y_cols)
+        if n_rows == 0:
+            logging.warning("generate_touch_density_heatmap: no y_cols provided, skipping.")
+            return
+
+        # 1. Bin edges — use pre-computed global edges when provided, otherwise
+        #    compute from this session's data subset (backward-compatible fallback).
+        if global_edges is not None and x_col in global_edges:
+            x_edges = global_edges[x_col]
+        else:
+            x_edges = self._get_global_edges(df[x_col], num_bins, log_axis=log_axis)
+        x_cats = pd.cut(df[x_col], bins=x_edges, include_lowest=True).cat.categories
+
+        y_edges_list = []
+        y_cats_list = []
+        for y_col in y_cols:
+            if global_edges is not None and y_col in global_edges:
+                edges = global_edges[y_col]
+            else:
+                edges = self._get_global_edges(df[y_col], num_bins, log_axis=log_axis)
+            cats = pd.cut(df[y_col], bins=edges, include_lowest=True).cat.categories
+            y_edges_list.append(edges)
+            y_cats_list.append(cats)
+
+        interaction_types = ['tap', 'stroke']
+
+        # 2. Pre-compute count matrices and determine global max for shared LogNorm
+        plot_cache: Dict[Tuple, Tuple[pd.DataFrame, int]] = {}
+        global_max = 0
+
+        for i_type in interaction_types:
+            subset = df[df[type_col] == i_type]
+            for y_idx, (y_col, y_edges, y_cats) in enumerate(
+                zip(y_cols, y_edges_list, y_cats_list)
+            ):
+                if subset.empty:
+                    matrix = pd.DataFrame(0, index=y_cats, columns=x_cats)
+                    count = 0
+                else:
+                    x_binned = pd.cut(subset[x_col], bins=x_edges, include_lowest=True)
+                    y_binned = pd.cut(subset[y_col], bins=y_edges, include_lowest=True)
+                    matrix = pd.crosstab(y_binned, x_binned, dropna=False)
+                    matrix = matrix.reindex(index=y_cats, columns=x_cats, fill_value=0)
+                    count = int(matrix.sum().sum())
+
+                cur_max = matrix.max().max()
+                if pd.notna(cur_max) and cur_max > global_max:
+                    global_max = cur_max
+
+                plot_cache[(i_type, y_idx)] = (matrix, count)
+
+        if global_max_count is not None:
+            # Override with caller-supplied cross-session maximum for consistent color scaling
+            global_max = global_max_count
+        if global_max == 0:
+            global_max = 1
+
+        # 3. Render
+        fig, axes = plt.subplots(n_rows, 2, figsize=(14, 5 * n_rows))
+        if n_rows == 1:
+            axes = axes[np.newaxis, :]
+
+        total_points = sum(
+            plot_cache[(i_type, 0)][1]
+            for i_type in interaction_types
+            if (i_type, 0) in plot_cache
+        )
+        base_title = f"Touch Density — {title_suffix}" if title_suffix else "Touch Density"
+        title = f"{base_title} | Total Points: {total_points}"
+        fig.suptitle(title, fontsize=14)
+
+        def fmt_cats(cats):
+            return [f"{c.mid:.2f}" for c in cats]
+
+        for y_idx, (y_col, y_cats) in enumerate(zip(y_cols, y_cats_list)):
+            for col_idx, i_type in enumerate(interaction_types):
+                ax = axes[y_idx, col_idx]
+                matrix, count = plot_cache[(i_type, y_idx)]
+                is_empty = (matrix.sum().sum() == 0)
+
+                plot_data = matrix.copy()
+                if not is_empty:
+                    plot_data = plot_data.replace(0, 1)
+                    mask = matrix == 0
+                else:
+                    mask = np.ones(matrix.shape, dtype=bool)
+
+                ax.set_facecolor('white')
+                sns.heatmap(
+                    plot_data,
+                    mask=mask,
+                    cmap='magma',
+                    norm=LogNorm(vmin=1, vmax=global_max),
+                    cbar=True,
+                    ax=ax,
+                )
+                ax.set_title(f"{i_type.capitalize()} (n={count})")
+                ax.set_xlabel(x_col)
+                ax.set_ylabel(y_col)
+                ax.invert_yaxis()
+                ax.set_xticklabels(fmt_cats(x_cats), rotation=45, ha='right')
+                ax.set_yticklabels(fmt_cats(y_cats), rotation=0)
+
+                if is_empty:
+                    ax.text(
+                        0.5, 0.5, "No Data",
+                        ha='center', va='center',
+                        transform=ax.transAxes,
+                        fontsize=12, color='gray',
+                    )
+
+        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+        self._save_plot(filename)

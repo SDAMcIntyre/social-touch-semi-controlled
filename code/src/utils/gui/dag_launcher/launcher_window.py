@@ -25,9 +25,11 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from utils.gui.dag_launcher.console_widget import ConsoleWidget
 from utils.gui.dag_launcher.kinect_directory_selector import SessionConfigSelector
 from utils.gui.dag_launcher.launcher_config import WorkflowEntry
 from utils.gui.dag_launcher.prefect_server_manager import PrefectServerManager
+from utils.gui.dag_launcher.process_output_reader import ProcessOutputReader
 from utils.gui.dag_launcher.task_panel import TaskPanel
 from utils.gui.dag_launcher.workflow_selector import WorkflowSelector
 from utils.pipeline.dag_config_model import DagConfigModel
@@ -50,6 +52,7 @@ class LauncherWindow(QMainWindow):
         self._initial_sizes_applied = False
         self._process: subprocess.Popen | None = None
         self._poll_timer: QTimer | None = None
+        self._reader: ProcessOutputReader | None = None
         self._aborting: bool = False
 
         self.setWindowTitle("DAG Config Launcher")
@@ -85,7 +88,7 @@ class LauncherWindow(QMainWindow):
         tb.addAction(self._save_as_action)
 
     def _build_ui(self) -> None:
-        # Three-column splitter
+        # Three-column horizontal splitter (workflow panels)
         self._splitter = QSplitter(Qt.Horizontal)
 
         # --- Left column: workflow selector ---
@@ -104,12 +107,22 @@ class LauncherWindow(QMainWindow):
         self._splitter.setStretchFactor(1, 2)  # task panel        (1/2)
         self._splitter.setStretchFactor(2, 1)  # kinect selector   (1/4)
 
-        # --- Wrap splitter + run bar in a central QWidget ---
+        # --- Console panel ---
+        self._console = ConsoleWidget()
+
+        # --- Vertical splitter: workflow panels (top 70%) + console (bottom 30%) ---
+        self._vsplitter = QSplitter(Qt.Vertical)
+        self._vsplitter.addWidget(self._splitter)
+        self._vsplitter.addWidget(self._console)
+        self._vsplitter.setStretchFactor(0, 7)
+        self._vsplitter.setStretchFactor(1, 3)
+
+        # --- Wrap vertical splitter + run bar in a central QWidget ---
         central = QWidget()
         layout = QVBoxLayout(central)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
-        layout.addWidget(self._splitter, stretch=1)
+        layout.addWidget(self._vsplitter, stretch=1)
         layout.addWidget(self._build_run_bar())
         self.setCentralWidget(central)
 
@@ -250,8 +263,10 @@ class LauncherWindow(QMainWindow):
         super().showEvent(event)
         if not self._initial_sizes_applied:
             w = self._splitter.width()
-            if w > 0:
+            h = self._vsplitter.height()
+            if w > 0 and h > 0:
                 self._splitter.setSizes([w // 4, w // 2, w // 4])
+                self._vsplitter.setSizes([int(h * 0.7), int(h * 0.3)])
                 self._initial_sizes_applied = True
 
     def closeEvent(self, event) -> None:  # noqa: N802
@@ -263,6 +278,9 @@ class LauncherWindow(QMainWindow):
             if self._poll_timer is not None:
                 self._poll_timer.stop()
                 self._poll_timer = None
+        if self._reader is not None:
+            self._reader.wait()
+            self._reader = None
         if self._model and self._model.dirty:
             if not self._confirm_discard():
                 event.ignore()
@@ -318,7 +336,18 @@ class LauncherWindow(QMainWindow):
             cmd += ["--dag-config", str(self._current_entry.dag_config)]
         env = self._server_manager.get_env() if self._server_manager.is_running() else None
         self._aborting = False
-        self._process = subprocess.Popen(cmd, cwd=str(project_root), env=env)
+        self._process = subprocess.Popen(
+            cmd,
+            cwd=str(project_root),
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+        self._console.clear()
+        self._reader = ProcessOutputReader(self._process)
+        self._reader.line_received.connect(self._console.append_line)
+        self._reader.cr_line_received.connect(self._console.replace_last_line)
+        self._reader.start()
         self._run_button.setEnabled(False)
         self._abort_button.setVisible(True)
         self.statusBar().showMessage("Running …")
@@ -336,6 +365,9 @@ class LauncherWindow(QMainWindow):
         self._poll_timer.stop()
         self._poll_timer = None
         self._abort_button.setVisible(False)
+        if self._reader is not None:
+            self._reader.wait()
+            self._reader = None
         if self._aborting:
             self.statusBar().showMessage("Aborted")
         else:

@@ -143,6 +143,39 @@ class DagConfigModel:
         task["options"][option] = value
         self._dirty = True
 
+    def get_profile_names(self, task_name: str, option_key: str) -> list[str]:
+        """Return profile names for a profile-container option."""
+        opts = self._get_task(task_name).get("options", {}) or {}
+        container = opts.get(option_key)
+        if not isinstance(container, dict):
+            return []
+        return list(container.keys())
+
+    def get_profile_enabled(self, task_name: str, option_key: str, profile_name: str) -> bool:
+        """Return True if the profile is enabled (absent ``enabled`` key defaults to True)."""
+        opts = self._get_task(task_name).get("options", {}) or {}
+        container = opts.get(option_key, {}) or {}
+        profile = container.get(profile_name, {}) or {}
+        return bool(profile.get("enabled", True))
+
+    def set_profile_enabled(self, task_name: str, option_key: str, profile_name: str, enabled: bool) -> None:
+        """Set or remove the ``enabled`` key on a profile dict.
+
+        When *enabled* is False, writes ``enabled: false``.
+        When *enabled* is True, removes the key so the YAML stays clean.
+        """
+        task = self._get_task(task_name)
+        opts = task.get("options") or {}
+        container = opts.get(option_key) or {}
+        profile = container.get(profile_name)
+        if profile is None:
+            return
+        if enabled:
+            profile.pop("enabled", None)
+        else:
+            profile["enabled"] = False
+        self._dirty = True
+
     def get_task_dependencies(self, task_name: str) -> list[str]:
         deps = self._get_task(task_name).get("depends_on", [])
         return list(deps) if deps else []
