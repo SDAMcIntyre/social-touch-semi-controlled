@@ -82,9 +82,9 @@ No directly applicable notes. `note-somatosensory-units-and-calculations.md` doc
 **Goal:** Eliminate CSV corruption by pre-serializing contact_points to string.
 
 **Tasks:**
-- [ ] Task 1.1 — Add import `from preprocessing.forearm_extraction import serialize_contact_points` to `objects_interaction_processor.py`
-- [ ] Task 1.2 — Replace `contact_points.tolist()` (line 178) with `serialize_contact_points([tuple(pt) for pt in contact_points])`
-- [ ] Task 1.3 — Add `contact_data["contact_points"] = "[]"` to `empty_structure()` (after line 224)
+- [x] Task 1.1 — Add import `from preprocessing.forearm_extraction import serialize_contact_points` to `objects_interaction_processor.py`
+- [x] Task 1.2 — Replace `contact_points.tolist()` (line 178) with `serialize_contact_points([tuple(pt) for pt in contact_points])`
+- [x] Task 1.3 — Add `contact_data["contact_points"] = "[]"` to `empty_structure()` (after line 224)
 
 **Files Modified:**
 - `code/src/preprocessing/motion_analysis/tactile_quantification/model/objects_interaction_processor.py` — 3 edits: import, serialize in contact case, add to empty case
