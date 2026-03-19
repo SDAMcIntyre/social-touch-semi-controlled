@@ -36,18 +36,17 @@ tasks:
   # --- Analysis Tasks ---
   # Step 1: Block/trial structure summary. No dependencies.
   summarize_session_blocks:
-    enabled: false
-    options:
-      force_processing: false
-    depends_on: []
-
-  # Unified extraction + clustering pipeline (replaces summarize_touches_per_session
-  # + analyse_number_single_touches). Configure extraction_profiles and
-  # clustering_profiles to select methods; all profiles run in one flow.
-  unified_touch_analysis:
     enabled: true
     options:
       force_processing: true
+    depends_on: []
+
+  # Stage 1: Per-session feature extraction. Writes one CSV per (session, profile).
+  # Output: 4_analysed/touch_features/<profile>/<session>_touch_summary.csv
+  touch_feature_extraction:
+    enabled: true
+    options:
+      force_processing: false
       extraction_profiles:
         max:
           method: max
@@ -56,11 +55,27 @@ tasks:
           aggregations: [mean, median, std, min, max, range, skewness]
         temporal:
           method: temporal
+          enabled: false
         mos:
           method: mechanics_of_solids
           youngs_modulus_kpa: 100.0
           poissons_ratio: 0.45
           skin_thickness_mm: 1.5
+          enabled: false
+    depends_on: []
+
+  # Stage 2: Global clustering on pooled extraction CSVs.
+  # Discovers extraction CSVs on disk — no explicit file list needed.
+  # Output: 4_analysed/touch_clusters/<profile>/<clusterer>/
+  touch_clustering:
+    enabled: true
+    options:
+      force_processing: false
+      extraction_profiles:
+        max: {method: max}
+        statistical: {method: statistical}
+        temporal: {method: temporal, enabled: false}
+        mos: {method: mechanics_of_solids, enabled: false}
       clustering_profiles:
         kmeans:
           method: kmeans
@@ -69,19 +84,52 @@ tasks:
           method: dbscan
           eps: auto
           min_touches_per_cluster: 30
+        hierarchical:
+          method: hierarchical
+          min_instances_per_sensor: 5
+          min_sensor_types: 2
+          sensor_col: session_id
         binning:
           method: binning
           n_bins: 20
           bin_method: equal_width
-          enabled: false
-    depends_on: []
+    depends_on: [touch_feature_extraction]
 
-  # Consumes output from unified_touch_analysis
+  # Stage 3: Statistical comparison of sensor measurements across strata.
+  # Discovers clustered CSVs on disk — no explicit file list needed.
+  # Output: 4_analysed/touch_comparisons/<profile>/<clusterer>/
+  touch_comparing:
+    enabled: false
+    options:
+      force_processing: false
+      extraction_profiles:
+        max: {method: max}
+      clustering_profiles:
+        hierarchical: {method: hierarchical, enabled: false}
+      comparing_profiles:
+        bias:
+          method: bias
+          measurement_col: spike_elicited
+          sensor_col: session_id
+          alpha: 0.05
+        precision:
+          method: precision
+          measurement_col: spike_elicited
+          sensor_col: session_id
+        distribution:
+          method: distribution
+          measurement_col: spike_elicited
+          sensor_col: session_id
+      min_instances_per_sensor: 5
+      min_sensor_types: 2
+    depends_on: [touch_clustering]
+
+  # Consumes output from touch_feature_extraction
   analyse_ap_efficacy:
     enabled: false
     options:
       force_processing: false
-    depends_on: ["unified_touch_analysis"]
+    depends_on: [touch_feature_extraction]
 
   # RF mapping via selectivity + DBSCAN. Requires unified touch summaries.
   map_receptive_fields:
@@ -90,4 +138,4 @@ tasks:
       grouping_columns: ['type_metadata', 'direction']
       monitor: false
       force_processing: false
-    depends_on: ["unified_touch_analysis"]
+    depends_on: [touch_feature_extraction]
