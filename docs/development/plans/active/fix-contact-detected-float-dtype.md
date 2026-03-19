@@ -75,11 +75,11 @@ No applicable notes. The somatosensory units note (`note-somatosensory-units-and
 **Goal:** Ensure `contact_detected` is integer in the output DataFrame.
 
 **Tasks:**
-- [ ] Task 1.1 — After the `ffill()` block (line ~154), add explicit forward-fill and int cast for `contact_detected`:
+- [x] Task 1.1 — After the `ffill()` block (line ~154), add explicit forward-fill and int cast for `contact_detected`:
   ```python
   kinect_scaled["contact_detected"] = kinect_scaled["contact_detected"].ffill().fillna(0).astype(int)
   ```
-- [ ] Task 1.2 — Verify `led_on` similarly gets int treatment (it already has special handling at line 152, but confirm it doesn't remain float in the `scaling_nofilling=False` path)
+- [x] Task 1.2 — Verify `led_on` similarly gets int treatment (it already has special handling at line 152, but confirm it doesn't remain float in the `scaling_nofilling=False` path)
 
 **Files Modified:**
 - `code/scripts/_4_merging/merge_neural_and_kinect_data.py` — Add dtype cast after ffill block (~line 155)

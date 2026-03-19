@@ -153,6 +153,12 @@ def align_and_merge_neural_and_kinect(
         else:
             kinect_scaled = kinect_scaled.ffill()
 
+    # contact_detected and led_on are binary state flags that must be integer.
+    # ffill() over NaN-sparse upsampled rows coerces int columns to float64;
+    # cast them back explicitly, filling any leading NaNs (before first sample) with 0.
+    kinect_scaled["contact_detected"] = kinect_scaled["contact_detected"].ffill().fillna(0).astype(int)
+    kinect_scaled["led_on"] = kinect_scaled["led_on"].ffill().fillna(0).astype(int)
+
     # --- 3. Synchronize Signals (Correlation) ---
     TTL_kinect = kinect_scaled["led_on"].values
     TTL_nerve = nerve["TTL_Aut"].values
