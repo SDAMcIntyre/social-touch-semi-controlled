@@ -108,19 +108,19 @@ code/src/analysis/touch_analytics/
 ```
 Stage 1 (Extraction)
   Input:  aggregated session CSVs (from 3_merged/)
-  Output: 4_analysed/unified_touches/<profile>/<session>_touch_summary.csv
+  Output: 4_analysed/touch_features/<profile>/<session>_touch_summary.csv
      |
      v
 Stage 2 (Clustering)
-  Input:  discovers <profile>/*_touch_summary.csv via glob
-  Output: 4_analysed/unified_touches/<profile>/clustering/<clusterer>/
+  Input:  discovers touch_features/<profile>/*_touch_summary.csv via glob
+  Output: 4_analysed/touch_clusters/<profile>/<clusterer>/
             pooled_touch_summary_clustered.csv
             cluster_metadata.json   (includes dispersion per stratum)
      |
      v
 Stage 3 (Comparing)
-  Input:  discovers pooled_touch_summary_clustered.csv + cluster_metadata.json
-  Output: 4_analysed/unified_touches/<profile>/clustering/<clusterer>/comparisons/
+  Input:  discovers pooled_touch_summary_clustered.csv + cluster_metadata.json from touch_clusters/
+  Output: 4_analysed/touch_comparisons/<profile>/<clusterer>/
             <strategy>_results.json     (per-stratum test results)
             synthesis_report.json       (dispersion-weighted global summary)
 ```
@@ -401,16 +401,32 @@ tasks:
 - **Unit consistency:** All somatosensory metrics are in mm, mm/frame, and mm^2 (see `docs/development/knowledge-base/note-somatosensory-units-and-calculations.md`). Standardization (z-score) in the hierarchical clusterer must account for these heterogeneous units.
 - **CuPy import order:** Not applicable — no GPU acceleration in this plan. If added later, CuPy must be imported before preprocessing packages (see CLAUDE.md).
 
+### GUI Integration Notes
+
+The DAG Launcher GUI (`launcher_window.py` → `TaskPanel`) auto-renders task options from the YAML config. The split pipeline requires **no GUI code changes**, but pipeline modules must honor the GUI's profile enable/disable contract.
+
+1. **No GUI code changes needed** — `TaskPanel._is_profile_dict()` auto-detects profile dicts (dict-of-dicts with `method` key). `comparing_profiles` follows this convention and will render as checkbox columns automatically.
+
+2. **Profile enable/disable contract** — When a user unchecks a profile checkbox in the TaskPanel, `DagConfigModel.set_profile_enabled()` writes `enabled: false` into that profile dict in the YAML. All pipeline modules **must** filter these out using `filter_enabled_profiles()` from `pipeline_shared.py` before iterating over profiles. Failure to filter means disabled profiles are silently executed.
+
+3. **Simple scalars** — `min_instances_per_sensor` and `min_sensor_types` render as editable cells automatically (they are plain int values under `options:`).
+
+4. **launcher.yaml** — No changes needed. The launcher already points to `analysis_workflow.py` + the DAG config; new tasks appear automatically.
+
+5. **DagConfigHandler vs DagConfigModel** — The GUI uses `DagConfigModel` (ruamel round-trip, preserves comments); the script uses `DagConfigHandler` (`safe_load`). Both see `enabled: false` as a plain dict key. The filtering responsibility lies in the pipeline modules, not the config layer.
+
 ---
 
 ## Implementation Plan
 
 ### Phase 1: Extract Shared Utilities + Split Extraction
 **Goal:** Create `pipeline_shared.py` and `extraction_pipeline.py`, verify extraction runs standalone.
+**Started:** 2026-03-18
+**Completed:** 2026-03-18
 
-- [ ] Task 1.1 — Create `pipeline_shared.py`: move `SHARED_COLUMNS`, `_TqdmLineWrapper`, `session_id_from_path()`, default option dicts from `unified_pipeline.py`
-- [ ] Task 1.2 — Create `extraction_pipeline.py`: move `_extract_session()`, `_extract_all_touches()`, wrap in public `run_feature_extraction()`
-- [ ] Task 1.3 — Add `touch_feature_extraction_flow` to `analysis_workflow.py`
+- [x] Task 1.1 — Create `pipeline_shared.py`: move `SHARED_COLUMNS`, `_TqdmLineWrapper`, `session_id_from_path()`, default option dicts from `unified_pipeline.py`. Add `filter_enabled_profiles()` utility for the GUI enable/disable contract.
+- [x] Task 1.2 — Create `extraction_pipeline.py`: move `_extract_session()`, `_extract_all_touches()`, wrap in public `run_feature_extraction()`. Use `filter_enabled_profiles()` from `pipeline_shared` instead of inline dict comprehension.
+- [x] Task 1.3 — Add `touch_feature_extraction_flow` to `analysis_workflow.py`
 - [ ] Task 1.4 — Verify: extraction runs standalone and produces identical output
 
 **Files created:**
@@ -425,9 +441,11 @@ tasks:
 
 ### Phase 2: Split Clustering
 **Goal:** Create `clustering_pipeline.py` with directory-scanning discovery, verify clustering runs standalone on previously-extracted data.
+**Started:** 2026-03-18
+**Completed:** 2026-03-18
 
-- [ ] Task 2.1 — Create `clustering_pipeline.py`: move `_cluster_profile()`, heatmap helpers, wrap in public `run_clustering()` with glob-based input discovery
-- [ ] Task 2.2 — Add `touch_clustering_flow` to `analysis_workflow.py`
+- [x] Task 2.1 — Create `clustering_pipeline.py`: move `_cluster_profile()`, heatmap helpers, wrap in public `run_clustering()` with glob-based input discovery. Call `filter_enabled_profiles()` on both `extraction_profiles` and `clustering_profiles` at the top of `run_clustering()`.
+- [x] Task 2.2 — Add `touch_clustering_flow` to `analysis_workflow.py`
 - [ ] Task 2.3 — Verify: clustering discovers extraction CSVs and produces identical output
 
 **Files created:**
@@ -441,12 +459,14 @@ tasks:
 
 ### Phase 3: Hierarchical Clusterer
 **Goal:** Implement Ward's linkage + adaptive non-uniform dendrogram cut with coverage constraint.
+**Started:** 2026-03-18
+**Completed:** 2026-03-18
 
-- [ ] Task 3.1 — Create `clustering/hierarchical_clusterer.py` implementing `TouchClusterer` ABC
-- [ ] Task 3.2 — Implement recursive coverage-constrained cut algorithm (design doc Stage 2)
-- [ ] Task 3.3 — Add dispersion tagging (within-cluster variance) to metadata
-- [ ] Task 3.4 — Register `'hierarchical'` in `CLUSTERER_REGISTRY`
-- [ ] Task 3.5 — Inject `_sensor_labels` from `clustering_pipeline.py` when `sensor_col` is configured
+- [x] Task 3.1 — Create `clustering/hierarchical_clusterer.py` implementing `TouchClusterer` ABC
+- [x] Task 3.2 — Implement recursive coverage-constrained cut algorithm (design doc Stage 2)
+- [x] Task 3.3 — Add dispersion tagging (within-cluster variance) to metadata
+- [x] Task 3.4 — Register `'hierarchical'` in `CLUSTERER_REGISTRY`
+- [x] Task 3.5 — Inject `_sensor_labels` from `clustering_pipeline.py` when `sensor_col` is configured
 - [ ] Task 3.6 — Verify: hierarchical clusterer produces valid strata with coverage guarantees
 
 **Files created:**
@@ -460,15 +480,17 @@ tasks:
 
 ### Phase 4: Comparing Stage
 **Goal:** Implement the comparing framework and 3 concrete strategies.
+**Started:** 2026-03-18
+**Completed:** 2026-03-18
 
-- [ ] Task 4.1 — Create `comparing/base.py`: `ComparisonStrategy` ABC + `ComparisonResult` dataclass
-- [ ] Task 4.2 — Create `comparing/__init__.py`: `COMPARATOR_REGISTRY` + `get_comparator()`
-- [ ] Task 4.3 — Implement `BiasComparator`: `scipy.stats.f_oneway` + `scipy.stats.tukey_hsd`
-- [ ] Task 4.4 — Implement `PrecisionComparator`: `scipy.stats.levene`
-- [ ] Task 4.5 — Implement `DistributionComparator`: pairwise `scipy.stats.ks_2samp`
-- [ ] Task 4.6 — Implement `synthesis.py`: `synthesize_across_strata()` with inverse-dispersion weighting
-- [ ] Task 4.7 — Create `comparing_pipeline.py`: orchestrates discovery -> coverage check -> comparison -> synthesis -> output
-- [ ] Task 4.8 — Add `touch_comparing_flow` to `analysis_workflow.py`
+- [x] Task 4.1 — Create `comparing/base.py`: `ComparisonStrategy` ABC + `ComparisonResult` dataclass
+- [x] Task 4.2 — Create `comparing/__init__.py`: `COMPARATOR_REGISTRY` + `get_comparator()`
+- [x] Task 4.3 — Implement `BiasComparator`: `scipy.stats.f_oneway` + `scipy.stats.tukey_hsd`
+- [x] Task 4.4 — Implement `PrecisionComparator`: `scipy.stats.levene`
+- [x] Task 4.5 — Implement `DistributionComparator`: pairwise `scipy.stats.ks_2samp`
+- [x] Task 4.6 — Implement `synthesis.py`: `synthesize_across_strata()` with inverse-dispersion weighting
+- [x] Task 4.7 — Create `comparing_pipeline.py`: orchestrates discovery -> coverage check -> comparison -> synthesis -> output. Call `filter_enabled_profiles()` on all three profile dicts (`extraction_profiles`, `clustering_profiles`, `comparing_profiles`) at the top of `run_comparing()`.
+- [x] Task 4.8 — Add `touch_comparing_flow` to `analysis_workflow.py`
 
 **Files created:**
 - `code/src/analysis/touch_analytics/comparing/__init__.py`
@@ -487,14 +509,16 @@ tasks:
 
 ### Phase 5: DAG Config + Cleanup
 **Goal:** Update DAG YAML, remove old unified_pipeline.py, update task dependencies.
+**Started:** 2026-03-18
+**Completed:** 2026-03-18
 
-- [ ] Task 5.1 — Rewrite `configs/analyse_workflow_dag.yaml` with 3 split tasks
-- [ ] Task 5.2 — Update `available_tasks` in `analysis_workflow.py`: remove `unified_touch_analysis`, add 3 new tasks
-- [ ] Task 5.3 — Update kwargs forwarding in `run_batch_analysis()` for new option keys (`comparing_profiles`, `min_instances_per_sensor`, `min_sensor_types`)
-- [ ] Task 5.4 — Update `analyse_ap_efficacy` and `map_receptive_fields` `depends_on` to `["touch_feature_extraction"]`
-- [ ] Task 5.5 — Delete `unified_pipeline.py` (all logic now in the 3 split modules)
-- [ ] Task 5.6 — Update `touch_analytics/__init__.py` exports: remove `run_unified_touch_analysis`, add `run_feature_extraction`, `run_clustering`, `run_comparing`
-- [ ] Task 5.7 — Fix `_collect_unified_files()` in `analysis_workflow.py` to scan profile subdirectories (or accept profile parameter)
+- [x] Task 5.1 — Rewrite `configs/analyse_workflow_dag.yaml` with 3 split tasks
+- [x] Task 5.2 — Update `available_tasks` in `analysis_workflow.py`: remove `unified_touch_analysis`, add 3 new tasks
+- [x] Task 5.3 — Update kwargs forwarding in `run_batch_analysis()` for new option keys: add `if "comparing_profiles" in options`, `if "min_instances_per_sensor" in options`, `if "min_sensor_types" in options` forwarding blocks alongside the existing `extraction_profiles` / `clustering_profiles` blocks
+- [x] Task 5.4 — Update `analyse_ap_efficacy` and `map_receptive_fields` `depends_on` to `["touch_feature_extraction"]`
+- [x] Task 5.5 — Delete `unified_pipeline.py` (all logic now in the 3 split modules)
+- [x] Task 5.6 — Update `touch_analytics/__init__.py` exports: remove `run_unified_touch_analysis`, add `run_feature_extraction`, `run_clustering`, `run_comparing`
+- [x] Task 5.7 — Fix `_collect_unified_files()` in `analysis_workflow.py` to scan profile subdirectories (or accept profile parameter)
 
 **Files modified:**
 - `configs/analyse_workflow_dag.yaml` — restructured task entries
@@ -586,6 +610,7 @@ tasks:
 | `scipy.stats.tukey_hsd` requires scipy >= 1.8 | Low | Low | Check version in environment.yml; fallback to `statsmodels` if needed |
 | Hierarchical clustering O(n^2) memory for large datasets | Low | Medium | Touch counts per session are moderate (~hundreds); log warning if N > threshold |
 | Profile config duplication across task YAML entries | Low | Low | Clustering/comparing only need profile *names* for directory discovery; can simplify to list |
+| TaskPanel column explosion (~10 profile checkboxes across 3 tasks) | Low | Low | Existing behavior (greyed-out columns for non-applicable profiles); follow-up: collapsible profile groups |
 
 ---
 
@@ -613,3 +638,6 @@ tasks:
 - Clusterer registry: `code/src/analysis/touch_analytics/clustering/__init__.py`
 - Idempotency utility: `code/src/utils/should_process_task.py`
 - Unit conventions: `docs/development/knowledge-base/note-somatosensory-units-and-calculations.md`
+- GUI task panel: `code/src/utils/gui/dag_launcher/task_panel.py`
+- GUI launcher window: `code/src/utils/gui/dag_launcher/launcher_window.py`
+- GUI config model: `code/src/utils/pipeline/dag_config_model.py`

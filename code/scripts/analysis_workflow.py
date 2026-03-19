@@ -31,7 +31,9 @@ from analysis.touch_analytics import (
     generate_ap_efficacy_matrix,
     generate_session_summary
 )
-from analysis.touch_analytics.unified_pipeline import run_unified_touch_analysis
+from analysis.touch_analytics.extraction_pipeline import run_feature_extraction
+from analysis.touch_analytics.clustering_pipeline import run_clustering
+from analysis.touch_analytics.comparing_pipeline import run_comparing
 from analysis.receptive_field_mapping import RFMappingConfig
 from analysis.receptive_field_mapping.rf_mapping_engine import RFMappingEngine
 from analysis.receptive_field_mapping.rf_data_loader import load_grouped_spatial_data
@@ -75,30 +77,94 @@ def summarize_session_blocks_flow(
         return []
 
 
-@flow(name="unified_touch_analysis")
-def unified_touch_analysis_flow(
+@flow(name="touch_feature_extraction")
+def touch_feature_extraction_flow(
+    input_items: List[Tuple[Path, Path]],
+    force_processing: bool = False,
+    extraction_profiles: dict = None,
+) -> List[Path]:
+    """
+    Stage 1: Per-session feature extraction.
+    Writes one CSV per (session, profile) to
+    ``4_analysed/touch_features/<profile>/<session>_touch_summary.csv``.
+    """
+    print(f"[Batch Analysis] Running touch feature extraction for {len(input_items)} item(s)...")
+    if not input_items:
+        return []
+    profiles = extraction_profiles or {'max': {'method': 'max'}}
+    output_dir = input_items[0][1] / '4_analysed' / 'touch_features'
+    per_profile = run_feature_extraction(
+        input_items=input_items,
+        extraction_profiles=profiles,
+        output_dir=output_dir,
+        force=force_processing,
+    )
+    return [path for paths in per_profile.values() for path in paths]
+
+
+@flow(name="touch_clustering")
+def touch_clustering_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
     extraction_profiles: dict = None,
     clustering_profiles: dict = None,
 ) -> List[Path]:
     """
-    Unified extraction + clustering pipeline replacing the old
-    summarize_touches_per_session + analyse_number_single_touches pair.
+    Stage 2: Global clustering on pooled extraction CSVs.
+    Discovers CSVs written by touch_feature_extraction and writes
+    ``4_analysed/touch_clusters/<profile>/<clusterer>/pooled_touch_summary_clustered.csv``.
     """
-    print(f"[Batch Analysis] Running unified touch analysis for {len(input_items)} item(s)...")
-    options = {}
-    if extraction_profiles:
-        options['extraction_profiles'] = extraction_profiles
-    if clustering_profiles:
-        options['clustering_profiles'] = clustering_profiles
-    options['force_processing'] = force_processing
-    output_dir = input_items[0][1] / '4_analysed' / 'unified_touches'
-    return run_unified_touch_analysis(
-        input_items=input_items,
-        options=options,
+    print(f"[Batch Analysis] Running touch clustering for {len(input_items)} item(s)...")
+    if not input_items:
+        return []
+    profiles = extraction_profiles or {'max': {'method': 'max'}}
+    clusterers = clustering_profiles or {'kmeans': {'method': 'kmeans', 'min_touches_per_cluster': 30}}
+    extraction_dir = input_items[0][1] / '4_analysed' / 'touch_features'
+    output_dir = input_items[0][1] / '4_analysed' / 'touch_clusters'
+    per_key = run_clustering(
         output_dir=output_dir,
+        extraction_profiles=profiles,
+        clustering_profiles=clusterers,
         force=force_processing,
+        extraction_dir=extraction_dir,
+    )
+    return [path for paths in per_key.values() for path in paths]
+
+
+@flow(name="touch_comparing")
+def touch_comparing_flow(
+    input_items: List[Tuple[Path, Path]],
+    force_processing: bool = False,
+    extraction_profiles: dict = None,
+    clustering_profiles: dict = None,
+    comparing_profiles: dict = None,
+    min_instances_per_sensor: int = 5,
+    min_sensor_types: int = 2,
+) -> List[Path]:
+    """
+    Stage 3: Statistical comparison of sensor measurements across strata.
+    Discovers clustered CSVs written by touch_clustering and writes
+    per-strategy result JSONs and a dispersion-weighted synthesis report.
+    """
+    print(f"[Batch Analysis] Running touch comparing for {len(input_items)} item(s)...")
+    if not input_items:
+        return []
+    profiles = extraction_profiles or {'max': {'method': 'max'}}
+    clusterers = clustering_profiles or {'kmeans': {'method': 'kmeans'}}
+    strategies = comparing_profiles or {
+        'bias': {'method': 'bias', 'measurement_col': 'spike_elicited', 'sensor_col': 'session_id'},
+    }
+    clustering_dir = input_items[0][1] / '4_analysed' / 'touch_clusters'
+    output_dir = input_items[0][1] / '4_analysed' / 'touch_comparisons'
+    return run_comparing(
+        output_dir=output_dir,
+        extraction_profiles=profiles,
+        clustering_profiles=clusterers,
+        comparing_profiles=strategies,
+        min_instances_per_sensor=min_instances_per_sensor,
+        min_sensor_types=min_sensor_types,
+        force=force_processing,
+        clustering_dir=clustering_dir,
     )
 
 
@@ -165,7 +231,7 @@ def map_receptive_fields_flow(
     for input_file, database_path in input_items:
         try:
             # Locate unified summary
-            unified_dir = database_path / "4_analysed" / "unified_touches"
+            unified_dir = database_path / "4_analysed" / "touch_features"
             filename = input_file.name
             if "_semicontrolled_" in filename:
                 prefix = filename.split("_semicontrolled_")[0]
@@ -318,12 +384,14 @@ def _load_forearm_pcd(session_merged_output_dir: Path, session_id: str):
 
 def _collect_unified_files(input_items: List[Tuple[Path, Path]]) -> List[Path]:
     """
-    Helper to reconstruct the expected paths of the unified summary files.
-    These files are expected to be in the root of '4_analysed' based on Step 1.
+    Reconstruct expected paths of touch-summary CSVs written by touch_feature_extraction.
+    Scans all extraction profile subdirectories under '4_analysed/unified_touches/'.
+    Returns deduplicated list of existing paths.
     """
+    seen: set = set()
     unified_files = []
     for input_file, database_path in input_items:
-        output_dir = database_path / "4_analysed" / "unified_touches"
+        unified_root = database_path / "4_analysed" / "touch_features"
         filename = input_file.name
 
         if "_semicontrolled_" in filename:
@@ -332,12 +400,15 @@ def _collect_unified_files(input_items: List[Tuple[Path, Path]]) -> List[Path]:
         else:
             new_filename = f"{input_file.stem}_touch_summary.csv"
 
-        expected_path = output_dir / new_filename
-        if expected_path.exists():
-            unified_files.append(expected_path)
-        else:
-            logging.debug(f"Expected unified file missing: {expected_path}")
-            
+        # Scan all profile subdirectories
+        for profile_dir in sorted(unified_root.glob("*")):
+            if not profile_dir.is_dir():
+                continue
+            candidate = profile_dir / new_filename
+            if candidate.exists() and candidate not in seen:
+                seen.add(candidate)
+                unified_files.append(candidate)
+
     return unified_files
 
 # --- Batch Processing Logic (Main) ---
@@ -376,7 +447,9 @@ def run_batch_analysis(
 
     available_tasks = [
         ("summarize_session_blocks", summarize_session_blocks_flow),
-        ("unified_touch_analysis", unified_touch_analysis_flow),
+        ("touch_feature_extraction", touch_feature_extraction_flow),
+        ("touch_clustering", touch_clustering_flow),
+        ("touch_comparing", touch_comparing_flow),
         ("analyse_ap_efficacy", analyse_ap_efficacy_flow),
         ("map_receptive_fields", map_receptive_fields_flow),
     ]
@@ -426,6 +499,12 @@ def run_batch_analysis(
                         kwargs["extraction_profiles"] = options["extraction_profiles"]
                     if "clustering_profiles" in options:
                         kwargs["clustering_profiles"] = options["clustering_profiles"]
+                    if "comparing_profiles" in options:
+                        kwargs["comparing_profiles"] = options["comparing_profiles"]
+                    if "min_instances_per_sensor" in options:
+                        kwargs["min_instances_per_sensor"] = options["min_instances_per_sensor"]
+                    if "min_sensor_types" in options:
+                        kwargs["min_sensor_types"] = options["min_sensor_types"]
                     flow_func(**kwargs)
                 except Exception as e:
                     executor.error_msg = f"Batch analysis failed: {str(e)}"
