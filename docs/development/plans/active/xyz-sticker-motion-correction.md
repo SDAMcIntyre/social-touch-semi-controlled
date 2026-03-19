@@ -188,14 +188,14 @@ handstickers/
 
 ### Phase 1: Filter Strategy Pattern
 **Goal:** Create the filter ABC, two implementations, and factory
-**Started:** —
-**Completed:** —
+**Started:** 2026-03-19
+**Completed:** 2026-03-19
 
-- [ ] Task 1.1 — Create `motion_correction/__init__.py` with public exports
-- [ ] Task 1.2 — Create `motion_filter_interface.py` with `MotionFilterInterface` ABC (`filter()`, `name()`)
-- [ ] Task 1.3 — Create `butterworth_filter.py` with `ButterworthFilter` using `scipy.signal.butter` + `filtfilt`
-- [ ] Task 1.4 — Create `savgol_filter.py` with `SavgolFilter` using `scipy.signal.savgol_filter`
-- [ ] Task 1.5 — Create `motion_filter_factory.py` with `FilterChoice` enum and `MotionFilterFactory`
+- [x] Task 1.1 — Create `motion_correction/__init__.py` with public exports
+- [x] Task 1.2 — Create `motion_filter_interface.py` with `MotionFilterInterface` ABC (`filter()`, `name()`)
+- [x] Task 1.3 — Create `butterworth_filter.py` with `ButterworthFilter` using `scipy.signal.butter` + `filtfilt`
+- [x] Task 1.4 — Create `savgol_filter.py` with `SavgolFilter` using `scipy.signal.savgol_filter`
+- [x] Task 1.5 — Create `motion_filter_factory.py` with `FilterChoice` enum and `MotionFilterFactory`
 
 **Files Created:**
 - `code/src/preprocessing/stickers_analysis/xyz/motion_correction/__init__.py`
@@ -208,13 +208,13 @@ handstickers/
 
 ### Phase 2: Outlier Detection
 **Goal:** Detect and interpolate physically impossible motion spikes
-**Started:** —
-**Completed:** —
+**Started:** 2026-03-19
+**Completed:** 2026-03-19
 
-- [ ] Task 2.1 — Create `OutlierConfig` dataclass with toggleable hard/statistical parameters
-- [ ] Task 2.2 — Implement hard-threshold detection (velocity > max mm/s, acceleration > max mm/s²)
-- [ ] Task 2.3 — Implement statistical detection (MAD-based, configurable multiplier)
-- [ ] Task 2.4 — Implement `interpolate_outliers()` with linear interpolation from neighbours
+- [x] Task 2.1 — Create `OutlierConfig` dataclass with toggleable hard/statistical parameters
+- [x] Task 2.2 — Implement hard-threshold detection (velocity > max mm/s, acceleration > max mm/s²)
+- [x] Task 2.3 — Implement statistical detection (MAD-based, configurable multiplier)
+- [x] Task 2.4 — Implement `interpolate_outliers()` with linear interpolation from neighbours
 
 **Files Created:**
 - `code/src/preprocessing/stickers_analysis/xyz/motion_correction/outlier_detector.py`
@@ -223,12 +223,12 @@ handstickers/
 
 ### Phase 3: Orchestrator & Diagnostics
 **Goal:** Wire everything together and produce visual outputs
-**Started:** —
-**Completed:** —
+**Started:** 2026-03-19
+**Completed:** 2026-03-19
 
-- [ ] Task 3.1 — Create `DiagnosticsPlotter` with position overlay, kinematics comparison, and outlier summary plots
-- [ ] Task 3.2 — Create `MotionCorrectionOrchestrator` with `run_correct()` and `run_compare()` methods
-- [ ] Task 3.3 — Handle NaN gaps in raw data (explicit NaN check + interpolation before filtering)
+- [x] Task 3.1 — Create `DiagnosticsPlotter` with position overlay, kinematics comparison, and outlier summary plots
+- [x] Task 3.2 — Create `MotionCorrectionOrchestrator` with `run_correct()` and `run_compare()` methods
+- [x] Task 3.3 — Handle NaN gaps in raw data (explicit NaN check + interpolation before filtering)
 
 **Files Created:**
 - `code/src/preprocessing/stickers_analysis/xyz/motion_correction/diagnostics_plotter.py`
@@ -238,15 +238,15 @@ handstickers/
 
 ### Phase 4: DAG Integration
 **Goal:** Add the task to the preprocessing workflow and DAG config
-**Started:** —
-**Completed:** —
+**Started:** 2026-03-19
+**Completed:** 2026-03-19
 
-- [ ] Task 4.1 — Create task script `correct_xyz_stickers_motion.py` following `extract_stickers_xyz_positions.py` pattern
-- [ ] Task 4.2 — Add Prefect flow `correct_xyz_stickers_motion_flow` in `preprocess_workflow_kinect_auto.py` (after `generate_xyz_stickers` flow at line 236)
-- [ ] Task 4.3 — Add pipeline stage entry in `pipeline_stages` list (after `generate_xyz_stickers` at line 444), outputting to `sticker_3d_tracking_path` to override context for downstream tasks
-- [ ] Task 4.4 — Add task config block to `configs/preprocess_workflow_kinect_auto_dag.yaml` (between `generate_xyz_stickers` at line 51 and Stage 3 at line 53)
-- [ ] Task 4.5 — Update `depends_on` for `generate_3d_hand_in_motion` to include `correct_xyz_stickers_motion`
-- [ ] Task 4.6 — Update `__init__.py` exports in `stickers_analysis/xyz/` and `stickers_analysis/`
+- [x] Task 4.1 — Create task script `correct_xyz_stickers_motion.py` following `extract_stickers_xyz_positions.py` pattern
+- [x] Task 4.2 — Add Prefect flow `correct_xyz_stickers_motion_flow` in `preprocess_workflow_kinect_auto.py` (after `generate_xyz_stickers` flow at line 236)
+- [x] Task 4.3 — Add pipeline stage entry in `pipeline_stages` list (after `generate_xyz_stickers` at line 444), outputting to `sticker_3d_tracking_path` to override context for downstream tasks
+- [x] Task 4.4 — Add task config block to `configs/preprocess_workflow_kinect_auto_dag.yaml` (between `generate_xyz_stickers` at line 51 and Stage 3 at line 53)
+- [x] Task 4.5 — Update `depends_on` for `generate_3d_hand_in_motion` to include `correct_xyz_stickers_motion`
+- [x] Task 4.6 — Update `__init__.py` exports in `stickers_analysis/xyz/` and `stickers_analysis/`
 
 **Files Created:**
 - `code/scripts/_3_preprocessing/_1_sticker_tracking/correct_xyz_stickers_motion.py`

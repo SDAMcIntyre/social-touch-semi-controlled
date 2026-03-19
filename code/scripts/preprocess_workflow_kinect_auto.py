@@ -42,7 +42,8 @@ from _3_preprocessing._1_sticker_tracking import (
     adjust_ellipse_centers_to_global_frame,
     consolidate_2d_tracking_data,
     
-    extract_stickers_xyz_positions
+    extract_stickers_xyz_positions,
+    correct_xyz_stickers_motion
 )
 
 from _3_preprocessing._2_hand_tracking import (
@@ -234,6 +235,39 @@ def generate_xyz_stickers(
         force_processing=force_processing
     )
     return result_csv_path
+
+@flow(name="6c. Correct XYZ Sticker Motion")
+def correct_xyz_stickers_motion_flow(
+    stickers_xyz_path: Path,
+    output_dir: Path,
+    *,
+    mode: str = "correct",
+    filter_method: str = "butterworth",
+    filter_params: dict | None = None,
+    outlier_detection: dict | None = None,
+    force_processing: bool = False,
+) -> Path:
+    print(f"[{output_dir.name}] Correcting XYZ sticker motion (mode='{mode}')...")
+    name_baseline = stickers_xyz_path.stem.replace("_xyz_tracked", "")
+    corrected_csv_path = output_dir / (name_baseline + "_xyz_corrected.csv")
+    diagnostics_dir = output_dir / "xyz_correction_diagnostics"
+
+    correct_xyz_stickers_motion(
+        input_csv_path=stickers_xyz_path,
+        output_csv_path=corrected_csv_path,
+        diagnostics_dir=diagnostics_dir,
+        mode=mode,
+        filter_method=filter_method,
+        filter_params=filter_params,
+        outlier_detection=outlier_detection,
+        force_processing=force_processing,
+    )
+
+    if mode == "correct":
+        return corrected_csv_path
+    # Compare mode: no corrected CSV — downstream still uses the raw path
+    return stickers_xyz_path
+
 
 # --- REFACTORED: Track Hands Model Flow ---
 @flow(name="7a. Track Hands Model")
@@ -436,11 +470,21 @@ def run_single_session_pipeline(
                             "stickers_roi_csv_path": context.get("raw_stickers_roi_csv")}, 
          "outputs": ["sticker_2d_tracking_path", None]},
          
-        {"name": "generate_xyz_stickers", 
-         "func": generate_xyz_stickers, 
-         "params": lambda: {"stickers_2d_path": context.get("sticker_2d_tracking_path"), 
-                            "source_video": config.source_video, 
-                            "output_dir": config.video_processed_output_dir / "handstickers"}, 
+        {"name": "generate_xyz_stickers",
+         "func": generate_xyz_stickers,
+         "params": lambda: {"stickers_2d_path": context.get("sticker_2d_tracking_path"),
+                            "source_video": config.source_video,
+                            "output_dir": config.video_processed_output_dir / "handstickers"},
+         "outputs": ["sticker_3d_tracking_path"]},
+
+        {"name": "correct_xyz_stickers_motion",
+         "func": correct_xyz_stickers_motion_flow,
+         "params": lambda: {"stickers_xyz_path": context.get("sticker_3d_tracking_path"),
+                            "output_dir": config.video_processed_output_dir / "handstickers",
+                            "mode": dag_handler.get_task_options("correct_xyz_stickers_motion").get("mode", "correct"),
+                            "filter_method": dag_handler.get_task_options("correct_xyz_stickers_motion").get("filter_method", "butterworth"),
+                            "filter_params": dag_handler.get_task_options("correct_xyz_stickers_motion").get("filter_params"),
+                            "outlier_detection": dag_handler.get_task_options("correct_xyz_stickers_motion").get("outlier_detection")},
          "outputs": ["sticker_3d_tracking_path"]},
 
         # --- Stage 3: Trial Definition & Analysis ---
