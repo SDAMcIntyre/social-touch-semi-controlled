@@ -1,6 +1,7 @@
 import numpy as np
 import open3d as o3d
 from typing import Optional, Dict, Union, Tuple, Any
+from preprocessing.forearm_extraction import serialize_contact_points
 
 class ObjectsInteractionProcessor:
     """
@@ -175,7 +176,7 @@ class ObjectsInteractionProcessor:
 
         contact_quantities = {
             "contact_detected": 1,
-            "contact_points": contact_points.tolist(),
+            "contact_points": serialize_contact_points([tuple(pt) for pt in contact_points]),
             "contact_depth": float(contact_depth),
             "contact_area": float(total_contact_area),
             "contact_location_x": float(mean_location[0]),
@@ -222,6 +223,7 @@ class ObjectsInteractionProcessor:
         contact_data["contact_detected"] = 0
         contact_data["contact_area"] = 0.0
         contact_data["contact_depth"] = 0.0
+        contact_data["contact_points"] = "[]"
         
         visualization = {
             "contact_points": np.array([]),
