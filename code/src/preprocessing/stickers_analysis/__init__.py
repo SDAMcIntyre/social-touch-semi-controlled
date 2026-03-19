@@ -45,6 +45,13 @@ from .xyz.data_access.xyz_data_filehandler import XYZDataFileHandler
 from .xyz.core.xyz_extractor_factory import XYZExtractorFactory, ExtractorChoice
 from .xyz.core.xyz_extractor_ellipse_depth import EllipseDepthExtractor
 from .xyz.core.xyz_extracting_orchestrator import XYZStickerOrchestrator
+from .xyz.motion_correction import (
+    MotionCorrectionOrchestrator,
+    OutlierConfig,
+    OutlierDetector,
+    FilterChoice,
+    MotionFilterFactory,
+)
 
 from .common.models.tracked_data_interface import TrackedDataInterface
 
