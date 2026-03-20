@@ -14,7 +14,7 @@ dependencies:
   - vtk>=9.4
 
   # --- Core scientific (MKL-linked builds from conda) ---
-  - numpy>=2.0
+  - chumpy @ git+https://github.com/mattloper/chumpy@master
   - scipy>=1.15
 
   # --- Media / codecs (needed by OpenCV for video I/O) ---
@@ -30,7 +30,6 @@ dependencies:
       - tifffile>=2025.5
 
       # --- 3D, Visualization & Geometry ---
-      - chumpy>=0.70
       - open3d>=0.19
       - plyfile>=1.1
       - pygltflib>=1.16
@@ -80,7 +79,7 @@ dependencies:
       - rich>=14
 
       # --- I/O & Hardware ---
-      - pyk4a>=1.5; sys_platform == "win32"
+      - pyk4a>=1.5
       - pyserial>=3.5
       - pywin32>=311; sys_platform == "win32"
 
@@ -100,5 +99,5 @@ dependencies:
       - tqdm>=4.67
       - typer>=0.16
 
-      # --- Project package (editable install) ---
+      # --- Project (editable install) ---
       - -e .
