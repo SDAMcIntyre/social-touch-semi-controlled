@@ -4,6 +4,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
+from .feature_extraction.kinematics import compute_velocity_magnitudes, compute_acceleration_magnitudes
 
 # Architectural Import
 from utils.should_process_task import should_process_task, clean_task_outputs
@@ -66,14 +67,10 @@ def _process_touch_analysis(input_path: Path, output_path: Path, show: bool) -> 
         touch_type = group['type_metadata'].iloc[0] if 'type_metadata' in group.columns else "unknown"
         block_order_id = group['block_order_id'].iloc[0]
 
-        # Velocity
-        velocity_vectors = group[['sticker_blue_position_x', 'sticker_blue_position_y', 'sticker_blue_position_z']].diff().fillna(0)
-        velocity_magnitudes = np.sqrt(velocity_vectors.pow(2).sum(axis=1))
+        # Velocity / Acceleration
+        velocity_magnitudes = compute_velocity_magnitudes(group)
+        acceleration_magnitudes = compute_acceleration_magnitudes(velocity_magnitudes)
         max_velocity = velocity_magnitudes.max()
-
-        # Acceleration
-        acceleration_vectors = velocity_vectors.diff().fillna(0)
-        acceleration_magnitudes = np.sqrt(acceleration_vectors.pow(2).sum(axis=1))
         max_acceleration = acceleration_magnitudes.max()
 
         # Direction

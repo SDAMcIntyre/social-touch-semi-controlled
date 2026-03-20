@@ -35,7 +35,7 @@ class MechanicsOfSolidsExtractor(FeatureExtractor):
     |------------------|------------------------------------------|-------|
     | strain_max/mean  | depth / skin_thickness                   | —     |
     | stress_max/mean  | E * strain                               | kPa   |
-    | strain_rate_max  | velocity / (skin_thickness * fps)        | 1/s   |
+    | strain_rate_max  | velocity / skin_thickness                | 1/s   |
     | elastic_energy   | 0.5 * E * strain^2 * area * thickness   | mJ    |
     | impulse          | sum(stress * area * dt)                  | mN·s  |
     """
@@ -49,12 +49,12 @@ class MechanicsOfSolidsExtractor(FeatureExtractor):
         depth_m = group['contact_depth'].values * 1e-3          # mm → m
         area_m2 = group['contact_area'].values * 1e-6           # mm² → m²
 
-        vel_magnitudes = compute_velocity_magnitudes(group).values * 1e-3  # mm/s → m/s
+        vel_magnitudes = compute_velocity_magnitudes(group, fps=fps).values * 1e-3  # mm/s → m/s
 
         strain = depth_m / h                                     # dimensionless
         stress = E * strain                                      # kPa (E in kPa, strain dimensionless)
 
-        strain_rate = vel_magnitudes / (h * fps)                 # 1/s
+        strain_rate = vel_magnitudes / h                         # 1/s
 
         # Elastic energy per frame: 0.5 * E[kPa] * strain^2 * area[m^2] * h[m] → kPa·m^3 = kJ → mJ
         elastic_energy_per_frame = 0.5 * E * strain ** 2 * area_m2 * h * 1e6  # mJ

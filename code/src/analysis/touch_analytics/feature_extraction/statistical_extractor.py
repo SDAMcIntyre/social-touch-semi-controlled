@@ -15,9 +15,10 @@ class StatisticalExtractor(FeatureExtractor):
 
     def extract(self, group: pd.DataFrame, config: dict) -> dict:
         aggregations = config.get('aggregations', _DEFAULT_AGGREGATIONS)
+        fps = config.get('fps', 30.0)
 
-        vel = compute_velocity_magnitudes(group)
-        accel = compute_acceleration_magnitudes(vel)
+        vel = compute_velocity_magnitudes(group, fps=fps)
+        accel = compute_acceleration_magnitudes(vel, fps=fps)
 
         variables = {
             'depth': group['contact_depth'],
