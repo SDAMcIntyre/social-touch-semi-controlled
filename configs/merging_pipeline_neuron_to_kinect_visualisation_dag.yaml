@@ -7,10 +7,10 @@
 
 parameters:
   kinect_configs: 
-    valid_configs_ST13-01/kinect_config_2022-06-14_ST13-01_semicontrolled_block-order01.yaml
+    valid_configs_ST16-05/kinect_config_2022-06-17_ST16-05_semicontrolled_block-order01.yaml
 tasks:
   view_neural_kinect_scene:
-    enabled: false
+    enabled: true
     description: "Launch the NeuralKinectViewer for the merged neural + Kinect 3D
       scene."
     options:
@@ -18,7 +18,7 @@ tasks:
     depends_on: []
 
   view_neural_kinect_scene_transformed:
-    enabled: true
+    enabled: false
     description: "Launch the NeuralKinectViewer in registered-frame mode.  Shows the
       unified forearm PLY and applies the per-block ICP transform to the MKV cloud,
       hand mesh, and stickers.  Skipped automatically for single-forearm sessions
