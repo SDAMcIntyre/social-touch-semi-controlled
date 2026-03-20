@@ -2,7 +2,8 @@
 
 **Date:** 2026-03-20
 **Author:** Basil Duvernoy
-**Status:** In Progress
+**Status:** Completed
+**Completed:** 2026-03-20 09:49
 **Branch:** `feature/fix-gui-scalar-edit-crash`
 
 ---
