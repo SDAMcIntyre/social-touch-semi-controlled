@@ -282,3 +282,67 @@ def extract_forearm(
         print(f"❌ ERROR: An unexpected error occurred: {e}", file=sys.stderr)
         sys.exit(1)
 
+
+
+
+if __name__ == "__main__":
+    from preprocessing.forearm_extraction.models.forearm_parameters import Point
+
+    database_path  = r"F:/liu-onedrive-nospecial-carac/_Teams/Social touch Kinect MNG/02_data/semi-controlled/"
+    video_block = "kinect/2022-06-17_ST16-05/"
+
+    # ── Configuration ────────────────────────────────────────────
+    # Option A: Load from an existing metadata JSON (recommended)
+    metadata_json = Path(database_path + "2_processed/" + video_block + "forearm_pointclouds/2022-06-17_ST16-05_arm_roi_metadata.json")
+    # Option B: Set to None to use manual parameters below
+    # metadata_json = None
+
+    session_primary_dir = Path(database_path + "1_primary/" + video_block + "block-order-01")
+    output_dir = Path(database_path + "2_processed/" + video_block + "forearm_pointclouds/")
+
+    # ── Resolve video_config ─────────────────────────────────────
+    if metadata_json is not None and metadata_json.exists():
+        all_params = ForearmFrameParametersFileHandler.load(str(metadata_json))
+        if not all_params:
+            raise RuntimeError(f"No parameters found in {metadata_json}")
+        video_config = all_params[0]  # pick the first entry (change index to debug others)
+        print(f"Loaded config: {video_config.video_filename}, frame {video_config.frame_id}")
+    else:
+        # Manual fallback — fill in real values for your session
+        video_config = ForearmParameters(
+            video_filename="depth_video.mp4",
+            frame_ids=[542],
+            representative_frame_id=542,
+            region_of_interest=RegionOfInterest(
+                top_left_corner=Point(x=400, y=300),
+                bottom_right_corner=Point(x=1200, y=900),
+                angle_deg=0.0,
+            ),
+            frame_width=1920,
+            frame_height=1080,
+            fps=30.0,
+            nframes=6000,
+            fourcc_str="mp4v",
+        )
+
+    # ── Resolve paths ────────────────────────────────────────────
+    video_path = session_primary_dir / video_config.video_filename.replace(".mp4", ".mkv")
+    output_stem = video_config.build_output_stem(video_path.stem)
+    output_ply_path = output_dir / f"{output_stem}.ply"
+    output_params_path = output_dir / f"{output_stem}_extraction_params.json"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"Video:  {video_path}")
+    print(f"Output: {output_ply_path}")
+
+    # ── Run ──────────────────────────────────────────────────────
+    extract_forearm(
+        video_path=str(video_path),
+        video_config=video_config,
+        output_ply_path=str(output_ply_path),
+        output_params_path=str(output_params_path),
+        monitor=True,
+        interactive=True,
+        force_processing=True,
+    )
+
