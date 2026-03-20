@@ -15,7 +15,7 @@ from typing import List, Optional
 import numpy as np
 import open3d as o3d
 
-from utils.should_process_task import should_process_task
+from utils.should_process_task import should_process_task, clean_task_outputs
 from primary_processing import KinectConfig
 from postprocessing.xyz_reference_from_gestures import PCACalibrationEngine, CalibrationResult
 
@@ -89,7 +89,7 @@ def export_forearm_pca_calibrated(
     ):
         logger.info("[%s] Forearm PLY export up-to-date. Skipping.", session_id)
         return output_path
-
+    clean_task_outputs(output_path)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Load calibration

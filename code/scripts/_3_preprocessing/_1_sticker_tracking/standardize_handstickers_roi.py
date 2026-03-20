@@ -7,7 +7,7 @@ from typing import Tuple
 from preprocessing.stickers_analysis import (
     ROITrackedFileHandler
 )
-from utils.should_process_task import should_process_task
+from utils.should_process_task import should_process_task, clean_task_outputs
 
 # --- Helper & Core Logic Functions ---
 
@@ -70,8 +70,7 @@ def generate_standard_roi_size_dataset(
     ):
         print(f"Unified ROI dataset already exists: {output_roi_path}. Skipping.")
         return # Skips if outputs are up-to-date
-
-
+    clean_task_outputs(output_roi_path)
     print("--- Starting ROI Standardisation Process ---")
 
     # Load data sources

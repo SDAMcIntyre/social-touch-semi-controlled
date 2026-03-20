@@ -6,7 +6,7 @@ from typing import Dict, Set, Tuple
 
 import pandas as pd
 
-from utils.should_process_task import should_process_task
+from utils.should_process_task import should_process_task, clean_task_outputs
 
 logger = logging.getLogger(__name__)
 
@@ -131,7 +131,7 @@ def filter_block_by_neural_quality(
     ):
         logger.info(f"Already up-to-date: {output_csv.name}")
         return output_csv
-
+    clean_task_outputs(output_csv)
     df = pd.read_csv(input_csv)
     if 'trial_id' not in df.columns:
         raise KeyError(f"'trial_id' column missing in {input_csv.name}")

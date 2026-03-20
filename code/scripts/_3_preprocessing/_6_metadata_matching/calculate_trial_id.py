@@ -6,7 +6,7 @@ from typing import Optional
 # Configure basic logging to print to the console
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-from utils.should_process_task import should_process_task
+from utils.should_process_task import should_process_task, clean_task_outputs
 
 def calculate_trial_id(
         trial_chunk_path: Path,
@@ -40,8 +40,8 @@ def calculate_trial_id(
         force=force_processing
     ):
         logging.info(f"✅ Skipping task: Output file '{output_path}' already exists.")
-        return True 
-
+        return True
+    clean_task_outputs(output_path)
     try:
         # Load trial chunk data
         if not trial_chunk_path.exists():

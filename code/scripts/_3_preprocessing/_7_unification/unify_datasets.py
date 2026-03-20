@@ -4,7 +4,7 @@ from typing import Optional, List, Dict
 
 import pandas as pd
 
-from utils.should_process_task import should_process_task
+from utils.should_process_task import should_process_task, clean_task_outputs
 
 # --- Configuration ---
 logging.basicConfig(
@@ -142,13 +142,13 @@ def unify_datasets(
     
     # Check cache/existence logic using the utility function
     if not should_process_task(
-        output_paths=[output_path], 
-        input_paths=[contact_path, led_path, trial_path, single_touch_path, stimuli_path], 
+        output_paths=[output_path],
+        input_paths=[contact_path, led_path, trial_path, single_touch_path, stimuli_path],
         force=force_processing
     ):
         logger.info(f"Skipping task: Output '{output_path}' exists.")
         return True
-
+    clean_task_outputs(output_path)
     try:
         logger.info("Loading datasets for unification...")
         dataframes = _load_datasets(inputs)

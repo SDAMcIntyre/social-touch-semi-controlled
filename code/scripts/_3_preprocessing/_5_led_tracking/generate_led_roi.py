@@ -4,7 +4,7 @@ from pathlib import Path
 # Setup a basic logger
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-from utils.should_process_task import should_process_task  # noqa: E402
+from utils.should_process_task import should_process_task, clean_task_outputs  # noqa: E402
 
 from preprocessing.led_analysis import (
     ROIManager,
@@ -56,7 +56,7 @@ def generate_led_roi(
             force=force_processing):
         logging.info(f"Output file already exists or previous steps are missing. Skipping ROI definition for '{video_path.name}'.")
         return True
-
+    clean_task_outputs(output_video_path)
     logging.info(f"Starting LED ROI definition for '{video_path.name}'.")
 
     # 3. Core Logic is wrapped in error handling for runtime issues.

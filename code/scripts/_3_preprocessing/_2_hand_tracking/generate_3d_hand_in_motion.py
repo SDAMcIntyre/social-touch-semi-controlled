@@ -4,7 +4,7 @@ import numpy as np
 import json
 from pathlib import Path
 
-from utils.should_process_task import should_process_task
+from utils.should_process_task import should_process_task, clean_task_outputs
 from preprocessing.motion_analysis import MeshSequenceLoader, HandMotionManager
 
 def parse_coordinates_from_dataframe(
@@ -47,12 +47,12 @@ def generate_3d_hand_in_motion(
     Orchestrates data loading and delegates domain logic to HandMotionManager.
     """
     if not should_process_task(
-        input_paths=[stickers_path, hands_curated_path, metadata_path], 
-        output_paths=[output_csv_path, output_npz_path], 
+        input_paths=[stickers_path, hands_curated_path, metadata_path],
+        output_paths=[output_csv_path, output_npz_path],
         force=force_processing):
         print(f"✅ Output files already exist. Use --force to overwrite.")
         return
-    
+    clean_task_outputs([output_csv_path, output_npz_path])
     print("Step 1: Loading input data...")
     try:
         df = pd.read_csv(stickers_path)

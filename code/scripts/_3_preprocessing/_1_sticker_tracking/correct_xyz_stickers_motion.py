@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 
-from utils.should_process_task import should_process_task
+from utils.should_process_task import should_process_task, clean_task_outputs
 from preprocessing.stickers_analysis import (
     MotionCorrectionOrchestrator,
     OutlierConfig,
@@ -60,7 +60,8 @@ def correct_xyz_stickers_motion(
             "Use force_processing=True to overwrite."
         )
         return
-
+    if mode == "correct":
+        clean_task_outputs(output_csv_path)
     print(f"Starting XYZ motion correction (mode='{mode}')...")
 
     # Build outlier config from dict or use defaults

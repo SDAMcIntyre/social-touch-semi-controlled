@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from sklearn.decomposition import PCA
 
 # Import the idempotency check utility
-from utils.should_process_task import should_process_task
+from utils.should_process_task import should_process_task, clean_task_outputs
 
 from postprocessing.xyz_reference_from_gestures import (
     PCACalibrationEngine,
@@ -161,7 +161,7 @@ def set_xyz_reference_from_gestures(
     ):
         logger.info(f"[{output_dir.name}] Task up-to-date. Skipping.")
         return expected_output_files, output_dir
-
+    clean_task_outputs(all_check_outputs)
     output_dir.mkdir(parents=True, exist_ok=True)
     
     # Initialize Components

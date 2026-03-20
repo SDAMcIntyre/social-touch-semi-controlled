@@ -13,7 +13,7 @@ from typing import List
 
 import pandas as pd
 
-from utils.should_process_task import should_process_task
+from utils.should_process_task import should_process_task, clean_task_outputs
 from preprocessing.forearm_extraction import (
     ForearmRegistrator,
     get_transform_schedule,
@@ -57,7 +57,7 @@ def apply_icp_registration(
     ):
         logger.info("[%s] ICP registration up-to-date. Skipping.", output_dir.name)
         return expected_outputs
-
+    clean_task_outputs(expected_outputs)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Load registration transforms (keyed by session from first config)

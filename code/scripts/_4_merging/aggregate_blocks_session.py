@@ -6,7 +6,7 @@ import logging
 # Setup a basic logger
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-from utils.should_process_task import should_process_task
+from utils.should_process_task import should_process_task, clean_task_outputs
 
 def aggregate_session_blocks(
     input_paths: List[Path],
@@ -30,13 +30,13 @@ def aggregate_session_blocks(
     # 2. Check if processing is required using should_process_task
     # Checks modification times of input_paths vs output_path
     if not should_process_task(
-        input_paths=input_paths, 
-        output_paths=output_path, 
+        input_paths=input_paths,
+        output_paths=output_path,
         force=force_processing
     ):
         logging.info(f"✅ Output file '{output_path.name}' already exists and is up-to-date. Use force_processing to overwrite.")
         return output_path
-        
+    clean_task_outputs(output_path)
     # Proceed with aggregation if check passed
     logging.info(f"Aggregating {len(input_paths)} blocks into {output_path.name}...")
     

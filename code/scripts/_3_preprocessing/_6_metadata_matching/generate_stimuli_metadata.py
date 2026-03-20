@@ -1,6 +1,6 @@
 from pathlib import Path
 import pandas as pd
-from utils.should_process_task import should_process_task
+from utils.should_process_task import should_process_task, clean_task_outputs
 
 def generate_stimuli_metadata_to_data(
     trial_id_path: Path, 
@@ -25,13 +25,13 @@ def generate_stimuli_metadata_to_data(
     # Validation: Check if processing is required using should_process_task
     # We pass both output paths to ensure both are generated if either is missing/outdated
     if not should_process_task(
-        input_paths=[trial_id_path, stimuli_path], 
-        output_paths=[output_path, aligned_output_path], 
+        input_paths=[trial_id_path, stimuli_path],
+        output_paths=[output_path, aligned_output_path],
         force=force_processing
     ):
         print(f"Skipping stimuli generation: Output files exist and are up-to-date.")
         return output_path, aligned_output_path
-        
+    clean_task_outputs([output_path, aligned_output_path])
     print(f"Reading trial IDs from {trial_id_path} and stimuli source from {stimuli_path}")
 
     # 1. Load Data
