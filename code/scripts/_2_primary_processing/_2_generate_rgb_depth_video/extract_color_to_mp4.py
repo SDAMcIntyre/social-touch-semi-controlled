@@ -9,7 +9,7 @@ import datetime
 import threading
 import contextlib
 
-from utils.should_process_task import should_process_task
+from utils.should_process_task import should_process_task, clean_task_outputs
 
 # This maps the stable enum to the hardware's known dimensions (width, height).
 CUSTOM_RESOLUTION_MAP = {
@@ -190,7 +190,7 @@ def extract_color_to_mp4(
     if not need_to_process and os.path.exists(marker_filepath):
         print(f"Skipping '{mkv_path}' as output file already validated.")
         return output_filepath
-
+    clean_task_outputs(output_filepath)
     try:
         playback = open_kinect_file_safely(str(mkv_path))
         playback.open()

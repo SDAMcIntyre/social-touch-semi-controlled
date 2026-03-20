@@ -9,7 +9,7 @@ import pandas as pd
 
 
 # Local application/library specific imports
-from utils.should_process_task import should_process_task
+from utils.should_process_task import should_process_task, clean_task_outputs
 from preprocessing.stickers_analysis import (
     ROITrackedFileHandler,
     ROITrackedObjects,
@@ -67,7 +67,7 @@ def consolidate_2d_tracking_data(
     if not should_process_task(output_paths=output_csv_path, input_paths=[roi_csv_path, ellipse_csv_path], force=force_processing):
         print(f"✅ Output file '{output_csv_path}' already exists. Use --force to overwrite.")
         return
-
+    clean_task_outputs(output_csv_path)
     try:
         # 1. Load Data using robust handlers
         print("📖 Loading input data...")

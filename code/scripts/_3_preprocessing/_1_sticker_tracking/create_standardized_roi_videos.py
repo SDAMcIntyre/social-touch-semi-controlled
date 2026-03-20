@@ -12,7 +12,7 @@ import pandas as pd
 # Local application imports
 from preprocessing.common import ColorFormat, VideoMP4Manager
 from preprocessing.stickers_analysis import ROITrackedFileHandler
-from utils.should_process_task import should_process_task
+from utils.should_process_task import should_process_task, clean_task_outputs
 
 
 @contextmanager
@@ -210,7 +210,7 @@ def create_standardized_roi_videos(
         ):
             print(f"Video {output_video_path} has already been processed. Skipping...")
             continue
-
+        clean_task_outputs(output_video_path)
         # Corrected function call to match the robust version defined above
         create_windowed_video(
             video_manager=video_manager,

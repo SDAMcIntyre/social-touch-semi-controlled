@@ -6,7 +6,7 @@ from primary_processing.mkv_video_management.mkv_stream_analyze import (
     save_report_to_csv
 )
 
-from utils.should_process_task import should_process_task
+from utils.should_process_task import should_process_task, clean_task_outputs
 
 
 def generate_mkv_stream_analysis(
@@ -15,12 +15,12 @@ def generate_mkv_stream_analysis(
               *,
               force_processing: bool = False
 ) -> str:
-    if not should_process_task(output_paths=output_csv_path, 
+    if not should_process_task(output_paths=output_csv_path,
                                input_paths=input_video,
                                force=force_processing):
         print(f"Analysis has already been done (result file: {output_csv_path}). Skipping")
         return output_csv_path
-    
+    clean_task_outputs(output_csv_path)
     try:
         # Use the class as a context manager
         with MKVStreamAnalyzer(input_video) as analyzer:

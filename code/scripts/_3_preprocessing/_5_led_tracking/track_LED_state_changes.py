@@ -11,7 +11,7 @@ from pathlib import Path
 logging.basicConfig(level=logging.INFO, format='%(asctime-s - %(levelname)s - %(message)s')
 
 
-from utils.should_process_task import should_process_task
+from utils.should_process_task import should_process_task, clean_task_outputs
 
 from preprocessing.led_analysis import (
     LEDBlinkingAnalyzer,
@@ -90,14 +90,14 @@ def track_led_states_changes(
     This function handles file checks, calls the analysis, saves the
     results using the dedicated handler, and optionally plots them.
     """
-    # 1. Check if processing is needed    
+    # 1. Check if processing is needed
     if not should_process_task(
-         input_paths=[video_path], 
-         output_paths=[csv_output_path, metadata_output_path], 
+         input_paths=[video_path],
+         output_paths=[csv_output_path, metadata_output_path],
          force=force_processing):
         logging.info(f"Output files already exist. Skipping analysis for '{video_path.name}'.")
         return
-
+    clean_task_outputs([csv_output_path, metadata_output_path])
     # 2. Run the core analysis (Computation)
     analyzer = None
     try:

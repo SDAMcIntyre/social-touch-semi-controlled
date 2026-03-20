@@ -18,7 +18,7 @@ from tqdm import tqdm
 # Internal module imports (Assumed to exist in user environment)
 from preprocessing.common import VideoMP4Manager
 from preprocessing.motion_analysis import HamerClientAPI
-from utils.should_process_task import should_process_task
+from utils.should_process_task import should_process_task, clean_task_outputs
 
 # --- Configuration & Setup ---
 
@@ -263,7 +263,7 @@ def track_hands_on_video(
     ):
         logger.info(f"Skipping: {output_path} is up to date.")
         return
-
+    clean_task_outputs(output_path)
     # 1. Initialize Config
     config = ProcessingConfig(
         max_workers=16  # Aggressive I/O threading for HTTP requests

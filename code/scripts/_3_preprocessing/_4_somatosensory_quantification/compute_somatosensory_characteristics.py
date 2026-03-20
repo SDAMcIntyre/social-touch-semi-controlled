@@ -9,7 +9,7 @@ import pandas as pd
 
 from PyQt5.QtWidgets import QApplication
 
-from utils.should_process_task import should_process_task
+from utils.should_process_task import should_process_task, clean_task_outputs
 
 from preprocessing.motion_analysis import (
     HandMotionManager,
@@ -56,12 +56,12 @@ def compute_somatosensory_characteristics(
         fps: int = 30
 ) -> Optional[str]:
     if not should_process_task(
-        output_paths=output_csv_path, 
-        input_paths=[hand_motion_path, forearm_metadata_path], 
+        output_paths=output_csv_path,
+        input_paths=[hand_motion_path, forearm_metadata_path],
         force=force_processing):
         print(f"✅ Output file '{output_csv_path}' already exists. Use force_processing to overwrite.")
         return None
-    
+    clean_task_outputs(output_csv_path)
     # 1. LOAD MOTION DATA via HandMotionManager
     print(f"Loading Hand Motion Data from: {hand_motion_path}")
     motion_manager = HandMotionManager(fps=float(fps))

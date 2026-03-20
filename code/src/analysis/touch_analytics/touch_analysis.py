@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 
 # Architectural Import
-from utils.should_process_task import should_process_task
+from utils.should_process_task import should_process_task, clean_task_outputs
 
 def generate_unified_summary(
         input_path: Path,
@@ -22,13 +22,13 @@ def generate_unified_summary(
     """
     # 1. Idempotency Check
     if not should_process_task(
-        input_paths=[input_path], 
-        output_paths=[output_path], 
+        input_paths=[input_path],
+        output_paths=[output_path],
         force=force
     ):
         logging.info(f"Skipping Unified Summary for {input_path.name} (Up-to-date).")
         return output_path
-
+    clean_task_outputs(output_path)
     logging.info(f"Analyzing (Unified): {input_path.name}")
     return _process_touch_analysis(input_path, output_path, show)
 

@@ -22,7 +22,7 @@ from preprocessing.forearm_extraction.registration.csv_spatial_transformer impor
     parse_contact_points,
     serialize_contact_points,
 )
-from utils.should_process_task import should_process_task
+from utils.should_process_task import should_process_task, clean_task_outputs
 
 logger = logging.getLogger(__name__)
 
@@ -166,7 +166,7 @@ def project_contacts_onto_forearm(
             logger.info("Contact projection up-to-date. Skipping: %s", output_csv.name)
             output_paths.append(output_csv)
             continue
-
+        clean_task_outputs(output_csv)
         distances = _project_single_csv(input_csv, output_csv, kdtree, vertices)
         logger.info("Projected contact points: %s", output_csv.name)
         output_paths.append(output_csv)

@@ -5,6 +5,31 @@ from typing import List, Union
 PathLike = Union[str, Path]
 PathInput = Union[PathLike, List[PathLike]]
 
+
+def _normalize_to_paths(targets: PathInput) -> List[Path]:
+    if isinstance(targets, (str, Path)):
+        return [Path(targets)]
+    return [Path(p) for p in targets]
+
+
+def clean_task_outputs(output_paths: PathInput) -> None:
+    """Delete output files before processing to prevent stale artifacts.
+
+    Call immediately after should_process_task() returns True,
+    before actual processing begins.
+    """
+    paths = _normalize_to_paths(output_paths)
+    for p in paths:
+        if p is None:
+            continue
+        if p.exists() and p.is_file():
+            try:
+                p.unlink()
+                print(f"  Cleaned stale output: '{p.name}'")
+            except PermissionError:
+                print(f"  Could not delete '{p}' (file locked). Proceeding anyway.")
+
+
 def should_process_task(
     *,
     output_paths: PathInput,
@@ -23,15 +48,9 @@ def should_process_task(
     Returns:
         bool: True if processing is required, False otherwise.
     """
-    
-    # 1. Helper function to normalize arguments to List[Path]
-    def _normalize_to_paths(targets: PathInput) -> List[Path]:
-        if isinstance(targets, (str, Path)):
-            return [Path(targets)]
-        return [Path(p) for p in targets]
 
     outputs: List[Path] = _normalize_to_paths(output_paths)
-    inputs: List[Path] = _normalize_to_paths(input_paths)
+    inputs:  List[Path] = _normalize_to_paths(input_paths)
 
     # 2. Check if any input files are missing
     for path in inputs:

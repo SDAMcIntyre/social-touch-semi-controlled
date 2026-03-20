@@ -8,7 +8,7 @@ from typing import List, Dict, Optional
 # Import local modules
 from .touch_config import DISCRETIZATION_CONFIG
 from .reporting import VisualReportingStrategy
-from utils.should_process_task import should_process_task
+from utils.should_process_task import should_process_task, clean_task_outputs
 
 def generate_touch_summary_matrix(
     input_files: List[Path], 
@@ -29,7 +29,7 @@ def generate_touch_summary_matrix(
     ):
         logging.info(f"Skipping Touch Summary Matrix (up-to-date): {output_file.name}")
         return output_file
-
+    clean_task_outputs(output_file)
     return _generate_matrix_internal(
         input_files, output_file, config, show, log_scale, log_axis, mode="count"
     )
@@ -52,7 +52,7 @@ def generate_ap_efficacy_matrix(
     ):
         logging.info(f"Skipping AP Efficacy Matrix (up-to-date): {output_file.name}")
         return output_file
-
+    clean_task_outputs(output_file)
     # Note: Log scale is False for efficacy (ratios 0-1 don't work well with log colors)
     return _generate_matrix_internal(
         input_files, output_file, config, show, log_scale=False, log_axis=True, mode="efficacy"

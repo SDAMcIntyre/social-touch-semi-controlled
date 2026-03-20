@@ -22,7 +22,7 @@ from typing import List, Tuple
 import pandas as pd
 from tqdm import tqdm
 
-from utils.should_process_task import should_process_task
+from utils.should_process_task import should_process_task, clean_task_outputs
 from .feature_extraction import get_extractor
 from .pipeline_shared import SHARED_COLUMNS, _TqdmLineWrapper, filter_enabled_profiles, session_id_from_path
 
@@ -158,7 +158,7 @@ def _extract_session(
                     continue
             except FileNotFoundError:
                 pass
-
+        clean_task_outputs(output_path)
         try:
             extractor = get_extractor(method)
         except KeyError as exc:

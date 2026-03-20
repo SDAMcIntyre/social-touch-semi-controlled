@@ -28,7 +28,7 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
-from utils.should_process_task import should_process_task
+from utils.should_process_task import should_process_task, clean_task_outputs
 from .clustering import get_clusterer
 from .reporting import VisualReportingStrategy
 from .pipeline_shared import (
@@ -171,7 +171,7 @@ def _cluster_profile(
                     continue
             except FileNotFoundError:
                 pass
-
+        clean_task_outputs([pooled_csv, metadata_json])
         try:
             clusterer = get_clusterer(method)
         except KeyError as exc:
