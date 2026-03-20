@@ -69,7 +69,8 @@ def serialize_contact_points(
     """
     if not points:
         return "[]"
-    inner = " ".join(f"[{x} {y} {z}]" for x, y, z in points)
+    #inner = " ".join(f"[{x} {y} {z}]" for x, y, z in points)
+    inner = " ".join(f"[{x:.1f} {y:.1f} {z:.1f}]" for x, y, z in points)
     return f"[{inner}]"
 
 

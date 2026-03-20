@@ -46,13 +46,14 @@ tasks:
   touch_feature_extraction:
     enabled: true
     options:
-      force_processing: false
+      force_processing: true
       extraction_profiles:
         max:
           method: max
         statistical:
           method: statistical
           aggregations: [mean, median, std, min, max, range, skewness]
+          enabled: false
         temporal:
           method: temporal
           enabled: false
@@ -70,25 +71,28 @@ tasks:
   touch_clustering:
     enabled: true
     options:
-      force_processing: false
+      force_processing: true
       extraction_profiles:
         max: {method: max}
-        statistical: {method: statistical}
+        statistical: {method: statistical, enabled: false}
         temporal: {method: temporal, enabled: false}
         mos: {method: mechanics_of_solids, enabled: false}
       clustering_profiles:
         kmeans:
           method: kmeans
           min_touches_per_cluster: 30
+          enabled: false
         dbscan:
           method: dbscan
           eps: auto
           min_touches_per_cluster: 30
+          enabled: false
         hierarchical:
           method: hierarchical
           min_instances_per_sensor: 5
           min_sensor_types: 2
           sensor_col: session_id
+          enabled: false
         binning:
           method: binning
           n_bins: 20

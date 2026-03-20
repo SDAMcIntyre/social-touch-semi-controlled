@@ -6,30 +6,7 @@
 parameters:
   # Set to true to run different sessions in parallel, false to run them one by one.
   parallel_execution: false
-  kinect_configs: [
-      valid_configs_ST14-02/kinect_config_2022-06-15_ST14-02_semicontrolled_block-order01.yaml,
-    valid_configs_ST14-02/kinect_config_2022-06-15_ST14-02_semicontrolled_block-order02.yaml,
-    valid_configs_ST14-02/kinect_config_2022-06-15_ST14-02_semicontrolled_block-order04.yaml,
-    valid_configs_ST14-02/kinect_config_2022-06-15_ST14-02_semicontrolled_block-order05.yaml,
-    valid_configs_ST14-02/kinect_config_2022-06-15_ST14-02_semicontrolled_block-order06.yaml,
-    valid_configs_ST14-02/kinect_config_2022-06-15_ST14-02_semicontrolled_block-order08.yaml,
-    valid_configs_ST14-03, valid_configs_ST14-04, valid_configs_ST15-01, 
-      valid_configs_ST15-02/kinect_config_2022-06-16_ST15-02_semicontrolled_block-order01.yaml,
-    valid_configs_ST16-02/kinect_config_2022-06-17_ST16-02_semicontrolled_block-order01.yaml,
-    valid_configs_ST16-02/kinect_config_2022-06-17_ST16-02_semicontrolled_block-order02.yaml,
-    valid_configs_ST16-02/kinect_config_2022-06-17_ST16-02_semicontrolled_block-order03.yaml,
-    valid_configs_ST16-02/kinect_config_2022-06-17_ST16-02_semicontrolled_block-order04.yaml,
-    valid_configs_ST16-02/kinect_config_2022-06-17_ST16-02_semicontrolled_block-order05.yaml,
-    valid_configs_ST16-02/kinect_config_2022-06-17_ST16-02_semicontrolled_block-order06.yaml,
-    valid_configs_ST16-02/kinect_config_2022-06-17_ST16-02_semicontrolled_block-order07.yaml,
-    valid_configs_ST16-02/kinect_config_2022-06-17_ST16-02_semicontrolled_block-order08.yaml,
-    valid_configs_ST16-02/kinect_config_2022-06-17_ST16-02_semicontrolled_block-order09.yaml,
-    valid_configs_ST16-02/kinect_config_2022-06-17_ST16-02_semicontrolled_block-order10.yaml,
-    valid_configs_ST16-02/kinect_config_2022-06-17_ST16-02_semicontrolled_block-order11.yaml,
-    valid_configs_ST16-02/kinect_config_2022-06-17_ST16-02_semicontrolled_block-order12.yaml,
-    valid_configs_ST16-02/kinect_config_2022-06-17_ST16-02_semicontrolled_block-order13.yaml,
-    valid_configs_ST16-02/kinect_config_2022-06-17_ST16-02_semicontrolled_block-order14.yaml,
-    valid_configs_ST16-02/kinect_config_2022-06-17_ST16-02_semicontrolled_block-order15.yaml]
+  kinect_configs: valid_configs_ST14-01
 
 tasks:
 
@@ -43,23 +20,23 @@ tasks:
   set_xyz_reference_from_gestures:
     enabled: true
     options:
-      force_processing: true
+      force_processing: false
     depends_on: [apply_icp_registration]
 
   export_forearm_pca_calibrated:
     enabled: true
     options:
-      force_processing: true
+      force_processing: false
     depends_on: [set_xyz_reference_from_gestures]
 
   project_contacts_onto_forearm:
     enabled: true
     options:
-      force_processing: true
+      force_processing: false
     depends_on: [set_xyz_reference_from_gestures, export_forearm_pca_calibrated]
 
   aggregate_session:
     enabled: true
     options:
-      force_processing: true
+      force_processing: false
     depends_on: [project_contacts_onto_forearm]

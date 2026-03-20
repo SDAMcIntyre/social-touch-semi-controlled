@@ -53,7 +53,7 @@ tasks:
     enabled: true
     options:
       force_processing: true
-      mode: "compare"                    # "compare" or "correct"
+      mode: "correct"                    # "compare" or "correct"
       filter_method: "butterworth"       # "butterworth" or "savgol"
       filter_params:
         butterworth:
