@@ -9,7 +9,7 @@ per-stratum results plus a dispersion-weighted synthesis report.
 Output layout
 -------------
 <output_dir>/
-  <extraction_profile>/
+  <combination_name>/
     <clusterer_name>/
       <strategy>_results.json    (per-stratum test results)
       synthesis_report.json      (dispersion-weighted global summary)
@@ -28,9 +28,26 @@ from .comparing.synthesis import synthesize_across_strata
 from .pipeline_shared import filter_enabled_profiles
 
 
+def _translate_extraction_profiles_to_combinations(extraction_profiles: dict) -> dict:
+    """
+    Translate old ``extraction_profiles`` format to ``feature_combinations``.
+
+    Each old profile becomes a combination named after itself, used purely
+    for directory discovery (the comparing pipeline does not re-merge features).
+    """
+    combinations: dict = {}
+    for profile_name, profile_config in extraction_profiles.items():
+        enabled = profile_config.get('enabled', True)
+        combinations[profile_name] = {
+            'enabled': enabled,
+            'features': [profile_name],
+        }
+    return combinations
+
+
 def run_comparing(
     output_dir: Path,
-    extraction_profiles: dict,
+    feature_combinations: dict,
     clustering_profiles: dict,
     comparing_profiles: dict,
     min_instances_per_sensor: int = 5,
@@ -41,18 +58,18 @@ def run_comparing(
     """
     Discover clustered CSVs and run all configured comparison strategies.
 
+    Iterates the cross-product:
+    (enabled feature_combination) x (enabled clustering_profile) x (enabled comparing_profile).
+
     Parameters
     ----------
     output_dir
         Root directory for comparison outputs
         (e.g. ``database / '4_analysed' / 'touch_comparisons'``).
-    clustering_dir
-        Root directory where clustering outputs were written
-        (e.g. ``database / '4_analysed' / 'touch_clusters'``).
-        Defaults to *output_dir* when not provided (backward-compatible).
-    extraction_profiles
-        Only names are used for directory discovery; profiles with
-        ``enabled: false`` are skipped.
+    feature_combinations
+        Dict mapping combination_name -> combination_config. Used for
+        directory discovery only (the clustered CSV already has all features merged).
+        Supports backward-compat ``extraction_profiles`` format automatically.
     clustering_profiles
         Only names are used for directory discovery; profiles with
         ``enabled: false`` are skipped.
@@ -65,12 +82,26 @@ def run_comparing(
         Minimum distinct sensors per stratum to be exploitable.
     force
         Rewrite existing comparison outputs.
+    clustering_dir
+        Root directory where clustering outputs were written
+        (e.g. ``database / '4_analysed' / 'touch_clusters'``).
+        Defaults to *output_dir* when not provided (backward-compatible).
 
     Returns
     -------
     List of output JSON paths written.
     """
-    extraction_profiles = filter_enabled_profiles(extraction_profiles)
+    # Backward-compat: old format used extraction_profiles without a 'features' list
+    if feature_combinations and not any(
+        'features' in v for v in feature_combinations.values() if isinstance(v, dict)
+    ):
+        logging.warning(
+            "comparing_pipeline: 'extraction_profiles' format detected — "
+            "translating to new 'feature_combinations' format automatically."
+        )
+        feature_combinations = _translate_extraction_profiles_to_combinations(feature_combinations)
+
+    feature_combinations = filter_enabled_profiles(feature_combinations)
     clustering_profiles = filter_enabled_profiles(clustering_profiles)
     comparing_profiles = filter_enabled_profiles(comparing_profiles)
 
@@ -79,32 +110,32 @@ def run_comparing(
     outputs: List[Path] = []
 
     print(
-        f"=== comparing pipeline: {len(extraction_profiles)} extraction profile(s), "
+        f"=== comparing pipeline: {len(feature_combinations)} combination(s), "
         f"{len(clustering_profiles)} clustering profile(s), "
         f"{len(comparing_profiles)} strategy(ies) ===",
         flush=True,
     )
 
-    for extraction_name in extraction_profiles:
+    for combination_name in feature_combinations:
         for clusterer_name in clustering_profiles:
-            cluster_dir = cluster_src / extraction_name / clusterer_name
+            cluster_dir = cluster_src / combination_name / clusterer_name
             pooled_csv = cluster_dir / 'pooled_touch_summary_clustered.csv'
             metadata_json = cluster_dir / 'cluster_metadata.json'
 
             if not pooled_csv.exists():
                 logging.warning(
-                    f"[{extraction_name}/{clusterer_name}] Clustered CSV not found: {pooled_csv}. "
+                    f"[{combination_name}/{clusterer_name}] Clustered CSV not found: {pooled_csv}. "
                     "Run touch_clustering first."
                 )
                 continue
 
-            comparisons_dir = output_dir / extraction_name / clusterer_name
+            comparisons_dir = output_dir / combination_name / clusterer_name
 
             # Idempotency: skip if synthesis report exists and not force
             synthesis_path = comparisons_dir / 'synthesis_report.json'
             if not force and synthesis_path.exists():
                 print(
-                    f"  [compare] {extraction_name} / {clusterer_name} — up to date",
+                    f"  [compare] {combination_name} / {clusterer_name} — up to date",
                     flush=True,
                 )
                 outputs.append(synthesis_path)
@@ -133,7 +164,7 @@ def run_comparing(
 
             if 'cluster_label' not in pooled_df.columns:
                 logging.error(
-                    f"[{extraction_name}/{clusterer_name}] 'cluster_label' column missing."
+                    f"[{combination_name}/{clusterer_name}] 'cluster_label' column missing."
                 )
                 continue
 
@@ -157,7 +188,7 @@ def run_comparing(
                 )
                 if sensor_col is None:
                     logging.warning(
-                        f"[{extraction_name}/{clusterer_name}] stratum {stratum_label}: "
+                        f"[{combination_name}/{clusterer_name}] stratum {stratum_label}: "
                         "no sensor column found — skipping."
                     )
                     continue
@@ -166,7 +197,7 @@ def run_comparing(
                     stratum_df, sensor_col, min_instances_per_sensor, min_sensor_types
                 ):
                     logging.info(
-                        f"  [compare] {extraction_name}/{clusterer_name} stratum "
+                        f"  [compare] {combination_name}/{clusterer_name} stratum "
                         f"{stratum_label} — non-exploitable (coverage)"
                     )
                     continue
@@ -178,7 +209,7 @@ def run_comparing(
 
                     if meas_col not in stratum_df.columns:
                         logging.warning(
-                            f"[{extraction_name}/{clusterer_name}] "
+                            f"[{combination_name}/{clusterer_name}] "
                             f"measurement column '{meas_col}' missing — skipping."
                         )
                         continue
@@ -194,7 +225,7 @@ def run_comparing(
                         result.stratum_dispersion = dispersion
                     except Exception as exc:
                         logging.error(
-                            f"[{extraction_name}/{clusterer_name}] strategy '{profile_name}' "
+                            f"[{combination_name}/{clusterer_name}] strategy '{profile_name}' "
                             f"stratum {stratum_label} failed: {exc}"
                         )
                         continue
@@ -226,7 +257,7 @@ def run_comparing(
                         json.dump(synthesis_records, f, indent=2, default=str)
                     outputs.append(synthesis_path)
                     print(
-                        f"  [compare] {extraction_name} / {clusterer_name} — "
+                        f"  [compare] {combination_name} / {clusterer_name} — "
                         f"{len(all_results)} result(s), synthesis written",
                         flush=True,
                     )
@@ -234,7 +265,7 @@ def run_comparing(
                     logging.error(f"Failed to write synthesis report: {exc}")
             else:
                 print(
-                    f"  [compare] {extraction_name} / {clusterer_name} — "
+                    f"  [compare] {combination_name} / {clusterer_name} — "
                     "no exploitable strata",
                     flush=True,
                 )

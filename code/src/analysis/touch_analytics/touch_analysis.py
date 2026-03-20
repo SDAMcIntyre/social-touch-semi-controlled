@@ -100,10 +100,10 @@ def _process_touch_analysis(input_path: Path, output_path: Path, show: bool) -> 
             'block_order_id': block_order_id,
             'type_metadata': touch_type,
             'direction': direction,
-            'max_depth': max_depth,
-            'max_contact_area': max_contact_area,
-            'max_velocity': max_velocity,
-            'max_acceleration': max_acceleration,
+            'depth_max': max_depth,
+            'area_max': max_contact_area,
+            'velocity_max': max_velocity,
+            'acceleration_max': max_acceleration,
             'mean_contact_x': mean_contact_x,
             'mean_contact_y': mean_contact_y,
             'mean_contact_z': mean_contact_z,
@@ -135,14 +135,14 @@ def _generate_summary_plot(summary_df, name):
     fig, axs = plt.subplots(2, 2, figsize=(12, 10))
     fig.suptitle(f'Analysis Summary: {name}', fontsize=16)
 
-    axs[0, 0].scatter(summary_df['max_depth'], summary_df['max_velocity'], alpha=0.6, c='blue')
+    axs[0, 0].scatter(summary_df['depth_max'], summary_df['velocity_max'], alpha=0.6, c='blue')
     axs[0, 0].set_title('Max Velocity vs Max Depth')
     
     type_counts = summary_df['type_metadata'].value_counts()
     type_counts.plot(kind='bar', ax=axs[0, 1], color='orange', alpha=0.7)
     axs[0, 1].set_title('Distribution of Touch Types')
 
-    axs[1, 0].hist(summary_df['max_acceleration'], bins=20, color='green', alpha=0.7)
+    axs[1, 0].hist(summary_df['acceleration_max'], bins=20, color='green', alpha=0.7)
     axs[1, 0].set_title('Max Acceleration Distribution')
 
     # Add spike info to the plot if available
@@ -152,7 +152,7 @@ def _generate_summary_plot(summary_df, name):
                        ha='center', va='center', fontsize=20, transform=axs[1, 1].transAxes)
         axs[1, 1].set_title('Efficacy Summary')
     else:
-        axs[1, 1].hist(summary_df['max_contact_area'], bins=20, color='purple', alpha=0.7)
+        axs[1, 1].hist(summary_df['area_max'], bins=20, color='purple', alpha=0.7)
         axs[1, 1].set_title('Max Contact Area Distribution')
 
     plt.tight_layout(rect=[0, 0.03, 1, 0.95])

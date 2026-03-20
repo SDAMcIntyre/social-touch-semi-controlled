@@ -3,13 +3,13 @@
 Standalone feature extraction pipeline.
 
 Replaces the extraction logic formerly in unified_pipeline.py.
-Runs per-session extraction for all configured profiles and writes
-one CSV per (session, profile) pair.
+Runs per-session extraction for all configured features and writes
+one CSV per (session, feature) pair under its own folder.
 
 Output layout
 -------------
 <output_dir>/
-  <profile_name>/
+  <feature_name>/
     <session>_touch_summary.csv
 """
 
@@ -23,27 +23,81 @@ import pandas as pd
 from tqdm import tqdm
 
 from utils.should_process_task import should_process_task, clean_task_outputs
-from .feature_extraction import get_extractor
+from .feature_extraction import get_feature_extractor, AGGREGATION_NAMES
 from .pipeline_shared import SHARED_COLUMNS, _TqdmLineWrapper, filter_enabled_profiles, session_id_from_path
+
+
+def _translate_extraction_profiles(extraction_profiles: dict) -> dict:
+    """
+    Translate old ``extraction_profiles`` format to new ``features`` format.
+
+    Old format (example)::
+
+        extraction_profiles:
+          max:
+            method: max
+          stats:
+            method: statistical
+            aggregations: [mean, std]
+          mos:
+            method: mechanics_of_solids
+            youngs_modulus_kpa: 100.0
+
+    New format::
+
+        features:
+          max:
+            enabled: true
+          mean:
+            enabled: true
+          std:
+            enabled: true
+          mechanics_of_solids:
+            enabled: true
+            youngs_modulus_kpa: 100.0
+    """
+    features: dict = {}
+    for profile_name, profile_config in extraction_profiles.items():
+        enabled = profile_config.get('enabled', True)
+        method = profile_config.get('method', profile_name)
+        if method == 'max':
+            features['max'] = {'enabled': enabled}
+        elif method == 'statistical':
+            aggregations = profile_config.get('aggregations', ['mean', 'std'])
+            for agg in aggregations:
+                features[agg] = {'enabled': enabled}
+        elif method == 'temporal':
+            features['temporal'] = {'enabled': enabled}
+        elif method == 'mechanics_of_solids':
+            cfg = {k: v for k, v in profile_config.items() if k not in ('method', 'enabled')}
+            cfg['enabled'] = enabled
+            features['mechanics_of_solids'] = cfg
+        else:
+            # Unknown method — pass through using the profile name as feature name
+            features[method] = profile_config
+    return features
 
 
 def run_feature_extraction(
     input_items: List[Tuple[Path, Path]],
-    extraction_profiles: dict,
+    features: dict,
     output_dir: Path,
     force: bool = False,
 ) -> dict[str, list[Path]]:
     """
-    Run per-session feature extraction for all configured profiles.
+    Run per-session feature extraction for all configured features.
+
+    Each enabled feature extracts to its own subfolder under *output_dir*:
+    ``output_dir / feature_name / <session>_touch_summary.csv``.
 
     Parameters
     ----------
     input_items
         List of (aggregated_session_csv, database_root_path) tuples.
-    extraction_profiles
-        Dict mapping profile_name -> profile_config. Profiles with
-        ``enabled: false`` are filtered out before calling this function
-        (or can be filtered here via the caller).
+    features
+        Dict mapping feature_name -> feature_config. Supports both the new
+        ``features`` format and the old ``extraction_profiles`` format
+        (backward-compat translation is applied automatically).
     output_dir
         Root directory for extraction outputs
         (e.g. ``database / '4_analysed' / 'unified_touches'``).
@@ -52,19 +106,32 @@ def run_feature_extraction(
 
     Returns
     -------
-    dict mapping profile_name -> list of session CSV paths written.
+    dict mapping feature_name -> list of session CSV paths written.
     """
-    extraction_profiles = filter_enabled_profiles(extraction_profiles)
+    # Backward-compat: translate old extraction_profiles format if needed.
+    # Old format uses a 'method' key inside each entry; new format does not.
+    if features and any('method' in v for v in features.values() if isinstance(v, dict)):
+        logging.warning(
+            "extraction_pipeline: 'extraction_profiles' format detected — "
+            "translating to new 'features' format automatically."
+        )
+        features = _translate_extraction_profiles(features)
 
-    per_profile_session_csvs: dict[str, list[Path]] = {p: [] for p in extraction_profiles}
+    features = filter_enabled_profiles(features)
 
-    n_steps = len(input_items) * len(extraction_profiles)
+    per_feature_session_csvs: dict[str, list[Path]] = {f: [] for f in features}
+
+    n_steps = len(input_items) * len(features)
 
     print(
         f"=== extraction pipeline: {len(input_items)} sessions, "
-        f"{len(extraction_profiles)} extractors ===",
+        f"{len(features)} features ===",
         flush=True,
     )
+
+    if not features:
+        logging.warning("extraction_pipeline: no features enabled — producing no output.")
+        return per_feature_session_csvs
 
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", category=RuntimeWarning)
@@ -75,31 +142,31 @@ def run_feature_extraction(
                 session_outputs = _extract_session(
                     input_file=input_file,
                     output_dir=output_dir,
-                    extraction_profiles=extraction_profiles,
+                    features=features,
                     force=force,
                     progress=progress,
                 )
-                for profile_name, csv_path in session_outputs.items():
-                    per_profile_session_csvs[profile_name].append(csv_path)
+                for feature_name, csv_path in session_outputs.items():
+                    per_feature_session_csvs[feature_name].append(csv_path)
 
-    total = sum(len(v) for v in per_profile_session_csvs.values())
+    total = sum(len(v) for v in per_feature_session_csvs.values())
     print(f"=== extraction pipeline complete: {total} outputs ===", flush=True)
-    return per_profile_session_csvs
+    return per_feature_session_csvs
 
 
 def _extract_session(
     input_file: Path,
     output_dir: Path,
-    extraction_profiles: dict,
+    features: dict,
     force: bool,
     progress: tqdm = None,
 ) -> dict[str, Path]:
     """
-    Run all enabled extraction profiles on one session CSV.
+    Run all enabled features on one session CSV.
 
     Returns
     -------
-    dict mapping profile_name -> output CSV path.
+    dict mapping feature_name -> output CSV path.
     """
     results: dict[str, Path] = {}
     session_id = session_id_from_path(input_file)
@@ -109,7 +176,7 @@ def _extract_session(
     except Exception as exc:
         logging.error(f"Failed to load {input_file}: {exc}")
         if progress is not None:
-            progress.update(len(extraction_profiles))
+            progress.update(len(features))
         return results
 
     # Shared preprocessing
@@ -135,12 +202,10 @@ def _extract_session(
     else:
         csv_stem = f'{input_file.stem}_touch_summary.csv'
 
-    for profile_name, profile_config in extraction_profiles.items():
-        method = profile_config.get('method', profile_name)
-
-        profile_dir = output_dir / profile_name
-        profile_dir.mkdir(parents=True, exist_ok=True)
-        output_path = profile_dir / csv_stem
+    for feature_name, feature_config in features.items():
+        feature_dir = output_dir / feature_name
+        feature_dir.mkdir(parents=True, exist_ok=True)
+        output_path = feature_dir / csv_stem
 
         # Idempotency
         if not force and output_path.exists():
@@ -150,28 +215,36 @@ def _extract_session(
                     output_paths=[output_path],
                     force=False,
                 ):
-                    results[profile_name] = output_path
+                    results[feature_name] = output_path
                     if progress is not None:
-                        progress.set_postfix_str(f"extract: {session_id}/{profile_name}", refresh=False)
+                        progress.set_postfix_str(f"extract: {session_id}/{feature_name}", refresh=False)
                         progress.update(1)
-                    print(f"  [extract] {session_id} / {profile_name} — up to date", flush=True)
+                    print(f"  [extract] {session_id} / {feature_name} — up to date", flush=True)
                     continue
             except FileNotFoundError:
                 pass
         clean_task_outputs(output_path)
+
         try:
-            extractor = get_extractor(method)
+            extractor = get_feature_extractor(feature_name, feature_config)
         except KeyError as exc:
-            logging.error(f"Profile '{profile_name}': {exc}")
+            logging.error(f"Feature '{feature_name}': {exc}")
             if progress is not None:
-                progress.set_postfix_str(f"extract: {session_id}/{profile_name}", refresh=False)
+                progress.set_postfix_str(f"extract: {session_id}/{feature_name}", refresh=False)
                 progress.update(1)
-            print(f"  [extract] {session_id} / {profile_name} — error: unknown extractor", flush=True)
+            print(f"  [extract] {session_id} / {feature_name} — error: unknown feature", flush=True)
             continue
 
+        # For aggregation features, inject the aggregation name into the config
+        # so that StatisticalExtractor produces the correct columns.
+        if feature_name in AGGREGATION_NAMES:
+            extract_config = {**feature_config, 'aggregations': [feature_name]}
+        else:
+            extract_config = feature_config
+
         rows = _extract_all_touches(
-            df, extractor, profile_config, has_nerve_data,
-            desc=f"{session_id}/{profile_name}",
+            df, extractor, extract_config, has_nerve_data,
+            desc=f"{session_id}/{feature_name}",
         )
         summary_df = pd.DataFrame(rows)
         summary_df['session_id'] = session_id
@@ -179,21 +252,21 @@ def _extract_session(
         try:
             summary_df.to_csv(output_path, index=False)
             logging.info(
-                f"[{profile_name}] Saved {len(summary_df)} touches → {output_path}"
+                f"[{feature_name}] Saved {len(summary_df)} touches → {output_path}"
             )
         except Exception as exc:
             logging.error(f"Failed to save {output_path}: {exc}")
             if progress is not None:
-                progress.set_postfix_str(f"extract: {session_id}/{profile_name}", refresh=False)
+                progress.set_postfix_str(f"extract: {session_id}/{feature_name}", refresh=False)
                 progress.update(1)
-            print(f"  [extract] {session_id} / {profile_name} — error: save failed", flush=True)
+            print(f"  [extract] {session_id} / {feature_name} — error: save failed", flush=True)
             continue
 
-        results[profile_name] = output_path
+        results[feature_name] = output_path
         if progress is not None:
-            progress.set_postfix_str(f"extract: {session_id}/{profile_name}", refresh=False)
+            progress.set_postfix_str(f"extract: {session_id}/{feature_name}", refresh=False)
             progress.update(1)
-        print(f"  [extract] {session_id} / {profile_name} — {len(summary_df)} touches", flush=True)
+        print(f"  [extract] {session_id} / {feature_name} — {len(summary_df)} touches", flush=True)
 
     return results
 
@@ -201,7 +274,7 @@ def _extract_session(
 def _extract_all_touches(
     df: pd.DataFrame,
     extractor,
-    profile_config: dict,
+    feature_config: dict,
     has_nerve_data: bool,
     desc: str = "",
 ) -> list[dict]:
@@ -254,7 +327,7 @@ def _extract_all_touches(
         }
 
         try:
-            features = extractor.extract(group, profile_config)
+            features = extractor.extract(group, feature_config)
         except Exception as exc:
             logging.warning(
                 f"Extractor failed for trial={trial_id} touch={touch_id}: {exc}"
