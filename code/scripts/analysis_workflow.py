@@ -81,49 +81,50 @@ def summarize_session_blocks_flow(
 def touch_feature_extraction_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
-    extraction_profiles: dict = None,
+    features: dict = None,
 ) -> List[Path]:
     """
     Stage 1: Per-session feature extraction.
-    Writes one CSV per (session, profile) to
-    ``4_analysed/touch_features/<profile>/<session>_touch_summary.csv``.
+    Writes one CSV per (session, feature) to
+    ``4_analysed/touch_features/<feature>/<session>_touch_summary.csv``.
     """
     print(f"[Batch Analysis] Running touch feature extraction for {len(input_items)} item(s)...")
     if not input_items:
         return []
-    profiles = extraction_profiles or {'max': {'method': 'max'}}
+    feature_dict = features or {'max': {'enabled': True}}
     output_dir = input_items[0][1] / '4_analysed' / 'touch_features'
-    per_profile = run_feature_extraction(
+    per_feature = run_feature_extraction(
         input_items=input_items,
-        extraction_profiles=profiles,
+        features=feature_dict,
         output_dir=output_dir,
         force=force_processing,
     )
-    return [path for paths in per_profile.values() for path in paths]
+    return [path for paths in per_feature.values() for path in paths]
 
 
 @flow(name="touch_clustering")
 def touch_clustering_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
-    extraction_profiles: dict = None,
+    feature_combinations: dict = None,
     clustering_profiles: dict = None,
 ) -> List[Path]:
     """
-    Stage 2: Global clustering on pooled extraction CSVs.
-    Discovers CSVs written by touch_feature_extraction and writes
-    ``4_analysed/touch_clusters/<profile>/<clusterer>/pooled_touch_summary_clustered.csv``.
+    Stage 2: Global clustering on pooled feature CSVs.
+    Discovers CSVs written by touch_feature_extraction, merges per combination,
+    and writes
+    ``4_analysed/touch_clusters/<combination>/<clusterer>/pooled_touch_summary_clustered.csv``.
     """
     print(f"[Batch Analysis] Running touch clustering for {len(input_items)} item(s)...")
     if not input_items:
         return []
-    profiles = extraction_profiles or {'max': {'method': 'max'}}
+    combinations = feature_combinations or {'basic': {'enabled': True, 'features': ['max']}}
     clusterers = clustering_profiles or {'kmeans': {'method': 'kmeans', 'min_touches_per_cluster': 30}}
     extraction_dir = input_items[0][1] / '4_analysed' / 'touch_features'
     output_dir = input_items[0][1] / '4_analysed' / 'touch_clusters'
     per_key = run_clustering(
         output_dir=output_dir,
-        extraction_profiles=profiles,
+        feature_combinations=combinations,
         clustering_profiles=clusterers,
         force=force_processing,
         extraction_dir=extraction_dir,
@@ -135,7 +136,7 @@ def touch_clustering_flow(
 def touch_comparing_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
-    extraction_profiles: dict = None,
+    feature_combinations: dict = None,
     clustering_profiles: dict = None,
     comparing_profiles: dict = None,
     min_instances_per_sensor: int = 5,
@@ -149,7 +150,7 @@ def touch_comparing_flow(
     print(f"[Batch Analysis] Running touch comparing for {len(input_items)} item(s)...")
     if not input_items:
         return []
-    profiles = extraction_profiles or {'max': {'method': 'max'}}
+    combinations = feature_combinations or {'basic': {'enabled': True, 'features': ['max']}}
     clusterers = clustering_profiles or {'kmeans': {'method': 'kmeans'}}
     strategies = comparing_profiles or {
         'bias': {'method': 'bias', 'measurement_col': 'spike_elicited', 'sensor_col': 'session_id'},
@@ -158,7 +159,7 @@ def touch_comparing_flow(
     output_dir = input_items[0][1] / '4_analysed' / 'touch_comparisons'
     return run_comparing(
         output_dir=output_dir,
-        extraction_profiles=profiles,
+        feature_combinations=combinations,
         clustering_profiles=clusterers,
         comparing_profiles=strategies,
         min_instances_per_sensor=min_instances_per_sensor,
@@ -495,8 +496,10 @@ def run_batch_analysis(
                         kwargs["grouping_columns"] = options["grouping_columns"]
                     if "monitor" in options:
                         kwargs["monitor"] = options["monitor"]
-                    if "extraction_profiles" in options:
-                        kwargs["extraction_profiles"] = options["extraction_profiles"]
+                    if "features" in options:
+                        kwargs["features"] = options["features"]
+                    if "feature_combinations" in options:
+                        kwargs["feature_combinations"] = options["feature_combinations"]
                     if "clustering_profiles" in options:
                         kwargs["clustering_profiles"] = options["clustering_profiles"]
                     if "comparing_profiles" in options:

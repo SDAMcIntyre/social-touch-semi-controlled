@@ -2,14 +2,14 @@
 """
 Standalone clustering pipeline.
 
-Replaces the clustering logic formerly in unified_pipeline.py.
-Discovers per-session extraction CSVs on disk (written by extraction_pipeline.py),
-pools them per extraction profile, and runs each configured clusterer.
+Discovers per-session feature CSVs on disk (written by extraction_pipeline.py),
+merges them per feature combination, and runs the cross-product of
+(enabled feature_combinations) x (enabled clustering_profiles).
 
 Output layout
 -------------
 <output_dir>/
-  <extraction_profile>/
+  <combination_name>/
     <clusterer_name>/
       pooled_touch_summary_clustered.csv
       cluster_metadata.json
@@ -38,82 +38,238 @@ from .pipeline_shared import (
     session_id_from_path,
 )
 
+# Columns that uniquely identify a single touch across feature CSVs
+_TOUCH_ID_COLS = ['block_order_id', 'trial_id', 'single_touch_id', 'session_id']
+
+
+def _translate_extraction_profiles_to_combinations(extraction_profiles: dict) -> dict:
+    """
+    Translate old ``extraction_profiles`` format to ``feature_combinations``.
+
+    Each old profile becomes a combination whose feature list contains only
+    the profile's own name::
+
+        extraction_profiles:
+          max:
+            method: max
+          stats:
+            method: statistical
+
+    becomes::
+
+        feature_combinations:
+          max:
+            enabled: true
+            features: [max]
+          stats:
+            enabled: true
+            features: [stats]
+    """
+    combinations: dict = {}
+    for profile_name, profile_config in extraction_profiles.items():
+        enabled = profile_config.get('enabled', True)
+        combinations[profile_name] = {
+            'enabled': enabled,
+            'features': [profile_name],
+        }
+    return combinations
+
+
+def _merge_feature_csvs(feature_names: list[str], extraction_dir: Path) -> pd.DataFrame:
+    """
+    Load and merge per-session CSVs from multiple feature folders.
+
+    For each session present in **all** requested feature folders, the CSVs are
+    joined on touch-identity columns (block_order_id, trial_id, single_touch_id,
+    session_id). Sessions missing from any feature folder are skipped with a
+    warning. All merged sessions are then pooled into a single DataFrame.
+
+    Parameters
+    ----------
+    feature_names
+        Ordered list of feature names (e.g. ``['max', 'mean']``).
+    extraction_dir
+        Root of the extraction output tree
+        (e.g. ``database / '4_analysed' / 'touch_features'``).
+
+    Returns
+    -------
+    pd.DataFrame
+        Pooled DataFrame with shared columns from the first feature plus
+        feature-specific columns from all features merged on touch identity.
+        Empty DataFrame if no common sessions are found.
+    """
+    # --- Load all session CSVs per feature --------------------------------
+    feature_sessions: dict[str, dict[str, pd.DataFrame]] = {}
+    for feature_name in feature_names:
+        feature_dir = extraction_dir / feature_name
+        if not feature_dir.exists():
+            logging.warning(
+                f"_merge_feature_csvs: feature folder not found: {feature_dir} — "
+                f"run touch_feature_extraction with feature '{feature_name}' enabled."
+            )
+            feature_sessions[feature_name] = {}
+            continue
+        sessions: dict[str, pd.DataFrame] = {}
+        for csv in sorted(feature_dir.glob('*_touch_summary.csv')):
+            try:
+                sessions[csv.stem] = pd.read_csv(csv)
+            except Exception as exc:
+                logging.warning(f"Could not read {csv}: {exc}")
+        feature_sessions[feature_name] = sessions
+
+    # --- Intersect sessions present in ALL feature folders ----------------
+    non_empty = [set(v.keys()) for v in feature_sessions.values() if v]
+    if not non_empty:
+        logging.warning("_merge_feature_csvs: no session CSVs found in any feature folder.")
+        return pd.DataFrame()
+
+    common_stems = set.intersection(*non_empty)
+    if not common_stems:
+        logging.warning(
+            "_merge_feature_csvs: no sessions are present in all feature folders — "
+            f"features requested: {feature_names}"
+        )
+        return pd.DataFrame()
+
+    # Warn about sessions present in some but not all feature folders
+    all_stems = set.union(*non_empty)
+    incomplete = all_stems - common_stems
+    if incomplete:
+        logging.warning(
+            f"_merge_feature_csvs: {len(incomplete)} session(s) skipped — "
+            f"not present in all feature folders: {sorted(incomplete)}"
+        )
+
+    # --- Merge per session ------------------------------------------------
+    all_sessions: list[pd.DataFrame] = []
+    for stem in sorted(common_stems):
+        first_df = feature_sessions[feature_names[0]][stem].copy()
+        merged = first_df
+
+        for feature_name in feature_names[1:]:
+            other_df = feature_sessions[feature_name][stem]
+            # Only carry feature-specific columns from subsequent CSVs
+            feature_only_cols = [c for c in other_df.columns if c not in SHARED_COLUMNS]
+            merge_keys = [k for k in _TOUCH_ID_COLS if k in merged.columns and k in other_df.columns]
+            subset = other_df[merge_keys + feature_only_cols]
+            merged = merged.merge(subset, on=merge_keys, how='inner')
+            # Warn on unexpected duplicate columns
+            dup_cols = [c for c in feature_only_cols if c in first_df.columns]
+            if dup_cols:
+                logging.warning(
+                    f"_merge_feature_csvs: duplicate columns detected when merging "
+                    f"feature '{feature_name}': {dup_cols}"
+                )
+
+        all_sessions.append(merged)
+
+    if not all_sessions:
+        return pd.DataFrame()
+    return pd.concat(all_sessions, ignore_index=True)
+
 
 def run_clustering(
     output_dir: Path,
-    extraction_profiles: dict,
+    feature_combinations: dict,
     clustering_profiles: dict,
     force: bool = False,
     extraction_dir: Path = None,
 ) -> dict[str, List[Path]]:
     """
-    Discover extraction CSVs on disk and run all configured clusterers.
+    Merge feature CSVs per combination and run all configured clusterers.
+
+    Executes the cross-product: each enabled ``feature_combination`` x each
+    enabled ``clustering_profile`` produces one output directory.
 
     Parameters
     ----------
     output_dir
         Root directory for clustering outputs
         (e.g. ``database / '4_analysed' / 'touch_clusters'``).
-    extraction_dir
-        Root directory where extraction CSVs were written
-        (e.g. ``database / '4_analysed' / 'touch_features'``).
-        Defaults to *output_dir* when not provided (backward-compatible).
-        Extraction CSVs are expected at ``extraction_dir/<profile>/*_touch_summary.csv``.
-    extraction_profiles
-        Dict mapping profile_name -> profile_config. Only the names are used
-        for directory scanning; profiles with ``enabled: false`` are skipped.
+    feature_combinations
+        Dict mapping combination_name -> combination_config.
+        Each config must contain ``features: [feature_name, ...]`` listing which
+        feature folders to merge. Supports backward-compat ``extraction_profiles``
+        format (each profile becomes a single-feature combination automatically).
     clustering_profiles
         Dict mapping clusterer_name -> clusterer_config. Profiles with
         ``enabled: false`` are skipped.
     force
         Override idempotency checks.
+    extraction_dir
+        Root of the extraction output tree. Defaults to *output_dir* when not
+        provided (backward-compatible).
 
     Returns
     -------
-    Dict mapping ``"<extraction_profile>/<clusterer_name>"`` -> list of
+    Dict mapping ``"<combination_name>/<clusterer_name>"`` -> list of
     pooled-clustered CSV paths written.
     """
-    extraction_profiles = filter_enabled_profiles(extraction_profiles)
+    # Backward-compat: old format used extraction_profiles without a 'features' list
+    if feature_combinations and not any(
+        'features' in v for v in feature_combinations.values() if isinstance(v, dict)
+    ):
+        logging.warning(
+            "clustering_pipeline: 'extraction_profiles' format detected — "
+            "translating to new 'feature_combinations' format automatically."
+        )
+        feature_combinations = _translate_extraction_profiles_to_combinations(feature_combinations)
+
+    feature_combinations = filter_enabled_profiles(feature_combinations)
     clustering_profiles = filter_enabled_profiles(clustering_profiles)
 
     src_dir = extraction_dir if extraction_dir is not None else output_dir
 
     results: dict[str, List[Path]] = {}
 
+    n_combinations = len(feature_combinations)
+    n_clusterers = len(clustering_profiles)
     print(
-        f"=== clustering pipeline: {len(extraction_profiles)} extraction profile(s), "
-        f"{len(clustering_profiles)} clusterer(s) ===",
+        f"=== clustering pipeline: {n_combinations} feature combination(s), "
+        f"{n_clusterers} clusterer(s) ===",
         flush=True,
     )
 
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", category=RuntimeWarning)
 
-        for profile_name in extraction_profiles:
-            profile_dir = src_dir / profile_name
-            session_csvs = sorted(profile_dir.glob("*_touch_summary.csv"))
-
-            if not session_csvs:
+        for combination_name, combination_config in feature_combinations.items():
+            feature_names: list[str] = combination_config.get('features', [])
+            if not feature_names:
                 logging.warning(
-                    f"[{profile_name}] No extraction CSVs found in {profile_dir}. "
-                    "Run touch_feature_extraction first."
+                    f"[{combination_name}] No features listed in combination config — skipping."
                 )
                 continue
 
             print(
-                f"  [cluster] {profile_name} — {len(session_csvs)} session CSV(s) found",
+                f"  [cluster] combination '{combination_name}' — "
+                f"features: {feature_names}",
                 flush=True,
             )
 
-            cluster_outputs = _cluster_profile(
-                profile_name=profile_name,
-                session_csvs=session_csvs,
+            pooled = _merge_feature_csvs(feature_names, src_dir)
+            if pooled.empty:
+                logging.warning(
+                    f"[{combination_name}] No data after merging feature CSVs — skipping."
+                )
+                continue
+
+            print(
+                f"  [cluster] combination '{combination_name}' — "
+                f"{len(pooled)} touches from {pooled['session_id'].nunique() if 'session_id' in pooled.columns else '?'} session(s)",
+                flush=True,
+            )
+
+            cluster_outputs = _cluster_combination(
+                combination_name=combination_name,
+                pooled=pooled,
                 output_dir=output_dir,
                 clustering_profiles=clustering_profiles,
                 force=force,
             )
             for clusterer_name, paths in cluster_outputs.items():
-                key = f"{profile_name}/{clusterer_name}"
+                key = f"{combination_name}/{clusterer_name}"
                 results[key] = paths
 
     total = sum(len(v) for v in results.values())
@@ -121,63 +277,48 @@ def run_clustering(
     return results
 
 
-def _cluster_profile(
-    profile_name: str,
-    session_csvs: List[Path],
+def _cluster_combination(
+    combination_name: str,
+    pooled: pd.DataFrame,
     output_dir: Path,
     clustering_profiles: dict,
     force: bool,
 ) -> dict[str, List[Path]]:
-    """Pool all session CSVs for *profile_name* and run each clusterer."""
+    """Run each clusterer on the already-pooled *pooled* DataFrame."""
     outputs: dict[str, List[Path]] = {}
-
-    # Pool all sessions
-    dfs = []
-    for p in session_csvs:
-        if p.exists():
-            try:
-                session_df = pd.read_csv(p)
-                session_df['session_id'] = session_id_from_path(p)
-                dfs.append(session_df)
-            except Exception as exc:
-                logging.warning(f"Could not read {p}: {exc}")
-    if not dfs:
-        logging.warning(f"[{profile_name}] No session CSVs could be loaded.")
-        return outputs
-
-    pooled = pd.concat(dfs, ignore_index=True)
 
     for clusterer_name, clusterer_config in clustering_profiles.items():
         method = clusterer_config.get('method', clusterer_name)
-        out_dir = output_dir / profile_name / clusterer_name
+        out_dir = output_dir / combination_name / clusterer_name
         out_dir.mkdir(parents=True, exist_ok=True)
 
         pooled_csv = out_dir / 'pooled_touch_summary_clustered.csv'
         metadata_json = out_dir / 'cluster_metadata.json'
 
-        # Idempotency
+        # Idempotency: use session CSVs as conceptual inputs — skip if up to date
         if not force and pooled_csv.exists():
             try:
                 if not should_process_task(
-                    input_paths=session_csvs,
+                    input_paths=[pooled_csv],  # approximate: use output mtime
                     output_paths=[pooled_csv],
                     force=False,
                 ):
                     outputs.setdefault(clusterer_name, []).append(pooled_csv)
                     print(
-                        f"  [cluster] {profile_name} / {clusterer_name} — up to date",
+                        f"  [cluster] {combination_name} / {clusterer_name} — up to date",
                         flush=True,
                     )
                     continue
             except FileNotFoundError:
                 pass
         clean_task_outputs([pooled_csv, metadata_json])
+
         try:
             clusterer = get_clusterer(method)
         except KeyError as exc:
             logging.error(f"Clustering profile '{clusterer_name}': {exc}")
             print(
-                f"  [cluster] {profile_name} / {clusterer_name} — error: unknown clusterer",
+                f"  [cluster] {combination_name} / {clusterer_name} — error: unknown clusterer",
                 flush=True,
             )
             continue
@@ -190,10 +331,10 @@ def _cluster_profile(
         ]
         if not feature_cols:
             logging.warning(
-                f"[{profile_name}/{clusterer_name}] No numeric feature columns found."
+                f"[{combination_name}/{clusterer_name}] No numeric feature columns found."
             )
             print(
-                f"  [cluster] {profile_name} / {clusterer_name} — error: no numeric features",
+                f"  [cluster] {combination_name} / {clusterer_name} — error: no numeric features",
                 flush=True,
             )
             continue
@@ -209,9 +350,9 @@ def _cluster_profile(
         try:
             labels, metadata = clusterer.fit_predict(feature_df, clusterer_config)
         except Exception as exc:
-            logging.error(f"[{profile_name}/{clusterer_name}] Clustering failed: {exc}")
+            logging.error(f"[{combination_name}/{clusterer_name}] Clustering failed: {exc}")
             print(
-                f"  [cluster] {profile_name} / {clusterer_name} — error: clustering failed",
+                f"  [cluster] {combination_name} / {clusterer_name} — error: clustering failed",
                 flush=True,
             )
             continue
@@ -233,14 +374,14 @@ def _cluster_profile(
             with open(metadata_json, 'w') as f:
                 json.dump(metadata, f, indent=2, default=str)
             logging.info(
-                f"[{profile_name}/{clusterer_name}] Clustered {len(result_df)} touches "
+                f"[{combination_name}/{clusterer_name}] Clustered {len(result_df)} touches "
                 f"→ {pooled_csv}"
             )
             outputs.setdefault(clusterer_name, []).append(pooled_csv)
         except Exception as exc:
             logging.error(f"Failed to save clustering output: {exc}")
             print(
-                f"  [cluster] {profile_name} / {clusterer_name} — error: save failed",
+                f"  [cluster] {combination_name} / {clusterer_name} — error: save failed",
                 flush=True,
             )
             continue
@@ -251,17 +392,17 @@ def _cluster_profile(
             cluster_desc = f"{metadata['n_bins']} bins, {len(result_df)} samples"
         else:
             cluster_desc = f"{len(result_df)} samples"
-        print(f"  [cluster] {profile_name} / {clusterer_name} — {cluster_desc}", flush=True)
+        print(f"  [cluster] {combination_name} / {clusterer_name} — {cluster_desc}", flush=True)
 
         if len(feature_cols) >= 2 and 'session_id' in result_df.columns:
             n_heatmap_sessions = result_df['session_id'].nunique()
             _generate_session_heatmaps(result_df, out_dir, feature_cols)
             print(
-                f"  [heatmap] {profile_name} / {clusterer_name} — {n_heatmap_sessions} sessions",
+                f"  [heatmap] {combination_name} / {clusterer_name} — {n_heatmap_sessions} sessions",
                 flush=True,
             )
         else:
-            print(f"  [heatmap] {profile_name} / {clusterer_name} — skipped", flush=True)
+            print(f"  [heatmap] {combination_name} / {clusterer_name} — skipped", flush=True)
 
     return outputs
 

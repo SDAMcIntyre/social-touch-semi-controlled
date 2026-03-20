@@ -22,13 +22,18 @@ SHARED_COLUMNS = [
 # Default options used when a YAML section is missing
 DEFAULT_EXTRACTION_OPTIONS: dict = {
     'force_processing': False,
-    'extraction_profiles': {
-        'max': {'method': 'max'},
+    'features': {
+        'max': {'enabled': True},
     },
+}
+
+DEFAULT_FEATURE_COMBINATIONS: dict = {
+    'basic': {'enabled': True, 'features': ['max']},
 }
 
 DEFAULT_CLUSTERING_OPTIONS: dict = {
     'force_processing': False,
+    'feature_combinations': DEFAULT_FEATURE_COMBINATIONS,
     'clustering_profiles': {
         'kmeans': {'method': 'kmeans', 'min_touches_per_cluster': 30},
     },
@@ -36,6 +41,7 @@ DEFAULT_CLUSTERING_OPTIONS: dict = {
 
 DEFAULT_COMPARING_OPTIONS: dict = {
     'force_processing': False,
+    'feature_combinations': DEFAULT_FEATURE_COMBINATIONS,
     'comparing_profiles': {
         'bias': {'method': 'bias', 'measurement_col': 'spike_elicited', 'sensor_col': 'session_id'},
     },

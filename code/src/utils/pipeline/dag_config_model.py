@@ -176,6 +176,57 @@ class DagConfigModel:
             profile["enabled"] = False
         self._dirty = True
 
+    # ------------------------------------------------------------------
+    # Combinations — CRUD for dict-of-dicts option entries
+    # ------------------------------------------------------------------
+
+    def add_combination(
+        self, task_name: str, option_key: str, combo_name: str, combo_config: dict
+    ) -> None:
+        """Insert a new combination entry into a dict-of-dicts option."""
+        task = self._get_task(task_name)
+        opts = task.get("options") or {}
+        container = opts.get(option_key)
+        if not isinstance(container, dict):
+            return
+        container[combo_name] = combo_config
+        self._dirty = True
+
+    def remove_combination(self, task_name: str, option_key: str, combo_name: str) -> None:
+        """Delete a combination entry from a dict-of-dicts option."""
+        task = self._get_task(task_name)
+        opts = task.get("options") or {}
+        container = opts.get(option_key)
+        if not isinstance(container, dict):
+            return
+        container.pop(combo_name, None)
+        self._dirty = True
+
+    def get_combination_features(
+        self, task_name: str, option_key: str, combo_name: str
+    ) -> list[str]:
+        """Return the features list for a combination entry."""
+        opts = self._get_task(task_name).get("options", {}) or {}
+        container = opts.get(option_key, {}) or {}
+        combo = container.get(combo_name, {}) or {}
+        features = combo.get("features", [])
+        return list(features) if features else []
+
+    def set_combination_features(
+        self, task_name: str, option_key: str, combo_name: str, features: list[str]
+    ) -> None:
+        """Write a flow-style features list into a combination entry."""
+        task = self._get_task(task_name)
+        opts = task.get("options") or {}
+        container = opts.get(option_key) or {}
+        combo = container.get(combo_name)
+        if combo is None:
+            return
+        seq = CommentedSeq(features)
+        seq.fa.set_flow_style()
+        combo["features"] = seq
+        self._dirty = True
+
     def get_task_dependencies(self, task_name: str) -> list[str]:
         deps = self._get_task(task_name).get("depends_on", [])
         return list(deps) if deps else []
