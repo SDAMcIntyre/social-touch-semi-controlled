@@ -360,7 +360,9 @@ class TaskPanel(QWidget):
         spec = self._column_spec[col - 2]
         opt_key = spec[1]
         self._model.set_task_option(task_name, opt_key, new_val)
+        self._table.blockSignals(True)
         item.setData(Qt.UserRole, new_val)
+        self._table.blockSignals(False)
         self.task_changed.emit()
 
     def _scroll_to_task(self, task_name: str) -> None:
