@@ -11,11 +11,12 @@ class MaxExtractor(FeatureExtractor):
     """
 
     def extract(self, group: pd.DataFrame, config: dict) -> dict:
+        fps = config.get('fps', 30.0)
         max_depth = group['contact_depth'].max()
         max_contact_area = group['contact_area'].max()
 
-        vel_magnitudes = compute_velocity_magnitudes(group)
-        accel_magnitudes = compute_acceleration_magnitudes(vel_magnitudes)
+        vel_magnitudes = compute_velocity_magnitudes(group, fps=fps)
+        accel_magnitudes = compute_acceleration_magnitudes(vel_magnitudes, fps=fps)
 
         return {
             'max_depth': max_depth,

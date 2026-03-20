@@ -38,22 +38,17 @@ sticker XYZ extraction, and tactile quantification.
 
 | Property | Value |
 |----------|-------|
-| Unit | **mm/frame** (displayed as `mm/f`) |
-| To convert to mm/s | multiply by 30 (at 30 fps) |
+| Unit | **mm/s** |
 
-**Calculation** — `touch_analysis.py:153–155`:
+**Calculation** — `kinematics.py: compute_velocity_magnitudes()`:
 
 ```python
-velocity_vectors = group[['sticker_blue_position_x',
-                          'sticker_blue_position_y',
-                          'sticker_blue_position_z']].diff().fillna(0)
-velocity_magnitudes = np.sqrt(velocity_vectors.pow(2).sum(axis=1))
+velocity_magnitudes = compute_velocity_magnitudes(group, fps=fps)
 ```
 
-Frame-to-frame Euclidean displacement of the blue sticker. No division by
-time is applied — the unit is purely spatial displacement per frame.
-
-**Quick conversion:** 1 mm/f = 30 mm/s = 3 cm/s (at 30 fps).
+Frame-to-frame Euclidean displacement of the blue sticker multiplied by the
+capture frame rate (fps, default 30). The result is a physical velocity in
+mm/s.
 
 ---
 
@@ -120,8 +115,8 @@ labeling error.
 When adding new metrics derived from Kinect point-cloud geometry:
 
 - **Positions** are in mm (inherited from the SDK).
-- **Per-frame differences** (velocity, displacement) are in mm/frame.
-  Divide by frame interval (1/30 s) to get mm/s.
+- **Velocity** is in mm/s. Use `compute_velocity_magnitudes(group, fps=fps)`
+  from `kinematics.py` — it handles the fps multiplication internally.
 - **Areas** computed from mesh triangles are in mm².
 - **Volumes** (if ever needed) would be in mm³.
 - Always verify there is no hidden unit conversion by tracing the data path

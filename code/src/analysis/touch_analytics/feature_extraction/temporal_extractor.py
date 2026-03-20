@@ -2,7 +2,6 @@
 import numpy as np
 import pandas as pd
 from .base import FeatureExtractor
-from .kinematics import compute_velocity_magnitudes
 
 _SLOPE_FRAMES = 5  # number of frames used for onset/offset slope linear fit
 
