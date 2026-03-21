@@ -35,8 +35,14 @@ tasks:
       force_processing: false
     depends_on: [set_xyz_reference_from_gestures, export_forearm_pca_calibrated]
 
-  aggregate_session:
+  center_on_receptive_field:
     enabled: true
     options:
       force_processing: false
     depends_on: [project_contacts_onto_forearm]
+
+  aggregate_session:
+    enabled: true
+    options:
+      force_processing: false
+    depends_on: [center_on_receptive_field]

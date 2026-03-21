@@ -38,6 +38,7 @@ from _5_postprocessing import (
     set_xyz_reference_from_gestures,
     export_forearm_pca_calibrated,
     project_contacts_onto_forearm,
+    center_on_receptive_field,
 )
 from _4_merging.aggregate_blocks_session import aggregate_session_blocks
 
@@ -102,6 +103,23 @@ def project_contacts_onto_forearm_flow(
     print(f"[{output_dir.name}] Projecting contact points onto forearm surface...")
     return project_contacts_onto_forearm(
         input_files, forearm_ply_path, output_dir, projection_stats_path,
+        force_processing=force_processing,
+    )
+
+
+@flow(name="center_on_receptive_field")
+def center_on_receptive_field_flow(
+    input_files: List[Path],
+    forearm_ply_path: Optional[Path],
+    output_dir: Path,
+    forearm_output_dir: Path,
+    rf_origin_path: Path,
+    force_processing: bool = False,
+) -> List[Path]:
+    """Center block CSVs and forearm PLY on the receptive field origin."""
+    print(f"[{output_dir.name}] Centering spatial data on receptive field origin...")
+    return center_on_receptive_field(
+        input_files, forearm_ply_path, output_dir, forearm_output_dir, rf_origin_path,
         force_processing=force_processing,
     )
 
@@ -204,12 +222,25 @@ def run_single_session_postprocessing(
             },
             "outputs": ["projected_files"]
         },
-        # Step 5: Aggregate fully-processed blocks into one session-level CSV
+        # Step 5: Center spatial data on the receptive field origin
+        {
+            "name": "center_on_receptive_field",
+            "func": center_on_receptive_field_flow,
+            "params": lambda: {
+                "input_files": context.get("projected_files"),
+                "forearm_ply_path": context.get("forearm_pca_ply"),
+                "output_dir": session_output_dir / "blocks_rf_centered",
+                "forearm_output_dir": session_output_dir / "forearm_rf_centered",
+                "rf_origin_path": session_output_dir / "rf_center_origin.json",
+            },
+            "outputs": ["rf_centered_files"]
+        },
+        # Step 6: Aggregate fully-processed blocks into one session-level CSV
         {
             "name": "aggregate_session",
             "func": aggregate_session_blocks_flow,
             "params": lambda: {
-                "input_files": context.get("projected_files"),
+                "input_files": context.get("rf_centered_files"),
                 "output_path": session_output_dir / f"{session_id}_semicontrolled_aggregated_session.csv",
             },
             "outputs": ["aggregated_file"]
