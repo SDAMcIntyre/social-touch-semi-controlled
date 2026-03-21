@@ -10,7 +10,12 @@
 # ==============================================================================
 
 parameters:
-  kinect_configs: valid_configs_ST14-01
+  kinect_configs: [valid_configs_ST13-01, valid_configs_ST13-02, 
+      valid_configs_ST13-03, valid_configs_ST14-01, valid_configs_ST14-02, 
+      valid_configs_ST14-03, valid_configs_ST14-04, valid_configs_ST15-01, 
+      valid_configs_ST15-02, valid_configs_ST16-02, valid_configs_ST16-03, 
+      valid_configs_ST16-04, valid_configs_ST16-05, valid_configs_ST18-01, 
+      valid_configs_ST18-04]
   #kinect_configs: "valid_configs_ST16-05"
 
 tasks:
@@ -59,6 +64,14 @@ tasks:
     options:
       force_processing: false
 
+  define_hand_tracking_roi:
+    enabled: true
+    description: "Define a static ROI crop region for hand tracking (optional, improves
+      detection in cluttered scenes)."
+    depends_on: []
+    options:
+      force_processing: false
+
   curate_hamer_hand_models:
     enabled: true
     description: "Validate and curate Hamer hand model tracking using GUI."
@@ -72,3 +85,4 @@ tasks:
     depends_on: [define_trial_chunks]
     options:
       force_processing: false
+      keep_stale: true

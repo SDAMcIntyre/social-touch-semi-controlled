@@ -280,9 +280,15 @@ def track_hands_model_flow(
     print(f"[{output_dir.name}] Tracking Hands Model...")
     name_baseline = rgb_video_path.stem + "_handmodel"
     tracked_hands_path = output_dir / (name_baseline + "_tracked_hands.pkl")
-    
-    track_hands_on_video(rgb_video_path, tracked_hands_path, force_processing=force_processing)
-    
+    roi_path = output_dir / (name_baseline + "_roi.json")
+
+    track_hands_on_video(
+        rgb_video_path,
+        tracked_hands_path,
+        force_processing=force_processing,
+        roi_path=roi_path,
+    )
+
     return tracked_hands_path
 
 # --- REFACTORED: Generate 3D Hand Motion Flow ---
@@ -561,7 +567,7 @@ def run_single_session_pipeline(
     for stage_idx, stage in enumerate(pipeline_stages):
         task_name = stage["name"]
     
-        executor = TaskExecutor(task_name, block_name, dag_handler, monitor)
+        executor = TaskExecutor(task_name, block_name, dag_handler, monitor, session_name=block_name)
         with executor:
             if not executor.can_run:
                 continue
@@ -628,13 +634,17 @@ def run_batch_processing(
             )
             submitted_runs.append(run)
         else:
-            run_single_session_pipeline(
-                config=validated_config,
-                dag_handler=dag_handler_instance,
-                monitor_queue=monitor_queue,
-                report_file_path=report_file_path
-            )
-            logging.info(f"--- Completed session: {block_file.stem} ---")
+            try:
+                run_single_session_pipeline(
+                    config=validated_config,
+                    dag_handler=dag_handler_instance,
+                    monitor_queue=monitor_queue,
+                    report_file_path=report_file_path
+                )
+                logging.info(f"--- Completed session: {block_file.stem} ---")
+            except Exception as e:
+                logging.error(f"Failed to process session {block_file.stem}. Error: {e}")
+                continue
 
     if parallel:
         logging.info("All flows submitted. Waiting for parallel runs to complete...")
