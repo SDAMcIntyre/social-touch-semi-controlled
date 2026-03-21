@@ -62,6 +62,76 @@ def retry_operation(max_retries: int, delay_base: int):
         return wrapper
     return decorator
 
+# --- ROI Helpers ---
+
+def _load_roi_config(roi_path: Path) -> Optional[dict]:
+    """Read the sidecar ROI JSON. Returns None if the file does not exist."""
+    if not roi_path.exists():
+        return None
+    try:
+        with open(roi_path) as f:
+            return json.load(f)
+    except Exception as e:
+        logger.warning(f"Failed to read ROI config {roi_path}: {e}")
+        return None
+
+
+def _create_cropped_video(source_path: Path, roi: dict, temp_dir: Path) -> Path:
+    """
+    Write a temporary cropped MP4 from source_path using the given ROI bounds.
+
+    null values in roi are treated as full extent for that edge.
+    If the resolved crop covers the entire frame, source_path is returned unchanged.
+
+    Args:
+        source_path: Original video path.
+        roi:         Dict with keys x_min, x_max, y_min, y_max (int or None).
+        temp_dir:    Directory where the temp file will be written.
+
+    Returns:
+        Path to the cropped video (or source_path if no cropping is needed).
+    """
+    cap = cv2.VideoCapture(str(source_path))
+    frame_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    frame_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    fourcc_int = int(cap.get(cv2.CAP_PROP_FOURCC))
+
+    # Resolve null to full extent and clamp to actual frame dimensions
+    x_min = max(0, int(roi.get("x_min") or 0))
+    x_max = min(frame_w, int(roi.get("x_max") or frame_w))
+    y_min = max(0, int(roi.get("y_min") or 0))
+    y_max = min(frame_h, int(roi.get("y_max") or frame_h))
+
+    # If all null (or bounds equal full frame), no cropping needed
+    if x_min == 0 and x_max == frame_w and y_min == 0 and y_max == frame_h:
+        cap.release()
+        logger.info("ROI covers full frame — skipping crop.")
+        return source_path
+
+    crop_w = x_max - x_min
+    crop_h = y_max - y_min
+    out_path = temp_dir / f"cropped_{source_path.name}"
+
+    writer = cv2.VideoWriter(str(out_path), fourcc_int, fps, (crop_w, crop_h))
+    if not writer.isOpened():
+        # Fall back to mp4v codec if the source codec is not supported for writing
+        writer = cv2.VideoWriter(
+            str(out_path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (crop_w, crop_h)
+        )
+
+    logger.info(f"Cropping video to x=[{x_min},{x_max}] y=[{y_min},{y_max}] → {out_path.name}")
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        writer.write(frame[y_min:y_max, x_min:x_max])
+
+    cap.release()
+    writer.release()
+    return out_path
+
+
 # --- Core Logic Components ---
 
 class HandTrackingPipeline:
@@ -86,19 +156,21 @@ class HandTrackingPipeline:
         )
 
     def _process_batch_mode(
-        self, 
-        video_manager: VideoMP4Manager, 
-        original_video_path: Path
+        self,
+        video_manager: VideoMP4Manager,
+        original_video_path: Path,
+        roi_video_path: Optional[Path] = None,
     ) -> Dict[int, Any]:
         """
         Executes the Video Upload strategy.
         Uploads the original file directly as a whole.
+        If roi_video_path is provided, that cropped video is uploaded instead.
         """
         results_map = {}
-        
+
         # STRATEGY: Upload Entire Video (Pass-through)
         logger.info("Strategy: Whole Video Processing. Uploading original source.")
-        path_to_upload = str(original_video_path)
+        path_to_upload = str(roi_video_path if roi_video_path is not None else original_video_path)
         
         # Mapping is direct identity (0->0, 1->1, etc.)
         total_frames = len(video_manager)
@@ -199,21 +271,33 @@ class HandTrackingPipeline:
         self,
         rgb_video_path: Path,
         output_path: Path,
-        use_video_api: bool
+        use_video_api: bool,
+        roi: Optional[dict] = None,
     ):
         # 1. Setup Video
         video_manager = VideoMP4Manager(rgb_video_path)
         total_frames = len(video_manager)
-        
+
         # 2. Processing
         results_list: List[Optional[Any]] = [None] * total_frames
-        
+
         with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+
+            # Create a cropped video for batch mode when an ROI is configured
+            roi_video_path: Optional[Path] = None
+            if use_video_api and roi is not None:
+                cropped = _create_cropped_video(rgb_video_path, roi, temp_path)
+                # _create_cropped_video returns source_path unchanged when no crop needed
+                if cropped != rgb_video_path:
+                    roi_video_path = cropped
+
             if use_video_api:
                 logger.info("Mode: Batch Video API (Whole Video)")
                 processed_map = self._process_batch_mode(
-                    video_manager=video_manager, 
-                    original_video_path=rgb_video_path
+                    video_manager=video_manager,
+                    original_video_path=rgb_video_path,
+                    roi_video_path=roi_video_path,
                 )
             else:
                 logger.info("Mode: Parallel Frame Extraction (Whole Video)")
@@ -239,47 +323,56 @@ class HandTrackingPipeline:
 # --- Entry Point ---
 
 def track_hands_on_video(
-    rgb_video_path: Path, 
-    output_path: Path, 
-    *, 
+    rgb_video_path: Path,
+    output_path: Path,
+    *,
     force_processing: bool = False,
-    use_video_api: bool = True
-): 
+    use_video_api: bool = True,
+    roi_path: Optional[Path] = None,
+):
     """
     Entry point for whole-video hand tracking.
-    
+
     Args:
         rgb_video_path: Path to the input video.
-        output_path: Destination for the pickle file.
+        output_path:    Destination for the pickle file.
         force_processing: Ignore task cache check.
-        use_video_api: Use batch video upload (True) or frame-by-frame (False).
+        use_video_api:  Use batch video upload (True) or frame-by-frame (False).
+        roi_path:       Optional path to a ``*_handmodel_roi.json`` sidecar file.
+                        When present and the file exists, the video is cropped to
+                        the specified region before being uploaded to the API.
+                        Gracefully ignored if the file does not exist.
     """
     # 0. Check Processing Status
-    # Removed trial_id_path from input dependencies
     if not should_process_task(
         input_paths=[rgb_video_path],
         output_paths=[output_path],
-        force=force_processing
+        force=force_processing,
     ):
         logger.info(f"Skipping: {output_path} is up to date.")
         return
     clean_task_outputs(output_path)
-    # 1. Initialize Config
+
+    # 1. Load ROI configuration (None if file absent or unreadable)
+    roi = _load_roi_config(roi_path) if roi_path is not None else None
+    if roi is not None:
+        logger.info(f"ROI config loaded from {roi_path}: {roi}")
+
+    # 2. Initialize Config
     config = ProcessingConfig(
         max_workers=16  # Aggressive I/O threading for HTTP requests
     )
 
-    # 2. Run Pipeline
+    # 3. Run Pipeline
     pipeline = HandTrackingPipeline(config)
-    
+
     try:
         pipeline.execute(
             rgb_video_path=rgb_video_path,
             output_path=output_path,
-            use_video_api=use_video_api
+            use_video_api=use_video_api,
+            roi=roi,
         )
     except Exception as e:
         logger.exception(f"Pipeline execution failed: {e}")
         raise
-
-    return
