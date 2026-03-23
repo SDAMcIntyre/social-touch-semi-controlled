@@ -163,3 +163,21 @@ tasks:
       monitor: false
       force_processing: false
     depends_on: [touch_feature_extraction]
+
+  # Cluster-based RF mapping: spike-count heatmaps grouped by data-driven cluster labels.
+  # Reads from touch_clustering output; renders 3D forearm heatmap PNGs per (cluster, session).
+  # Output: 4_analysed/receptive_field_maps_clustered/<combination>/<clusterer>/
+  map_receptive_fields_clustered:
+    enabled: true
+    options:
+      force_processing: false
+      feature_combinations:
+        only_mean: {enabled: true, features: [mean]}
+        only_max: {enabled: true, features: [max]}
+        only_median: {enabled: true, features: [median]}
+      clustering_profiles:
+        binning: {method: binning}
+        kmeans: {method: kmeans}
+        dbscan: {method: dbscan}
+        hierarchical: {method: hierarchical}
+    depends_on: [touch_clustering]

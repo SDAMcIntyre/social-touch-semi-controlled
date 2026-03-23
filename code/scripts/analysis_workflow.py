@@ -34,7 +34,7 @@ from analysis.touch_analytics import (
 from analysis.touch_analytics.extraction_pipeline import run_feature_extraction
 from analysis.touch_analytics.clustering_pipeline import run_clustering
 from analysis.touch_analytics.comparing_pipeline import run_comparing
-from analysis.receptive_field_mapping import RFMappingConfig
+from analysis.receptive_field_mapping import RFMappingConfig, run_cluster_rf_mapping
 from analysis.receptive_field_mapping.rf_mapping_engine import RFMappingEngine
 from analysis.receptive_field_mapping.rf_data_loader import load_grouped_spatial_data
 from analysis.receptive_field_mapping.rf_visualizer import RFVisualizer
@@ -347,6 +347,40 @@ def map_receptive_fields_flow(
     return results
 
 
+@flow(name="map_receptive_fields_clustered")
+def map_receptive_fields_clustered_flow(
+    input_items: List[Tuple[Path, Path]],
+    force_processing: bool = False,
+    feature_combinations: dict = None,
+    clustering_profiles: dict = None,
+) -> List[Path]:
+    """
+    Cluster-based RF mapping: spike-count heatmaps per cluster from touch_clustering output.
+    Reads pooled_touch_summary_clustered.csv, forward-fills contact_points (30Hz->1kHz),
+    counts spikes per (x,y,z) point, and renders 3D forearm heatmap PNGs.
+    Output: ``4_analysed/receptive_field_maps_clustered/<combination>/<clusterer>/``
+    """
+    print(f"[Batch Analysis] Running cluster-based RF mapping for {len(input_items)} item(s)...")
+    if not input_items:
+        return []
+
+    combinations = feature_combinations or {'only_mean': {'enabled': True, 'features': ['mean']}}
+    clusterers = clustering_profiles or {'kmeans': {'method': 'kmeans'}}
+
+    database_path = input_items[0][1]
+    clustering_dir = database_path / '4_analysed' / 'touch_clusters'
+    output_dir = database_path / '4_analysed' / 'receptive_field_maps_clustered'
+
+    return run_cluster_rf_mapping(
+        clustering_dir=clustering_dir,
+        input_items=input_items,
+        output_dir=output_dir,
+        feature_combinations=combinations,
+        clustering_profiles=clusterers,
+        force=force_processing,
+    )
+
+
 def _save_group_csv(rf_result, output_dir: Path) -> Optional[Path]:
     """Save per-group RF points with selectivity and cluster assignment."""
     import pandas as pd
@@ -453,6 +487,7 @@ def run_batch_analysis(
         ("touch_comparing", touch_comparing_flow),
         ("analyse_ap_efficacy", analyse_ap_efficacy_flow),
         ("map_receptive_fields", map_receptive_fields_flow),
+        ("map_receptive_fields_clustered", map_receptive_fields_clustered_flow),
     ]
     
     task_names = [t[0] for t in available_tasks]
