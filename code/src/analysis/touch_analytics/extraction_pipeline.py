@@ -180,13 +180,14 @@ def _extract_session(
         return results
 
     # Shared preprocessing
-    if 'source_block_file' in df.columns:
-        df['block_order_id'] = (
-            df['source_block_file'].astype(str)
-            .str.extract(r'_block-order-(\d+)_', expand=False)
-        )
-    else:
-        df['block_order_id'] = None
+    if 'block_order_id' not in df.columns:
+        if 'source_block_file' in df.columns:
+            df['block_order_id'] = (
+                df['source_block_file'].astype(str)
+                .str.extract(r'_block-order-(\d+)_', expand=False)
+            )
+        else:
+            df['block_order_id'] = None
 
     has_nerve_data = 'Nerve_spike' in df.columns
     if not has_nerve_data:

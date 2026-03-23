@@ -44,10 +44,11 @@ def _process_touch_analysis(input_path: Path, output_path: Path, show: bool) -> 
         logging.error(f"Failed to load CSV: {e}")
         raise
 
-    if 'source_block_file' in df.columns:
-        df['block_order_id'] = df['source_block_file'].astype(str).str.extract(r'_block-order-(\d+)_', expand=False)
-    else:
-        df['block_order_id'] = None
+    if 'block_order_id' not in df.columns:
+        if 'source_block_file' in df.columns:
+            df['block_order_id'] = df['source_block_file'].astype(str).str.extract(r'_block-order-(\d+)_', expand=False)
+        else:
+            df['block_order_id'] = None
 
     # Check for Nerve_spike column presence
     has_nerve_data = 'Nerve_spike' in df.columns
