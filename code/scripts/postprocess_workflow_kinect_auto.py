@@ -128,6 +128,7 @@ def center_on_receptive_field_flow(
 def aggregate_session_blocks_flow(
     input_files: List[Path],
     output_path: Path,
+    forearm_ply_path: Optional[Path] = None,
     force_processing: bool = False,
 ) -> Path:
     """Aggregate all fully-processed block CSVs into one session-level CSV."""
@@ -135,8 +136,18 @@ def aggregate_session_blocks_flow(
     return aggregate_session_blocks(
         input_paths=input_files,
         output_path=output_path,
+        forearm_ply_path=forearm_ply_path,
         force_processing=force_processing,
     )
+
+
+def _resolve_latest_forearm_ply(session_output_dir: Path) -> Optional[Path]:
+    """Return the most recent forearm PLY: RF-centered if available, else PCA-calibrated."""
+    for subdir in ("forearm_rf_centered", "forearm_pca_calibrated"):
+        candidates = sorted((session_output_dir / subdir).glob("*.ply"))
+        if candidates:
+            return candidates[-1]
+    return None
 
 
 # --- Worker Flow ---
@@ -242,6 +253,7 @@ def run_single_session_postprocessing(
             "params": lambda: {
                 "input_files": context.get("rf_centered_files"),
                 "output_path": session_output_dir / f"{session_id}_semicontrolled_aggregated_session.csv",
+                "forearm_ply_path": _resolve_latest_forearm_ply(session_output_dir),
             },
             "outputs": ["aggregated_file"]
         },

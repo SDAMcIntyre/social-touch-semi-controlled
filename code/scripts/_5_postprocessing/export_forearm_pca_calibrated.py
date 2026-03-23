@@ -2,7 +2,7 @@
 
 Loads the unified registered forearm PLY for the session, applies the same full
 PCA transform used in stage 2, and writes the result to
-``forearm_pca_calibrated/{session_id}_forearm_pca_calibrated.ply``.
+``forearm_pca_calibrated/{session_id}_forearm.ply``.
 
 Single-forearm sessions (no ``_unified_registered.ply``) fall back to the single
 forearm PLY found in ``forearm_pointclouds/``.
@@ -80,7 +80,7 @@ def export_forearm_pca_calibrated(
         )
         return None
 
-    output_path = output_dir / f"{session_id}_forearm_pca_calibrated.ply"
+    output_path = output_dir / f"{session_id}_forearm.ply"
 
     if not should_process_task(
         input_paths=[forearm_ply_path, calib_json_path],

@@ -376,7 +376,7 @@ def _load_forearm_pcd(session_merged_output_dir: Path, session_id: str):
     """Load PCA-calibrated forearm PLY from postprocessing output for visualization."""
     import open3d as o3d
 
-    pcd_path = session_merged_output_dir / "forearm_pca_calibrated" / f"{session_id}_forearm_pca_calibrated.ply"
+    pcd_path = session_merged_output_dir / "forearm_pca_calibrated" / f"{session_id}_forearm.ply"
     if pcd_path.exists():
         return o3d.io.read_point_cloud(str(pcd_path))
     logging.warning(f"Forearm PLY not found: {pcd_path}")
