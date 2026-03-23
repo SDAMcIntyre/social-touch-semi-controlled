@@ -34,10 +34,7 @@ from analysis.touch_analytics import (
 from analysis.touch_analytics.extraction_pipeline import run_feature_extraction
 from analysis.touch_analytics.clustering_pipeline import run_clustering
 from analysis.touch_analytics.comparing_pipeline import run_comparing
-from analysis.receptive_field_mapping import RFMappingConfig, run_cluster_rf_mapping
-from analysis.receptive_field_mapping.rf_mapping_engine import RFMappingEngine
-from analysis.receptive_field_mapping.rf_data_loader import load_grouped_spatial_data
-from analysis.receptive_field_mapping.rf_visualizer import RFVisualizer
+from analysis.receptive_field_mapping import run_cluster_rf_mapping
 
 # --- Analysis Flows ---
 
@@ -208,145 +205,6 @@ def analyse_ap_efficacy_flow(
         logging.warning("No unified summary files found. Run 'unified_touch_analysis' first.")
         return []
 
-@flow(name="map_receptive_fields")
-def map_receptive_fields_flow(
-    input_items: List[Tuple[Path, Path]],
-    force_processing: bool = False,
-    grouping_columns: List[str] = None,
-    monitor: bool = False,
-) -> List[Path]:
-    """
-    RF Mapping: Compute per-group receptive field maps via selectivity + DBSCAN.
-    Consumes unified touch summaries and raw merged CSVs.
-    """
-    from utils.should_process_task import should_process_task
-
-    if grouping_columns is None:
-        grouping_columns = ["type_metadata", "direction"]
-
-    print(f"[Batch Analysis] Mapping receptive fields for {len(input_items)} item(s)...")
-
-    config = RFMappingConfig()
-    results = []
-
-    for input_file, database_path in input_items:
-        try:
-            # Locate unified summary
-            unified_dir = database_path / "4_analysed" / "touch_features"
-            filename = input_file.name
-            if "_semicontrolled_" in filename:
-                prefix = filename.split("_semicontrolled_")[0]
-                summary_name = f"{prefix}_semicontrolled_touch_summary.csv"
-            else:
-                summary_name = f"{input_file.stem}_touch_summary.csv"
-
-            summary_path = unified_dir / summary_name
-            if not summary_path.exists():
-                logging.warning(
-                    f"Unified summary not found: {summary_path}. "
-                    "Run 'unified_touch_analysis' first. Skipping."
-                )
-                continue
-
-            # Output directory for RF maps
-            rf_output_dir = database_path / "4_analysed" / "receptive_field_maps"
-            rf_output_dir.mkdir(parents=True, exist_ok=True)
-
-            # Collect raw merged CSVs (same session dir as input_file)
-            raw_csv_dir = input_file.parent
-            raw_csv_paths = sorted(raw_csv_dir.glob("*_semicontrolled_aggregated_session.csv"))
-            if not raw_csv_paths:
-                raw_csv_paths = [input_file]
-
-            # Define expected outputs for idempotency
-            summary_json = rf_output_dir / "rf_mapping_summary.json"
-            if not should_process_task(
-                input_paths=[summary_path] + raw_csv_paths,
-                output_paths=[summary_json],
-                force=force_processing,
-            ):
-                logging.info(f"[{rf_output_dir.name}] RF mapping up-to-date. Skipping.")
-                results.append(summary_json)
-                continue
-
-            # Load and group spatial data
-            grouped_data = load_grouped_spatial_data(
-                raw_csv_paths=raw_csv_paths,
-                summary_csv_path=summary_path,
-                grouping_columns=grouping_columns,
-                config=config,
-            )
-
-            if not grouped_data:
-                logging.warning(f"No grouped data produced for {input_file.name}. Skipping.")
-                continue
-
-            # Pre-load forearm for image export (and interactive monitor if requested)
-            import json
-            session_id = filename.split("_semicontrolled_")[0]
-            forearm_pcd = _load_forearm_pcd(input_file.parent, session_id)
-
-            # Process each group
-            all_results = {}
-            for group_label, spatial_data in grouped_data.items():
-                selectivity = RFMappingEngine.compute_selectivity(
-                    spatial_data.spike_counts,
-                    spatial_data.total_counts,
-                )
-                rf_result = RFMappingEngine.cluster_receptive_field(
-                    selectivity,
-                    config.algorithm,
-                    group_label,
-                    touch_count=spatial_data.touch_count,
-                )
-
-                # Save per-group CSV and static image
-                _save_group_csv(rf_result, rf_output_dir)
-                RFVisualizer.save_rf_map_image(rf_result, rf_output_dir, forearm_pcd)
-
-                # Visualize interactively if requested
-                if monitor and rf_result.clusters:
-                    RFVisualizer.visualize_rf_map(rf_result, forearm_pcd)
-
-                all_results[group_label] = {
-                    "touch_count": rf_result.touch_count,
-                    "total_points_evaluated": rf_result.total_points_evaluated,
-                    "points_above_threshold": rf_result.points_above_threshold,
-                    "num_clusters": len(rf_result.clusters),
-                    "cluster_sizes": [c.point_count for c in rf_result.clusters],
-                    "cluster_mean_selectivity": [
-                        round(c.mean_selectivity, 4) for c in rf_result.clusters
-                    ],
-                }
-
-            # Save summary JSON
-            with open(summary_json, "w") as f:
-                json.dump(
-                    {
-                        "grouping_columns": grouping_columns,
-                        "algorithm_config": {
-                            "selectivity_threshold": config.algorithm.selectivity_threshold,
-                            "dbscan_eps": config.algorithm.dbscan_eps,
-                            "dbscan_min_samples": config.algorithm.dbscan_min_samples,
-                            "min_cluster_points": config.algorithm.min_cluster_points,
-                        },
-                        "groups": all_results,
-                    },
-                    f,
-                    indent=2,
-                )
-
-            results.append(summary_json)
-            logging.info(f"RF mapping complete for {input_file.name}: {len(all_results)} groups.")
-
-        except Exception as e:
-            logging.error(f"Failed RF mapping for {input_file.name}: {e}")
-            import traceback
-            traceback.print_exc()
-
-    return results
-
-
 @flow(name="map_receptive_fields_clustered")
 def map_receptive_fields_clustered_flow(
     input_items: List[Tuple[Path, Path]],
@@ -379,42 +237,6 @@ def map_receptive_fields_clustered_flow(
         clustering_profiles=clusterers,
         force=force_processing,
     )
-
-
-def _save_group_csv(rf_result, output_dir: Path) -> Optional[Path]:
-    """Save per-group RF points with selectivity and cluster assignment."""
-    import pandas as pd
-
-    if not rf_result.clusters:
-        return None
-
-    rows = []
-    for cluster in rf_result.clusters:
-        for i in range(cluster.point_count):
-            rows.append({
-                "x": cluster.points[i, 0],
-                "y": cluster.points[i, 1],
-                "z": cluster.points[i, 2],
-                "selectivity": cluster.selectivity_scores[i],
-                "cluster_id": cluster.cluster_id,
-            })
-
-    df = pd.DataFrame(rows)
-    safe_label = rf_result.group_label.replace("/", "_").replace(" ", "_")
-    csv_path = output_dir / f"rf_map_{safe_label}.csv"
-    df.to_csv(csv_path, index=False)
-    return csv_path
-
-
-def _load_forearm_pcd(session_merged_output_dir: Path, session_id: str):
-    """Load PCA-calibrated forearm PLY from postprocessing output for visualization."""
-    import open3d as o3d
-
-    pcd_path = session_merged_output_dir / "forearm_pca_calibrated" / f"{session_id}_forearm.ply"
-    if pcd_path.exists():
-        return o3d.io.read_point_cloud(str(pcd_path))
-    logging.warning(f"Forearm PLY not found: {pcd_path}")
-    return None
 
 
 def _collect_unified_files(input_items: List[Tuple[Path, Path]]) -> List[Path]:
@@ -486,7 +308,6 @@ def run_batch_analysis(
         ("touch_clustering", touch_clustering_flow),
         ("touch_comparing", touch_comparing_flow),
         ("analyse_ap_efficacy", analyse_ap_efficacy_flow),
-        ("map_receptive_fields", map_receptive_fields_flow),
         ("map_receptive_fields_clustered", map_receptive_fields_clustered_flow),
     ]
     

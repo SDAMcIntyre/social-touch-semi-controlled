@@ -52,7 +52,7 @@ tasks:
       # mechanics_of_solids) use their own extractor. Set enabled: true to activate.
       features:
         max:
-          enabled: true
+          enabled: false
         mean:
           enabled: true
         min: {}
@@ -93,10 +93,10 @@ tasks:
           enabled: true
           features: [mean]
         only_max:
-          enabled: true
+          enabled: false
           features: [max]
         only_median:
-          enabled: true
+          enabled: false
           features: [median]
       clustering_profiles:
         binning:
@@ -106,15 +106,18 @@ tasks:
         kmeans:
           method: kmeans
           min_touches_per_cluster: 30
+          enabled: false
         dbscan:
           method: dbscan
           eps: auto
           min_touches_per_cluster: 30
+          enabled: false
         hierarchical:
           method: hierarchical
           min_instances_per_sensor: 5
           min_sensor_types: 2
           sensor_col: session_id
+          enabled: false
     depends_on: [touch_feature_extraction]
 
   # Stage 3: Statistical comparison of sensor measurements across strata.
@@ -155,29 +158,20 @@ tasks:
       force_processing: false
     depends_on: [touch_feature_extraction]
 
-  # RF mapping via selectivity + DBSCAN. Requires unified touch summaries.
-  map_receptive_fields:
-    enabled: false
-    options:
-      grouping_columns: ['type_metadata', 'direction']
-      monitor: false
-      force_processing: false
-    depends_on: [touch_feature_extraction]
-
   # Cluster-based RF mapping: spike-count heatmaps grouped by data-driven cluster labels.
   # Reads from touch_clustering output; renders 3D forearm heatmap PNGs per (cluster, session).
   # Output: 4_analysed/receptive_field_maps_clustered/<combination>/<clusterer>/
   map_receptive_fields_clustered:
     enabled: true
     options:
-      force_processing: false
+      force_processing: true
       feature_combinations:
         only_mean: {enabled: true, features: [mean]}
-        only_max: {enabled: true, features: [max]}
-        only_median: {enabled: true, features: [median]}
+        only_max: {enabled: false, features: [max]}
+        only_median: {enabled: false, features: [median]}
       clustering_profiles:
         binning: {method: binning}
-        kmeans: {method: kmeans}
-        dbscan: {method: dbscan}
-        hierarchical: {method: hierarchical}
+        kmeans: {method: kmeans, enabled: false}
+        dbscan: {method: dbscan, enabled: false}
+        hierarchical: {method: hierarchical, enabled: false}
     depends_on: [touch_clustering]
