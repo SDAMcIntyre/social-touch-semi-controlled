@@ -2,7 +2,8 @@
 
 **Date:** 2026-03-21
 **Author:** Basil Duvernoy
-**Status:** Draft
+**Status:** Completed
+**Completed:** 2026-03-23 12:04
 **Branch:** `feature/non-blocking-dependency-popups`
 
 ---
