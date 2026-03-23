@@ -62,7 +62,7 @@ def resolve_postprocessed_paths(config: KinectConfig) -> Dict[str, Optional[Path
 
     Expected pipeline outputs:
       - contact_projected_csv : session_merged_output_dir/blocks_contact_projected/{merged_csv_name}
-      - forearm_pca_ply       : session_merged_output_dir/forearm_pca_calibrated/{session_id}_forearm_pca_calibrated.ply
+      - forearm_pca_ply       : session_merged_output_dir/forearm_pca_calibrated/{session_id}_forearm.ply
       - pca_calib_json        : session_merged_output_dir/blocks_pca_calibrated/pca-xyz_transformation-matrices.json
       - hand_motion_path      : video_processed_output_dir/kinematics_analysis/{stem}_handmodel_motion.npz
       - forearm_metadata_path : session_processed_output_dir/forearm_pointclouds/{session_id}_arm_roi_metadata.json
@@ -82,7 +82,7 @@ def resolve_postprocessed_paths(config: KinectConfig) -> Dict[str, Optional[Path
         forearm_pca_ply = (
             config.session_merged_output_dir
             / "forearm_pca_calibrated"
-            / f"{config.session_id}_forearm_pca_calibrated.ply"
+            / f"{config.session_id}_forearm.ply"
         )
         pca_calib_json = (
             config.session_merged_output_dir
