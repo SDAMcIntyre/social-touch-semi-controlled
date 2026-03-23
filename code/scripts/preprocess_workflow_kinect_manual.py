@@ -55,6 +55,7 @@ def define_hand_tracking_roi_flow(
     output_dir: Path,
     *,
     force_processing: bool = False,
+    roi_mode: str = "manual",
 ):
     """Define a static ROI crop region used by the auto pipeline's hand tracking step."""
     print(f"[{output_dir.name}] Defining hand tracking ROI...")
@@ -62,6 +63,7 @@ def define_hand_tracking_roi_flow(
         rgb_video_path=rgb_video_path,
         output_dir=output_dir,
         force_processing=force_processing,
+        roi_mode=roi_mode,
     )
 
 
@@ -290,11 +292,14 @@ def run_single_session_pipeline(
         # 0. Hand Tracking ROI (optional — improves HaMeR detection in cluttered scenes)
         if dag_handler.can_run('define_hand_tracking_roi'):
             print(f"[{block_name}] ==> Running task: define_hand_tracking_roi")
-            force = dag_handler.get_task_options('define_hand_tracking_roi').get('force_processing', False)
+            _opts = dag_handler.get_task_options('define_hand_tracking_roi')
+            force = _opts.get('force_processing', False)
+            roi_mode = _opts.get('roi_mode', 'manual')
             define_hand_tracking_roi_flow(
                 rgb_video_path=rgb_video_path,
                 output_dir=kin_dir,
                 force_processing=force,
+                roi_mode=roi_mode,
             )
             dag_handler.mark_completed('define_hand_tracking_roi')
 

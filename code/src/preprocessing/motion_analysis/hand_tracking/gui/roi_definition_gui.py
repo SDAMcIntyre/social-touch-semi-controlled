@@ -1,64 +1,14 @@
 import json
 import logging
+import tkinter as tk
 from pathlib import Path
 from typing import Optional
 
 import cv2
 
-from preprocessing.common import VideoMP4Manager, FrameROISquare
+from preprocessing.common import FrameROISquare, VideoFrameSelector
 
 logger = logging.getLogger(__name__)
-
-
-def _select_frame(video_manager: VideoMP4Manager) -> Optional[object]:
-    """
-    Display video frames with keyboard navigation. Returns the selected BGR frame
-    or None if the user cancels.
-
-    Controls:
-        a / ← : previous frame
-        d / → : next frame
-        q      : jump back 10% of total frames
-        e      : jump forward 10% of total frames
-        Enter / Space : confirm selected frame
-        ESC    : cancel
-    """
-    n_frames = len(video_manager)
-    if n_frames == 0:
-        return None
-
-    idx = 0
-    window_name = "Select Frame for ROI  |  a/d=prev/next  q/e=jump  Enter=confirm  ESC=cancel"
-    cv2.namedWindow(window_name)
-
-    while True:
-        frame_bgr = video_manager[idx]  # defaults to BGR
-
-        overlay = frame_bgr.copy()
-        label = f"Frame {idx + 1} / {n_frames}"
-        cv2.putText(overlay, label, (15, 35), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 0), 3, cv2.LINE_AA)
-        cv2.putText(overlay, label, (15, 35), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 1, cv2.LINE_AA)
-        cv2.imshow(window_name, overlay)
-
-        key = cv2.waitKey(50) & 0xFF
-
-        if key == 27:  # ESC — cancel
-            cv2.destroyWindow(window_name)
-            return None
-        elif key in (13, 32):  # Enter or Space — confirm
-            cv2.destroyWindow(window_name)
-            return frame_bgr
-        elif key == ord('a'):  # prev frame
-            idx = max(0, idx - 1)
-        elif key == ord('d'):  # next frame
-            idx = min(n_frames - 1, idx + 1)
-        elif key == ord('q'):  # jump back 10%
-            idx = max(0, idx - max(1, n_frames // 10))
-        elif key == ord('e'):  # jump forward 10%
-            idx = min(n_frames - 1, idx + max(1, n_frames // 10))
-
-    cv2.destroyWindow(window_name)
-    return None
 
 
 def select_roi_on_video(
@@ -68,7 +18,7 @@ def select_roi_on_video(
     """
     Interactive ROI selection on a navigable video frame.
 
-    Step 1: the user navigates frames and confirms one with Enter.
+    Step 1: the user navigates frames using the shared VideoFrameSelector widget.
     Step 2: FrameROISquare opens on that frame for rectangle drawing.
 
     Args:
@@ -80,11 +30,31 @@ def select_roi_on_video(
     Returns:
         dict with integer keys x_min, x_max, y_min, y_max, or None if cancelled.
     """
-    video_manager = VideoMP4Manager(video_path)
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        logger.error(f"Cannot open video: {video_path}")
+        return None
 
-    frame_bgr = _select_frame(video_manager)
-    if frame_bgr is None:
+    frame_num = None
+    root = tk.Tk()
+    root.geometry("1x1+10000+10000")  # off-screen; withdraw() hides transient children on Windows
+    try:
+        selector = VideoFrameSelector(root, cap, title=f"Select Frame for Hand Tracking ROI — {video_path.name}")
+        frame_num = selector.select_frame()
+    finally:
+        root.destroy()
+
+    if frame_num is None:
+        cap.release()
         logger.info("Frame selection cancelled.")
+        return None
+
+    cap.set(cv2.CAP_PROP_POS_FRAMES, frame_num)
+    success, frame_bgr = cap.read()
+    cap.release()
+
+    if not success or frame_bgr is None:
+        logger.error("Failed to read selected frame from video.")
         return None
 
     frame_h, frame_w = frame_bgr.shape[:2]
@@ -106,7 +76,7 @@ def select_roi_on_video(
     roi_selector = FrameROISquare(
         frame_bgr,
         is_rgb=False,
-        window_title="Draw Hand Tracking ROI  |  left-click drag, then Proceed / Enter",
+        window_title=f"Draw Hand Tracking ROI — {video_path.name}  |  left-click drag, then Proceed / Enter",
         predefined_roi=predefined,
     )
     roi_selector.run()
