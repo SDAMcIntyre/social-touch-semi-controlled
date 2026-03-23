@@ -275,7 +275,8 @@ def track_hands_model_flow(
     rgb_video_path: Path,
     output_dir: Path,
     *,
-    force_processing: bool = False
+    force_processing: bool = False,
+    keep_stale: bool = False,
 ) -> Path:
     print(f"[{output_dir.name}] Tracking Hands Model...")
     name_baseline = rgb_video_path.stem + "_handmodel"
@@ -287,6 +288,7 @@ def track_hands_model_flow(
         tracked_hands_path,
         force_processing=force_processing,
         roi_path=roi_path,
+        keep_stale=keep_stale,
     )
 
     return tracked_hands_path
@@ -513,7 +515,8 @@ def run_single_session_pipeline(
         {"name": "track_hands_model",
          "func": track_hands_model_flow,
          "params": lambda: {"rgb_video_path": context.get("rgb_video_path"),
-                            "output_dir": config.video_processed_output_dir / "kinematics_analysis"},
+                            "output_dir": config.video_processed_output_dir / "kinematics_analysis",
+                            "keep_stale": dag_handler.get_task_options("track_hands_model").get("keep_stale", False)},
          "outputs": ["tracked_hands_path"]},
 
         # --- REFACTORED: Generate 3D Motion (Consumes Hand Model) ---
