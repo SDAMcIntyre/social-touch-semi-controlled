@@ -1,3 +1,4 @@
+import re
 import shutil
 import pandas as pd
 from pathlib import Path
@@ -58,6 +59,8 @@ def aggregate_session_blocks(
             df = pd.read_csv(filename)
             # Add a column indicating the source file (block)
             df['source_block_file'] = filename.name
+            match = re.search(r'block-order-(\d+)', filename.name)
+            df['block_order_id'] = match.group(1) if match else None
             df_list.append(df)
         except Exception as e:
             logging.error(f"Failed to read {filename}: {e}")
