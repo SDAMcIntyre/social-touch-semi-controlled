@@ -34,7 +34,8 @@ def should_process_task(
     *,
     output_paths: PathInput,
     input_paths: PathInput,
-    force: bool = False
+    force: bool = False,
+    keep_stale: bool = False
 ) -> bool:
     """
     Determines if a task should run based on file existence and timestamps,
@@ -43,7 +44,8 @@ def should_process_task(
     Args:
         output_paths: Single path or list of paths (str or Path) representing generated artifacts.
         input_paths: Single path or list of paths (str or Path) representing source files.
-        force: If True, bypasses checks and forces processing.
+        force: If True, bypasses checks and forces processing. Overrides keep_stale.
+        keep_stale: If True, refreshes timestamps of stale outputs instead of reprocessing.
 
     Returns:
         bool: True if processing is required, False otherwise.
@@ -81,6 +83,15 @@ def should_process_task(
         return True
 
     if latest_input_mod_time > oldest_output_mod_time:
+        if keep_stale:
+            print("⚠️ Task is stale but keep_stale=True — refreshing output timestamps.")
+            for p in outputs:
+                try:
+                    p.touch()
+                except PermissionError:
+                    print(f"  Could not touch '{p}' (permission denied). Proceeding with processing.")
+                    return True
+            return False
         print(f"⚠️ Task is stale. An input has been updated more recently than output.")
         return True
 
