@@ -8,11 +8,12 @@ from .monitoring.pipeline_monitor import PipelineMonitor
 # -----------------------------------------------------------------------------
 class TaskExecutor:
     """A context manager to handle the boilerplate of running a pipeline task."""
-    def __init__(self, task_name, block_name, dag_handler, monitor):
+    def __init__(self, task_name, block_name, dag_handler, monitor, session_name: str = None):
         self.task_name: str = task_name
         self.block_name: str = block_name
         self.dag_handler: DagConfigHandler = dag_handler
         self.monitor: PipelineMonitor = monitor
+        self.session_name: str = session_name
         self.can_run: bool = False
         self.error_msg: str = None
 
@@ -29,14 +30,17 @@ class TaskExecutor:
             return 
 
         if exc_type:
-            from .pipeline_dependency_error import PipelineDependencyError
-            if isinstance(exc_value, PipelineDependencyError):
-                from .dependency_popup import show_dependency_error_popup
-                show_dependency_error_popup(exc_value)
             self.error_msg = f"Task '{self.task_name}' failed: {exc_value}"
             print(f"❌ {self.error_msg}\n{traceback.format_exc()}")
             if self.monitor is not None:
                 self.monitor.update(self.block_name, self.task_name, "FAILURE", self.error_msg)
+
+            from .pipeline_dependency_error import PipelineDependencyError
+            if isinstance(exc_value, PipelineDependencyError):
+                if self.session_name and not exc_value.session_name:
+                    exc_value.session_name = self.session_name
+                from .dependency_popup import show_dependency_error_popup
+                show_dependency_error_popup(exc_value)
             return True
         else: 
             self.dag_handler.mark_completed(self.task_name)
