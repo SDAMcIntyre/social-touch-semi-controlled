@@ -2,7 +2,8 @@
 
 **Date:** 2026-03-21
 **Author:** Basil Duvernoy
-**Status:** In Progress
+**Status:** Completed
+**Completed:** 2026-03-23 11:02
 **Branch:** `feature/keep-stale-outputs`
 
 ---
