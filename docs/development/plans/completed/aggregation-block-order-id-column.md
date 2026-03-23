@@ -2,7 +2,8 @@
 
 **Date:** 2026-03-23
 **Author:** Basil Duvernoy
-**Status:** In Progress
+**Status:** Completed
+**Completed:** 2026-03-23 17:15
 **Branch:** `feature/aggregation-block-order-id-column`
 
 ---
