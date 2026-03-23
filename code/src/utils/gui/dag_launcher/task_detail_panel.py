@@ -169,6 +169,11 @@ class TaskDetailPanel(QWidget):
             cb.setChecked(val)
             cb.stateChanged.connect(self._make_bool_handler(key, cb))
             layout.addWidget(cb)
+        elif isinstance(val, str) and val in {"auto", "manual"}:
+            cb = QCheckBox("Auto")
+            cb.setChecked(val == "auto")
+            cb.stateChanged.connect(self._make_mode_toggle_handler(key, cb))
+            layout.addWidget(cb)
         elif isinstance(val, (int, float, str)):
             row_widget = QWidget()
             row_layout = QHBoxLayout(row_widget)
@@ -325,6 +330,14 @@ class TaskDetailPanel(QWidget):
     # ------------------------------------------------------------------
     # Handler factories
     # ------------------------------------------------------------------
+
+    def _make_mode_toggle_handler(self, key: str, cb: QCheckBox):
+        def _handler(_state: int) -> None:
+            if self._model is None or self._task_name is None:
+                return
+            self._model.set_task_option(self._task_name, key, "auto" if cb.isChecked() else "manual")
+            self.task_changed.emit()
+        return _handler
 
     def _make_bool_handler(self, key: str, cb: QCheckBox):
         def _handler(_state: int) -> None:

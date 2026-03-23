@@ -132,6 +132,37 @@ def _create_cropped_video(source_path: Path, roi: dict, temp_dir: Path) -> Path:
     return out_path
 
 
+def _offset_roi_coordinates(results_map: Dict[int, Any], roi: dict) -> None:
+    """
+    Shift pixel coordinates in API results from cropped-frame space back to
+    the original full-frame space by adding the ROI origin offset.
+
+    Mutates *results_map* values in-place.  Samples that lack a ``hands``
+    key (e.g. error frames) are silently skipped.
+    """
+    x_off = int(roi.get("x_min") or 0)
+    y_off = int(roi.get("y_min") or 0)
+    if x_off == 0 and y_off == 0:
+        return
+
+    for sample in results_map.values():
+        for hand in sample.get("hands", []):
+            bbox = hand.get("person_bounding_box_xyxy")
+            if bbox is not None and len(bbox) == 4:
+                hand["person_bounding_box_xyxy"] = [
+                    bbox[0] + x_off,
+                    bbox[1] + y_off,
+                    bbox[2] + x_off,
+                    bbox[3] + y_off,
+                ]
+
+            vertices = hand.get("vertices_pixel")
+            if vertices is not None:
+                hand["vertices_pixel"] = [
+                    [v[0] + x_off, v[1] + y_off] for v in vertices
+                ]
+
+
 # --- Core Logic Components ---
 
 class HandTrackingPipeline:
@@ -305,6 +336,10 @@ class HandTrackingPipeline:
                     video_manager, temp_dir
                 )
 
+        # 2b. Offset pixel coordinates when ROI cropping was applied
+        if roi_video_path is not None and roi is not None:
+            _offset_roi_coordinates(processed_map, roi)
+
         # 3. Assembly & Serialization
         logger.info("Assembling results...")
         for i, data in processed_map.items():
@@ -329,6 +364,7 @@ def track_hands_on_video(
     force_processing: bool = False,
     use_video_api: bool = True,
     roi_path: Optional[Path] = None,
+    keep_stale: bool = False,
 ):
     """
     Entry point for whole-video hand tracking.
@@ -344,10 +380,14 @@ def track_hands_on_video(
                         Gracefully ignored if the file does not exist.
     """
     # 0. Check Processing Status
+    input_paths = [rgb_video_path]
+    if roi_path is not None and roi_path.exists():
+        input_paths.append(roi_path)
     if not should_process_task(
-        input_paths=[rgb_video_path],
+        input_paths=input_paths,
         output_paths=[output_path],
         force=force_processing,
+        keep_stale=keep_stale,
     ):
         logger.info(f"Skipping: {output_path} is up to date.")
         return
