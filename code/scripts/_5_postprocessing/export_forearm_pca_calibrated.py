@@ -108,7 +108,7 @@ def export_forearm_pca_calibrated(
 
     # Write output PLY
     out_pcd = o3d.geometry.PointCloud()
-    out_pcd.points = o3d.utility.Vector3dVector(transformed)
+    out_pcd.points = o3d.utility.Vector3dVector(np.round(transformed, 1))
     if pcd.has_colors():
         out_pcd.colors = pcd.colors
     o3d.io.write_point_cloud(str(output_path), out_pcd)

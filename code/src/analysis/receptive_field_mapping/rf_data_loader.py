@@ -10,7 +10,7 @@ import logging
 import re
 from collections import Counter
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 
@@ -19,6 +19,25 @@ from analysis.touch_analytics.touch_config import DISCRETIZATION_CONFIG
 from .rf_mapping_config import GroupedSpatialData, RFMappingConfig
 
 logger = logging.getLogger(__name__)
+
+
+# ------------------------------------------------------------------
+# PLY path resolution
+# ------------------------------------------------------------------
+
+def resolve_forearm_ply(session_dir: Path, session_id: str) -> Optional[Path]:
+    """Resolve the forearm PLY path for a session in RF-centered coordinate space.
+
+    The aggregated session CSV always contains contact points in RF-centered
+    space (produced by ``blocks_rf_centered/``).  The forearm PLY must be in
+    the same space to avoid misalignment.  Returns ``None`` if the
+    RF-centered PLY does not exist.
+    """
+    rf_centered = session_dir / 'forearm_rf_centered' / f'{session_id}_forearm.ply'
+    if rf_centered.exists():
+        return rf_centered
+
+    return None
 
 
 # ------------------------------------------------------------------
@@ -39,7 +58,7 @@ def parse_contact_points(point_str: str) -> List[Tuple[float, float, float]]:
 
     for match in matches:
         try:
-            parts = match.strip().split()
+            parts = match.strip().lstrip("[").split()
             if len(parts) == 3:
                 pt = (float(parts[0]), float(parts[1]), float(parts[2]))
                 points.append(pt)

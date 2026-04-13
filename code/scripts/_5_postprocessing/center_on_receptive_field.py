@@ -173,6 +173,7 @@ def _translate_forearm_ply(
     """
     pcd = o3d.io.read_point_cloud(str(input_ply))
     pcd.translate(-offset, relative=True)
+    pcd.points = o3d.utility.Vector3dVector(np.round(np.asarray(pcd.points), 1))
     output_ply.parent.mkdir(parents=True, exist_ok=True)
     o3d.io.write_point_cloud(str(output_ply), pcd)
 
