@@ -14,7 +14,11 @@ from typing import Dict, List, Tuple
 
 import pandas as pd
 
-from analysis.receptive_field_mapping.rf_data_loader import parse_contact_points
+from analysis.receptive_field_mapping.rf_cluster_visualizer import render_forearm_heatmap
+from analysis.receptive_field_mapping.rf_data_loader import (
+    parse_contact_points,
+    resolve_forearm_ply,
+)
 from analysis.touch_analytics.pipeline_shared import (
     filter_enabled_profiles,
     session_id_from_path,
@@ -240,7 +244,6 @@ def run_cluster_rf_mapping(
     -------
     List of paths to produced spike_counts.csv files.
     """
-    from analysis.receptive_field_mapping.rf_cluster_visualizer import render_forearm_heatmap
 
     session_dir_map = _resolve_session_paths(input_items)
     enabled_combinations = filter_enabled_profiles(feature_combinations)
@@ -353,10 +356,7 @@ def run_cluster_rf_mapping(
                     if spike_df.empty:
                         continue
                     session_dir = session_dir_map[session_id]
-                    forearm_ply = (
-                        session_dir / 'forearm_pca_calibrated'
-                        / f'{session_id}_forearm.ply'
-                    )
+                    forearm_ply = resolve_forearm_ply(session_dir, session_id)
                     png_path = cluster_out / f'{session_id}_rf_heatmap.png'
                     print(f"    Rendering heatmap: {session_id}...")
                     try:

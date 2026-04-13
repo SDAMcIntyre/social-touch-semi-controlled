@@ -34,14 +34,13 @@ def aggregate_session_blocks(
         output_path.parent / forearm_ply_path.name
         if forearm_ply_path is not None else None
     )
-    all_inputs = list(input_paths) + ([forearm_ply_path] if forearm_ply_path is not None else [])
-    all_outputs = [output_path] + ([forearm_ply_dest] if forearm_ply_dest is not None else [])
 
     # 2. Check if processing is required using should_process_task
-    # Checks modification times of input_paths vs output_path
+    # Only the CSV inputs/output are checked — the forearm PLY is a side-effect copy
+    # whose preserved mtime (shutil.copy2) would otherwise always trigger a false stale.
     if not should_process_task(
-        input_paths=all_inputs,
-        output_paths=all_outputs,
+        input_paths=list(input_paths),
+        output_paths=[output_path],
         force=force_processing
     ):
         logging.info(f"✅ Output file '{output_path.name}' already exists and is up-to-date. Use force_processing to overwrite.")
