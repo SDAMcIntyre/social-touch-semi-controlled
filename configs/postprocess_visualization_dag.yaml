@@ -10,8 +10,7 @@
 # ==============================================================================
 
 parameters:
-  kinect_configs: 
-    valid_configs_ST18-04/kinect_config_2022-06-22_ST18-04_semicontrolled_block-order01.yaml
+  kinect_configs: valid_configs_ST13-02
 
 tasks:
   view_postprocessed_simple:
@@ -22,9 +21,18 @@ tasks:
     depends_on: []
 
   view_postprocessed_advanced:
-    enabled: true
+    enabled: false
     description: "Launch PostprocessedSceneViewer in advanced mode: adds per-frame
       sticker spheres (PCA-calibrated) and a hand mesh with ICP+PCA transform chain.
       Degrades gracefully when hand motion NPZ, ICP transforms, or PCA calib are missing."
+    options: {}
+    depends_on: []
+
+  view_before_after_steps:
+    enabled: true
+    description: "Launch BeforeAfterStepViewer for each of the 4 postprocessing steps
+      (ICP registration, PCA calibration, forearm projection, RF centering). Opens
+      one side-by-side dual-plotter window per step sequentially; steps with missing
+      intermediate data are skipped with a warning."
     options: {}
     depends_on: []

@@ -47,9 +47,14 @@ from primary_processing import (
     KinectConfig,
 )
 
-from preprocessing.forearm_extraction import get_transform_schedule
+from preprocessing.forearm_extraction import (
+    get_transform_schedule,
+    ForearmFrameParametersFileHandler,
+    ForearmCatalog,
+    get_forearms_with_fallback,
+)
 
-from postprocessing.gui import PostprocessedSceneViewer
+from postprocessing.gui import PostprocessedSceneViewer, BeforeAfterStepViewer
 from postprocessing.xyz_reference_from_gestures.calibration_pca_engine import CalibrationResult
 
 
@@ -105,6 +110,107 @@ def resolve_postprocessed_paths(config: KinectConfig) -> Dict[str, Optional[Path
         "forearm_metadata_path": forearm_dir / f"{config.session_id}_arm_roi_metadata.json",
         "forearm_pointcloud_dir": forearm_dir,
     }
+
+
+def _load_per_video_forearm(config: KinectConfig):
+    """Return the reference forearm (frame 0) as an Open3D PointCloud, or None.
+
+    Loads forearm metadata for the current block via ForearmCatalog and returns
+    the frame-0 reference pointcloud using get_forearms_with_fallback().
+    Returns None when the metadata file is missing or loading fails.
+    """
+    forearm_dir = config.session_processed_output_dir / "forearm_pointclouds"
+    metadata_path = forearm_dir / f"{config.session_id}_arm_roi_metadata.json"
+    if not metadata_path.exists():
+        print(f"  Warning: forearm metadata not found at {metadata_path} — step 1 before-forearm unavailable.")
+        return None
+    try:
+        forearm_params = ForearmFrameParametersFileHandler.load(metadata_path)
+        catalog = ForearmCatalog(forearm_params, forearm_dir)
+        forearms = get_forearms_with_fallback(catalog, config.source_video.name)
+        return forearms.get(0)
+    except Exception as exc:
+        print(f"  Warning: could not load per-video forearm: {exc}")
+        return None
+
+
+def _load_unified_forearm(config: KinectConfig) -> Optional[Path]:
+    """Return the path to the unified registered PLY, or a single-forearm fallback.
+
+    Mirrors the _find_forearm_ply() pattern from export_forearm_pca_calibrated.py.
+    Returns None when no PLY is found.
+    """
+    forearm_dir = config.session_processed_output_dir / "forearm_pointclouds"
+    unified = forearm_dir / f"{config.session_id}_unified_registered.ply"
+    if unified.exists():
+        return unified
+    plies = sorted(forearm_dir.glob("*.ply"))
+    if plies:
+        print(f"  No unified registered PLY found; using fallback: {plies[0].name}")
+        return plies[0]
+    return None
+
+
+def resolve_before_after_paths(config: KinectConfig) -> List[Dict]:
+    """Return a list of step descriptors for the 4 postprocessing steps.
+
+    Each descriptor is a dict with keys:
+        step_label    : str
+        before_csv    : Path
+        after_csv     : Path
+        before_forearm: Optional[Union[Path, Open3D PointCloud]]
+        after_forearm : Optional[Union[Path, Open3D PointCloud]]
+
+    Returns an empty list when config.session_merged_output_dir is None.
+    """
+    if config.session_merged_output_dir is None:
+        return []
+
+    base = config.session_merged_output_dir
+    session_id = config.session_id
+    block_id = config.block_id
+
+    raw_name = f"{session_id}_semicontrolled_{block_id}_merged_data.csv"
+    pca_name = f"{session_id}_semicontrolled_{block_id}_merged_data_pca-xyz.csv"
+    forearm_ply_name = f"{session_id}_forearm.ply"
+
+    forearm_pca_dir = base / "forearm_pca_calibrated"
+    forearm_rf_dir = base / "forearm_rf_centered"
+
+    # Forearms for steps 1 and 2 require loading from the preprocessing outputs.
+    per_video_forearm = _load_per_video_forearm(config)   # Open3D PointCloud or None
+    unified_forearm_ply = _load_unified_forearm(config)   # Path or None
+
+    return [
+        {
+            "step_label": "Step 1: ICP Registration",
+            "before_csv": base / "blocks_merged" / raw_name,
+            "after_csv": base / "blocks_registered" / raw_name,
+            "before_forearm": per_video_forearm,
+            "after_forearm": unified_forearm_ply,
+        },
+        {
+            "step_label": "Step 2: PCA Calibration",
+            "before_csv": base / "blocks_registered" / raw_name,
+            "after_csv": base / "blocks_pca_calibrated" / pca_name,
+            "before_forearm": unified_forearm_ply,
+            "after_forearm": forearm_pca_dir / forearm_ply_name,
+        },
+        {
+            "step_label": "Step 3: Forearm Projection",
+            "before_csv": base / "blocks_pca_calibrated" / pca_name,
+            "after_csv": base / "blocks_contact_projected" / pca_name,
+            "before_forearm": forearm_pca_dir / forearm_ply_name,
+            "after_forearm": forearm_pca_dir / forearm_ply_name,
+        },
+        {
+            "step_label": "Step 4: RF Centering",
+            "before_csv": base / "blocks_contact_projected" / pca_name,
+            "after_csv": base / "blocks_rf_centered" / pca_name,
+            "before_forearm": forearm_pca_dir / forearm_ply_name,
+            "after_forearm": forearm_rf_dir / forearm_ply_name,
+        },
+    ]
 
 
 def _load_icp_schedule(
@@ -270,6 +376,53 @@ def run_single_session_pipeline_advanced(
     dag_handler.mark_completed(task_name)
 
 
+def run_single_session_pipeline_before_after(
+    config: KinectConfig,
+    dag_handler: DagConfigHandler,
+) -> None:
+    """Launch BeforeAfterStepViewer for each postprocessing step of one block."""
+    task_name = "view_before_after_steps"
+    if not dag_handler.can_run(task_name):
+        return
+
+    steps = resolve_before_after_paths(config)
+    block_name = config.source_video.name
+
+    for step in steps:
+        before_csv: Path = step["before_csv"]
+        after_csv: Path = step["after_csv"]
+        step_label: str = step["step_label"]
+
+        if not before_csv.exists():
+            print(f"[{block_name}] {step_label}: missing before CSV {before_csv} — skipping.")
+            continue
+        if not after_csv.exists():
+            print(f"[{block_name}] {step_label}: missing after CSV {after_csv} — skipping.")
+            continue
+
+        print(f"[{block_name}] Launching BeforeAfterStepViewer for {step_label}...")
+        app = QApplication.instance() or QApplication(sys.argv)
+
+        viewer = BeforeAfterStepViewer(
+            before_csv_path=before_csv,
+            after_csv_path=after_csv,
+            before_forearm=step["before_forearm"],
+            after_forearm=step["after_forearm"],
+            step_label=step_label,
+            recording_name=config.source_video.stem,
+        )
+        viewer.show()
+        app.exec_()
+        # Pump the event loop twice: first pass processes deferred deletions
+        # (VTK render window Finalize calls from closeEvent), second pass
+        # flushes any events those deletions may have posted.  This ensures
+        # the OpenGL context is fully released before the next viewer opens.
+        QCoreApplication.processEvents()
+        QCoreApplication.processEvents()
+
+    dag_handler.mark_completed(task_name)
+
+
 # ---------------------------------------------------------------------------
 # Batch dispatcher
 # ---------------------------------------------------------------------------
@@ -292,6 +445,7 @@ def run_batch_sequentially(
 
             run_single_session_pipeline(config, dag_handler_instance)
             run_single_session_pipeline_advanced(config, dag_handler_instance)
+            run_single_session_pipeline_before_after(config, dag_handler_instance)
         except Exception as exc:
             print(f"Failed to initialise session {block_file.name}: {exc}")
             continue
