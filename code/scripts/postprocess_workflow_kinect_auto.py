@@ -370,35 +370,57 @@ def run_batch_postprocessing(
 
 # --- Main ---
 
+def setup_environment():
+    project_data_root = path_tools.get_project_data_root()
+    configs_dir = Path("configs")
+
+    print("🛠️  Setting up environment...")
+    reports_dir = Path("reports")
+    reports_dir.mkdir(exist_ok=True)
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
+    report_file_path = reports_dir / f"{timestamp}_postprocess_workflow_kinect_auto_status.xlsx"
+    if report_file_path.exists():
+        report_file_path.unlink()
+        print("🧹 File with the same name found, removing it.")
+    return project_data_root, configs_dir, report_file_path
+
 def main():
     freeze_support()
     parser = argparse.ArgumentParser()
     parser.add_argument("--dag-config", type=Path, required=True)
     args = parser.parse_args()
     dag_config_path = args.dag_config
+    project_data_root, configs_dir, report_file_path = setup_environment()
 
-    # Configuration
-    project_data_root = path_tools.get_project_data_root() # Using path_tools as per reference script
-    configs_dir = Path("configs")
-    
-    reports_dir = Path("reports")
-    reports_dir.mkdir(exist_ok=True)
-    report_file_path = reports_dir / f"postprocess_status.xlsx"
+    try:
+        main_dag_handler = DagConfigHandler(dag_config_path)
+        is_parallel = main_dag_handler.get_parameter('parallel_execution', False)
+        entries = main_dag_handler.get_parameter('kinect_configs')
+        block_files = resolve_session_configs(entries, configs_dir / "kinect_configs")
+    except FileNotFoundError:
+        print(f"❌ Error: Configuration file '{dag_config_path}' not found.")
+        exit(1)
 
-    monitor_queue = Queue()
-    
-    main_dag_handler = DagConfigHandler(dag_config_path)
-    entries = main_dag_handler.get_parameter('kinect_configs')
-    block_files = resolve_session_configs(entries, configs_dir / "kinect_configs")
+    print("📊 Initializing pipeline monitor...")
+    pipeline_stages = list(main_dag_handler.tasks.keys())
+    main_monitor = PipelineMonitor(report_path=str(report_file_path), stages=pipeline_stages, live_plotting=True)
+    main_monitor.show_dashboard()
 
-    run_batch_postprocessing(
-        block_files=block_files,
-        project_data_root=project_data_root,
-        dag_config_path=dag_config_path,
-        monitor_queue=monitor_queue,
-        report_file_path=report_file_path,
-        parallel=False
-    )
+    try:
+        run_batch_postprocessing(
+            block_files=block_files,
+            project_data_root=project_data_root,
+            dag_config_path=dag_config_path,
+            monitor_queue=main_monitor.queue,
+            report_file_path=report_file_path,
+            parallel=is_parallel,
+        )
+        print("\n🏁 All pipeline tasks have completed.")
+        print("✨ Dashboard will close automatically in 10 seconds...")
+        time.sleep(10)
+    finally:
+        main_monitor.close_dashboard(block=True)
+        print(f"👋 Processing finished. Final report saved to {report_file_path}")
 
 if __name__ == "__main__":
     main()
