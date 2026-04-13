@@ -100,6 +100,7 @@ tasks:
     enabled: true
     options:
       force_processing: false
+      keep_stale: true
     depends_on: []
 
   # --- 3D Kinematics (Depends on Hand Tracking) ---

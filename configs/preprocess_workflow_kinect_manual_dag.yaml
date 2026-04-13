@@ -10,12 +10,9 @@
 # ==============================================================================
 
 parameters:
-  kinect_configs: [valid_configs_ST13-01, valid_configs_ST13-02, 
-      valid_configs_ST13-03, valid_configs_ST14-01, valid_configs_ST14-02, 
-      valid_configs_ST14-03, valid_configs_ST14-04, valid_configs_ST15-01, 
-      valid_configs_ST15-02, valid_configs_ST16-02, valid_configs_ST16-03, 
-      valid_configs_ST16-04, valid_configs_ST16-05, valid_configs_ST18-01, 
-      valid_configs_ST18-04]
+  kinect_configs: [
+      valid_configs_ST13-02/kinect_config_2022-06-14_ST13-02_semicontrolled_block-order03.yaml,
+    valid_configs_ST13-02/kinect_config_2022-06-14_ST13-02_semicontrolled_block-order04.yaml]
   #kinect_configs: "valid_configs_ST16-05"
 
 tasks:
@@ -71,6 +68,7 @@ tasks:
     depends_on: []
     options:
       force_processing: false
+      roi_mode: manual
 
   curate_hamer_hand_models:
     enabled: true
