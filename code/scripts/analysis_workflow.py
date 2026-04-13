@@ -234,12 +234,18 @@ def map_receptive_fields_clustered_flow(
     force_processing: bool = False,
     feature_combinations: dict = None,
     clustering_profiles: dict = None,
+    pick_camera_angle_force: bool = False,
 ) -> List[Path]:
     """
     Cluster-based RF mapping: spike-count heatmaps per cluster from touch_clustering output.
     Reads pooled_touch_summary_clustered.csv, forward-fills contact_points (30Hz->1kHz),
     counts spikes per (x,y,z) point, and renders 3D forearm heatmap PNGs.
     Output: ``4_analysed/receptive_field_maps_clustered/<combination>/<clusterer>/``
+
+    After mapping, launches the interactive camera angle picker.  The GUI
+    opens automatically when any session lacks ``camera_params.json``.
+    Set ``pick_camera_angle_force: true`` in the DAG options to force the
+    GUI open even when all sessions already have camera params.
     """
     print(f"[Batch Analysis] Running cluster-based RF mapping for {len(input_items)} item(s)...")
     if not input_items:
@@ -252,7 +258,7 @@ def map_receptive_fields_clustered_flow(
     clustering_dir = database_path / '4_analysed' / 'touch_clusters'
     output_dir = database_path / '4_analysed' / 'receptive_field_maps_clustered'
 
-    return run_cluster_rf_mapping(
+    result = run_cluster_rf_mapping(
         clustering_dir=clustering_dir,
         input_items=input_items,
         output_dir=output_dir,
@@ -260,6 +266,17 @@ def map_receptive_fields_clustered_flow(
         clustering_profiles=clusterers,
         force=force_processing,
     )
+
+    from analysis.receptive_field_mapping.rf_camera_angle_task import pick_rf_camera_angle_batch
+    from analysis.touch_analytics.pipeline_shared import session_id_from_path
+
+    session_output_dirs = {
+        session_id_from_path(csv_path): csv_path.parent
+        for csv_path, _ in input_items
+    }
+    pick_rf_camera_angle_batch(session_output_dirs, force_processing=pick_camera_angle_force)
+
+    return result
 
 
 def _collect_unified_files(input_items: List[Tuple[Path, Path]]) -> List[Path]:
@@ -388,6 +405,8 @@ def run_batch_analysis(
                         kwargs["min_instances_per_sensor"] = options["min_instances_per_sensor"]
                     if "min_sensor_types" in options:
                         kwargs["min_sensor_types"] = options["min_sensor_types"]
+                    if "pick_camera_angle_force" in options:
+                        kwargs["pick_camera_angle_force"] = options["pick_camera_angle_force"]
                     if "show_interactive" in options:
                         kwargs["show_interactive"] = options["show_interactive"]
                     flow_func(**kwargs)
