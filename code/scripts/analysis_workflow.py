@@ -34,7 +34,7 @@ from analysis.touch_analytics import (
 from analysis.touch_analytics.extraction_pipeline import run_feature_extraction
 from analysis.touch_analytics.clustering_pipeline import run_clustering
 from analysis.touch_analytics.comparing_pipeline import run_comparing
-from analysis.receptive_field_mapping import run_cluster_rf_mapping
+from analysis.receptive_field_mapping import run_cluster_rf_mapping, run_simple_rf_mapping
 
 # --- Analysis Flows ---
 
@@ -72,6 +72,29 @@ def summarize_session_blocks_flow(
     except Exception as exc:
         logging.error(f"Failed to generate session block summary: {exc}")
         return []
+
+
+@flow(name="map_receptive_fields_simple")
+def map_receptive_fields_simple_flow(
+    input_items: List[Tuple[Path, Path]],
+    force_processing: bool = False,
+    show_interactive: bool = False,
+) -> List[Path]:
+    """
+    Simple RF mapping: raw spike-position CSV + forearm heatmap per session.
+    Runs before feature extraction — no dependency on clustering or extraction.
+    Output: ``4_analysed/receptive_field_maps_simple/<session_id>/``
+    """
+    print(f"[Batch Analysis] Running simple RF mapping for {len(input_items)} item(s)...")
+    if not input_items:
+        return []
+    output_dir = input_items[0][1] / '4_analysed' / 'receptive_field_maps_simple'
+    return run_simple_rf_mapping(
+        input_items=input_items,
+        output_dir=output_dir,
+        force=force_processing,
+        show_interactive=show_interactive,
+    )
 
 
 @flow(name="touch_feature_extraction")
@@ -304,6 +327,7 @@ def run_batch_analysis(
 
     available_tasks = [
         ("summarize_session_blocks", summarize_session_blocks_flow),
+        ("map_receptive_fields_simple", map_receptive_fields_simple_flow),
         ("touch_feature_extraction", touch_feature_extraction_flow),
         ("touch_clustering", touch_clustering_flow),
         ("touch_comparing", touch_comparing_flow),
@@ -364,6 +388,8 @@ def run_batch_analysis(
                         kwargs["min_instances_per_sensor"] = options["min_instances_per_sensor"]
                     if "min_sensor_types" in options:
                         kwargs["min_sensor_types"] = options["min_sensor_types"]
+                    if "show_interactive" in options:
+                        kwargs["show_interactive"] = options["show_interactive"]
                     flow_func(**kwargs)
                 except Exception as e:
                     executor.error_msg = f"Batch analysis failed: {str(e)}"
