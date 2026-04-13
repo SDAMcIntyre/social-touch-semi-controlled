@@ -2,7 +2,7 @@
 
 **Date:** 2026-03-23
 **Author:** Basil Duvernoy
-**Status:** In Progress
+**Status:** Superseded by pick-rf-camera-angle (picker built directly in analysis package)
 **Branch:** `feature/pick-rf-camera-angle` (existing)
 
 ---
