@@ -149,6 +149,9 @@ tasks:
     enabled: false
     options:
       force_processing: true
+      # Set to true to force the camera angle picker GUI open even when all
+      # sessions already have camera_params.json saved.
+      pick_camera_angle_force: true
       feature_combinations:
         only_mean: {enabled: true, features: [mean]}
         only_max: {enabled: false, features: [max]}
