@@ -88,6 +88,7 @@ except Exception as _exc:
 # ---------------------------------------------------------------------------
 # Internal package imports
 # ---------------------------------------------------------------------------
+from preprocessing.common import define_custom_colors
 from preprocessing.common.data_access.kinect_mkv_manager import KinectMKV
 from preprocessing.common.data_access.kinect_pointcloud_wrapper import KinectPointCloudView
 from preprocessing.forearm_extraction import (
@@ -100,33 +101,6 @@ from preprocessing.motion_analysis import HandMotionManager
 from preprocessing.stickers_analysis import XYZDataFileHandler
 
 from .sticker_velocity_compass import StickerVelocityCompass
-
-
-def define_custom_colors(string_list) -> dict:
-    """
-    Searches an iterable of strings for standard color keywords.
-
-    Returns a dict mapping each input string that contains a color keyword to
-    the matched color name (lowercase).  If multiple keywords match, the last
-    one wins.
-
-    Args:
-        string_list: An iterable (e.g., list, dict_keys) of strings to search.
-
-    Returns:
-        A dict ``{item: color_name}`` for items that contain a color keyword.
-    """
-    STANDARD_COLORS = {
-        "red", "green", "blue", "yellow", "orange", "purple", "pink",
-        "black", "white", "brown", "gray", "grey", "cyan", "magenta", "violet",
-    }
-    found_colors: dict = {}
-    for item in string_list:
-        item_lower = item.lower()
-        for color in STANDARD_COLORS:
-            if color in item_lower:
-                found_colors[item] = color
-    return found_colors
 
 
 def _parse_contact_points_cell(cell) -> Optional[np.ndarray]:

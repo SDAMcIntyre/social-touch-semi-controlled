@@ -1,12 +1,12 @@
 import sys
 from pathlib import Path
-from typing import Iterable, List, Dict
+from typing import List, Dict
 from PyQt5.QtWidgets import QApplication
 import numpy as np
-import matplotlib.pyplot as plt
 from dataclasses import dataclass
 
 from preprocessing.common import (
+    define_custom_colors,
     KinectMKV,
     KinectPointCloudView,
 
@@ -16,7 +16,11 @@ from preprocessing.common import (
     PersistentOpen3DPointCloudSequence,
     Trajectory,
 
-    SceneViewerVideoMaker
+    SceneViewerVideoMaker,
+
+    LineSpec,
+    SubplotSpec,
+    TimeSeriesPanel,
 )
 from preprocessing.stickers_analysis import (
     XYZDataFileHandler
@@ -171,35 +175,6 @@ class RigidityAnalyzer:
         plt.tight_layout()
         plt.show(block=False)
 
-def define_custom_colors(string_list: Iterable[str]) -> dict[str, str]:
-    """
-    Searches an iterable of strings for standard color keywords.
-
-    Args:
-        string_list: An iterable (e.g., list, dict_keys) of strings to search through.
-
-    Returns:
-        A list of unique color names found in the strings.
-    """
-    # Define the set of standard color keywords to search for
-    STANDARD_COLORS = {
-        "red", "green", "blue", "yellow", "orange", "purple", "pink",
-        "black", "white", "brown", "gray", "grey", "cyan", "magenta", "violet"
-    }
-    
-    found_colors = {}
-    
-    # Iterate through each string in the input list
-    for item in string_list:
-        # Convert the string to lowercase for case-insensitive matching
-        item_lower = item.lower()
-        # Check if any of the standard colors are a substring of the item
-        for color in STANDARD_COLORS:
-            if color in item_lower:
-                found_colors[item] = color
-    
-    return found_colors
-
 def view_xyz_stickers_on_depth_data(
     xyz_csv_path: Path,
     kinect_video_path: Path,
@@ -228,7 +203,7 @@ def view_xyz_stickers_on_depth_data(
     )
     analyzer = RigidityAnalyzer(abs_tolerance=2.0, rel_tolerance=0.05)
     # Run Analysis with Plotting enabled
-    result = analyzer.validate_triangle_consistency(coordinates_over_time, plot_variations=True)
+    result = analyzer.validate_triangle_consistency(coordinates_over_time, plot_variations=False)
 
     # Output Results
     print(f"Dataset Shape: {coordinates_over_time.shape}")
@@ -296,7 +271,46 @@ def view_xyz_stickers_on_depth_data(
             )
             viewer.add_object(sticker_object)
 
-        # 5. Show the viewer and run the application
+        # 5. Build and attach the TimeSeriesPanel
+        sticker_names = list(stickers_xyz_dict.keys())
+        max_len = max(arr.shape[0] for arr in stickers_xyz_dict.values())
+
+        # X, Y, Z subplots — one line per sticker
+        xyz_subplots = []
+        for axis_idx, axis_label in enumerate(["X (mm)", "Y (mm)", "Z (mm)"]):
+            lines = [
+                LineSpec(
+                    label=name,
+                    data=stickers_xyz_dict[name][:, axis_idx],
+                    color=custom_colors.get(name, 'magenta'),
+                )
+                for name in sticker_names
+            ]
+            xyz_subplots.append(SubplotSpec(ylabel=axis_label, lines=lines))
+
+        # Edge-length subplot — only when exactly 3 stickers
+        edge_subplot = None
+        if len(sticker_names) == 3:
+            p0 = stickers_xyz_dict[sticker_names[0]]
+            p1 = stickers_xyz_dict[sticker_names[1]]
+            p2 = stickers_xyz_dict[sticker_names[2]]
+            d01 = np.linalg.norm(p1 - p0, axis=1)
+            d12 = np.linalg.norm(p2 - p1, axis=1)
+            d20 = np.linalg.norm(p0 - p2, axis=1)
+            edge_subplot = SubplotSpec(
+                ylabel="Edge (mm)",
+                lines=[
+                    LineSpec(label="P0-P1", data=d01, color="red"),
+                    LineSpec(label="P1-P2", data=d12, color="green"),
+                    LineSpec(label="P2-P0", data=d20, color="blue"),
+                ],
+            )
+
+        all_subplots = xyz_subplots + ([edge_subplot] if edge_subplot is not None else [])
+        panel = TimeSeriesPanel(all_subplots, total_frames=max_len, fps=30.0)
+        viewer.set_time_series_panel(panel)
+
+        # 6. Show the viewer and run the application
         #    This replaces the old 'window = PointCloudViewer(...)' call.
         viewer.show()
         app.exec_()

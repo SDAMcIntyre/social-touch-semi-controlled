@@ -5,7 +5,7 @@ import logging
 import pandas as pd
 import numpy as np
 from pathlib import Path
-from typing import List, Tuple, Optional, Iterable, Dict
+from typing import List, Tuple, Optional, Dict
 
 # Setup a basic logger
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -15,39 +15,12 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 from utils.should_process_task import should_process_task
 
 # Importing necessary managers from the existing codebase structure
-from preprocessing.common import VideoMP4Manager
+from preprocessing.common import define_custom_colors, VideoMP4Manager
 from preprocessing.stickers_analysis import (
     ConsolidatedTracksFileHandler,
     ConsolidatedTracksManager
 )
 from preprocessing.trial_segmentation import TrialSegmenterGUI
-
-
-def define_custom_colors(string_list: Iterable[str]) -> Dict[str, str]:
-    """
-    Assigns a standard color keyword based on substrings in a list of names.
-
-    Args:
-        string_list: An iterable (e.g., list) of object names.
-
-    Returns:
-        A dictionary mapping each object name to a found color string.
-    """
-    STANDARD_COLORS = {
-        "red", "green", "blue", "yellow", "orange", "purple", "pink",
-        "black", "white", "brown", "gray", "grey", "cyan", "magenta", "violet"
-    }
-    
-    found_colors = {}
-    
-    for item in string_list:
-        item_lower = item.lower()
-        for color in STANDARD_COLORS:
-            if color in item_lower:
-                found_colors[item] = color
-                break  # Assign the first color found and move to the next item
-    
-    return found_colors
 
 
 def load_existing_chunks_from_csv(csv_path: Path) -> List[Tuple[int, int]]:

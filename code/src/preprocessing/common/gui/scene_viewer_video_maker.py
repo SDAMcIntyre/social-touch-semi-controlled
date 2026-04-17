@@ -30,13 +30,14 @@ class SceneViewerVideoMaker(SceneViewer):
         super().__init__(parent)
         self.setWindowTitle("3D Scene Navigator + Video Export")
 
-    def _setup_frame_controls(self, parent_layout: QVBoxLayout):
+    def _setup_frame_controls(self) -> QWidget:
         """Overrides the control setup to add the Export Video button."""
-        frame_controls_layout = QHBoxLayout()
-        
+        row = QWidget()
+        frame_controls_layout = QHBoxLayout(row)
+
         self.recenter_button = QPushButton("Recenter View")
         self.recenter_button.clicked.connect(self._recenter_view)
-        
+
         self.export_button = QPushButton("Export Video (1080p)")
         self.export_button.setStyleSheet("background-color: #d32f2f; color: white; font-weight: bold;")
         self.export_button.clicked.connect(self._on_export_video_clicked)
@@ -46,19 +47,18 @@ class SceneViewerVideoMaker(SceneViewer):
         self.slider.setMaximum(0)
         self.slider.setValue(self.current_index)
         self.slider.valueChanged.connect(self._on_slider_change)
-        
+
         self.label = QLabel()
         self.label.setFixedWidth(150)
-        
+
         frame_controls_layout.addWidget(QLabel("Frame:"))
         frame_controls_layout.addWidget(self.slider)
         frame_controls_layout.addWidget(self.label)
         frame_controls_layout.addWidget(self.recenter_button)
         frame_controls_layout.addWidget(self.export_button)
-        
-        parent_layout.addLayout(frame_controls_layout)
-        
+
         self._update_label()
+        return row
 
     def _on_export_video_clicked(self):
         """Handles the video export workflow."""

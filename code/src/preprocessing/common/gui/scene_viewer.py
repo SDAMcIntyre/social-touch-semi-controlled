@@ -2,7 +2,7 @@
 import bisect
 import sys
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Iterable, Optional
 
 # Third-party imports
 import numpy as np
@@ -11,9 +11,37 @@ import pyvista as pv
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (QApplication, QCheckBox, QGroupBox,
                              QHBoxLayout, QLabel, QMainWindow,
-                             QPushButton, QSlider, QVBoxLayout, QWidget
+                             QPushButton, QScrollArea, QSlider,
+                             QVBoxLayout, QWidget
 )
 from pyvistaqt import QtInteractor
+
+def define_custom_colors(string_list: Iterable[str]) -> Dict[str, str]:
+    """
+    Searches an iterable of strings for standard color keywords.
+
+    Returns a dict mapping each input string that contains a color keyword to
+    the matched color name (lowercase).  If multiple keywords match, the last
+    one wins.
+
+    Args:
+        string_list: An iterable (e.g., list, dict_keys) of strings to search.
+
+    Returns:
+        A dict ``{item: color_name}`` for items that contain a color keyword.
+    """
+    STANDARD_COLORS = {
+        "red", "green", "blue", "yellow", "orange", "purple", "pink",
+        "black", "white", "brown", "gray", "grey", "cyan", "magenta", "violet",
+    }
+    found_colors: Dict[str, str] = {}
+    for item in string_list:
+        item_lower = item.lower()
+        for color in STANDARD_COLORS:
+            if color in item_lower:
+                found_colors[item] = color
+    return found_colors
+
 
 class PointCloudData:
     """
@@ -331,31 +359,58 @@ class Trajectory(SceneObject):
 class SceneViewer(QMainWindow):
     """
     The main viewer window.
+
+    Layout (matches NeuralKinectViewer._build_ui):
+
+        QVBoxLayout (outer)
+        ├── top_widget   (QHBoxLayout, stretch=4)
+        │   ├── plotter_widget (stretch=4)
+        │   │   └── QtInteractor
+        │   └── QScrollArea (fixed 220 px, stretch=1)
+        │       └── _right_panel (QVBoxLayout: object groupboxes)
+        ├── frame_controls_widget  (returned by _setup_frame_controls)
+        └── time_series_panel      (optional, added via set_time_series_panel)
     """
     def __init__(self, parent=None):
         super().__init__(parent)
         self.scene_objects: Dict[str, SceneObject] = {}
         self.current_index = 0
-        
+        self.time_series_panel: Optional[QWidget] = None
+
         self.setWindowTitle("3D Scene Navigator")
         self.setGeometry(100, 100, 1200, 800)
-        
+
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
-        
-        main_layout = QHBoxLayout(central_widget)
 
-        plotter_container = QWidget()
-        plotter_layout = QVBoxLayout(plotter_container)
+        # --- Outer vertical layout ---
+        self._outer_layout = QVBoxLayout(central_widget)
+
+        # --- Top row: plotter + scrollable right panel ---
+        top_widget = QWidget()
+        top_layout = QHBoxLayout(top_widget)
+
+        plotter_widget = QWidget()
+        plotter_layout = QVBoxLayout(plotter_widget)
         self.plotter = QtInteractor(self)
         self.plotter.set_background('midnightblue')
         plotter_layout.addWidget(self.plotter.interactor)
-        self._setup_frame_controls(plotter_layout)
-        
-        self.object_controls_layout = self._setup_object_controls_panel()
-        
-        main_layout.addWidget(plotter_container, 4)
-        main_layout.addLayout(self.object_controls_layout, 1)
+        top_layout.addWidget(plotter_widget, stretch=4)
+
+        # Right panel (scrollable, fixed 220 px)
+        self._right_panel = QWidget()
+        self._right_panel_layout = QVBoxLayout(self._right_panel)
+        self._right_panel_layout.addStretch()
+        scroll = QScrollArea()
+        scroll.setWidget(self._right_panel)
+        scroll.setWidgetResizable(True)
+        scroll.setFixedWidth(220)
+        top_layout.addWidget(scroll, stretch=1)
+
+        self._outer_layout.addWidget(top_widget, stretch=4)
+
+        # --- Middle row: frame controls ---
+        self._outer_layout.addWidget(self._setup_frame_controls())
 
         self._update_plot()
 
@@ -398,7 +453,8 @@ class SceneViewer(QMainWindow):
         if custom_controls:
             object_groupbox_layout.addWidget(custom_controls)
 
-        self.object_controls_layout.insertWidget(self.object_controls_layout.count() - 1, object_groupbox)
+        # Insert before the trailing stretch item
+        self._right_panel_layout.insertWidget(self._right_panel_layout.count() - 1, object_groupbox)
         
         self._update_slider_range()
         self._update_plot()
@@ -417,37 +473,54 @@ class SceneViewer(QMainWindow):
             self.scene_objects[name].color_override_active = is_active
             self._update_plot()
 
-    def _setup_object_controls_panel(self) -> QVBoxLayout:
-        controls_layout = QVBoxLayout()
-        controls_layout.addStretch()
-        return controls_layout
-        
+    def set_time_series_panel(self, panel: QWidget) -> None:
+        """
+        Attach an optional time series panel below the frame controls.
+
+        The panel must expose an ``update_cursor(frame_idx: int)`` method so
+        that the frame slider can keep the cursor synchronised.  Calling this
+        method more than once replaces the previously attached panel.
+
+        Args:
+            panel: A ``QWidget`` (typically a ``TimeSeriesPanel``) to append
+                to the outer vertical layout.
+        """
+        if self.time_series_panel is not None:
+            # Remove the old panel from the layout and schedule it for deletion
+            self._outer_layout.removeWidget(self.time_series_panel)
+            self.time_series_panel.setParent(None)
+
+        self.time_series_panel = panel
+        self._outer_layout.addWidget(panel)
+
     def _update_slider_range(self):
         max_frames = self.num_frames
         self.slider.setMaximum(max_frames - 1 if max_frames > 0 else 0)
         self._update_label()
 
-    def _setup_frame_controls(self, parent_layout: QVBoxLayout):
-        frame_controls_layout = QHBoxLayout()
+    def _setup_frame_controls(self) -> QWidget:
+        """Build and return the frame-controls row widget."""
+        row = QWidget()
+        frame_controls_layout = QHBoxLayout(row)
         self.recenter_button = QPushButton("Recenter View")
         self.recenter_button.clicked.connect(self._recenter_view)
-        
+
         self.slider = QSlider(Qt.Horizontal)
         self.slider.setMinimum(0)
         self.slider.setMaximum(0)
         self.slider.setValue(self.current_index)
         self.slider.valueChanged.connect(self._on_slider_change)
-        
+
         self.label = QLabel()
         self.label.setFixedWidth(150)
-        
+
         frame_controls_layout.addWidget(QLabel("Frame:"))
         frame_controls_layout.addWidget(self.slider)
         frame_controls_layout.addWidget(self.label)
         frame_controls_layout.addWidget(self.recenter_button)
-        parent_layout.addLayout(frame_controls_layout)
-        
+
         self._update_label()
+        return row
 
     def _recenter_view(self):
         if not self.scene_objects:
@@ -476,6 +549,8 @@ class SceneViewer(QMainWindow):
         self.current_index = value
         self._update_plot()
         self._update_label()
+        if self.time_series_panel is not None:
+            self.time_series_panel.update_cursor(value)
 
     def _update_label(self):
         total_frames = self.num_frames
