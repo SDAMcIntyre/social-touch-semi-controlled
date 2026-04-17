@@ -74,11 +74,12 @@ class TestBuildEllipseMask:
         assert mask[50, 50]
 
     def test_pixel_count_approximates_ellipse_area(self):
-        # Circle of radius 10 → area = π*10² ≈ 314.
+        # axes_major/axes_minor are full diameters (cv2.fitEllipse convention),
+        # so diameter=20 → radius=10 → area = π*10² ≈ 314.
         # cv2 rasterisation includes boundary pixels, so allow ±20%.
         mask = EllipseDepthExtractor._build_ellipse_mask(
             shape=(200, 200), center_x=100, center_y=100,
-            axes_major=10, axes_minor=10, angle=0,
+            axes_major=20, axes_minor=20, angle=0,
         )
         expected = math.pi * 10 * 10
         assert expected * 0.8 < mask.sum() < expected * 1.2
@@ -134,50 +135,119 @@ class TestSampleDepthWithinMask:
 
 
 # ---------------------------------------------------------------------------
+# _weighted_median
+# ---------------------------------------------------------------------------
+
+class TestWeightedMedian:
+
+    def test_heavy_weight_on_last_value_selects_it(self):
+        # values=[1,2,3], weights=[1,1,100] → weighted median = 3
+        vals = np.array([1.0, 2.0, 3.0])
+        w = np.array([1.0, 1.0, 100.0])
+        assert EllipseDepthExtractor._weighted_median(vals, w) == pytest.approx(3.0)
+
+    def test_uniform_weights_equal_plain_median_odd(self):
+        vals = np.array([1.0, 3.0, 2.0])
+        w = np.ones(3)
+        result = EllipseDepthExtractor._weighted_median(vals, w)
+        assert result == pytest.approx(float(np.median(vals)))
+
+    def test_uniform_weights_equal_plain_median_even(self):
+        # For even-length arrays, weighted median picks the lower middle.
+        vals = np.array([1.0, 2.0, 3.0, 4.0])
+        w = np.ones(4)
+        result = EllipseDepthExtractor._weighted_median(vals, w)
+        # cumsum=[1,2,3,4], midpoint=2.0, first val where cumsum >= 2 is index 1 → 2.0
+        assert result == pytest.approx(2.0)
+
+    def test_single_element(self):
+        vals = np.array([42.0])
+        w = np.array([1.0])
+        assert EllipseDepthExtractor._weighted_median(vals, w) == pytest.approx(42.0)
+
+    def test_heavy_weight_on_first_value_selects_it(self):
+        vals = np.array([1.0, 2.0, 3.0])
+        w = np.array([100.0, 1.0, 1.0])
+        assert EllipseDepthExtractor._weighted_median(vals, w) == pytest.approx(1.0)
+
+
+# ---------------------------------------------------------------------------
 # _aggregate_depth
 # ---------------------------------------------------------------------------
 
 class TestAggregateDepth:
 
-    def test_homogeneous_returns_median_z(self):
-        zs = np.array([698.0, 699.0, 700.0, 701.0, 702.0])
-        xs = np.arange(5, dtype=float)
-        ys = np.ones(5)
-        _, _, z, _, _ = EllipseDepthExtractor._aggregate_depth(xs, ys, zs, 10.0)
-        assert z == pytest.approx(np.median(zs))
-
-    def test_homogeneous_z_std_is_correct(self):
+    def test_uniform_z_returns_uniform_weighted_median(self):
+        # Degenerate case: all z equal → uniform weights → z_mm equals single value.
         zs = np.array([700.0, 700.0, 700.0])
         xs = np.ones(3)
         ys = np.ones(3)
-        _, _, _, z_std, _ = EllipseDepthExtractor._aggregate_depth(xs, ys, zs, 10.0)
+        _, _, z, _, _, _ = EllipseDepthExtractor._aggregate_depth(xs, ys, zs, 10.0, 0.3)
+        assert z == pytest.approx(700.0)
+
+    def test_z_std_is_computed_over_all_input_pixels(self):
+        zs = np.array([700.0, 700.0, 700.0])
+        xs = np.ones(3)
+        ys = np.ones(3)
+        _, _, _, z_std, _, _ = EllipseDepthExtractor._aggregate_depth(xs, ys, zs, 10.0, 0.3)
         assert z_std == pytest.approx(0.0, abs=1e-6)
 
-    def test_homogeneous_pixel_count_is_correct(self):
+    def test_pixel_count_is_total_input_count(self):
         zs = np.array([700.0, 701.0, 702.0])
         xs = np.ones(3)
         ys = np.ones(3)
-        _, _, _, _, n = EllipseDepthExtractor._aggregate_depth(xs, ys, zs, 10.0)
+        _, _, _, _, n, _ = EllipseDepthExtractor._aggregate_depth(xs, ys, zs, 10.0, 0.3)
         assert n == 3
 
-    def test_spread_out_returns_shallow_cluster_z(self):
-        # 30 hand pixels at 700 mm, 30 background pixels at 800 mm.
-        # z_std ≈ 50 mm >> threshold 10 mm → shallow-cluster path selected.
-        zs = np.concatenate([np.full(30, 700.0), np.full(30, 800.0)])
-        xs = np.ones(60) * 10.0
-        ys = np.ones(60) * 5.0
-        _, _, z, z_std, n = EllipseDepthExtractor._aggregate_depth(xs, ys, zs, 10.0)
-        assert z == pytest.approx(700.0, abs=2.0)
-        assert n == 60
+    def test_weighted_result_biased_toward_near_camera_on_gradient(self):
+        # Linear z gradient within sticker diameter → no guard fires.
+        # Depth weighting should pull z_mm below the plain median.
+        zs = np.arange(700.0, 709.0)      # 9 points, range = 8 mm < 10 mm
+        xs = np.zeros(9)
+        ys = np.zeros(9)
+        _, _, z, _, _, _ = EllipseDepthExtractor._aggregate_depth(xs, ys, zs, 10.0, 0.3)
+        # Plain median would be 704.0; weighted result must be strictly lower.
+        assert z < np.median(zs)
 
-    def test_spread_out_z_is_less_than_all_sample_median(self):
+    def test_bimodal_z_sticker_guard_clips_to_near_cluster(self):
+        # 30 hand pixels at 700, 30 background at 800; z_range=100 > 10 → guard fires.
         zs = np.concatenate([np.full(30, 700.0), np.full(30, 800.0)])
         xs = np.ones(60) * 10.0
         ys = np.ones(60) * 5.0
-        # Force shallow-cluster path with threshold=10, force median path with threshold=1000.
-        _, _, z_shallow, _, _ = EllipseDepthExtractor._aggregate_depth(xs, ys, zs, 10.0)
-        _, _, z_median, _, _ = EllipseDepthExtractor._aggregate_depth(xs, ys, zs, 1000.0)
-        assert z_shallow < z_median
+        _, _, z, _, n, _ = EllipseDepthExtractor._aggregate_depth(xs, ys, zs, 10.0, 0.3)
+        assert z == pytest.approx(700.0, abs=2.0)
+        assert n == 60  # n_pixels counts all input samples, not just candidates
+
+
+# ---------------------------------------------------------------------------
+# Sticker-size guard
+# ---------------------------------------------------------------------------
+
+class TestStickerSizeGuard:
+
+    def test_guard_fires_when_z_range_exceeds_diameter(self):
+        # z_range = 50 mm > sticker_diameter_mm=10 → z_range_clipped=True
+        zs = np.concatenate([np.full(30, 700.0), np.full(30, 750.0)])
+        xs = np.ones(60)
+        ys = np.ones(60)
+        _, _, _, _, _, clipped = EllipseDepthExtractor._aggregate_depth(xs, ys, zs, 10.0, 0.3)
+        assert clipped is True
+
+    def test_guard_does_not_fire_within_diameter(self):
+        # z_range = 5 mm < sticker_diameter_mm=10 → z_range_clipped=False
+        zs = np.array([700.0, 702.0, 705.0])
+        xs = np.ones(3)
+        ys = np.ones(3)
+        _, _, _, _, _, clipped = EllipseDepthExtractor._aggregate_depth(xs, ys, zs, 10.0, 0.3)
+        assert clipped is False
+
+    def test_guard_result_is_close_to_near_camera_value(self):
+        # After guard clips background, z_mm should be near the near cluster.
+        zs = np.concatenate([np.full(30, 700.0), np.full(30, 750.0)])
+        xs = np.ones(60)
+        ys = np.ones(60)
+        _, _, z, _, _, _ = EllipseDepthExtractor._aggregate_depth(xs, ys, zs, 10.0, 0.3)
+        assert z == pytest.approx(700.0, abs=2.0)
 
 
 # ---------------------------------------------------------------------------
@@ -251,7 +321,7 @@ class TestExtract:
         pc = _make_uniform_point_cloud(100, 100, 700.0)
         row = _make_row()
         _, monitor = extractor.extract(row, pc)
-        assert set(monitor.keys()) == {"px", "py", "z_std", "n_depth_pixels"}
+        assert set(monitor.keys()) == {"px", "py", "z_std", "n_depth_pixels", "z_range_clipped"}
 
 
 # ---------------------------------------------------------------------------
@@ -274,7 +344,7 @@ class TestGetEmptyResult:
     def test_monitor_keys(self):
         extractor = EllipseDepthExtractor()
         _, monitor = extractor.get_empty_result()
-        assert set(monitor.keys()) == {"px", "py", "z_std", "n_depth_pixels"}
+        assert set(monitor.keys()) == {"px", "py", "z_std", "n_depth_pixels", "z_range_clipped"}
 
 
 # ---------------------------------------------------------------------------
