@@ -234,7 +234,7 @@ def map_receptive_fields_clustered_flow(
     force_processing: bool = False,
     feature_combinations: dict = None,
     clustering_profiles: dict = None,
-    pick_camera_angle_force: bool = False,
+    camera_angle_mode: str = "manual",
 ) -> List[Path]:
     """
     Cluster-based RF mapping: spike-count heatmaps per cluster from touch_clustering output.
@@ -242,10 +242,10 @@ def map_receptive_fields_clustered_flow(
     counts spikes per (x,y,z) point, and renders 3D forearm heatmap PNGs.
     Output: ``4_analysed/receptive_field_maps_clustered/<combination>/<clusterer>/``
 
-    After mapping, launches the interactive camera angle picker.  The GUI
-    opens automatically when any session lacks ``camera_params.json``.
-    Set ``pick_camera_angle_force: true`` in the DAG options to force the
-    GUI open even when all sessions already have camera params.
+    After mapping, assigns camera angles per session.  ``camera_angle_mode``
+    controls whether this is done interactively (``"manual"``) or automatically
+    (``"auto"``).  In manual mode, ``force_processing`` also forces the picker
+    open for sessions that already have ``camera_params.json``.
     """
     print(f"[Batch Analysis] Running cluster-based RF mapping for {len(input_items)} item(s)...")
     if not input_items:
@@ -274,7 +274,11 @@ def map_receptive_fields_clustered_flow(
         session_id_from_path(csv_path): csv_path.parent
         for csv_path, _ in input_items
     }
-    pick_rf_camera_angle_batch(session_output_dirs, force_processing=pick_camera_angle_force)
+    pick_rf_camera_angle_batch(
+        session_output_dirs,
+        force_processing=force_processing,
+        camera_angle_mode=camera_angle_mode,
+    )
 
     return result
 
@@ -405,8 +409,13 @@ def run_batch_analysis(
                         kwargs["min_instances_per_sensor"] = options["min_instances_per_sensor"]
                     if "min_sensor_types" in options:
                         kwargs["min_sensor_types"] = options["min_sensor_types"]
-                    if "pick_camera_angle_force" in options:
-                        kwargs["pick_camera_angle_force"] = options["pick_camera_angle_force"]
+                    if "camera_angle_mode" in options:
+                        mode_cfg = options["camera_angle_mode"]
+                        if isinstance(mode_cfg, dict):
+                            auto_enabled = mode_cfg.get("auto", {}).get("enabled", False)
+                            kwargs["camera_angle_mode"] = "auto" if auto_enabled else "manual"
+                        else:
+                            kwargs["camera_angle_mode"] = mode_cfg
                     if "show_interactive" in options:
                         kwargs["show_interactive"] = options["show_interactive"]
                     flow_func(**kwargs)

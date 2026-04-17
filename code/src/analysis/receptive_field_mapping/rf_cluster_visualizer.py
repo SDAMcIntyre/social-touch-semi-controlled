@@ -11,49 +11,13 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from .tangent_plane_alignment import (  # noqa: F401
+    _compute_surface_normal,
+    align_points,
+    compute_tangent_plane_rotation,
+)
+
 logger = logging.getLogger(__name__)
-
-
-def _compute_surface_normal(
-    forearm_vertices: np.ndarray,
-    contact_centroid: np.ndarray,
-    k: int = 50,
-) -> np.ndarray:
-    """Estimate the forearm surface normal at the contact centroid.
-
-    Uses a KD-tree to find k nearest forearm vertices to the centroid, then
-    PCA on those neighbours to extract the smallest eigenvector (surface normal).
-
-    Parameters
-    ----------
-    forearm_vertices:
-        (N, 3) array of forearm point cloud vertices.
-    contact_centroid:
-        (3,) array — centroid of contact points.
-    k:
-        Number of neighbours to use for local PCA.
-
-    Returns
-    -------
-    Unit normal vector (3,), or None if computation fails or is degenerate.
-    """
-    try:
-        from scipy.spatial import KDTree
-
-        tree = KDTree(forearm_vertices)
-        _, idx = tree.query(contact_centroid, k=min(k, len(forearm_vertices)))
-        neighbors = forearm_vertices[idx]
-        centered = neighbors - neighbors.mean(axis=0)
-        _, _, Vt = np.linalg.svd(centered, full_matrices=False)
-        # Smallest singular vector = surface normal direction
-        normal = Vt[-1]
-        norm = np.linalg.norm(normal)
-        if norm < 1e-8:
-            return None
-        return normal / norm
-    except Exception:
-        logger.debug("Surface normal computation failed", exc_info=True)
-        return None
 
 
 def _normal_to_view_angles(normal: np.ndarray) -> tuple:
@@ -133,9 +97,16 @@ def render_forearm_heatmap(
     ax.yaxis.pane.set_edgecolor('black')
     ax.zaxis.pane.set_edgecolor('black')
 
+    # --- Compute contact centroid and tangent-plane rotation early ---
+    xs = spike_counts_df['x'].to_numpy()
+    ys = spike_counts_df['y'].to_numpy()
+    zs = spike_counts_df['z'].to_numpy()
+    contact_centroid = np.array([xs.mean(), ys.mean(), zs.mean()]) if len(xs) > 0 else None
+
     # --- Plot forearm point cloud ---
     forearm_vertices = None
     sc_forearm = None
+    R = None
     if forearm_ply_path is not None and forearm_ply_path.exists():
         try:
             import open3d as o3d
@@ -161,6 +132,15 @@ def render_forearm_heatmap(
                     forearm_sub = forearm_sub[mask]
                     if sub_colors is not None:
                         sub_colors = sub_colors[mask]
+
+                R = (
+                    compute_tangent_plane_rotation(forearm_vertices, contact_centroid)
+                    if contact_centroid is not None
+                    else None
+                )
+                if R is not None:
+                    forearm_sub = align_points(forearm_sub, R)
+
                 if sub_colors is not None:
                     point_colors = sub_colors
                 else:
@@ -178,10 +158,13 @@ def render_forearm_heatmap(
         logger.warning("Forearm PLY not found: %s", forearm_ply_path)
 
     # --- Overlay contact points coloured by spike_count ---
-    xs = spike_counts_df['x'].to_numpy()
-    ys = spike_counts_df['y'].to_numpy()
-    zs = spike_counts_df['z'].to_numpy()
     counts = spike_counts_df['spike_count'].to_numpy()
+
+    if R is not None:
+        spike_pts_rot = align_points(np.stack([xs, ys, zs], axis=1), R)
+        plot_xs, plot_ys, plot_zs = spike_pts_rot[:, 0], spike_pts_rot[:, 1], spike_pts_rot[:, 2]
+    else:
+        plot_xs, plot_ys, plot_zs = xs, ys, zs
 
     vmin = max(1, counts.min())
     vmax = counts.max()
@@ -192,7 +175,7 @@ def render_forearm_heatmap(
         norm = LogNorm(vmin=vmin, vmax=vmax)
 
     sc = ax.scatter(
-        xs, ys, zs,
+        plot_xs, plot_ys, plot_zs,
         c=counts, cmap='RdYlBu_r', s=20, alpha=0.9,
         norm=norm, depthshade=False,
     )
@@ -201,15 +184,16 @@ def render_forearm_heatmap(
     cbar.ax.yaxis.label.set_color('white')
     plt.setp(cbar.ax.yaxis.get_ticklabels(), color='white')
 
-    # --- Camera orientation: normal to contact surface ---
-    elev, azim = 30.0, 45.0  # sensible default
-    if forearm_vertices is not None and len(xs) > 0:
-        contact_centroid = np.array([xs.mean(), ys.mean(), zs.mean()])
-        normal = _compute_surface_normal(forearm_vertices, contact_centroid)
-        if normal is not None:
-            elev, azim = _normal_to_view_angles(normal)
-
-    ax.view_init(elev=elev, azim=azim)
+    # --- Camera orientation ---
+    if R is not None:
+        ax.view_init(elev=90, azim=-90)
+    else:
+        elev, azim = 30.0, 45.0  # sensible default
+        if forearm_vertices is not None and contact_centroid is not None:
+            normal = _compute_surface_normal(forearm_vertices, contact_centroid)
+            if normal is not None:
+                elev, azim = _normal_to_view_angles(normal)
+        ax.view_init(elev=elev, azim=azim)
 
     # --- Labels and title ---
     ax.set_xlabel('X (mm)', color='white')
