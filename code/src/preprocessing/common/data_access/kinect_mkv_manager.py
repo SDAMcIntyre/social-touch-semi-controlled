@@ -9,6 +9,8 @@ import open3d as o3d
 from pyk4a import K4AException, PyK4APlayback, PyK4ACapture
 from pyk4a.config import ImageFormat, FPS, ColorResolution, DepthMode
 
+from .parallax_correction import apply_parallax_shift
+
 # --- Setup & Configuration ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -17,16 +19,25 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 class KinectFrame:
     """
     A container for a single frame's data with lazy-loading capabilities.
+
+    When ``parallax_correction=True`` (default), ``transformed_depth`` and
+    ``transformed_depth_point_cloud`` are shifted by ``(dv=-1, du=+10)`` px
+    with NaN-padded edges to compensate the residual RGB↔depth offset; pass
+    ``parallax_correction=False`` to obtain the raw pyk4a output instead.
+    See: docs/development/knowledge-base/note-azure-kinect-rgb-depth-parallax.md
     """
-    def __init__(self, capture: PyK4ACapture, color_format: ImageFormat):
+    def __init__(self, capture: PyK4ACapture, color_format: ImageFormat, parallax_correction: bool = True):
         self._capture = capture
         self._color_format = color_format
+        self._parallax_correction = parallax_correction
 
         # Private attributes for caching the processed data once loaded
         self._color: np.ndarray | None | bool = False
         self._depth: np.ndarray | None | bool = False
         self._transformed_depth: np.ndarray | None | bool = False
         self._transformed_depth_point_cloud: np.ndarray | None | bool = False
+        self._transformed_depth_corrected: np.ndarray | None | bool = False
+        self._transformed_depth_point_cloud_corrected: np.ndarray | None | bool = False
 
     @property
     def color(self) -> np.ndarray | None:
@@ -56,6 +67,11 @@ class KinectFrame:
         """Depth map transformed to the color camera's geometry. Lazily loaded."""
         if self._transformed_depth is False:
             self._transformed_depth = self._capture.transformed_depth
+        if self._parallax_correction:
+            if self._transformed_depth_corrected is False:
+                raw = self._transformed_depth
+                self._transformed_depth_corrected = apply_parallax_shift(raw) if raw is not None else None
+            return self._transformed_depth_corrected
         return self._transformed_depth
 
     @property
@@ -63,6 +79,11 @@ class KinectFrame:
         """3D point cloud from transformed depth. Lazily loaded."""
         if self._transformed_depth_point_cloud is False:
             self._transformed_depth_point_cloud = self._capture.transformed_depth_point_cloud
+        if self._parallax_correction:
+            if self._transformed_depth_point_cloud_corrected is False:
+                raw = self._transformed_depth_point_cloud
+                self._transformed_depth_point_cloud_corrected = apply_parallax_shift(raw) if raw is not None else None
+            return self._transformed_depth_point_cloud_corrected
         return self._transformed_depth_point_cloud
 
     def generate_o3d_point_cloud(self) -> o3d.geometry.PointCloud | None:
@@ -133,9 +154,10 @@ class _KinectPlayback:
 
 class _KinectReader:
     """[Internal] Handles list-like reading and navigation."""
-    def __init__(self, playback: PyK4APlayback, seek_strategy: Literal['timestamp', 'sequential'] = 'timestamp'):
+    def __init__(self, playback: PyK4APlayback, seek_strategy: Literal['timestamp', 'sequential'] = 'timestamp', parallax_correction: bool = True):
         self._playback = playback
         self._seek_strategy = seek_strategy
+        self._parallax_correction = parallax_correction
         fps_map = {FPS.FPS_5: 5, FPS.FPS_15: 15, FPS.FPS_30: 30}
         self.fps = fps_map.get(self._playback.configuration['camera_fps'], 30)
         self.total_frames = int((self._playback.length / 1_000_000) * self.fps)
@@ -145,7 +167,7 @@ class _KinectReader:
     def _get_frame_from_capture(self, capture: PyK4ACapture) -> KinectFrame | None:
         if capture is None:
             return None
-        return KinectFrame(capture, self._color_format)
+        return KinectFrame(capture, self._color_format, parallax_correction=self._parallax_correction)
 
     def seek(self, frame_index: int):
         """
@@ -244,23 +266,31 @@ class _KinectReader:
 class KinectMKV:
     """
     A unified, high-level interface for interacting with Azure Kinect MKV recordings.
+
+    When ``parallax_correction=True`` (default), frames returned by this class expose
+    parallax-corrected ``transformed_depth`` and ``transformed_depth_point_cloud`` arrays;
+    pass ``parallax_correction=False`` to obtain raw pyk4a output instead.
+    See: docs/development/knowledge-base/note-azure-kinect-rgb-depth-parallax.md
     """
-    def __init__(self, video_path: str | Path, seek_strategy: Literal['timestamp', 'sequential'] = 'timestamp'):
+    def __init__(self, video_path: str | Path, seek_strategy: Literal['timestamp', 'sequential'] = 'timestamp', parallax_correction: bool = True):
         """
         Args:
             video_path: Path to the MKV file.
             seek_strategy: 'timestamp' (fast, default) or 'sequential' (slower, more accurate).
                            Sequential mode resets to start if seeking backwards.
+            parallax_correction: If True (default), applies a (dv=-1, du=+10) px NaN-padded
+                                 median shift to transformed_depth and transformed_depth_point_cloud.
         """
         self._playback_manager = _KinectPlayback(video_path)
         self._playback: PyK4APlayback | None = None
         self._reader: _KinectReader | None = None
         self._seek_strategy = seek_strategy
-        
+        self._parallax_correction = parallax_correction
+
     def __enter__(self) -> 'KinectMKV':
         self._playback = self._playback_manager.open()
         # Initialize reader with the configured strategy
-        self._reader = _KinectReader(self._playback, seek_strategy=self._seek_strategy)
+        self._reader = _KinectReader(self._playback, seek_strategy=self._seek_strategy, parallax_correction=self._parallax_correction)
         logging.info(f"Opened '{self._playback_manager.video_path}'. Frames: ~{len(self)}, FPS: {self._reader.fps}, Mode: {self._seek_strategy}")
         return self
 
