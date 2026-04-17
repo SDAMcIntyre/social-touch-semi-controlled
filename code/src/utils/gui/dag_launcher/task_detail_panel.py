@@ -8,6 +8,7 @@ from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QCursor, QFont
 from PyQt5.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDialog,
     QFrame,
     QGroupBox,
@@ -29,6 +30,16 @@ from utils.gui.dag_launcher.yaml_edit_dialog import YamlEditDialog
 from utils.pipeline.dag_config_model import DagConfigModel
 
 _COMPLEX_FG = QColor("#336699")
+
+# Option keys that should render as a dropdown. Values are (display_label, saved_value) pairs.
+# None as saved_value writes YAML null (~ ), meaning "use the default".
+_OPTION_ENUMS: dict[str, list[tuple[str, object]]] = {
+    "projection_method": [
+        ("3D (default)", None),
+        ("tangent_plane", "tangent_plane"),
+        ("cylindrical_unwrap", "cylindrical_unwrap"),
+    ],
+}
 
 
 def _is_profile_dict(val: Any) -> bool:
@@ -144,7 +155,9 @@ class TaskDetailPanel(QWidget):
             return
 
         for i, (key, val) in enumerate(options.items()):
-            if _is_profile_dict(val):
+            if key in _OPTION_ENUMS:
+                widget = self._make_enum_section(key, val)
+            elif _is_profile_dict(val):
                 widget = self._make_profile_section(key, val)
             elif _is_feature_combinations_dict(val):
                 widget = self._make_combination_section(key, val)
@@ -157,6 +170,30 @@ class TaskDetailPanel(QWidget):
     # ------------------------------------------------------------------
     # Section builders
     # ------------------------------------------------------------------
+
+    def _make_enum_section(self, key: str, val: Any) -> QWidget:
+        """QComboBox for options with a fixed set of allowed values."""
+        box = QGroupBox(_option_header(key))
+        layout = QVBoxLayout(box)
+        layout.setContentsMargins(6, 4, 6, 4)
+
+        entries = _OPTION_ENUMS[key]
+        combo = QComboBox()
+        current_idx = 0
+        for i, (label, saved) in enumerate(entries):
+            combo.addItem(label)
+            if val == saved:
+                current_idx = i
+        combo.setCurrentIndex(current_idx)
+        combo.currentIndexChanged.connect(self._make_enum_handler(key, entries, combo))
+
+        row = QWidget()
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.addWidget(combo)
+        row_layout.addStretch()
+        layout.addWidget(row)
+        return box
 
     def _make_scalar_section(self, key: str, val: Any) -> QWidget:
         """Bool checkbox, string/number line edit, or complex clickable label."""
@@ -330,6 +367,15 @@ class TaskDetailPanel(QWidget):
     # ------------------------------------------------------------------
     # Handler factories
     # ------------------------------------------------------------------
+
+    def _make_enum_handler(self, key: str, entries: list, combo: QComboBox):
+        def _handler(index: int) -> None:
+            if self._model is None or self._task_name is None:
+                return
+            _, saved_val = entries[index]
+            self._model.set_task_option(self._task_name, key, saved_val)
+            self.task_changed.emit()
+        return _handler
 
     def _make_mode_toggle_handler(self, key: str, cb: QCheckBox):
         def _handler(_state: int) -> None:

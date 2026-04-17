@@ -79,6 +79,7 @@ def map_receptive_fields_simple_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
     show_interactive: bool = False,
+    projection_method: str = None,
 ) -> List[Path]:
     """
     Simple RF mapping: raw spike-position CSV + forearm heatmap per session.
@@ -94,6 +95,7 @@ def map_receptive_fields_simple_flow(
         output_dir=output_dir,
         force=force_processing,
         show_interactive=show_interactive,
+        projection_method=projection_method,
     )
 
 
@@ -235,6 +237,7 @@ def map_receptive_fields_clustered_flow(
     feature_combinations: dict = None,
     clustering_profiles: dict = None,
     camera_angle_mode: str = "manual",
+    projection_method: str = None,
 ) -> List[Path]:
     """
     Cluster-based RF mapping: spike-count heatmaps per cluster from touch_clustering output.
@@ -265,6 +268,7 @@ def map_receptive_fields_clustered_flow(
         feature_combinations=combinations,
         clustering_profiles=clusterers,
         force=force_processing,
+        projection_method=projection_method,
     )
 
     from analysis.receptive_field_mapping.rf_camera_angle_task import pick_rf_camera_angle_batch
@@ -418,6 +422,8 @@ def run_batch_analysis(
                             kwargs["camera_angle_mode"] = mode_cfg
                     if "show_interactive" in options:
                         kwargs["show_interactive"] = options["show_interactive"]
+                    if options.get("projection_method"):
+                        kwargs["projection_method"] = options["projection_method"]
                     flow_func(**kwargs)
                 except Exception as e:
                     executor.error_msg = f"Batch analysis failed: {str(e)}"

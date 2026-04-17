@@ -37,12 +37,13 @@ def _compute_rf_center(
     block_csvs: List[Path],
     config: SelectivityDBSCANConfig,
 ) -> Tuple[Optional[np.ndarray], dict]:
-    """Estimate the RF center from block CSVs via selectivity-weighted DBSCAN.
+    """Estimate the RF center from block CSVs via DBSCAN + top spike-count filter.
 
     Reads all block CSVs, accumulates spike and total contact-point counts
     per unique 3D position, computes per-point selectivity (spike/total),
     and clusters the high-selectivity points with DBSCAN.  The RF center is
-    the selectivity-weighted centroid of the dominant (largest) cluster.
+    the spike-count-weighted centroid of the top 10% highest spike-count
+    points within the dominant (largest) cluster.
 
     Args:
         block_csvs: Block-level CSVs from ``blocks_contact_projected/``.
@@ -114,10 +115,25 @@ def _compute_rf_center(
             "points_above_threshold": rf_result.points_above_threshold,
         }
 
+    TOP_FRACTION = 0.1
+
     dominant = max(rf_result.clusters, key=lambda c: c.point_count)
-    rf_center = np.average(
-        dominant.points, weights=dominant.selectivity_scores, axis=0
-    )
+
+    spike_counts_arr = np.array([
+        gsd.spike_counts.get(tuple(pt), 0)
+        for pt in dominant.points
+    ])
+
+    n_top = max(1, int(np.ceil(len(spike_counts_arr) * TOP_FRACTION)))
+    top_indices = np.argsort(spike_counts_arr)[-n_top:]
+
+    top_points = dominant.points[top_indices]
+    top_weights = spike_counts_arr[top_indices]
+
+    if top_weights.sum() > 0:
+        rf_center = np.average(top_points, weights=top_weights, axis=0)
+    else:
+        rf_center = np.mean(top_points, axis=0)
 
     return rf_center.astype(np.float64), {
         "status": "ok",
@@ -125,6 +141,8 @@ def _compute_rf_center(
         "dominant_cluster_id": int(dominant.cluster_id),
         "dominant_cluster_point_count": int(dominant.point_count),
         "dominant_cluster_mean_selectivity": float(dominant.mean_selectivity),
+        "rf_center_top_fraction": TOP_FRACTION,
+        "rf_center_top_n_points": int(n_top),
         "n_clusters_found": len(rf_result.clusters),
         "total_points_evaluated": rf_result.total_points_evaluated,
         "points_above_threshold": rf_result.points_above_threshold,

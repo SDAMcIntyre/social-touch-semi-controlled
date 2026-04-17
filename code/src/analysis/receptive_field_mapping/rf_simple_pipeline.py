@@ -114,6 +114,7 @@ def run_simple_rf_mapping(
     output_dir: Path,
     force: bool = False,
     show_interactive: bool = False,
+    projection_method: Optional[str] = None,
 ) -> List[Path]:
     """Extract raw spike-associated contact positions and render forearm heatmaps.
 
@@ -206,7 +207,8 @@ def run_simple_rf_mapping(
         # --- Render heatmap PNG ---
         if raw_points:
             spike_counts_df = _aggregate_spike_counts(positions_df, forearm_ply, session_id)
-            png_path = session_out / f'{session_id}_rf_simple.png'
+            suffix = f'_{projection_method}' if projection_method else ''
+            png_path = session_out / f'{session_id}_rf_simple{suffix}.png'
             try:
                 render_forearm_heatmap(
                     forearm_ply_path=forearm_ply,
@@ -215,6 +217,7 @@ def run_simple_rf_mapping(
                     session_id=session_id,
                     cluster_label='simple',
                     interactive=show_interactive,
+                    projection_method=projection_method,
                 )
                 print(f"[RF Simple] {session_id}: heatmap saved -> {png_path.name}")
             except Exception:
