@@ -15,6 +15,7 @@ from .data_access.video_mp4_manager import VideoMP4Manager, ColorFormat
 from .gui.frame_roi_square import FrameROISquare
 from .gui.frame_roi_rotatable import FrameROIRotatable
 from .gui.scene_viewer import (
+    define_custom_colors,
     LazyPointCloudSequence,
     PersistentOpen3DPointCloudSequence,
     PersistentPointCloudSequence,
@@ -25,6 +26,7 @@ from .gui.scene_viewer import (
     SceneViewer
 )
 from .gui.scene_viewer_video_maker import SceneViewerVideoMaker
+from .gui.time_series_panel import LineSpec, SubplotSpec, TimeSeriesPanel
 
 from .gui.video_frame_selector import VideoFrameSelector
 from .gui.video_frames_selector import VideoFramesSelector
@@ -55,4 +57,12 @@ __all__ = [
     "PointCloudSequence",
     "Open3DTriangleMeshSequence",
     "Trajectory",
+
+    # Utilities
+    "define_custom_colors",
+
+    # Time Series Panel
+    "LineSpec",
+    "SubplotSpec",
+    "TimeSeriesPanel",
 ]
