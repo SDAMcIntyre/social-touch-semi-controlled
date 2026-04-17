@@ -104,9 +104,14 @@ class RegistrationWorkbench:
         clouds: Mapping ``{snapshot_key: point_cloud}`` of forearm snapshots.
     """
 
-    def __init__(self, clouds: Dict[str, o3d.geometry.PointCloud]) -> None:
+    def __init__(
+        self,
+        clouds: Dict[str, o3d.geometry.PointCloud],
+        existing_state: Optional[dict] = None,
+    ) -> None:
         self._clouds       = clouds
         self._snapshot_keys = sorted(clouds.keys())
+        self._existing_state: Optional[dict] = existing_state
 
         # Set after processing
         self._transforms:    Optional[Dict[str, Tuple[np.ndarray, float]]] = None
@@ -126,12 +131,14 @@ class RegistrationWorkbench:
         # Suppress snapshot callback during dropdown repopulation
         self._rebuilding_snapshot: bool = False
 
-        # Accept state and cached parameters (widgets may be invalid after close)
+        # Accept state and cached parameters (widgets may be invalid after close).
+        # Seed from existing_state when provided so that _build_gui can read them.
+        _es = existing_state or {}
         self._accepted:      bool  = False
-        self._last_mode:     str   = "average"
-        self._last_method:   str   = "global"
-        self._last_max_dist: float = 2.00
-        self._last_max_iter: int   = 500
+        self._last_mode:     str   = _es.get("mode", "average")
+        self._last_method:   str   = _es.get("parameters", {}).get("registration_method", "global")
+        self._last_max_dist: float = _es.get("parameters", {}).get("max_correspondence_distance", 2.00)
+        self._last_max_iter: int   = _es.get("parameters", {}).get("icp_max_iteration", 500)
 
         # GUI handles (all set by _build_gui)
         self._win:                  Optional[gui.Window]      = None
@@ -180,7 +187,8 @@ class RegistrationWorkbench:
         self._combo_mode = gui.Combobox()
         for m in _UNIFICATION_MODES:
             self._combo_mode.add_item(m)
-        self._combo_mode.selected_index = _UNIFICATION_MODES.index("average")
+        _mode_idx = _UNIFICATION_MODES.index(self._last_mode) if self._last_mode in _UNIFICATION_MODES else _UNIFICATION_MODES.index("average")
+        self._combo_mode.selected_index = _mode_idx
         self._combo_mode.set_on_selection_changed(self._on_mode_changed)
         row.add_child(self._combo_mode)
 
@@ -190,27 +198,32 @@ class RegistrationWorkbench:
         self._combo_canonical = gui.Combobox()
         for k in self._snapshot_keys:
             self._combo_canonical.add_item(k)
-        self._combo_canonical.selected_index = 0
+        _existing_canonical = (self._existing_state or {}).get("canonical_key")
+        if _existing_canonical is not None and _existing_canonical in self._snapshot_keys:
+            self._combo_canonical.selected_index = self._snapshot_keys.index(_existing_canonical)
+        else:
+            self._combo_canonical.selected_index = 0
         row.add_child(self._combo_canonical)
         row.add_fixed(int(em * 1.5))
         row.add_child(gui.Label("Method:"))
         self._combo_method = gui.Combobox()
         for meth in _REGISTRATION_METHODS:
             self._combo_method.add_item(meth)
-        self._combo_method.selected_index = len(_REGISTRATION_METHODS) - 1
+        _method_idx = _REGISTRATION_METHODS.index(self._last_method) if self._last_method in _REGISTRATION_METHODS else len(_REGISTRATION_METHODS) - 1
+        self._combo_method.selected_index = _method_idx
         row.add_child(self._combo_method)
 
         row.add_fixed(int(em * 1.5))
         row.add_child(gui.Label("Max dist (m):"))
         self._edit_max_dist = gui.NumberEdit(gui.NumberEdit.DOUBLE)
-        self._edit_max_dist.double_value = 1.00
+        self._edit_max_dist.double_value = self._last_max_dist
         self._edit_max_dist.set_limits(0.001, 5.000)
         row.add_child(self._edit_max_dist)
 
         row.add_fixed(em)
         row.add_child(gui.Label("Max iter:"))
         self._edit_max_iter = gui.NumberEdit(gui.NumberEdit.INT)
-        self._edit_max_iter.int_value = 200
+        self._edit_max_iter.int_value = self._last_max_iter
         self._edit_max_iter.set_limits(10, 2000)
         row.add_child(self._edit_max_iter)
 

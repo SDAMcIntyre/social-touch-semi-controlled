@@ -4,20 +4,28 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from .pipeline_dependency_error import PipelineDependencyError
 
-# Keep references to non-modal popups so they are not garbage-collected.
-_active_popups: list = []
-
 
 def show_dependency_error_popup(error: "PipelineDependencyError") -> None:
-    """Show a non-blocking QMessageBox informing the user of a cross-pipeline dependency failure.
+    """Show a modal QMessageBox informing the user of a cross-pipeline dependency failure.
 
-    The popup stays visible until the user dismisses it, but does **not** block
-    execution — the pipeline continues to the next session immediately.
+    Blocks the calling thread until the user dismisses the dialog; the
+    pipeline then continues to the next session. Must be called from the
+    main thread — Qt GUI operations are not thread-safe. If invoked from
+    a worker thread (e.g. under Prefect parallel execution) the popup is
+    skipped and the error is logged instead.
     """
     try:
         import sys
+        import threading
         from PyQt5.QtWidgets import QApplication, QMessageBox
         from PyQt5.QtCore import Qt
+
+        if threading.current_thread() is not threading.main_thread():
+            print(
+                f"[dependency_popup] Skipping modal popup (called from worker thread): "
+                f"session={error.session_name!r} required_pipeline={error.required_pipeline!r} msg={error}"
+            )
+            return
 
         app = QApplication.instance() or QApplication(sys.argv)
 
@@ -34,12 +42,6 @@ def show_dependency_error_popup(error: "PipelineDependencyError") -> None:
         )
         msg.setWindowFlags(msg.windowFlags() | Qt.WindowStaysOnTopHint)
 
-        # Remove from the reference list when the user closes the popup.
-        msg.finished.connect(lambda: _active_popups.remove(msg))
-        _active_popups.append(msg)
-
-        msg.show()
-        msg.raise_()
-        msg.activateWindow()
+        msg.exec_()
     except Exception as popup_exc:
         print(f"[dependency_popup] Could not show popup: {popup_exc}")

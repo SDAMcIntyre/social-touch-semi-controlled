@@ -19,6 +19,7 @@ class PointCloudController:
         self.output_path = "output.ply"  # Default save paths
         self.metadata_path = "output_metadata.json"
         self._running = True
+        self.saved: bool = False
 
     def set_visualizer(self, visualizer: PointCloudVisualizer):
         """Connects the controller to the visualizer."""
@@ -55,6 +56,7 @@ class PointCloudController:
         try:
             # 1. --- SAVE THE STATE FROM THE MODEL ---
             self.model.save(self.output_path, self.metadata_path)
+            self.saved = True
         except Exception as e:
             # Log any errors that occur during the save process
             print(f"❌ Error during save operation: {e}")

@@ -49,17 +49,15 @@ def correct_xyz_stickers_motion(
         force_processing: If ``False``, skip if ``output_csv_path`` already
                           exists.
     """
-    if mode == "correct":
-        output_paths = [output_csv_path]
-    else:
-        output_paths = []
+    output_paths = [output_csv_path] if mode == "correct" else []
 
-    if not force_processing and mode == "correct" and output_csv_path.exists():
-        print(
-            f"✅ Corrected CSV already exists: {output_csv_path}. "
-            "Use force_processing=True to overwrite."
-        )
+    if not should_process_task(
+        input_paths=[input_csv_path],
+        output_paths=output_paths,
+        force=force_processing,
+    ):
         return
+
     if mode == "correct":
         clean_task_outputs(output_csv_path)
     print(f"Starting XYZ motion correction (mode='{mode}')...")
