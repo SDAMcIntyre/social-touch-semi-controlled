@@ -58,6 +58,10 @@ class ForearmFrameParametersFileHandler:
                     top_left_corner=Point(**roi_data["top_left_corner"]),
                     bottom_right_corner=Point(**roi_data["bottom_right_corner"]),
                     angle_deg=roi_data.get("angle_deg", 0.0),
+                    center_x=roi_data.get("center_x"),
+                    center_y=roi_data.get("center_y"),
+                    width=roi_data.get("width"),
+                    height=roi_data.get("height"),
                 )
 
                 # Remove the processed ROI dict to unpack the rest of the keys
