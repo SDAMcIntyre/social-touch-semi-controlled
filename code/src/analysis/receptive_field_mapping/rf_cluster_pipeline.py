@@ -10,7 +10,7 @@ import json
 import logging
 from collections import Counter
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 
@@ -211,6 +211,7 @@ def run_cluster_rf_mapping(
     feature_combinations: dict,
     clustering_profiles: dict,
     force: bool = False,
+    projection_method: Optional[str] = None,
 ) -> List[Path]:
     """Orchestrate cluster-based receptive field mapping.
 
@@ -351,13 +352,14 @@ def run_cluster_rf_mapping(
                         f" {len(pooled_df)} unique contact points."
                     )
 
-                # Render per-session 3D forearm heatmaps
+                # Render per-session forearm heatmaps
                 for session_id, spike_df in session_spike_dfs.items():
                     if spike_df.empty:
                         continue
                     session_dir = session_dir_map[session_id]
                     forearm_ply = resolve_forearm_ply(session_dir, session_id)
-                    png_path = cluster_out / f'{session_id}_rf_heatmap.png'
+                    suffix = f'_{projection_method}' if projection_method else ''
+                    png_path = cluster_out / f'{session_id}_rf_heatmap{suffix}.png'
                     print(f"    Rendering heatmap: {session_id}...")
                     try:
                         render_forearm_heatmap(
@@ -366,6 +368,7 @@ def run_cluster_rf_mapping(
                             output_path=png_path,
                             session_id=session_id,
                             cluster_label=cluster_label,
+                            projection_method=projection_method,
                         )
                     except Exception:
                         logger.exception(

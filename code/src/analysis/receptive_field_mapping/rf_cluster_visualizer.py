@@ -11,6 +11,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from .rf_2d_renderer import render_2d_heatmap
+from .rf_projection import project_to_2d
 from .rf_surface_utils import load_or_build_forearm_mesh, map_scalars_to_mesh
 from .tangent_plane_alignment import (  # noqa: F401
     _compute_surface_normal,
@@ -47,6 +49,7 @@ def render_forearm_heatmap(
     session_id: str,
     cluster_label: str,
     interactive: bool = False,
+    projection_method: str = None,
 ) -> None:
     """Render a 3D forearm heatmap of spike-count contact points and save as PNG.
 
@@ -73,20 +76,63 @@ def render_forearm_heatmap(
         If True, display an interactive 3D window (blocking) in addition to
         saving the PNG. Skips the Agg backend so the window is navigable.
         If False (default), uses the Agg backend for offscreen PNG-only rendering.
+    projection_method:
+        If set, projects spike points to 2D using the named method and renders
+        a 2D scatter + heatmap figure instead of the 3D plot. The output filename
+        should include the method name (caller's responsibility via output_path).
+        Pass None (default) for the original 3D rendering path.
     """
-    import matplotlib
-    if not interactive:
-        matplotlib.use('Agg')  # Non-interactive backend for offscreen rendering
-    import matplotlib.pyplot as plt
-    from matplotlib.colors import LogNorm
-    from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 — registers 3d projection
-
     if spike_counts_df.empty:
         logger.warning(
             "Empty spike_counts_df for session %s, cluster %s — skipping render.",
             session_id, cluster_label,
         )
         return
+
+    # --- 2D projection path (early return) ---
+    if projection_method is not None:
+        spike_xyz = spike_counts_df[['x', 'y', 'z']].to_numpy()
+        counts = spike_counts_df['spike_count'].to_numpy()
+        contact_centroid = spike_xyz.mean(axis=0) if len(spike_xyz) > 0 else None
+
+        forearm_vertices = None
+        if forearm_ply_path is not None and forearm_ply_path.exists():
+            try:
+                import open3d as o3d
+                pcd = o3d.io.read_point_cloud(str(forearm_ply_path))
+                pts = np.asarray(pcd.points)
+                if pts.size > 0:
+                    forearm_vertices = pts
+            except Exception:
+                logger.warning("Could not load forearm PLY for 2D projection: %s", forearm_ply_path, exc_info=True)
+
+        uv_points = project_to_2d(spike_xyz, forearm_vertices, contact_centroid, method=projection_method)
+
+        forearm_uv = None
+        if forearm_vertices is not None:
+            try:
+                forearm_uv = project_to_2d(forearm_vertices, forearm_vertices, contact_centroid, method=projection_method)
+            except Exception:
+                logger.debug("Could not project forearm vertices to 2D for background.", exc_info=True)
+
+        render_2d_heatmap(
+            uv_points=uv_points,
+            counts=counts,
+            output_path=output_path,
+            session_id=session_id,
+            cluster_label=cluster_label,
+            projection_method=projection_method,
+            forearm_uv=forearm_uv,
+            interactive=interactive,
+        )
+        return
+
+    import matplotlib
+    if not interactive:
+        matplotlib.use('Agg')  # Non-interactive backend for offscreen rendering
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import LogNorm
+    from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 — registers 3d projection
 
     fig = plt.figure(figsize=(10, 8), facecolor='black')
     ax = fig.add_subplot(111, projection='3d')
