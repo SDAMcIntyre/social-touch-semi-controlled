@@ -2,7 +2,8 @@
 
 **Date:** 2026-04-14
 **Author:** Basil Duvernoy
-**Status:** In Progress
+**Status:** Completed
+**Completed:** 2026-04-17 15:34
 **Branch:** `feature/depth-weighted-xyz-aggregation` (reuse active branch) or `feature/depth-aggregation-diagnostics-viewer`
 
 ---
