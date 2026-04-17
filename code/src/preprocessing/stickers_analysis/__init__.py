@@ -55,6 +55,8 @@ from .xyz.motion_correction import (
 
 from .common.models.tracked_data_interface import TrackedDataInterface
 
+from .xyz.gui.depth_aggregation_diagnostics_gui import DepthAggregationDiagnosticsGUI
+
 # Define what gets imported with 'from stickers_analysis import *'
 __all__ = [
     "ROIAnnotationFileHandler",

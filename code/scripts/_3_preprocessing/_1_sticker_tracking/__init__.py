@@ -29,4 +29,5 @@ from .view_xyz_stickers_with_depth_data import view_xyz_stickers_on_depth_data
 from .view_summary_stickers_on_rgb_data import view_summary_stickers_on_rgb_data
 from .view_ellipse_tracking import view_ellipse_tracking
 from .view_ellipse_tracking_adjusted import view_ellipse_tracking_adjusted
+from .view_xyz_depth_aggregation import view_xyz_depth_aggregation
 
