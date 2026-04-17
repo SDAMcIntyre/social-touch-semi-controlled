@@ -24,8 +24,13 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import open3d as o3d
 import pandas as pd
+import trimesh
 
 from analysis.receptive_field_mapping.rf_mapping_engine import RFMappingEngine
+from analysis.receptive_field_mapping.rf_surface_utils import (
+    apply_rotation_to_mesh,
+    load_or_build_forearm_mesh,
+)
 from analysis.receptive_field_mapping.tangent_plane_alignment import (
     _compute_surface_normal,
     align_points,
@@ -48,6 +53,7 @@ class SessionSceneData:
     selectivity_scores: Optional[np.ndarray] = None
     initial_normal: Optional[np.ndarray] = None
     tangent_rotation: Optional[np.ndarray] = None
+    forearm_mesh: Optional[trimesh.Trimesh] = None
     saved_camera_params: Optional[dict] = None
     camera_params_path: Path = field(default_factory=lambda: Path())
 
@@ -140,11 +146,14 @@ def collect_session_scene_data(
         if not forearm_plys:
             logger.warning("[%s] No forearm PLY in %s — skipping.", session_id, forearm_dir)
             continue
-        pcd = o3d.io.read_point_cloud(str(forearm_plys[-1]))
+        forearm_ply = forearm_plys[-1]
+        pcd = o3d.io.read_point_cloud(str(forearm_ply))
         forearm_points = np.asarray(pcd.points)
         if len(forearm_points) == 0:
             logger.warning("[%s] Forearm PLY is empty — skipping.", session_id)
             continue
+
+        forearm_mesh = load_or_build_forearm_mesh(forearm_ply)
 
         # Compute selectivity overlay from RF-centered CSVs
         rf_centered_dir = output_dir / "blocks_rf_centered"
@@ -164,6 +173,8 @@ def collect_session_scene_data(
             forearm_points = align_points(forearm_points, tangent_rotation)
             if contact_points is not None and len(contact_points) > 0:
                 contact_points = align_points(contact_points, tangent_rotation)
+            if forearm_mesh is not None:
+                forearm_mesh = apply_rotation_to_mesh(forearm_mesh, tangent_rotation)
 
         # Load existing camera params if available
         camera_params_path = output_dir / "camera_params.json"
@@ -181,6 +192,7 @@ def collect_session_scene_data(
             selectivity_scores=selectivity_scores,
             initial_normal=initial_normal,
             tangent_rotation=tangent_rotation,
+            forearm_mesh=forearm_mesh,
             saved_camera_params=saved_camera,
             camera_params_path=camera_params_path,
         )
