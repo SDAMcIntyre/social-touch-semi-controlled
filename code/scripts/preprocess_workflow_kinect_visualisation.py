@@ -15,7 +15,8 @@ from _3_preprocessing._1_sticker_tracking import (
     view_ellipse_tracking,
     view_ellipse_tracking_adjusted,
     view_summary_stickers_on_rgb_data,
-    view_xyz_stickers_on_depth_data
+    view_xyz_stickers_on_depth_data,
+    view_xyz_depth_aggregation,
 )
 
 from _3_preprocessing._3_forearm_extraction import (
@@ -97,6 +98,24 @@ def view_xyz_stickers(
         forearm_pointcloud_dir, 
         forearm_metadata_path, 
         rgb_video_path.name
+    )
+    return True
+
+
+def view_xyz_depth_aggregation_flow(
+    source_video: Path,
+    sticker_dir: Path,
+    rgb_video_path: Path,
+) -> bool:
+    """Launch the depth-aggregation diagnostics viewer for one session block."""
+    print(f"[{rgb_video_path.name}] Launching depth-aggregation diagnostics viewer...")
+    xy_csv_path = sticker_dir / (
+        rgb_video_path.stem + "_handstickers_summary_2d_coordinates.csv"
+    )
+    view_xyz_depth_aggregation(
+        xy_csv_path=xy_csv_path,
+        mkv_path=source_video,
+        rgb_video_path=rgb_video_path,
     )
     return True
 
@@ -187,6 +206,15 @@ def run_single_session_visualization(
                 session_id=config.session_id
             )
             dag_handler.mark_completed('view_xyz_stickers')
+
+        if dag_handler.can_run('view_xyz_depth_aggregation'):
+            print(f"[{block_name}] ==> Running task: view_xyz_depth_aggregation")
+            view_xyz_depth_aggregation_flow(
+                source_video=config.source_video,
+                sticker_dir=stickers_dir,
+                rgb_video_path=rgb_video_path,
+            )
+            dag_handler.mark_completed('view_xyz_depth_aggregation')
 
         if dag_handler.can_run('view_somatosensory_assessement'):
             print(f"[{block_name}] ==> Running task: view_somatosensory_assessement")

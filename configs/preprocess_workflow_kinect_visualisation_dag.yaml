@@ -10,8 +10,7 @@
 # ==============================================================================
 
 parameters:
-  kinect_configs: 
-    valid_configs_ST16-05/kinect_config_2022-06-17_ST16-05_semicontrolled_block-order02.yaml
+  kinect_configs: valid_configs_ST13-02
 
 tasks:
   # PHASE 3: VISUALIZATION & VERIFICATION
@@ -33,6 +32,12 @@ tasks:
   view_xyz_stickers:
     enabled: false
     description: "Manually view the XYZ estimation of the stickers on the hand."
+    depends_on: []
+
+  view_xyz_depth_aggregation:
+    enabled: false
+    description: "Interactively inspect the depth-weighted XYZ aggregation pipeline
+      (mask, samples, depth histogram, weights, weighted-vs-plain scatter)."
     depends_on: []
 
   # PHASE 4: COMPLEX ASSESSMENTS
