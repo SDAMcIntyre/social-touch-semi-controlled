@@ -23,16 +23,21 @@ class RFVisualizer:
     def visualize_rf_map(
         rf_result: RFMapResult,
         forearm_pcd: Optional[o3d.geometry.PointCloud] = None,
+        forearm_mesh: Optional["trimesh.Trimesh"] = None,
     ) -> None:
         """Launch a split-screen Open3D viewer for one group's RF clusters.
 
-        Left panel: forearm reference point cloud (empty placeholder if *None*).
+        Left panel: forearm reference geometry — mesh if *forearm_mesh* is
+        provided, point cloud if *forearm_pcd* is provided, or an empty
+        placeholder otherwise.
         Right panel: RF cluster points colored by cluster membership, with
         brightness scaled by selectivity.
 
         Args:
             rf_result: The mapping result for a single group.
-            forearm_pcd: Optional forearm reference geometry for the left panel.
+            forearm_pcd: Optional forearm reference point cloud for the left panel.
+            forearm_mesh: Optional forearm trimesh surface for the left panel.
+                Takes priority over *forearm_pcd* when both are supplied.
         """
         if not rf_result.clusters:
             logger.info(
@@ -42,11 +47,20 @@ class RFVisualizer:
             return
 
         # --- Left panel ---
-        if forearm_pcd is not None:
+        if forearm_mesh is not None:
+            try:
+                o3d_mesh = o3d.geometry.TriangleMesh()
+                o3d_mesh.vertices = o3d.utility.Vector3dVector(forearm_mesh.vertices)
+                o3d_mesh.triangles = o3d.utility.Vector3iVector(forearm_mesh.faces)
+                o3d_mesh.compute_vertex_normals()
+                left_geometry = o3d_mesh
+            except Exception:
+                left_geometry = forearm_pcd if forearm_pcd is not None else o3d.geometry.PointCloud()
+        elif forearm_pcd is not None:
             left_geometry = forearm_pcd
         else:
             left_geometry = o3d.geometry.PointCloud()
-            logger.info("No forearm point cloud provided; left panel will be empty.")
+            logger.info("No forearm geometry provided; left panel will be empty.")
 
         # --- Right panel ---
         rf_pcd = RFVisualizer._build_rf_point_cloud(rf_result)
@@ -65,17 +79,22 @@ class RFVisualizer:
         rf_result: RFMapResult,
         output_dir,
         forearm_pcd: Optional[o3d.geometry.PointCloud] = None,
+        forearm_mesh: Optional["trimesh.Trimesh"] = None,
     ) -> Optional["Path"]:
         """Save a static 2-panel PNG (XY top-down and XZ side-view) for one group.
 
         Renders forearm reference as a subtle grey background when *forearm_pcd*
-        is provided.  Cluster colours and brightness follow the same HSV scheme
-        as the interactive viewer.
+        or *forearm_mesh* is provided.  When *forearm_mesh* is supplied it is
+        preferred and projected via ``ax.triplot``; otherwise *forearm_pcd* is
+        rendered via ``ax.scatter``.  Cluster colours and brightness follow the
+        same HSV scheme as the interactive viewer.
 
         Args:
             rf_result: The mapping result for a single group.
             output_dir: Directory where the PNG will be written.
-            forearm_pcd: Optional forearm reference geometry drawn as background.
+            forearm_pcd: Optional forearm reference point cloud drawn as background.
+            forearm_mesh: Optional forearm trimesh surface drawn as background.
+                Takes priority over *forearm_pcd* when both are supplied.
 
         Returns:
             Path to the saved PNG, or ``None`` if there are no clusters to render.
@@ -117,8 +136,16 @@ class RFVisualizer:
         ]
 
         fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+        ax_xy, ax_xz = axes[0], axes[1]
+
+        if forearm_mesh is not None:
+            verts = forearm_mesh.vertices
+            faces = forearm_mesh.faces
+            ax_xy.triplot(verts[:, 0], verts[:, 1], triangles=faces, color='lightgrey', linewidth=0.3, alpha=0.8)
+            ax_xz.triplot(verts[:, 0], verts[:, 2], triangles=faces, color='lightgrey', linewidth=0.3, alpha=0.8)
+
         for ax, (xi, yi, xlabel, ylabel, title) in zip(axes, projections):
-            if forearm_pcd is not None:
+            if forearm_mesh is None and forearm_pcd is not None:
                 fg_pts = np.asarray(forearm_pcd.points)
                 if len(fg_pts) > 0:
                     ax.scatter(

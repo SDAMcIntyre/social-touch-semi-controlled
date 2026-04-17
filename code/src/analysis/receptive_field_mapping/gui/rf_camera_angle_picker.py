@@ -12,6 +12,7 @@ from typing import Dict, List, Optional
 
 import numpy as np
 import pyvista as pv
+from analysis.receptive_field_mapping.rf_surface_utils import map_scalars_to_mesh, mesh_to_pyvista
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (
@@ -46,6 +47,7 @@ class _ViewerSettings:
     forearm_size: int = 2
     forearm_opacity: float = 1.0
     forearm_spheres: bool = True
+    render_as_surface: bool = True
     contact_cmap: str = "YlOrRd"
     contact_size: int = 6
     contact_opacity: float = 1.0
@@ -153,6 +155,11 @@ class RFCameraAnglePicker(QMainWindow):
         row.addWidget(self._fa_color_btn)
         fa_lay.addLayout(row)
 
+        self._fa_surface_cb = QCheckBox("Render as surface")
+        self._fa_surface_cb.setChecked(s.render_as_surface)
+        self._fa_surface_cb.stateChanged.connect(self._on_surface_toggle)
+        fa_lay.addWidget(self._fa_surface_cb)
+
         self._fa_size_slider = self._slider("Point size:", 1, 20, s.forearm_size, fa_lay)
         self._fa_size_slider.valueChanged.connect(lambda v: self._set_and_rebuild("forearm_size", v))
 
@@ -205,6 +212,8 @@ class RFCameraAnglePicker(QMainWindow):
         disp_lay.addWidget(self._axes_cb)
         self._settings_layout.addWidget(disp_box)
 
+        self._on_surface_toggle(Qt.Checked if s.render_as_surface else Qt.Unchecked)
+
     # ------------------------------------------------------------------
     # Widget helpers
     # ------------------------------------------------------------------
@@ -238,6 +247,12 @@ class RFCameraAnglePicker(QMainWindow):
     # ------------------------------------------------------------------
     # Settings change → rebuild
     # ------------------------------------------------------------------
+    def _on_surface_toggle(self, state) -> None:
+        is_surface = state == Qt.Checked
+        self._fa_size_slider.setEnabled(not is_surface)
+        self._fa_spheres_cb.setEnabled(not is_surface)
+        self._set_and_rebuild("render_as_surface", is_surface)
+
     def _set_and_rebuild(self, attr: str, value) -> None:
         setattr(self._settings, attr, value)
         self._apply_setting_change()
@@ -340,55 +355,93 @@ class RFCameraAnglePicker(QMainWindow):
             bounds_proxy, opacity=0.001, name="_bounds_proxy", pickable=False,
         )
 
-        # Forearm point cloud
-        forearm_cloud = pv.PolyData(data.forearm_points)
-        self.plotter.add_mesh(
-            forearm_cloud,
-            color=s.forearm_color,
-            point_size=s.forearm_size,
-            opacity=s.forearm_opacity,
-            render_points_as_spheres=s.forearm_spheres,
-            name="forearm",
-        )
+        mesh = data.forearm_mesh if s.render_as_surface else None
 
-        # Contact overlay
-        if data.contact_points is not None and len(data.contact_points) > 0:
-            contact_cloud = pv.PolyData(data.contact_points)
+        if mesh is not None:
+            mesh_pv = mesh_to_pyvista(mesh)
             has_scalars = (
-                data.selectivity_scores is not None
+                data.contact_points is not None
+                and len(data.contact_points) > 0
+                and data.selectivity_scores is not None
                 and len(data.selectivity_scores) == len(data.contact_points)
             )
             if has_scalars:
-                contact_cloud["selectivity"] = data.selectivity_scores
+                per_vertex = map_scalars_to_mesh(
+                    mesh, data.contact_points, data.selectivity_scores
+                )
+                mesh_pv["selectivity"] = per_vertex
                 sbar_args = {"title": "Selectivity"} if s.show_scalar_bar else None
                 self.plotter.add_mesh(
-                    contact_cloud,
+                    mesh_pv,
                     scalars="selectivity",
                     cmap=s.contact_cmap,
                     clim=[0, 1],
-                    point_size=s.contact_size,
-                    opacity=s.contact_opacity,
-                    render_points_as_spheres=s.contact_spheres,
+                    nan_color=s.forearm_color,
+                    opacity=s.forearm_opacity,
+                    smooth_shading=True,
                     scalar_bar_args=sbar_args,
                     show_scalar_bar=s.show_scalar_bar,
-                    name="contacts",
+                    name="forearm",
                 )
             else:
                 self.plotter.add_mesh(
-                    contact_cloud,
-                    color="red",
-                    point_size=s.contact_size,
-                    opacity=s.contact_opacity,
-                    render_points_as_spheres=s.contact_spheres,
-                    name="contacts",
+                    mesh_pv,
+                    color=s.forearm_color,
+                    opacity=s.forearm_opacity,
+                    smooth_shading=True,
+                    name="forearm",
                 )
+        else:
+            forearm_cloud = pv.PolyData(data.forearm_points)
+            self.plotter.add_mesh(
+                forearm_cloud,
+                color=s.forearm_color,
+                point_size=s.forearm_size,
+                opacity=s.forearm_opacity,
+                render_points_as_spheres=s.forearm_spheres,
+                name="forearm",
+            )
+
+        if mesh is None:
+            if data.contact_points is not None and len(data.contact_points) > 0:
+                contact_cloud = pv.PolyData(data.contact_points)
+                has_scalars = (
+                    data.selectivity_scores is not None
+                    and len(data.selectivity_scores) == len(data.contact_points)
+                )
+                if has_scalars:
+                    contact_cloud["selectivity"] = data.selectivity_scores
+                    sbar_args = {"title": "Selectivity"} if s.show_scalar_bar else None
+                    self.plotter.add_mesh(
+                        contact_cloud,
+                        scalars="selectivity",
+                        cmap=s.contact_cmap,
+                        clim=[0, 1],
+                        point_size=s.contact_size,
+                        opacity=s.contact_opacity,
+                        render_points_as_spheres=s.contact_spheres,
+                        scalar_bar_args=sbar_args,
+                        show_scalar_bar=s.show_scalar_bar,
+                        name="contacts",
+                    )
+                else:
+                    self.plotter.add_mesh(
+                        contact_cloud,
+                        color="red",
+                        point_size=s.contact_size,
+                        opacity=s.contact_opacity,
+                        render_points_as_spheres=s.contact_spheres,
+                        name="contacts",
+                    )
 
         if s.show_axes:
             self.plotter.add_axes()
 
         # Default camera (only when no camera will be restored externally)
         offset_dist = 400.0
-        if data.initial_normal is not None:
+        if data.tangent_rotation is not None:
+            cam_pos = centroid + np.array([0.0, 0.0, offset_dist])
+        elif data.initial_normal is not None:
             cam_pos = centroid + data.initial_normal * offset_dist
         else:
             cam_pos = centroid + np.array([0.0, 0.0, offset_dist])
