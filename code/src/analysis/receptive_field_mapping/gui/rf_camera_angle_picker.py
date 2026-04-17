@@ -388,7 +388,9 @@ class RFCameraAnglePicker(QMainWindow):
 
         # Default camera (only when no camera will be restored externally)
         offset_dist = 400.0
-        if data.initial_normal is not None:
+        if data.tangent_rotation is not None:
+            cam_pos = centroid + np.array([0.0, 0.0, offset_dist])
+        elif data.initial_normal is not None:
             cam_pos = centroid + data.initial_normal * offset_dist
         else:
             cam_pos = centroid + np.array([0.0, 0.0, offset_dist])
