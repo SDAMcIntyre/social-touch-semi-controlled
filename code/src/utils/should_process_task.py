@@ -12,6 +12,28 @@ def _normalize_to_paths(targets: PathInput) -> List[Path]:
     return [Path(p) for p in targets]
 
 
+def refresh_output_mtimes(output_paths: PathInput) -> None:
+    """Refresh the modification timestamps of existing output files without changing their contents.
+
+    Use this when processing is skipped (e.g. operator closes a GUI without edits) but
+    output mtimes must be brought forward so the staleness check in should_process_task()
+    does not refire on a subsequent non-forced run.
+
+    Args:
+        output_paths: Single path or list of paths (str or Path) to touch.
+                      Missing paths are silently skipped.
+                      Read-only paths are logged and skipped — no exception is raised.
+    """
+    paths = _normalize_to_paths(output_paths)
+    for p in paths:
+        if not p.exists():
+            continue
+        try:
+            p.touch()
+        except PermissionError:
+            print(f"  Could not touch '{p}' (permission denied). Skipping mtime refresh.")
+
+
 def clean_task_outputs(output_paths: PathInput) -> None:
     """Delete output files before processing to prevent stale artifacts.
 

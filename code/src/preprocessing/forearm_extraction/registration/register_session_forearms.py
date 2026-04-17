@@ -5,13 +5,14 @@ ICP to a common reference frame, and persists the unified cloud and
 per-snapshot transforms to disk.
 """
 
+import json
 import logging
 from pathlib import Path
 from typing import Dict, Optional
 
 import open3d as o3d
 
-from utils.should_process_task import should_process_task
+from utils.should_process_task import refresh_output_mtimes, should_process_task
 from preprocessing.common import PointCloudDataHandler
 from preprocessing.forearm_extraction.data_access.forearm_frame_parameters_filehandler import (
     ForearmFrameParametersFileHandler,
@@ -87,6 +88,8 @@ def register_session_forearms(
     unified_ply_path = pointclouds_dir / f"{session_id}_unified_registered.ply"
     transforms_path = pointclouds_dir / f"{session_id}_registration_transforms.json"
 
+    outputs_existed = all(p.exists() for p in [unified_ply_path, transforms_path])
+
     if not should_process_task(
         output_paths=[unified_ply_path, transforms_path],
         input_paths=[metadata_path],
@@ -130,11 +133,30 @@ def register_session_forearms(
 
     if visualize:
         # --- Interactive path: workbench handles mode/canonical/registration ---
-        workbench = RegistrationWorkbench(clouds)
+        existing_state: Optional[dict] = None
+        if transforms_path.exists():
+            try:
+                with transforms_path.open("r", encoding="utf-8") as _f:
+                    _raw = json.load(_f)
+                existing_state = {
+                    "mode":           _raw.get("mode", "average"),
+                    "canonical_key":  _raw.get("canonical_key"),
+                    "parameters": {
+                        "registration_method":        _raw.get("parameters", {}).get("registration_method", "global"),
+                        "max_correspondence_distance": _raw.get("parameters", {}).get("max_correspondence_distance", 2.00),
+                        "icp_max_iteration":           _raw.get("parameters", {}).get("icp_max_iteration", 500),
+                    },
+                }
+            except Exception:
+                logger.warning("Could not read existing transforms JSON — workbench will use defaults.")
+
+        workbench = RegistrationWorkbench(clouds, existing_state=existing_state)
         workbench.show()
 
         if not workbench.accepted:
             logger.info("Registration workbench cancelled — no artifacts written.")
+            if outputs_existed:
+                refresh_output_mtimes([unified_ply_path, transforms_path])
             return None
 
         result = workbench.get_result()

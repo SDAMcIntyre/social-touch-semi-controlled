@@ -125,6 +125,10 @@ class ArmSegmentation:
         self.interactive = interactive
         # Store original colors for clustering visualization
         self._original_colors = None
+        # Set to True if the operator clicked "Process" at least once during an
+        # interactive session; remains False if the window was closed without
+        # applying any changes (so the caller can skip re-saving unchanged outputs).
+        self.was_modified: bool = False
 
     def preprocess(self,
                    pcd: o3d.geometry.PointCloud,
@@ -713,6 +717,17 @@ class ArmSegmentation:
         """
         # --- Non-Interactive (or simple view) Path ---
         if not self.interactive or params_key is None or processing_func is None:
+            # Batch path: if a processing function was provided, run it silently
+            # using the saved params. No window, no blocking. Mirror the
+            # interactive path's cluster-step unpacking so callers get the
+            # selected cluster (not the all-clusters preview).
+            if processing_func is not None and params_key is not None:
+                result = processing_func(pcd_input, self.params[params_key])
+                if is_cluster_step:
+                    _all_clusters, arm_pcd = result
+                    return arm_pcd
+                return result
+            # Display-only call — caller has already gated on `show`.
             if len(pcd_input.points) > 0:
                 o3d.visualization.draw_geometries([pcd_input], window_name=window_name)
             else:
@@ -891,8 +906,18 @@ class ArmSegmentation:
         hsv_label = gui.Label("HSV: —")
         current_panel.add_child(hsv_label)
 
+        # Tracks whether the initial programmatic on_process() call has completed.
+        # Only calls triggered after that (button click, space bar) count as
+        # user edits and should set self.was_modified.
+        _gui_initialized = [False]
+
         def on_process():
             """Callback to update parameters and re-run processing."""
+            # Mark that the operator applied at least one change in this session,
+            # but only for user-triggered calls (not the initial programmatic run).
+            if _gui_initialized[0]:
+                self.was_modified = True
+
             # 1. Update params from widgets
             for key, widget_or_list in widgets.items():
                 if isinstance(widget_or_list, list):
@@ -1074,7 +1099,8 @@ class ArmSegmentation:
 
         w.set_on_layout(on_layout)
 
-        on_process()  # Initial run
+        on_process()  # Initial run — does NOT set was_modified
+        _gui_initialized[0] = True  # Subsequent on_process calls are user-triggered
 
         gui.Application.instance.run()
 

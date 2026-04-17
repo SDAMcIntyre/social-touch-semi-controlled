@@ -9,7 +9,7 @@ import sys
 
 # Assume it exists
 import utils.path_tools as path_tools
-from utils.should_process_task import should_process_task
+from utils.should_process_task import should_process_task, refresh_output_mtimes
 
 def trimesh_to_open3d(src_mesh: trimesh.Trimesh) -> o3d.geometry.TriangleMesh:
     """
@@ -49,11 +49,16 @@ def define_forearm_mesh(source: Union[np.ndarray, str, Path],
     5. Added persistence logic to save the mesh to `output_path`.
     """
     if output_path is not None and isinstance(source, (str, Path)):
+        outputs_existed = Path(output_path).exists()
         if not should_process_task(
             output_paths=[output_path],
             input_paths=[source],
             force=force_processing,
         ):
+            return None
+        if outputs_existed:
+            print("Outputs up-to-date, skipping reprocessing (mtimes refreshed)")
+            refresh_output_mtimes([output_path])
             return None
 
     # 1. Input Parsing and Data Loading via Open3D
