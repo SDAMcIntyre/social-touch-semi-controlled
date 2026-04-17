@@ -2,9 +2,9 @@
 
 **Created:** 2026-04-13 14:00
 **Approved:** —
-**Completed:** —
+**Completed:** 2026-04-17 15:34
 **Author:** Basil Duvernoy
-**Status:** In Progress
+**Status:** Completed
 **Branch:** `feature/depth-weighted-xyz-aggregation`
 
 ---
