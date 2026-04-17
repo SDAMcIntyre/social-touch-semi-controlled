@@ -276,7 +276,8 @@ class EllipseFitViewGUI:
             if not ellipse_data.empty and not ellipse_data.isnull().values.any():
                 data = ellipse_data.iloc[0]
                 center = (int(data['center_x']), int(data['center_y']))
-                axes = (int(data['axes_major'] / 2), int(data['axes_minor'] / 2))
+                # axes_minor is the axis rotated by `angle` (cv2.fitEllipse convention).
+                axes = (int(data['axes_minor'] / 2), int(data['axes_major'] / 2))
                 angle = int(data['angle'])
 
                 # Draw the ellipse

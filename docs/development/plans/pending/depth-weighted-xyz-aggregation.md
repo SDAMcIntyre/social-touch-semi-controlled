@@ -4,7 +4,7 @@
 **Approved:** —
 **Completed:** —
 **Author:** Basil Duvernoy
-**Status:** Draft
+**Status:** In Progress
 **Branch:** `feature/depth-weighted-xyz-aggregation`
 
 ---
@@ -113,17 +113,17 @@ The extractor interface, factory, and orchestrator are unchanged.
 
 ### Phase 1: Core Algorithm Change
 **Goal:** Replace branching with depth-weighted aggregation in `_aggregate_depth`
-**Started:** —
-**Completed:** —
+**Started:** 2026-04-13
+**Completed:** 2026-04-13
 
 **Tasks:**
-- [ ] Task 1.1 — Add static method `_weighted_median(values, weights)` to `EllipseDepthExtractor`
-- [ ] Task 1.2 — Add module-level constant `_DEPTH_WEIGHT_SIGMA = 0.3` (exponential decay rate)
-- [ ] Task 1.3 — Add `depth_weight_sigma` parameter to `__init__` (default `_DEPTH_WEIGHT_SIGMA`)
-- [ ] Task 1.4 — Rewrite `_aggregate_depth`: remove `spread_threshold_mm` parameter, remove homogeneous/spread-out branching, add depth-weighted median aggregation
-- [ ] Task 1.5 — Update `extract()` to pass new parameters to `_aggregate_depth`
-- [ ] Task 1.6 — Remove `spread_threshold_mm` from `__init__` (no longer used)
-- [ ] Task 1.7 — Clean up module-level constants: remove `_DEFAULT_SPREAD_THRESHOLD_MM` and `_SHALLOW_CLUSTER_PERCENTILE`
+- [x] Task 1.1 — Add static method `_weighted_median(values, weights)` to `EllipseDepthExtractor`
+- [x] Task 1.2 — Add module-level constant `_DEPTH_WEIGHT_SIGMA = 0.3` (exponential decay rate)
+- [x] Task 1.3 — Add `depth_weight_sigma` parameter to `__init__` (default `_DEPTH_WEIGHT_SIGMA`)
+- [x] Task 1.4 — Rewrite `_aggregate_depth`: remove `spread_threshold_mm` parameter, remove homogeneous/spread-out branching, add depth-weighted median aggregation
+- [x] Task 1.5 — Update `extract()` to pass new parameters to `_aggregate_depth`
+- [x] Task 1.6 — Remove `spread_threshold_mm` from `__init__` (no longer used)
+- [x] Task 1.7 — Clean up module-level constants: remove `_DEFAULT_SPREAD_THRESHOLD_MM` and `_SHALLOW_CLUSTER_PERCENTILE`
 
 **Files Modified:**
 - `code/src/preprocessing/stickers_analysis/xyz/core/xyz_extractor_ellipse_depth.py` — all changes in this file
@@ -132,17 +132,17 @@ The extractor interface, factory, and orchestrator are unchanged.
 
 ### Phase 2: Test Updates
 **Goal:** Update existing tests and add new coverage for depth-weighted behaviour
-**Started:** —
-**Completed:** —
+**Started:** 2026-04-13
+**Completed:** 2026-04-13
 
 **Tasks:**
-- [ ] Task 2.1 — Update `TestAggregateDepth` tests: remove spread-threshold-based assertions, add weighted-aggregation assertions
-- [ ] Task 2.2 — Add test: uniform z values → weighted median equals plain median (degenerate case)
-- [ ] Task 2.3 — Add test: tilted surface (linear z gradient) → weighted result is biased toward low-z (near-camera) side
-- [ ] Task 2.4 — Add test: bimodal z distribution (hand + background) → weighted result favours near-camera cluster
-- [ ] Task 2.5 — Add test: `_weighted_median` correctness on known values
-- [ ] Task 2.6 — Add test: sticker-size guard still fires when z-range > sticker_diameter_mm
-- [ ] Task 2.7 — Verify `test_output_monitor_keys` reflects current output keys (fix existing staleness if needed)
+- [x] Task 2.1 — Update `TestAggregateDepth` tests: remove spread-threshold-based assertions, add weighted-aggregation assertions
+- [x] Task 2.2 — Add test: uniform z values → weighted median equals plain median (degenerate case)
+- [x] Task 2.3 — Add test: tilted surface (linear z gradient) → weighted result is biased toward low-z (near-camera) side
+- [x] Task 2.4 — Add test: bimodal z distribution (hand + background) → weighted result favours near-camera cluster
+- [x] Task 2.5 — Add test: `_weighted_median` correctness on known values
+- [x] Task 2.6 — Add test: sticker-size guard still fires when z-range > sticker_diameter_mm
+- [x] Task 2.7 — Verify `test_output_monitor_keys` reflects current output keys (fix existing staleness if needed)
 
 **Files Modified:**
 - `code/tests/test_ellipse_depth_extractor.py` — update and extend

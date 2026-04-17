@@ -8,20 +8,18 @@ from .xyz_extractor_centroid import CentroidPointCloudExtractor
 from .xyz_extractor_interface import XYZExtractorInterface
 
 _MIN_VALID_PIXELS = 3
-_DEFAULT_SPREAD_THRESHOLD_MM = 10.0
-_SHALLOW_CLUSTER_PERCENTILE = 25.0
+_DEPTH_WEIGHT_SIGMA = 0.3
 STICKER_DIAMETER_MM: float = 10.0
 
 
 class EllipseDepthExtractor(XYZExtractorInterface):
     """
     Extracts 3D coordinates by sampling all depth points within the tracked
-    ellipse and applying homogeneity-adaptive aggregation.
+    ellipse and applying depth-accuracy-weighted aggregation.
 
-    For frames where the ellipse straddles a depth edge (fingertip, knuckle),
-    the shallow-cluster path selects the lower percentile of z values to
-    avoid the depth-gradient bias produced by the Kinect sensor at object
-    boundaries.
+    Pixels nearer to the camera (lower z) receive higher weight via an
+    exponential decay from z_min, correcting the systematic bias on tilted or
+    curved surfaces where far-side pixels are pulled toward the background.
 
     Falls back to single-pixel centroid extraction when ellipse data is
     unavailable or when fewer than three valid depth pixels are found within
@@ -34,12 +32,12 @@ class EllipseDepthExtractor(XYZExtractorInterface):
     def __init__(
         self,
         debug: bool = False,
-        spread_threshold_mm: float = _DEFAULT_SPREAD_THRESHOLD_MM,
         sticker_diameter_mm: float = STICKER_DIAMETER_MM,
+        depth_weight_sigma: float = _DEPTH_WEIGHT_SIGMA,
     ):
         self.debug = debug
-        self.spread_threshold_mm = spread_threshold_mm
         self._sticker_diameter_mm = sticker_diameter_mm
+        self._depth_weight_sigma = depth_weight_sigma
 
     # ------------------------------------------------------------------
     # Interface implementation
@@ -72,7 +70,7 @@ class EllipseDepthExtractor(XYZExtractorInterface):
 
                 if len(zs) >= _MIN_VALID_PIXELS:
                     x_mm, y_mm, z_mm, z_std, n_pixels, z_range_clipped = self._aggregate_depth(
-                        xs, ys, zs, self.spread_threshold_mm, self._sticker_diameter_mm
+                        xs, ys, zs, self._sticker_diameter_mm, self._depth_weight_sigma
                     )
                     coords_3d = {"x_mm": x_mm, "y_mm": y_mm, "z_mm": z_mm}
                     monitor_data = {
@@ -138,8 +136,9 @@ class EllipseDepthExtractor(XYZExtractorInterface):
             shape: (height, width) of the point cloud frame.
             center_x: Ellipse centre column in pixels.
             center_y: Ellipse centre row in pixels.
-            axes_major: Semi-major axis length in pixels.
-            axes_minor: Semi-minor axis length in pixels.
+            axes_major: Full major-axis length (diameter) in pixels, as stored
+                in the consolidated tracks CSV by ``cv2.fitEllipse``.
+            axes_minor: Full minor-axis length (diameter) in pixels.
             angle: Rotation angle in degrees (OpenCV convention).
 
         Returns:
@@ -147,8 +146,14 @@ class EllipseDepthExtractor(XYZExtractorInterface):
         """
         mask = np.zeros(shape, dtype=np.uint8)
         center = (int(round(center_x)), int(round(center_y)))
-        # Clamp axes to at least 1 px so cv2.ellipse never receives (0, 0).
-        axes = (max(1, int(round(axes_major))), max(1, int(round(axes_minor))))
+        # cv2.ellipse expects semi-axes; the CSV stores full diameters.
+        # The first axis is the one rotated by `angle`, which is `axes_minor`
+        # per the cv2.fitEllipse convention used by fit_ellipses_on_correlation_videos.py.
+        # Clamp to at least 1 px so cv2.ellipse never receives (0, 0).
+        axes = (
+            max(1, int(round(axes_minor / 2.0))),
+            max(1, int(round(axes_major / 2.0))),
+        )
         cv2.ellipse(mask, center, axes, angle, 0, 360, color=1, thickness=-1)
         return mask.astype(bool)
 
@@ -187,38 +192,37 @@ class EllipseDepthExtractor(XYZExtractorInterface):
         xs: np.ndarray,
         ys: np.ndarray,
         zs: np.ndarray,
-        spread_threshold_mm: float,
         sticker_diameter_mm: float,
+        depth_weight_sigma: float,
     ) -> Tuple[float, float, float, float, int, bool]:
-        """Homogeneity-adaptive aggregation with sticker-size guard.
+        """Depth-accuracy-weighted aggregation with sticker-size guard.
 
-        **Homogeneous case** (z_std < threshold):
-            The ellipse lies on a single surface plane. Select all valid
-            samples as candidates.
+        Assigns each sample a weight based on its relative z-position within
+        the candidate set.  Pixels nearer to the camera (smaller z) receive
+        higher weight via an exponential decay from z_min:
 
-        **Spread-out case** (z_std >= threshold):
-            The ellipse straddles a depth edge (e.g. fingertip against
-            background). Select the *shallow cluster* — the lower
-            ``_SHALLOW_CLUSTER_PERCENTILE`` percent of z values — as
-            candidates.
+        .. code-block:: python
 
-        **Sticker-size guard** (applied after either path above):
-            The physical sticker diameter (~10 mm) is a hard upper bound on
-            legitimate depth variation within the sticker area. If the z-range
-            of the candidate cluster still exceeds ``sticker_diameter_mm``,
-            some pixels are capturing the background depth ramp. Override the
-            cluster by keeping only values ≤ z_min + sticker_diameter_mm
-            (upper-Z, nearest-to-camera subset). ``z_range_clipped`` is set to
-            True when the guard fires.
+            z_norm = (z_i - z_min) / (z_max - z_min)   # 0 = nearest
+            w_i    = exp(-z_norm / sigma)
+
+        When all z values are identical (``z_max == z_min``), weights are set
+        to 1.0 (uniform), reproducing plain-median behaviour.
+
+        **Sticker-size guard** (applied before weighting):
+            The physical sticker diameter is a hard upper bound on legitimate
+            depth variation.  If ``z_max - z_min > sticker_diameter_mm``, keep
+            only the subset with ``z <= z_min + sticker_diameter_mm``.
+            ``z_range_clipped`` is True when the guard fires.
 
         Args:
             xs: 1-D array of x coordinates in mm.
             ys: 1-D array of y coordinates in mm.
             zs: 1-D array of z (depth) coordinates in mm.
-            spread_threshold_mm: z std value above which the spread-out path
-                is taken (default 10 mm ≈ 2× Kinect v2 noise floor).
             sticker_diameter_mm: Physical sticker diameter used as the z-range
                 plausibility guard (default 10 mm).
+            depth_weight_sigma: Exponential decay rate for depth weighting.
+                Smaller values give a steeper decay (default 0.3).
 
         Returns:
             Tuple ``(x_mm, y_mm, z_mm, z_std, n_pixels, z_range_clipped)``.
@@ -226,33 +230,54 @@ class EllipseDepthExtractor(XYZExtractorInterface):
         z_std = float(np.std(zs))
         n_pixels = int(len(zs))
 
-        if z_std < spread_threshold_mm:
-            candidate_xs, candidate_ys, candidate_zs = xs, ys, zs
-        else:
-            # Shallow cluster: points nearest to the camera (smallest z).
-            z_cutoff = float(np.percentile(zs, _SHALLOW_CLUSTER_PERCENTILE))
-            shallow = zs <= z_cutoff
-            candidate_xs = xs[shallow]
-            candidate_ys = ys[shallow]
-            candidate_zs = zs[shallow]
-
-        # Sticker-size guard: z-range within the candidate cluster must not
-        # exceed the physical sticker diameter.  Any excess means the cluster
-        # still contains background-gradient pixels; keep only the
-        # upper-Z (nearest-to-camera, minimum-Z) subset.
-        z_range = float(candidate_zs.max() - candidate_zs.min())
+        # Sticker-size guard: keep only pixels within one sticker-diameter of
+        # the nearest-camera (minimum-z) value.
+        z_min = float(zs.min())
+        z_max = float(zs.max())
+        z_range = z_max - z_min
         if z_range > sticker_diameter_mm:
-            z_min = float(candidate_zs.min())
-            size_mask = candidate_zs <= z_min + sticker_diameter_mm
-            candidate_xs = candidate_xs[size_mask]
-            candidate_ys = candidate_ys[size_mask]
-            candidate_zs = candidate_zs[size_mask]
+            size_mask = zs <= z_min + sticker_diameter_mm
+            candidate_xs = xs[size_mask]
+            candidate_ys = ys[size_mask]
+            candidate_zs = zs[size_mask]
             z_range_clipped = True
         else:
+            candidate_xs, candidate_ys, candidate_zs = xs, ys, zs
             z_range_clipped = False
 
-        x_mm = float(np.median(candidate_xs))
-        y_mm = float(np.median(candidate_ys))
-        z_mm = float(np.median(candidate_zs))
+        # Depth-accuracy weights: exponential decay from z_min.
+        cz_min = float(candidate_zs.min())
+        cz_max = float(candidate_zs.max())
+        if cz_max == cz_min:
+            weights = np.ones(len(candidate_zs))
+        else:
+            z_norm = (candidate_zs - cz_min) / (cz_max - cz_min)
+            weights = np.exp(-z_norm / depth_weight_sigma)
+
+        x_mm = EllipseDepthExtractor._weighted_median(candidate_xs, weights)
+        y_mm = EllipseDepthExtractor._weighted_median(candidate_ys, weights)
+        z_mm = EllipseDepthExtractor._weighted_median(candidate_zs, weights)
 
         return x_mm, y_mm, z_mm, z_std, n_pixels, z_range_clipped
+
+    @staticmethod
+    def _weighted_median(values: np.ndarray, weights: np.ndarray) -> float:
+        """Return the weighted median of ``values`` using ``weights``.
+
+        The weighted median is the value minimising ``sum(w_i * |x_i - v|)``,
+        found by sorting values, computing cumulative weights, and locating
+        the point where cumulative weight first reaches 50 % of total.
+
+        Args:
+            values: 1-D array of values.
+            weights: 1-D array of non-negative weights (same length as values).
+
+        Returns:
+            Weighted median as a float.
+        """
+        order = np.argsort(values)
+        sorted_vals = values[order]
+        sorted_weights = weights[order]
+        cumulative = np.cumsum(sorted_weights)
+        midpoint = cumulative[-1] / 2.0
+        return float(sorted_vals[cumulative >= midpoint][0])
