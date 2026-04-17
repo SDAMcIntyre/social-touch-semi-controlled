@@ -10,9 +10,8 @@
 # ==============================================================================
 
 parameters:
-  kinect_configs: [
-      valid_configs_ST13-02/kinect_config_2022-06-14_ST13-02_semicontrolled_block-order03.yaml,
-    valid_configs_ST13-02/kinect_config_2022-06-14_ST13-02_semicontrolled_block-order04.yaml]
+  kinect_configs: 
+    valid_configs_ST18-01/kinect_config_2022-06-22_ST18-01_semicontrolled_block-order01.yaml
   #kinect_configs: "valid_configs_ST16-05"
 
 tasks:
