@@ -12,6 +12,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+import numpy as np
 import pandas as pd
 
 from analysis.receptive_field_mapping.rf_cluster_visualizer import render_forearm_heatmap
@@ -19,7 +20,13 @@ from analysis.receptive_field_mapping.rf_data_loader import (
     parse_contact_points,
     resolve_forearm_ply,
 )
+from analysis.receptive_field_mapping.rf_metrics import (
+    compute_rf_metrics,
+    metrics_to_dict,
+    metrics_to_row,
+)
 from analysis.touch_analytics.pipeline_shared import (
+    SHARED_COLUMNS,
     filter_enabled_profiles,
     session_id_from_path,
 )
@@ -204,6 +211,93 @@ def _aggregate_spike_counts(
     return df
 
 
+def _format_cluster_folder(cluster_label: str) -> str:
+    try:
+        n = int(cluster_label)
+        return f'cluster_{n:02d}' if n >= 0 else 'cluster_noise'
+    except (ValueError, TypeError):
+        return f'cluster_{cluster_label}'
+
+
+def _build_cluster_description(
+    clustered_df: pd.DataFrame,
+    cluster_label: str,
+    metadata_json_path: Path = None,
+) -> dict:
+    rows = clustered_df[clustered_df['cluster_label'].astype(str) == str(cluster_label)]
+    desc: dict = {'cluster_label': cluster_label, 'n_touches': int(len(rows))}
+
+    if 'type_metadata' in rows.columns:
+        vc = rows['type_metadata'].value_counts(normalize=True)
+        desc['type_distribution'] = {str(k): round(float(v), 3) for k, v in vc.items()}
+
+    if 'direction' in rows.columns:
+        vc = rows['direction'].value_counts(normalize=True)
+        desc['direction_distribution'] = {str(k): round(float(v), 3) for k, v in vc.items()}
+
+    feature_cols = [
+        c for c in rows.columns
+        if c not in SHARED_COLUMNS
+        and c != 'cluster_label'
+        and not c.startswith('bin_')
+        and pd.api.types.is_numeric_dtype(rows[c])
+    ]
+    if feature_cols:
+        ranges = {}
+        for col in feature_cols:
+            vals = rows[col].dropna()
+            if len(vals) > 0:
+                ranges[col] = {
+                    'min': round(float(vals.min()), 2),
+                    'max': round(float(vals.max()), 2),
+                    'mean': round(float(vals.mean()), 2),
+                }
+        desc['feature_ranges'] = ranges
+
+    if metadata_json_path and metadata_json_path.exists():
+        try:
+            with open(metadata_json_path) as f:
+                meta = json.load(f)
+            if meta.get('primary_feature'):
+                desc['primary_feature'] = meta['primary_feature']
+            if meta.get('algorithm') == 'binning' and meta.get('bin_edges'):
+                pf = meta.get('primary_feature')
+                edges = meta['bin_edges'].get(pf, [])
+                try:
+                    idx = int(cluster_label)
+                    if 0 <= idx < len(edges) - 1:
+                        desc['bin_range'] = {
+                            'feature': pf,
+                            'low': round(edges[idx], 2),
+                            'high': round(edges[idx + 1], 2),
+                        }
+                except (ValueError, IndexError):
+                    pass
+        except Exception:
+            pass
+
+    return desc
+
+
+def _description_summary_line(desc: dict) -> str:
+    parts = []
+    if 'bin_range' in desc:
+        br = desc['bin_range']
+        parts.append(f"{br['feature']}: [{br['low']}, {br['high']}]")
+    elif desc.get('primary_feature') and 'feature_ranges' in desc:
+        pf = desc['primary_feature']
+        if pf in desc['feature_ranges']:
+            r = desc['feature_ranges'][pf]
+            parts.append(f"{pf}: [{r['min']}, {r['max']}]")
+    if 'type_distribution' in desc:
+        td = desc['type_distribution']
+        type_str = ', '.join(
+            f'{t}: {f:.0%}' for t, f in sorted(td.items(), key=lambda x: -x[1])
+        )
+        parts.append(type_str)
+    return ' — '.join(parts)
+
+
 def run_cluster_rf_mapping(
     clustering_dir: Path,
     input_items: List[Tuple[Path, Path]],
@@ -269,6 +363,9 @@ def run_cluster_rf_mapping(
 
             base_output = output_dir / combo_name / clusterer_name
             summary_json = base_output / 'rf_cluster_summary.json'
+            cluster_metadata_path = (
+                clustering_dir / combo_name / clusterer_name / 'cluster_metadata.json'
+            )
 
             if not should_process_task(
                 input_paths=[clustered_csv],
@@ -294,12 +391,20 @@ def run_cluster_rf_mapping(
             n_clusters = len(cluster_groups)
             print(f"  {n_clusters} clusters found.")
             summary_data: dict = {}
+            metrics_rows: List[dict] = []
 
             for cluster_idx, (cluster_label, cluster_df) in enumerate(cluster_groups.items(), start=1):
                 n_touches = len(cluster_df)
                 print(f"  Cluster {cluster_idx}/{n_clusters} (label={cluster_label}, {n_touches} touches)...")
-                cluster_out = base_output / f'cluster_{cluster_label}'
+                cluster_out = base_output / _format_cluster_folder(cluster_label)
                 cluster_out.mkdir(parents=True, exist_ok=True)
+
+                cluster_desc = _build_cluster_description(
+                    clustered_df, cluster_label, cluster_metadata_path,
+                )
+                with open(cluster_out / 'cluster_description.json', 'w') as _f:
+                    json.dump(cluster_desc, _f, indent=2)
+                description_line = _description_summary_line(cluster_desc)
 
                 session_touch_map = _build_session_touch_map(cluster_df)
                 session_counters: List[Counter] = []
@@ -339,6 +444,37 @@ def run_cluster_rf_mapping(
                 pooled_df.to_csv(spike_counts_csv, index=False)
                 produced.append(spike_counts_csv)
 
+                # Compute and save RF metrics
+                metrics_forearm_vertices = None
+                first_session_with_data = next(iter(session_spike_dfs), None)
+                if first_session_with_data is not None:
+                    _ply_path = resolve_forearm_ply(
+                        session_dir_map[first_session_with_data],
+                        first_session_with_data,
+                    )
+                    if _ply_path is not None:
+                        try:
+                            import open3d as o3d  # type: ignore
+                            pcd = o3d.io.read_point_cloud(str(_ply_path))
+                            metrics_forearm_vertices = np.asarray(pcd.points)
+                        except Exception:
+                            logger.warning(
+                                "Failed to load forearm PLY for metrics (cluster %s): %s",
+                                cluster_label, _ply_path,
+                            )
+
+                metrics = compute_rf_metrics(
+                    pooled_df,
+                    metrics_forearm_vertices,
+                    projection_method=projection_method or "tangent_plane",
+                )
+                metrics_json_path = cluster_out / 'rf_metrics.json'
+                with open(metrics_json_path, 'w') as _f:
+                    json.dump(metrics_to_dict(metrics), _f, indent=2)
+                metrics_rows.append(
+                    metrics_to_row(metrics, cluster_label, combo_name, clusterer_name)
+                )
+
                 total_spikes = int(pooled_df['spike_count'].sum()) if not pooled_df.empty else 0
                 if pooled_df.empty:
                     print(f"  -> No spikes found for cluster {cluster_label}. spike_counts.csv is empty.")
@@ -369,6 +505,7 @@ def run_cluster_rf_mapping(
                             session_id=session_id,
                             cluster_label=cluster_label,
                             projection_method=projection_method,
+                            cluster_description=description_line,
                         )
                     except Exception:
                         logger.exception(
@@ -381,7 +518,13 @@ def run_cluster_rf_mapping(
                     'n_touches': n_touches,
                     'total_spike_points': len(pooled_df),
                     'total_spikes': total_spikes,
+                    'rf_metrics_computed': True,
                 }
+
+            # Write pooled RF metrics summary CSV
+            if metrics_rows:
+                metrics_summary_csv = base_output / 'rf_metrics_summary.csv'
+                pd.DataFrame(metrics_rows).to_csv(metrics_summary_csv, index=False)
 
             # Save rf_cluster_summary.json (idempotency sentinel)
             base_output.mkdir(parents=True, exist_ok=True)
