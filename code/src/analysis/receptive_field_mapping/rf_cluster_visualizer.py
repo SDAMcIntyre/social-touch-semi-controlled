@@ -50,6 +50,7 @@ def render_forearm_heatmap(
     cluster_label: str,
     interactive: bool = False,
     projection_method: str = None,
+    cluster_description: str = '',
 ) -> None:
     """Render a 3D forearm heatmap of spike-count contact points and save as PNG.
 
@@ -124,6 +125,7 @@ def render_forearm_heatmap(
             projection_method=projection_method,
             forearm_uv=forearm_uv,
             interactive=interactive,
+            cluster_description=cluster_description,
         )
         return
 
@@ -323,10 +325,10 @@ def render_forearm_heatmap(
     ax.set_xlabel('X (mm)', color='white')
     ax.set_ylabel('Y (mm)', color='white')
     ax.set_zlabel('Z (mm)', color='white')
-    ax.set_title(
-        f'RF Heatmap — {session_id} | cluster {cluster_label}',
-        fontsize=11, color='white',
-    )
+    title_3d = f'RF Heatmap — {session_id} | cluster {cluster_label}'
+    if cluster_description:
+        title_3d += f'\n{cluster_description}'
+    ax.set_title(title_3d, fontsize=11, color='white')
     ax.tick_params(axis='x', colors='white')
     ax.tick_params(axis='y', colors='white')
     ax.tick_params(axis='z', colors='white')

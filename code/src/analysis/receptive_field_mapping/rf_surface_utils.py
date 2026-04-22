@@ -20,7 +20,7 @@ def load_or_build_forearm_mesh(
 ) -> Optional[trimesh.Trimesh]:
     if mesh_cache_path is None:
         mesh_cache_path = forearm_ply_path.with_name(
-            forearm_ply_path.stem + "_mesh.obj"
+            forearm_ply_path.stem + "_mesh_filtered.obj"
         )
 
     try:
@@ -41,9 +41,37 @@ def load_or_build_forearm_mesh(
         input_colors = np.asarray(pcd.colors) if pcd.has_colors() else None
 
         tri = Delaunay(points[:, :2])
+        simplices = tri.simplices
+
+        # Remove triangles whose longest 3D edge exceeds the local point spacing.
+        # This filters spurious cross-surface connections (e.g. between fingertips)
+        # that Delaunay creates from the 2D XY projection.
+        v0 = points[simplices[:, 0]]
+        v1 = points[simplices[:, 1]]
+        v2 = points[simplices[:, 2]]
+        edge_lens = np.stack([
+            np.linalg.norm(v1 - v0, axis=1),
+            np.linalg.norm(v2 - v1, axis=1),
+            np.linalg.norm(v0 - v2, axis=1),
+        ], axis=1)
+        max_edge = edge_lens.max(axis=1)
+        nn_dists, _ = KDTree(points).query(points, k=2)
+        threshold = max(float(np.median(nn_dists[:, 1])) * 8, 10.0)
+        simplices = simplices[max_edge <= threshold]
+
+        n_removed = len(tri.simplices) - len(simplices)
+        if n_removed > 0:
+            logger.info(
+                "Edge filtering: removed %d/%d triangles (threshold=%.1f mm) from %s",
+                n_removed, len(tri.simplices), threshold, forearm_ply_path.name,
+            )
+        if len(simplices) == 0:
+            logger.warning("All triangles filtered from %s", forearm_ply_path)
+            return None
+
         mesh = trimesh.Trimesh(
             vertices=points,
-            faces=tri.simplices,
+            faces=simplices,
             vertex_colors=input_colors,
         )
 

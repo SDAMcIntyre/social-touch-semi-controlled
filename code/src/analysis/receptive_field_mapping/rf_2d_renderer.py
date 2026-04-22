@@ -32,6 +32,7 @@ def render_2d_heatmap(
     projection_method: str,
     forearm_uv: Optional[np.ndarray] = None,
     interactive: bool = False,
+    cluster_description: str = '',
 ) -> None:
     """Render a 2D scatter + interpolated heatmap and save as PNG.
 
@@ -78,6 +79,8 @@ def render_2d_heatmap(
 
     fig, axes = plt.subplots(1, 2, figsize=(14, 6), facecolor='black')
     fig.subplots_adjust(wspace=0.35)
+    if cluster_description:
+        fig.suptitle(cluster_description, color='#aaaaaa', fontsize=9, y=1.02, style='italic')
 
     for ax in axes:
         ax.set_facecolor('black')
