@@ -14,7 +14,7 @@ Output layout
 import logging
 import sys
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import pandas as pd
 from tqdm import tqdm
@@ -34,6 +34,7 @@ def run_series_transforms(
     transforms: dict,
     output_dir: Path,
     force: bool = False,
+    prepared_dir: Optional[Path] = None,
 ) -> List[Path]:
     """
     Compute and persist per-frame kinematics for each session.
@@ -43,7 +44,7 @@ def run_series_transforms(
     input_items
         List of (aggregated_session_csv, database_root_path) tuples.
     transforms
-        Dict with transform configs, e.g. ``{'kinematics': {'enabled': True, 'fps': 30.0}}``.
+        Dict with transform configs, e.g. ``{'kinematics': {'enabled': True, 'fps': 1000.0}}``.
     output_dir
         Directory where augmented CSVs are written.
     force
@@ -56,7 +57,7 @@ def run_series_transforms(
     transforms = transforms or {}
     kinematics_cfg = transforms.get('kinematics', {})
     kinematics_enabled = kinematics_cfg.get('enabled', True)
-    fps = kinematics_cfg.get('fps', 30.0)
+    fps = kinematics_cfg.get('fps', 1000.0)
 
     pressure_cfg = transforms.get('pressure', {})
     pressure_enabled = pressure_cfg.get('enabled', True)
@@ -91,6 +92,7 @@ def run_series_transforms(
                 mos_E_kpa=mos_E_kpa,
                 mos_h_mm=mos_h_mm,
                 force=force,
+                prepared_dir=prepared_dir,
             )
             if result is not None:
                 written.append(result)
@@ -112,6 +114,7 @@ def _transform_session(
     mos_E_kpa: float,
     mos_h_mm: float,
     force: bool,
+    prepared_dir: Optional[Path] = None,
 ) -> Path | None:
     session_id = session_id_from_path(input_file)
     output_path = output_dir / f"{session_id}_series_augmented.csv"
@@ -135,10 +138,21 @@ def _transform_session(
             pass
     clean_task_outputs(output_path)
 
+    csv_to_load = input_file
+    if prepared_dir is not None:
+        prepared_path = prepared_dir / f"{session_id}_prepared.csv"
+        if prepared_path.exists():
+            csv_to_load = prepared_path
+        else:
+            logging.warning(
+                f"prepared_dir provided but prepared CSV not found for "
+                f"'{session_id}' — falling back to raw session CSV."
+            )
+
     try:
-        df = load_session_csv(input_file)
+        df = load_session_csv(csv_to_load)
     except Exception as exc:
-        logging.error(f"series_pipeline: failed to load {input_file}: {exc}")
+        logging.error(f"series_pipeline: failed to load {csv_to_load}: {exc}")
         return None
 
     df = ensure_block_id_column(df)

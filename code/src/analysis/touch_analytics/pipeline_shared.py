@@ -49,6 +49,11 @@ DEFAULT_COMPARING_OPTIONS: dict = {
     'min_sensor_types': 2,
 }
 
+DEFAULT_PREPARATION_OPTIONS: dict = {
+    'force_processing': False,
+    'interpolation_method': 'cubic',
+}
+
 
 class _TqdmLineWrapper:
     """Routes tqdm output through print()-compatible newline-terminated writes.
