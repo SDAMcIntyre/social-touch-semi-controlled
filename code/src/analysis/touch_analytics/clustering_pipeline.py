@@ -347,6 +347,17 @@ def _cluster_combination(
         if sensor_col and sensor_col in pooled.columns:
             clusterer_config = {**clusterer_config, '_sensor_labels': pooled.loc[valid_idx, sensor_col].values}
 
+        type_col = clusterer_config.get('type_col')
+        if type_col and type_col in pooled.columns:
+            clusterer_config = {
+                **clusterer_config,
+                '_type_labels': pooled.loc[valid_idx, type_col].values,
+                '_direction_labels': (
+                    pooled.loc[valid_idx, 'direction'].values
+                    if 'direction' in pooled.columns else None
+                ),
+            }
+
         try:
             labels, metadata = clusterer.fit_predict(feature_df, clusterer_config)
         except Exception as exc:

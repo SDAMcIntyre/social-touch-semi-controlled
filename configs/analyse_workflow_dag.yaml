@@ -26,7 +26,7 @@ tasks:
   map_receptive_fields_simple:
     enabled: true
     options:
-      force_processing: true
+      force_processing: false
       show_interactive: false
       projection_method: cylindrical_unwrap
     depends_on: []
@@ -52,6 +52,8 @@ tasks:
           enabled: false
         skewness:
           enabled: false
+        pressure_velocity_mean: {enabled: true}
+        pressure_velocity_max: {enabled: true}
         temporal:
           enabled: false
         mechanics_of_solids:
@@ -59,6 +61,7 @@ tasks:
           youngs_modulus_kpa: 100.0
           poissons_ratio: 0.45
           skin_thickness_mm: 1.5
+        touch_category: {enabled: true}
     depends_on: []
 
   # Stage 2: Global clustering on pooled feature CSVs.
@@ -88,6 +91,21 @@ tasks:
         only_median:
           enabled: false
           features: [median]
+        pressure_velocity_mean:
+          enabled: true
+          features: [pressure_velocity_mean]
+        pressure_velocity_max:
+          enabled: true
+          features: [pressure_velocity_max]
+        touch_category:
+          enabled: false
+          features: [touch_category]
+        pressure_and_category:
+          enabled: false
+          features: [pressure_velocity_mean, touch_category]
+        pressure_velocity_mean_and_type:
+          enabled: true
+          features: [pressure_velocity_mean, touch_category]
       clustering_profiles:
         binning:
           method: binning
@@ -108,13 +126,19 @@ tasks:
           min_sensor_types: 2
           sensor_col: session_id
           enabled: false
+        type_stratified:
+          method: type_stratified
+          base_method: binning
+          type_col: type_metadata
+          n_bins: 20
+          bin_method: equal_width
     depends_on: [touch_feature_extraction]
 
   # Stage 3: Statistical comparison of sensor measurements across strata.
   # Discovers clustered CSVs on disk — no explicit file list needed.
   # Output: 4_analysed/touch_comparisons/<combination>/<clusterer>/
   touch_comparing:
-    enabled: true
+    enabled: false
     options:
       force_processing: false
       feature_combinations:
@@ -154,20 +178,42 @@ tasks:
   map_receptive_fields_clustered:
     enabled: true
     options:
-      force_processing: true
+      force_processing: false
       # enabled: true → face-on camera computed automatically (no GUI).
       # enabled: false → interactive picker (manual). force_processing also
       # controls whether sessions with existing camera_params.json are re-shown.
       camera_angle_mode:
-        auto: {}
+        auto:
+          enabled: true
       feature_combinations:
         only_mean: {enabled: true, features: [mean]}
         only_max: {enabled: false, features: [max]}
         only_median: {enabled: false, features: [median]}
+        pressure_velocity_mean:
+          enabled: true
+          features: [pressure_velocity_mean]
+        pressure_velocity_max:
+          enabled: true
+          features: [pressure_velocity_max]
+        touch_category:
+          enabled: false
+          features: [touch_category]
+        pressure_and_category:
+          enabled: false
+          features: [pressure_velocity_mean, touch_category]
+        pressure_velocity_mean_and_type:
+          enabled: true
+          features: [pressure_velocity_mean, touch_category]
       projection_method: cylindrical_unwrap
       clustering_profiles:
         binning: {method: binning}
         kmeans: {method: kmeans, enabled: false}
         dbscan: {method: dbscan, enabled: false}
         hierarchical: {method: hierarchical, enabled: false}
+        type_stratified:
+          method: type_stratified
+          base_method: binning
+          type_col: type_metadata
+          n_bins: 20
+          bin_method: equal_width
     depends_on: [touch_clustering]
