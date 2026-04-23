@@ -26,7 +26,8 @@ column is still computed normally.
 import numpy as np
 import pandas as pd
 from .base import FeatureExtractor
-from ..series_level.kinematics import compute_velocity_magnitudes
+from ..series_level.kinematics import get_kinematics
+from ..series_level.pressure import get_geo_pressure
 
 
 class PressureExtractor(FeatureExtractor):
@@ -48,20 +49,18 @@ class PressureExtractor(FeatureExtractor):
 
     def extract(self, group: pd.DataFrame, config: dict) -> dict:
         aggregation = config.get('aggregation', 'mean')
+        fps = config.get('fps', 30.0)
         if aggregation not in ('mean', 'max'):
             raise ValueError(
                 f"PressureExtractor: unknown aggregation '{aggregation}'. "
                 "Expected 'mean' or 'max'."
             )
 
-        depth = group['contact_depth'].values.astype(float)
-        area = group['contact_area'].values.astype(float)
-
-        # Safe per-frame ratio: area <= 0 → NaN
-        pressure = np.where(area > 0, depth / area, np.nan)
+        pressure = get_geo_pressure(group).values.astype(float)
 
         # Velocity magnitudes (mm/s) — always computed, NaN-free
-        velocity = compute_velocity_magnitudes(group).values.astype(float)
+        vel, _ = get_kinematics(group, fps=fps)
+        velocity = vel.values.astype(float)
 
         if aggregation == 'mean':
             pressure_val = float(np.nan) if np.all(np.isnan(pressure)) else float(np.nanmean(pressure))

@@ -13,7 +13,7 @@ parameters:
 
 tasks:
   # --- Analysis Tasks ---
-  # Step 1: Block/trial structure summary. No dependencies.
+  # Block/trial structure summary. No dependencies.
   summarize_session_blocks:
     enabled: true
     options:
@@ -31,7 +31,28 @@ tasks:
       projection_method: cylindrical_unwrap
     depends_on: []
 
-  # Stage 1: Per-session feature extraction. Each enabled feature extracts to its own folder.
+  # Stage 2a (Series Transforms): Per-session kinematics, pressure, and MoS computation.
+  # Adds velocity_magnitude, acceleration_magnitude, geo_pressure, and (when enabled) MoS
+  # columns to each session CSV.
+  # Output: 4_analysed/series_transforms/<session>_series_augmented.csv
+  touch_series_transforms:
+    enabled: true
+    options:
+      force_processing: false
+      transforms:
+        kinematics:
+          enabled: true
+          fps: 30.0
+        pressure:
+          enabled: true
+        mechanics_of_solids:
+          enabled: false
+          youngs_modulus_kpa: 100.0
+          poissons_ratio: 0.45
+          skin_thickness_mm: 1.5
+    depends_on: []
+
+  # Stage 2b (Feature Extraction): Per-session feature extraction. Each enabled feature extracts to its own folder.
   # Output: 4_analysed/touch_features/<feature>/<session>_touch_summary.csv
   touch_feature_extraction:
     enabled: true
@@ -62,9 +83,9 @@ tasks:
           poissons_ratio: 0.45
           skin_thickness_mm: 1.5
         touch_category: {enabled: true}
-    depends_on: []
+    depends_on: [touch_series_transforms]
 
-  # Stage 2: Global clustering on pooled feature CSVs.
+  # Stages 3–5 (Reduction + Clustering + Evaluation): Global clustering on pooled feature CSVs.
   # Each enabled feature_combination merges the listed feature folders and runs
   # each enabled clustering_profile — cross-product of combinations x clusterers.
   # Output: 4_analysed/touch_clusters/<combination>/<clusterer>/
@@ -145,7 +166,7 @@ tasks:
           score: adjusted_rand_index
     depends_on: [touch_feature_extraction]
 
-  # Stage 3: Statistical comparison of sensor measurements across strata.
+  # Post-pipeline analysis: Statistical comparison of sensor measurements across strata.
   # Discovers clustered CSVs on disk — no explicit file list needed.
   # Output: 4_analysed/touch_comparisons/<combination>/<clusterer>/
   touch_comparing:

@@ -14,10 +14,9 @@ Default tissue parameters (from literature):
 See: docs/development/knowledge-base/note-somatosensory-units-and-calculations.md
 """
 
-import numpy as np
 import pandas as pd
 from .base import FeatureExtractor
-from ..series_level.kinematics import compute_velocity_magnitudes
+from ..series_level.mechanics import get_mechanics
 
 _DEFAULTS = {
     'youngs_modulus_kpa': 100.0,
@@ -41,26 +40,16 @@ class MechanicsOfSolidsExtractor(FeatureExtractor):
     """
 
     def extract(self, group: pd.DataFrame, config: dict) -> dict:
-        E = config.get('youngs_modulus_kpa', _DEFAULTS['youngs_modulus_kpa'])          # kPa
-        h = config.get('skin_thickness_mm', _DEFAULTS['skin_thickness_mm']) * 1e-3     # m
+        E = config.get('youngs_modulus_kpa', _DEFAULTS['youngs_modulus_kpa'])
+        h_mm = config.get('skin_thickness_mm', _DEFAULTS['skin_thickness_mm'])
         fps = config.get('fps', _DEFAULTS['fps'])
-        dt = 1.0 / fps  # s
 
-        depth_m = group['contact_depth'].values * 1e-3          # mm → m
-        area_m2 = group['contact_area'].values * 1e-6           # mm² → m²
-
-        vel_magnitudes = compute_velocity_magnitudes(group, fps=fps).values * 1e-3  # mm/s → m/s
-
-        strain = depth_m / h                                     # dimensionless
-        stress = E * strain                                      # kPa (E in kPa, strain dimensionless)
-
-        strain_rate = vel_magnitudes / h                         # 1/s
-
-        # Elastic energy per frame: 0.5 * E[kPa] * strain^2 * area[m^2] * h[m] → kPa·m^3 = kJ → mJ
-        elastic_energy_per_frame = 0.5 * E * strain ** 2 * area_m2 * h * 1e6  # mJ
-
-        # Impulse: stress[kPa] * area[m^2] * dt → kN·s → mN·s ×1e6
-        impulse_per_frame = stress * area_m2 * dt * 1e6  # mN·s
+        mos = get_mechanics(group, E, h_mm, fps)
+        strain = mos['mos_strain'].values
+        stress = mos['mos_stress_kpa'].values
+        strain_rate = mos['mos_strain_rate'].values
+        elastic_energy = mos['mos_elastic_energy_mj'].values
+        impulse = mos['mos_impulse_mns'].values
 
         return {
             'strain_max': float(strain.max()),
@@ -68,7 +57,7 @@ class MechanicsOfSolidsExtractor(FeatureExtractor):
             'stress_max_kpa': float(stress.max()),
             'stress_mean_kpa': float(stress.mean()),
             'strain_rate_max': float(strain_rate.max()),
-            'elastic_energy_max_mj': float(elastic_energy_per_frame.max()),
-            'elastic_energy_total_mj': float(elastic_energy_per_frame.sum()),
-            'impulse_total_mns': float(impulse_per_frame.sum()),
+            'elastic_energy_max_mj': float(elastic_energy.max()),
+            'elastic_energy_total_mj': float(elastic_energy.sum()),
+            'impulse_total_mns': float(impulse.sum()),
         }
