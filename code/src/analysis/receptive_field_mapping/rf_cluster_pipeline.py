@@ -258,21 +258,44 @@ def _build_cluster_description(
         try:
             with open(metadata_json_path) as f:
                 meta = json.load(f)
-            if meta.get('primary_feature'):
-                desc['primary_feature'] = meta['primary_feature']
-            if meta.get('algorithm') == 'binning' and meta.get('bin_edges'):
-                pf = meta.get('primary_feature')
-                edges = meta['bin_edges'].get(pf, [])
-                try:
-                    idx = int(cluster_label)
-                    if 0 <= idx < len(edges) - 1:
-                        desc['bin_range'] = {
-                            'feature': pf,
-                            'low': round(edges[idx], 2),
-                            'high': round(edges[idx + 1], 2),
-                        }
-                except (ValueError, IndexError):
-                    pass
+            if meta.get('algorithm') == 'type_stratified':
+                label_str = str(cluster_label)
+                sep = label_str.rfind('_')
+                if sep != -1:
+                    type_key = label_str[:sep]
+                    idx_str = label_str[sep + 1:]
+                    per_type_meta = meta.get('per_type', {}).get(type_key, {})
+                    pf = per_type_meta.get('primary_feature')
+                    if pf and per_type_meta.get('bin_edges'):
+                        edges = per_type_meta['bin_edges'].get(pf, [])
+                        try:
+                            idx = int(idx_str)
+                            if 0 <= idx < len(edges) - 1:
+                                desc['bin_range'] = {
+                                    'feature': pf,
+                                    'low': round(edges[idx], 2),
+                                    'high': round(edges[idx + 1], 2),
+                                }
+                        except (ValueError, IndexError):
+                            pass
+                    if pf:
+                        desc['primary_feature'] = pf
+            else:
+                if meta.get('primary_feature'):
+                    desc['primary_feature'] = meta['primary_feature']
+                if meta.get('algorithm') == 'binning' and meta.get('bin_edges'):
+                    pf = meta.get('primary_feature')
+                    edges = meta['bin_edges'].get(pf, [])
+                    try:
+                        idx = int(cluster_label)
+                        if 0 <= idx < len(edges) - 1:
+                            desc['bin_range'] = {
+                                'feature': pf,
+                                'low': round(edges[idx], 2),
+                                'high': round(edges[idx + 1], 2),
+                            }
+                    except (ValueError, IndexError):
+                        pass
         except Exception:
             pass
 
