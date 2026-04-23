@@ -1,4 +1,4 @@
-# feature_extraction/kinematics.py
+# representation/series_level/kinematics.py
 import numpy as np
 import pandas as pd
 

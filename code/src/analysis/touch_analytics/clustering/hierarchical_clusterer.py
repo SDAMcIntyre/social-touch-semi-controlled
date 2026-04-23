@@ -4,7 +4,8 @@ Hierarchical clusterer using Ward's linkage with an adaptive non-uniform
 dendrogram cut driven by a coverage constraint.
 
 Algorithm (from docs/design/inter_neuron_agreement_methodology.md):
-  1. Z-score all features with StandardScaler.
+  1. Features are pre-scaled by the orchestrator (ReductionPipeline) before
+     being passed here; no internal scaling is applied.
   2. Compute Ward's linkage matrix.
   3. Recursively cut the dendrogram top-down:
      - If both child subtrees independently satisfy the coverage constraint,
@@ -22,20 +23,17 @@ A node satisfies coverage when:
 
 Sensor label injection
 ----------------------
-The caller (clustering_pipeline.py) injects sensor labels at runtime via
-``config['_sensor_labels']`` (a numpy array aligned with feature_df rows).
-The ``_`` prefix signals a runtime key — not YAML-configured. Existing
-clusterers that receive this key simply ignore it.
+The caller (clustering_pipeline.py) passes sensor labels at runtime via
+``context.sensor_labels`` (a numpy array aligned with feature_df rows).
 """
 
 import logging
-from typing import Tuple
+from typing import ClassVar, Literal, Tuple
 
 import numpy as np
 import pandas as pd
-from sklearn.preprocessing import StandardScaler
 
-from .base import TouchClusterer
+from .base import ClusteringContext, TouchClusterer
 
 _DEFAULT_MIN_INSTANCES = 5
 _DEFAULT_MIN_SENSOR_TYPES = 2
@@ -44,18 +42,24 @@ _DEFAULT_MIN_SENSOR_TYPES = 2
 class HierarchicalClusterer(TouchClusterer):
     """
     Ward's linkage + adaptive non-uniform dendrogram cut with coverage constraint.
+
+    Data is expected to be already scaled by the orchestrator (ReductionPipeline)
+    before being passed here.
     """
+
+    PATH: ClassVar[Literal["A", "B"]] = "B"
 
     def fit_predict(
         self,
         feature_df: pd.DataFrame,
         config: dict,
+        context: ClusteringContext,
     ) -> Tuple[np.ndarray, dict]:
         from scipy.cluster.hierarchy import linkage
 
         min_instances = config.get('min_instances_per_sensor', _DEFAULT_MIN_INSTANCES)
         min_sensors = config.get('min_sensor_types', _DEFAULT_MIN_SENSOR_TYPES)
-        sensor_labels = config.get('_sensor_labels')  # runtime-injected, may be None
+        sensor_labels = context.sensor_labels  # may be None
 
         n = len(feature_df)
 
@@ -71,8 +75,7 @@ class HierarchicalClusterer(TouchClusterer):
                 "Ward linkage has O(n^2) memory cost — consider subsampling."
             )
 
-        scaler = StandardScaler()
-        X = scaler.fit_transform(feature_df.values)
+        X = feature_df.values
 
         Z = linkage(X, method='ward')
 

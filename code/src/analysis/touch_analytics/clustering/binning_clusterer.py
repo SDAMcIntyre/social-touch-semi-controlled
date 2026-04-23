@@ -1,11 +1,11 @@
 # clustering/binning_clusterer.py
 import logging
-from typing import Tuple
+from typing import ClassVar, Literal, Tuple
 
 import numpy as np
 import pandas as pd
 
-from .base import TouchClusterer
+from .base import ClusteringContext, TouchClusterer
 
 _DEFAULT_N_BINS = 20
 
@@ -34,10 +34,13 @@ class BinningClusterer(TouchClusterer):
         serialisation and writes the arrays as DataFrame columns instead.
     """
 
+    PATH: ClassVar[Literal["A", "B"]] = "B"
+
     def fit_predict(
         self,
         feature_df: pd.DataFrame,
         config: dict,
+        context: ClusteringContext,
     ) -> Tuple[np.ndarray, dict]:
         n_bins: int = config.get('n_bins', _DEFAULT_N_BINS)
         bin_method: str = config.get('bin_method', 'equal_width')

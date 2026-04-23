@@ -1,4 +1,4 @@
-# feature_extraction/temporal_extractor.py
+# representation/feature_characterization/temporal.py
 import numpy as np
 import pandas as pd
 from .base import FeatureExtractor

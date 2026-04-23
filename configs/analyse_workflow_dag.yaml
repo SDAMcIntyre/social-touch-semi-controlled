@@ -132,6 +132,17 @@ tasks:
           type_col: type_metadata
           n_bins: 20
           bin_method: equal_width
+      reduction:
+        scaler: standard
+        variance_filter: null
+        decomposition: null
+      evaluation:
+        internal_metrics: [silhouette, davies_bouldin, calinski_harabasz]
+        stability:
+          method: bootstrap
+          n_rounds: 20
+          subsample_fraction: 0.8
+          score: adjusted_rand_index
     depends_on: [touch_feature_extraction]
 
   # Stage 3: Statistical comparison of sensor measurements across strata.

@@ -1,4 +1,4 @@
-# feature_extraction/pressure_extractor.py
+# representation/feature_characterization/pressure.py
 """
 Geometric pressure proxy extractor.
 
@@ -8,7 +8,7 @@ for contact pressure concentration.  Unlike the model-based stress in
 is robust for cross-session / cross-subject comparisons.
 
 Also computes contact velocity from sticker 3-D position using
-``compute_velocity_magnitudes()`` from ``.kinematics``.
+``compute_velocity_magnitudes()`` from ``series_level.kinematics``.
 
 Units: geo_pressure in mm⁻¹  (depth in mm, area in mm²  → ratio in mm⁻¹)
        geo_velocity  in mm/s
@@ -26,7 +26,7 @@ column is still computed normally.
 import numpy as np
 import pandas as pd
 from .base import FeatureExtractor
-from .kinematics import compute_velocity_magnitudes
+from ..series_level.kinematics import compute_velocity_magnitudes
 
 
 class PressureExtractor(FeatureExtractor):

@@ -1,4 +1,4 @@
-# feature_extraction/mos_extractor.py
+# representation/feature_characterization/mos.py
 """
 Mechanics-of-Solids extractor.
 
@@ -17,7 +17,7 @@ See: docs/development/knowledge-base/note-somatosensory-units-and-calculations.m
 import numpy as np
 import pandas as pd
 from .base import FeatureExtractor
-from .kinematics import compute_velocity_magnitudes
+from ..series_level.kinematics import compute_velocity_magnitudes
 
 _DEFAULTS = {
     'youngs_modulus_kpa': 100.0,

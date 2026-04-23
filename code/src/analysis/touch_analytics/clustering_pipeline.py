@@ -30,6 +30,7 @@ from tqdm import tqdm
 
 from utils.should_process_task import should_process_task, clean_task_outputs
 from .clustering import get_clusterer
+from .clustering.base import ClusteringContext
 from .reporting import VisualReportingStrategy
 from .pipeline_shared import (
     SHARED_COLUMNS,
@@ -37,6 +38,8 @@ from .pipeline_shared import (
     filter_enabled_profiles,
     session_id_from_path,
 )
+from .reduction import ReductionPipeline
+from .evaluation import compute_internal_metrics, bootstrap_stability
 
 # Columns that uniquely identify a single touch across feature CSVs
 _TOUCH_ID_COLS = ['block_order_id', 'trial_id', 'single_touch_id', 'session_id']
@@ -263,6 +266,7 @@ def run_clustering(
 
             cluster_outputs = _cluster_combination(
                 combination_name=combination_name,
+                combination_config=combination_config,
                 pooled=pooled,
                 output_dir=output_dir,
                 clustering_profiles=clustering_profiles,
@@ -279,6 +283,7 @@ def run_clustering(
 
 def _cluster_combination(
     combination_name: str,
+    combination_config: dict,
     pooled: pd.DataFrame,
     output_dir: Path,
     clustering_profiles: dict,
@@ -286,6 +291,30 @@ def _cluster_combination(
 ) -> dict[str, List[Path]]:
     """Run each clusterer on the already-pooled *pooled* DataFrame."""
     outputs: dict[str, List[Path]] = {}
+
+    # --- Shared reduction: build feature matrix once per combination --------
+    feature_cols = [
+        c for c in pooled.columns
+        if c not in SHARED_COLUMNS
+        and pd.api.types.is_numeric_dtype(pooled[c])
+    ]
+
+    feature_df_full = pooled[feature_cols].dropna() if feature_cols else pd.DataFrame()
+    valid_idx = feature_df_full.index
+
+    reduction_meta: dict = {}
+    X_scaled: np.ndarray = np.empty((0, 0))
+
+    if not feature_cols:
+        logging.warning(
+            f"[{combination_name}] No numeric feature columns found — "
+            "all clusterers will be skipped."
+        )
+    else:
+        rp = ReductionPipeline()
+        X_scaled, reduction_meta = rp.fit_transform(feature_df_full, combination_config)
+
+    # -----------------------------------------------------------------------
 
     for clusterer_name, clusterer_config in clustering_profiles.items():
         method = clusterer_config.get('method', clusterer_name)
@@ -313,6 +342,13 @@ def _cluster_combination(
                 pass
         clean_task_outputs([pooled_csv, metadata_json])
 
+        if not feature_cols:
+            print(
+                f"  [cluster] {combination_name} / {clusterer_name} — error: no numeric features",
+                flush=True,
+            )
+            continue
+
         try:
             clusterer = get_clusterer(method)
         except KeyError as exc:
@@ -323,43 +359,23 @@ def _cluster_combination(
             )
             continue
 
-        # Feature columns only (drop shared/categorical)
-        feature_cols = [
-            c for c in pooled.columns
-            if c not in SHARED_COLUMNS
-            and pd.api.types.is_numeric_dtype(pooled[c])
-        ]
-        if not feature_cols:
-            logging.warning(
-                f"[{combination_name}/{clusterer_name}] No numeric feature columns found."
-            )
-            print(
-                f"  [cluster] {combination_name} / {clusterer_name} — error: no numeric features",
-                flush=True,
-            )
-            continue
+        # Wrap scaled array back into a DataFrame so clusterers that read
+        # .values still work, and pass the same retained-column names.
+        retained_cols = reduction_meta.get("retained_columns", feature_cols)
+        scaled_df = pd.DataFrame(X_scaled, index=feature_df_full.index, columns=retained_cols)
 
-        feature_df = pooled[feature_cols].dropna()
-        valid_idx = feature_df.index
-
-        # Inject sensor labels for clusterers that need them (e.g. HierarchicalClusterer)
+        # Build ClusteringContext with runtime arrays for clusterers that need them
         sensor_col = clusterer_config.get('sensor_col')
-        if sensor_col and sensor_col in pooled.columns:
-            clusterer_config = {**clusterer_config, '_sensor_labels': pooled.loc[valid_idx, sensor_col].values}
-
         type_col = clusterer_config.get('type_col')
-        if type_col and type_col in pooled.columns:
-            clusterer_config = {
-                **clusterer_config,
-                '_type_labels': pooled.loc[valid_idx, type_col].values,
-                '_direction_labels': (
-                    pooled.loc[valid_idx, 'direction'].values
-                    if 'direction' in pooled.columns else None
-                ),
-            }
+        direction_col = 'direction'
+        context = ClusteringContext(
+            sensor_labels=pooled.loc[valid_idx, sensor_col].to_numpy() if sensor_col and sensor_col in pooled.columns else None,
+            type_labels=pooled.loc[valid_idx, type_col].to_numpy() if type_col and type_col in pooled.columns else None,
+            direction_labels=pooled.loc[valid_idx, direction_col].to_numpy() if direction_col in pooled.columns else None,
+        )
 
         try:
-            labels, metadata = clusterer.fit_predict(feature_df, clusterer_config)
+            labels, metadata = clusterer.fit_predict(scaled_df, clusterer_config, context)
         except Exception as exc:
             logging.error(f"[{combination_name}/{clusterer_name}] Clustering failed: {exc}")
             print(
@@ -379,6 +395,38 @@ def _cluster_combination(
         # Session coverage
         sessions = result_df.get('session_id', pd.Series(dtype=str)).unique().tolist()
         metadata['session_coverage'] = len(sessions)
+
+        # --- Internal quality metrics --------------------------------------
+        try:
+            internal = compute_internal_metrics(X_scaled, labels)
+            metadata['internal_metrics'] = internal
+        except Exception as exc:
+            logging.warning(
+                f"[{combination_name}/{clusterer_name}] Internal metrics failed: {exc}"
+            )
+
+        # --- Stability (bootstrap) -----------------------------------------
+        eval_cfg: dict = combination_config.get('evaluation', {}) if combination_config else {}
+        stability_cfg: dict = eval_cfg.get('stability', {})
+        n_rounds: int = stability_cfg.get('n_rounds', 20)
+        subsample_fraction: float = stability_cfg.get('subsample_fraction', 0.8)
+        try:
+            stability = bootstrap_stability(
+                clusterer,
+                X_scaled,
+                clusterer_config,
+                n_rounds=n_rounds,
+                subsample_fraction=subsample_fraction,
+                context=context,
+            )
+            metadata['stability'] = stability
+        except Exception as exc:
+            logging.warning(
+                f"[{combination_name}/{clusterer_name}] Stability estimation failed: {exc}"
+            )
+
+        # --- Reduction metadata -------------------------------------------
+        metadata['reduction'] = reduction_meta
 
         try:
             result_df.to_csv(pooled_csv, index=False)

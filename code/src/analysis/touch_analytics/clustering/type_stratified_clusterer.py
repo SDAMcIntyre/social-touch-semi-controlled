@@ -1,11 +1,11 @@
 # clustering/type_stratified_clusterer.py
 import logging
-from typing import Tuple
+from typing import ClassVar, Literal, Tuple
 
 import numpy as np
 import pandas as pd
 
-from .base import TouchClusterer
+from .base import ClusteringContext, TouchClusterer
 
 _GROUPS = ['tap', 'stroke_proximal', 'stroke_distal']
 
@@ -18,20 +18,13 @@ class TypeStratifiedClusterer(TouchClusterer):
     independently via a delegate base clusterer, and merges results with
     type-prefixed string labels (e.g. ``tap_00``, ``stroke_proximal_01``).
 
-    Type and direction labels are injected into ``config`` by the calling
-    pipeline under the ``_type_labels`` and ``_direction_labels`` keys — the
-    same convention used by HierarchicalClusterer for ``_sensor_labels``.
+    Type and direction labels are provided via ``context.type_labels`` and
+    ``context.direction_labels``.
 
     Config keys
     -----------
     base_method : str
         Name of the delegate clusterer (must be in CLUSTERER_REGISTRY).
-    _type_labels : np.ndarray
-        Runtime-injected array (length = len(feature_df)) with type strings
-        (e.g. ``'tap'``, ``'stroke'``).
-    _direction_labels : np.ndarray or None
-        Runtime-injected array with direction strings (e.g. ``'proximal'``,
-        ``'distal'``).  Optional.
 
     Returns
     -------
@@ -41,23 +34,26 @@ class TypeStratifiedClusterer(TouchClusterer):
         Nested per-type metadata plus merged ``extra_columns``.
     """
 
+    PATH: ClassVar[Literal["A", "B"]] = "B"
+
     def fit_predict(
         self,
         feature_df: pd.DataFrame,
         config: dict,
+        context: ClusteringContext,
     ) -> Tuple[np.ndarray, dict]:
         from . import get_clusterer
 
-        if '_type_labels' not in config:
+        if context.type_labels is None:
             raise ValueError(
-                "TypeStratifiedClusterer requires '_type_labels' in config. "
+                "TypeStratifiedClusterer requires context.type_labels. "
                 "Ensure 'type_col' is set in the clustering profile YAML and "
                 "the column exists in the pooled DataFrame so the pipeline "
-                "injects '_type_labels' before calling fit_predict."
+                "populates ClusteringContext.type_labels before calling fit_predict."
             )
 
-        type_labels = config['_type_labels']
-        direction_labels = config.get('_direction_labels')
+        type_labels = context.type_labels
+        direction_labels = context.direction_labels
 
         group_keys = _build_group_keys(type_labels, direction_labels, len(feature_df))
 
@@ -76,7 +72,7 @@ class TypeStratifiedClusterer(TouchClusterer):
 
             indices = np.where(mask)[0]
             base_clusterer = get_clusterer(config['base_method'])
-            base_labels, base_meta = base_clusterer.fit_predict(feature_df.iloc[indices], config)
+            base_labels, base_meta = base_clusterer.fit_predict(feature_df.iloc[indices], config, context)
 
             string_labels = np.array(
                 [f"{group}_{int(lbl):02d}" for lbl in base_labels],

@@ -25,6 +25,7 @@ from tqdm import tqdm
 from utils.should_process_task import should_process_task, clean_task_outputs
 from .feature_extraction import get_feature_extractor, AGGREGATION_NAMES
 from .pipeline_shared import SHARED_COLUMNS, _TqdmLineWrapper, filter_enabled_profiles, session_id_from_path
+from .preparation.direction import infer_direction
 
 
 def _translate_extraction_profiles(extraction_profiles: dict) -> dict:
@@ -292,11 +293,7 @@ def _extract_all_touches(
             if 'type_metadata' in group.columns else 'unknown'
         )
 
-        direction = 'static'
-        if touch_type == 'stroke':
-            start_y = group['sticker_blue_position_y'].iloc[0]
-            end_y = group['sticker_blue_position_y'].iloc[-1]
-            direction = 'proximal' if end_y > start_y else 'distal'
+        direction = infer_direction(group)
 
         mean_contact_x = (
             group['contact_location_x'].mean()

@@ -1,8 +1,8 @@
-# feature_extraction/statistical_extractor.py
+# representation/feature_characterization/statistical.py
 import pandas as pd
 import numpy as np
 from .base import FeatureExtractor
-from .kinematics import compute_velocity_magnitudes, compute_acceleration_magnitudes
+from ..series_level.kinematics import compute_velocity_magnitudes, compute_acceleration_magnitudes
 
 _DEFAULT_AGGREGATIONS = ['mean', 'median', 'std', 'min', 'max', 'range', 'skewness']
 
