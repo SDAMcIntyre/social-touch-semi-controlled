@@ -56,7 +56,7 @@ class FeatureCombinationDialog(QDialog):
         super().__init__(parent)
         self._existing_names = existing_names
         self._edit_mode = combo_name is not None
-        self._combo_name: Optional[str] = combo_name
+        self._original_combo_name: Optional[str] = combo_name
 
         self.setWindowTitle(f"Feature Combination — {task_name}")
         self.setMinimumWidth(320)
@@ -65,13 +65,11 @@ class FeatureCombinationDialog(QDialog):
         layout = QVBoxLayout(self)
 
         layout.addWidget(QLabel("Name:"))
+        self._name_edit = QLineEdit()
+        self._name_edit.setPlaceholderText("e.g. pressure velocity (spaces converted to underscores)")
         if self._edit_mode:
-            self._name_label = QLabel(combo_name)
-            layout.addWidget(self._name_label)
-        else:
-            self._name_edit = QLineEdit()
-            self._name_edit.setPlaceholderText("e.g. mean_only")
-            layout.addWidget(self._name_edit)
+            self._name_edit.setText(combo_name)
+        layout.addWidget(self._name_edit)
 
         layout.addWidget(QLabel("Select features:"))
         self._checkboxes: dict[str, QCheckBox] = {}
@@ -99,11 +97,12 @@ class FeatureCombinationDialog(QDialog):
             if not name:
                 self._show_error("Name cannot be empty.")
                 return
-            if not re.fullmatch(r'[a-z0-9_]+', name):
+            if not re.fullmatch(r'[a-z0-9_ ]+', name):
                 self._show_error(
-                    "Name must contain only lowercase letters, digits, and underscores."
+                    "Name must contain only lowercase letters, digits, spaces, and underscores."
                 )
                 return
+            name = name.replace(' ', '_')
             if name in self._existing_names:
                 self._show_error(f"'{name}' already exists.")
                 return
@@ -123,6 +122,10 @@ class FeatureCombinationDialog(QDialog):
     def get_combo_name(self) -> Optional[str]:
         """Return the combination name (None if dialog was not accepted)."""
         return self._combo_name
+
+    def get_original_combo_name(self) -> Optional[str]:
+        """Return the original combination name (only in edit mode)."""
+        return self._original_combo_name
 
     def get_selected_features(self) -> list[str]:
         """Return the list of checked feature names."""
