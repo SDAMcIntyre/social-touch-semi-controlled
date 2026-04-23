@@ -157,6 +157,8 @@ class TaskDetailPanel(QWidget):
         for i, (key, val) in enumerate(options.items()):
             if key in _OPTION_ENUMS:
                 widget = self._make_enum_section(key, val)
+            elif key == "camera_angle_mode" and isinstance(val, dict) and "auto" in val:
+                widget = self._make_camera_angle_mode_section(key, val)
             elif _is_profile_dict(val):
                 widget = self._make_profile_section(key, val)
             elif _is_feature_combinations_dict(val):
@@ -229,6 +231,19 @@ class TaskDetailPanel(QWidget):
             lbl.mousePressEvent = self._make_complex_click_handler(key, lbl)
             layout.addWidget(lbl)
 
+        return box
+
+    def _make_camera_angle_mode_section(self, key: str, val: dict) -> QWidget:
+        """Group box titled 'Camera Angle Mode Auto' with an Enabled checkbox."""
+        box = QGroupBox("Camera Angle Mode Auto")
+        layout = QVBoxLayout(box)
+        layout.setContentsMargins(6, 4, 6, 4)
+        auto_cfg = val.get("auto") or {}
+        enabled = auto_cfg.get("enabled", False)
+        cb = QCheckBox("Enabled")
+        cb.setChecked(enabled)
+        cb.stateChanged.connect(self._make_camera_angle_mode_handler(key, cb))
+        layout.addWidget(cb)
         return box
 
     def _make_feature_section(self, key: str, val: dict) -> QWidget:
@@ -385,6 +400,14 @@ class TaskDetailPanel(QWidget):
             self.task_changed.emit()
         return _handler
 
+    def _make_camera_angle_mode_handler(self, key: str, cb: QCheckBox):
+        def _handler(_state: int) -> None:
+            if self._model is None or self._task_name is None:
+                return
+            self._model.set_task_option(self._task_name, key, {"auto": {"enabled": cb.isChecked()}})
+            self.task_changed.emit()
+        return _handler
+
     def _make_bool_handler(self, key: str, cb: QCheckBox):
         def _handler(_state: int) -> None:
             if self._model is None or self._task_name is None:
@@ -489,12 +512,26 @@ class TaskDetailPanel(QWidget):
                 parent=self,
             )
             if dlg.exec_() == QDialog.Accepted:
+                new_combo_name = dlg.get_combo_name()
+                original_combo_name = dlg.get_original_combo_name()
                 new_features = dlg.get_selected_features()
-                self._model.set_combination_features(
-                    self._task_name, opt_key, combo_name, new_features
-                )
-                preview_label.setText(f"[{', '.join(new_features)}]")
-                self.task_changed.emit()
+
+                # Handle rename: remove old, add new
+                if new_combo_name != original_combo_name:
+                    self._model.remove_combination(self._task_name, opt_key, original_combo_name)
+                    seq = CommentedSeq(new_features)
+                    seq.fa.set_flow_style()
+                    self._model.add_combination(
+                        self._task_name, opt_key, new_combo_name, {"enabled": True, "features": seq}
+                    )
+                    self.task_changed.emit()
+                    self.show_task(self._model, self._task_name)
+                else:
+                    self._model.set_combination_features(
+                        self._task_name, opt_key, combo_name, new_features
+                    )
+                    preview_label.setText(f"[{', '.join(new_features)}]")
+                    self.task_changed.emit()
         return _handler
 
     def _make_combination_add_handler(self, opt_key: str):
