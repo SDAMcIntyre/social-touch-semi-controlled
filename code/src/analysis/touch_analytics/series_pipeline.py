@@ -16,6 +16,7 @@ import sys
 from pathlib import Path
 from typing import List, Tuple
 
+import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
@@ -24,9 +25,18 @@ from .pipeline_shared import _TqdmLineWrapper, session_id_from_path
 from .preparation.loader import load_session_csv
 from .preparation.block_id import ensure_block_id_column
 from .preparation.grouping import group_touches
-from .representation.series_level.kinematics import get_kinematics
-from .representation.series_level.pressure import compute_geo_pressure
-from .representation.series_level.mechanics import compute_mos_series, MOS_COLUMNS
+from .preparation.interpolation import interpolate_touch_columns
+from .representation.series_level.kinematics import (
+    resolve_hand_position,
+    compute_velocity,
+    compute_acceleration,
+    STICKER_INPUT_COLUMNS,
+    HAND_POSITION_COLUMNS,
+    HAND_VELOCITY_COLUMNS,
+    HAND_ACCELERATION_COLUMNS,
+)
+from .representation.series_level.pressure import compute_pressure, PRESSURE_INPUT_COLUMNS
+from .representation.series_level.mechanics import compute_mos_series, MOS_COLUMNS, MOS_INPUT_COLUMNS
 
 
 def run_series_transforms(
@@ -34,16 +44,25 @@ def run_series_transforms(
     transforms: dict,
     output_dir: Path,
     force: bool = False,
+    preparation_dir: Path | None = None,
 ) -> List[Path]:
     """
-    Compute and persist per-frame kinematics for each session.
+    Compute and persist per-frame series transforms for each session.
 
     Parameters
     ----------
     input_items
         List of (aggregated_session_csv, database_root_path) tuples.
     transforms
-        Dict with transform configs, e.g. ``{'kinematics': {'enabled': True, 'fps': 30.0}}``.
+        Dict with transform configs, e.g.::
+
+            {
+                'hand_position': {'enabled': True, 'drop_used_inputs': False},
+                'hand_velocity': {'enabled': True, 'drop_used_inputs': False},
+                'hand_acceleration': {'enabled': True, 'drop_used_inputs': False},
+                'pressure': {'enabled': True, 'drop_used_inputs': False},
+                'mechanics_of_solids': {'enabled': False, ...},
+            }
     output_dir
         Directory where augmented CSVs are written.
     force
@@ -54,15 +73,26 @@ def run_series_transforms(
     List of paths to written augmented CSVs.
     """
     transforms = transforms or {}
-    kinematics_cfg = transforms.get('kinematics', {})
-    kinematics_enabled = kinematics_cfg.get('enabled', True)
-    fps = kinematics_cfg.get('fps', 30.0)
+
+    hand_pos_cfg = transforms.get('hand_position', {})
+    hand_pos_enabled = hand_pos_cfg.get('enabled', True)
+    hand_pos_drop = hand_pos_cfg.get('drop_used_inputs', False)
+
+    hand_vel_cfg = transforms.get('hand_velocity', {})
+    hand_vel_enabled = hand_vel_cfg.get('enabled', True)
+    hand_vel_drop = hand_vel_cfg.get('drop_used_inputs', False)
+
+    hand_accel_cfg = transforms.get('hand_acceleration', {})
+    hand_accel_enabled = hand_accel_cfg.get('enabled', True)
+    hand_accel_drop = hand_accel_cfg.get('drop_used_inputs', False)
 
     pressure_cfg = transforms.get('pressure', {})
     pressure_enabled = pressure_cfg.get('enabled', True)
+    pressure_drop = pressure_cfg.get('drop_used_inputs', False)
 
     mos_cfg = transforms.get('mechanics_of_solids', {})
     mos_enabled = mos_cfg.get('enabled', False)
+    mos_drop = mos_cfg.get('drop_used_inputs', False)
     mos_E_kpa = mos_cfg.get('youngs_modulus_kpa', 100.0)
     mos_h_mm = mos_cfg.get('skin_thickness_mm', 1.5)
 
@@ -70,7 +100,9 @@ def run_series_transforms(
 
     print(
         f"=== series transforms pipeline: {len(input_items)} sessions, "
-        f"kinematics={'enabled' if kinematics_enabled else 'disabled'}, "
+        f"hand_position={'enabled' if hand_pos_enabled else 'disabled'}, "
+        f"hand_velocity={'enabled' if hand_vel_enabled else 'disabled'}, "
+        f"hand_acceleration={'enabled' if hand_accel_enabled else 'disabled'}, "
         f"pressure={'enabled' if pressure_enabled else 'disabled'}, "
         f"mos={'enabled' if mos_enabled else 'disabled'} ===",
         flush=True,
@@ -84,13 +116,20 @@ def run_series_transforms(
             result = _transform_session(
                 input_file=input_file,
                 output_dir=output_dir,
-                kinematics_enabled=kinematics_enabled,
-                fps=fps,
+                hand_pos_enabled=hand_pos_enabled,
+                hand_pos_drop=hand_pos_drop,
+                hand_vel_enabled=hand_vel_enabled,
+                hand_vel_drop=hand_vel_drop,
+                hand_accel_enabled=hand_accel_enabled,
+                hand_accel_drop=hand_accel_drop,
                 pressure_enabled=pressure_enabled,
+                pressure_drop=pressure_drop,
                 mos_enabled=mos_enabled,
+                mos_drop=mos_drop,
                 mos_E_kpa=mos_E_kpa,
                 mos_h_mm=mos_h_mm,
                 force=force,
+                preparation_dir=preparation_dir,
             )
             if result is not None:
                 written.append(result)
@@ -105,27 +144,38 @@ def run_series_transforms(
 def _transform_session(
     input_file: Path,
     output_dir: Path,
-    kinematics_enabled: bool,
-    fps: float,
+    hand_pos_enabled: bool,
+    hand_pos_drop: bool,
+    hand_vel_enabled: bool,
+    hand_vel_drop: bool,
+    hand_accel_enabled: bool,
+    hand_accel_drop: bool,
     pressure_enabled: bool,
+    pressure_drop: bool,
     mos_enabled: bool,
+    mos_drop: bool,
     mos_E_kpa: float,
     mos_h_mm: float,
     force: bool,
+    preparation_dir: Path | None = None,
 ) -> Path | None:
     session_id = session_id_from_path(input_file)
     output_path = output_dir / f"{session_id}_series_augmented.csv"
 
-    if not kinematics_enabled:
-        logging.warning(
-            f"series_pipeline: kinematics disabled — skipping {session_id}"
-        )
-        return None
+    if preparation_dir is not None:
+        source_file = preparation_dir / f"{session_id}_prepared.csv"
+        if not source_file.exists():
+            raise FileNotFoundError(
+                f"series_pipeline: prepared CSV not found for {session_id}: {source_file}. "
+                "Run touch_preparation first, or set preparation_dir=None to use inline Stage 1."
+            )
+    else:
+        source_file = input_file
 
     if not force and output_path.exists():
         try:
             if not should_process_task(
-                input_paths=[input_file],
+                input_paths=[source_file],
                 output_paths=[output_path],
                 force=False,
             ):
@@ -136,41 +186,79 @@ def _transform_session(
     clean_task_outputs(output_path)
 
     try:
-        df = load_session_csv(input_file)
+        df = load_session_csv(source_file)
     except Exception as exc:
-        logging.error(f"series_pipeline: failed to load {input_file}: {exc}")
+        logging.error(f"series_pipeline: failed to load {source_file}: {exc}")
         return None
 
-    df = ensure_block_id_column(df)
+    if preparation_dir is None:
+        df = ensure_block_id_column(df)
+        df = interpolate_touch_columns(df)
     groups = group_touches(df)
 
-    vel_series: dict[int, pd.Series] = {}
-    accel_series: dict[int, pd.Series] = {}
+    need_velocity = hand_vel_enabled or hand_accel_enabled or mos_enabled
+
+    hand_pos_series: dict[int, pd.DataFrame] = {}
+    vel_series: dict[int, pd.DataFrame] = {}
+    accel_series: dict[int, pd.DataFrame] = {}
     pressure_series: dict[int, pd.Series] = {}
     mos_cols_series: dict[int, dict[str, pd.Series]] = {}
 
     for (_, _, touch_id), group in groups:
         if group.empty or touch_id == 0:
             continue
-        vel, accel = get_kinematics(group, fps=fps)
-        vel_series[id(group)] = vel
-        accel_series[id(group)] = accel
+
+        hand_pos = resolve_hand_position(group)
+        hand_pos_series[id(group)] = hand_pos
+
+        if need_velocity:
+            vel = compute_velocity(hand_pos)
+            accel = compute_acceleration(vel)
+
+            if hand_vel_enabled:
+                vel_series[id(group)] = vel
+            if hand_accel_enabled:
+                accel_series[id(group)] = accel
+
+            if mos_enabled:
+                aug_group = pd.concat([group, hand_pos], axis=1).copy()
+                aug_group['velocity_magnitude'] = np.sqrt(vel.pow(2).sum(axis=1))
+                aug_group['acceleration_magnitude'] = np.sqrt(accel.pow(2).sum(axis=1))
+                mos_cols_series[id(group)] = compute_mos_series(aug_group, mos_E_kpa, mos_h_mm)
+
         if pressure_enabled:
-            pressure_series[id(group)] = compute_geo_pressure(group)
-        if mos_enabled:
-            mos_cols_series[id(group)] = compute_mos_series(group, mos_E_kpa, mos_h_mm, fps)
+            pressure_series[id(group)] = compute_pressure(group)
 
     df = df.copy()
+
+    if hand_pos_enabled and hand_pos_series:
+        df[HAND_POSITION_COLUMNS] = pd.concat(hand_pos_series.values()).reindex(df.index)
     if vel_series:
-        df['velocity_magnitude'] = pd.concat(vel_series.values()).reindex(df.index)
-        df['acceleration_magnitude'] = pd.concat(accel_series.values()).reindex(df.index)
+        df[HAND_VELOCITY_COLUMNS] = pd.concat(vel_series.values()).reindex(df.index)
+    if accel_series:
+        df[HAND_ACCELERATION_COLUMNS] = pd.concat(accel_series.values()).reindex(df.index)
     if pressure_series:
-        df['geo_pressure'] = pd.concat(pressure_series.values()).reindex(df.index)
+        df['pressure'] = pd.concat(pressure_series.values()).reindex(df.index)
     if mos_cols_series:
         for col in MOS_COLUMNS:
             df[col] = pd.concat(
                 [group_mos[col] for group_mos in mos_cols_series.values()]
             ).reindex(df.index)
+
+    cols_to_drop = []
+    if hand_pos_drop:
+        cols_to_drop.extend([c for c in STICKER_INPUT_COLUMNS if c in df.columns])
+    if hand_vel_drop:
+        cols_to_drop.extend([c for c in HAND_POSITION_COLUMNS if c in df.columns])
+    if hand_accel_drop:
+        cols_to_drop.extend([c for c in HAND_VELOCITY_COLUMNS if c in df.columns])
+    if pressure_drop:
+        cols_to_drop.extend([c for c in PRESSURE_INPUT_COLUMNS if c in df.columns])
+    if mos_drop:
+        cols_to_drop.extend([c for c in MOS_INPUT_COLUMNS if c in df.columns and c not in cols_to_drop])
+
+    if cols_to_drop:
+        df = df.drop(columns=cols_to_drop)
 
     try:
         df.to_csv(output_path, index=False)

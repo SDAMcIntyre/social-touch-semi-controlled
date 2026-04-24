@@ -25,7 +25,8 @@ from tqdm import tqdm
 from utils.should_process_task import should_process_task, clean_task_outputs
 from .feature_extraction import get_feature_extractor, AGGREGATION_NAMES
 from .pipeline_shared import SHARED_COLUMNS, _TqdmLineWrapper, filter_enabled_profiles, session_id_from_path
-from .preparation.direction import infer_direction
+from .preparation.interpolation import interpolate_touch_columns
+from .representation.series_level.direction import infer_direction
 
 
 def _translate_extraction_profiles(extraction_profiles: dict) -> dict:
@@ -84,6 +85,8 @@ def run_feature_extraction(
     features: dict,
     output_dir: Path,
     force: bool = False,
+    series_dir: Path | None = None,
+    preparation_dir: Path | None = None,
 ) -> dict[str, list[Path]]:
     """
     Run per-session feature extraction for all configured features.
@@ -146,6 +149,8 @@ def run_feature_extraction(
                     features=features,
                     force=force,
                     progress=progress,
+                    series_dir=series_dir,
+                    preparation_dir=preparation_dir,
                 )
                 for feature_name, csv_path in session_outputs.items():
                     per_feature_session_csvs[feature_name].append(csv_path)
@@ -161,6 +166,8 @@ def _extract_session(
     features: dict,
     force: bool,
     progress: tqdm = None,
+    series_dir: Path | None = None,
+    preparation_dir: Path | None = None,
 ) -> dict[str, Path]:
     """
     Run all enabled features on one session CSV.
@@ -172,13 +179,31 @@ def _extract_session(
     results: dict[str, Path] = {}
     session_id = session_id_from_path(input_file)
 
+    # Determine actual source file: series augmented → prepared → raw (last resort)
+    source_file = input_file
+    if series_dir is not None:
+        candidate = series_dir / f"{session_id}_series_augmented.csv"
+        if candidate.exists():
+            source_file = candidate
+    if source_file is input_file and preparation_dir is not None:
+        candidate = preparation_dir / f"{session_id}_prepared.csv"
+        if candidate.exists():
+            source_file = candidate
+
     try:
-        df = pd.read_csv(input_file)
+        df = pd.read_csv(source_file)
     except Exception as exc:
-        logging.error(f"Failed to load {input_file}: {exc}")
+        logging.error(f"Failed to load {source_file}: {exc}")
         if progress is not None:
             progress.update(len(features))
         return results
+
+    if source_file is input_file:
+        logging.warning(
+            f"extraction_pipeline: {session_id} — no prepared or series CSV found; "
+            "applying inline interpolation on raw CSV (last resort)."
+        )
+        df = interpolate_touch_columns(df)
 
     # Shared preprocessing
     if 'block_order_id' not in df.columns:
@@ -213,7 +238,7 @@ def _extract_session(
         if not force and output_path.exists():
             try:
                 if not should_process_task(
-                    input_paths=[input_file],
+                    input_paths=[source_file],
                     output_paths=[output_path],
                     force=False,
                 ):

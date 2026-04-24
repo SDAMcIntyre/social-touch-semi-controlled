@@ -1,10 +1,6 @@
-# preparation/direction.py
+# representation/series_level/direction.py
 """
 Stroke direction inference for semi-controlled touch data.
-
-De-duplicated from:
-  - extraction_pipeline._extract_all_touches (lines 295–299)
-  - feature_extraction/touch_category_extractor.py (lines 46–52)
 
 Rule: a stroke is 'proximal' if ``sticker_blue_position_y`` increases
 (end_y > start_y), 'distal' otherwise (end_y <= start_y, including the

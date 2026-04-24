@@ -163,8 +163,9 @@ class ObjectsInteractionController:
             ordered_prefix = ['frame_index', 'time', 'contact_detected']
             contact_loc_cols = sorted([c for c in all_cols if c.startswith('contact_location_')])
             new_order_start = ordered_prefix + contact_loc_cols
-            remaining_cols = sorted([c for c in all_cols if c not in new_order_start])
-            final_order = new_order_start + remaining_cols
+            remaining_cols = sorted([c for c in all_cols if c not in new_order_start and c != 'contact_points'])
+            tail = ['contact_points'] if 'contact_points' in all_cols else []
+            final_order = new_order_start + remaining_cols + tail
             df = df[final_order]
 
         # Bundle visualization artifacts

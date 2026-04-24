@@ -44,29 +44,35 @@ from .evaluation import compute_internal_metrics, bootstrap_stability
 # Columns that uniquely identify a single touch across feature CSVs
 _TOUCH_ID_COLS = ['block_order_id', 'trial_id', 'single_touch_id', 'session_id']
 
-# Maps cluster-group data-type names to the column name prefix(es) written by the extractor.
-# StatisticalExtractor uses shorthand variable names (depth, area, velocity, acceleration)
-# as column prefixes — not the raw input column names.
-# Empty list means the type uses its own selection logic (touch_category, location).
+# Maps cluster-group data-type names to the column name prefix(es) written by
+# StatisticalExtractor.  Column names match the raw input columns directly
+# (e.g. contact_depth_mean, hand_velocity_x_max).
+# Empty list means the type uses its own selection logic (location).
 DATA_TYPE_TO_COLUMNS = {
-    'contact_area':   ['area'],          # StatisticalExtractor: area_mean, area_max, …
-    'contact_depth':  ['depth'],         # depth_mean, depth_max, …
-    'velocity':       ['velocity'],      # velocity_mean, velocity_max, …
-    'acceleration':   ['acceleration'],  # acceleration_mean, …
-    'pressure':       ['geo_pressure'],  # PressureExtractor: geo_pressure_mean/max
-    'location':       [],               # dual-mapped — see _resolve_required_feature_folders
-    'touch_category': [],               # binary one-hot — no aggregation folder
+    'contact_area':           ['contact_area'],
+    'contact_depth':          ['contact_depth'],
+    'hand_velocity':     ['hand_velocity_x', 'hand_velocity_y', 'hand_velocity_z'],
+    'hand_acceleration': ['hand_acceleration_x', 'hand_acceleration_y', 'hand_acceleration_z'],
+    'pressure':               ['pressure'],
+    'hand_position':          ['hand_position_x', 'hand_position_y', 'hand_position_z'],
+    'mos_strain':             ['mos_strain'],
+    'mos_stress_kpa':         ['mos_stress_kpa'],
+    'mos_strain_rate':        ['mos_strain_rate'],
+    'mos_elastic_energy_mj':  ['mos_elastic_energy_mj'],
+    'mos_impulse_mns':        ['mos_impulse_mns'],
+    'mechanics_of_solids':    ['mos_strain', 'mos_stress_kpa', 'mos_strain_rate',
+                               'mos_elastic_energy_mj', 'mos_impulse_mns'],
+    'location':               [],
 }
 
-_TOUCH_CATEGORY_COLUMNS = ['is_tap', 'is_stroke', 'dir_proximal', 'dir_distal']
 # location:mean uses these shared columns (always present in every per-aggregation CSV)
 _LOCATION_SHARED_COLS = ['mean_contact_x', 'mean_contact_y', 'mean_contact_z']
 # location:non-mean uses these as base column names; extractor writes e.g. contact_location_x_std
 _LOCATION_BASE_COLS = ['contact_location_x', 'contact_location_y', 'contact_location_z']
 
 
-def _resolve_required_feature_folders(group_spec: dict) -> tuple[list[str], bool]:
-    """Return (folder_names, needs_touch_category) for the given cluster group spec.
+def _resolve_required_feature_folders(group_spec: dict) -> list[str]:
+    """Return folder names for the given cluster group spec.
 
     ``folder_names`` is the list of per-aggregation folder names to load from
     ``touch_features/<folder>/``.  ``location: [mean]`` does NOT add ``mean`` to
@@ -75,12 +81,8 @@ def _resolve_required_feature_folders(group_spec: dict) -> tuple[list[str], bool
     """
     features: dict = group_spec.get('features', {})
     folders: list[str] = []
-    needs_touch_category = False
 
     for data_type, aggregations in features.items():
-        if data_type == 'touch_category':
-            needs_touch_category = True
-            continue
         if data_type == 'location':
             non_mean_aggs = [a for a in aggregations if a != 'mean']
             folders.extend(non_mean_aggs)
@@ -93,13 +95,12 @@ def _resolve_required_feature_folders(group_spec: dict) -> tuple[list[str], bool
         if f not in seen:
             seen.add(f)
             deduped.append(f)
-    return deduped, needs_touch_category
+    return deduped
 
 
 def _select_feature_columns(
     merged_df: pd.DataFrame,
     group_spec: dict,
-    needs_touch_category: bool,
 ) -> list[str]:
     """Return the list of feature column names to pass to the clusterer.
 
@@ -110,16 +111,6 @@ def _select_feature_columns(
     selected: list[str] = []
 
     for data_type, aggregations in features.items():
-        if data_type == 'touch_category':
-            for col in _TOUCH_CATEGORY_COLUMNS:
-                if col in merged_df.columns:
-                    selected.append(col)
-                else:
-                    logging.warning(
-                        f"cluster_groups: expected touch_category column '{col}' not found — skipping."
-                    )
-            continue
-
         if data_type == 'location':
             for agg in aggregations:
                 if agg == 'mean':
@@ -360,10 +351,7 @@ def run_clustering(
                 if evaluation is not None and "evaluation" not in group_spec:
                     group_spec["evaluation"] = evaluation
 
-                folder_names, needs_touch_category = _resolve_required_feature_folders(group_spec)
-                feature_names_to_load = folder_names[:]
-                if needs_touch_category:
-                    feature_names_to_load.append('touch_category')
+                feature_names_to_load = _resolve_required_feature_folders(group_spec)
 
                 if not feature_names_to_load:
                     raise ValueError(
@@ -392,7 +380,7 @@ def run_clustering(
                     flush=True,
                 )
 
-                feature_cols = _select_feature_columns(pooled, group_spec, needs_touch_category)
+                feature_cols = _select_feature_columns(pooled, group_spec)
 
                 group_clustering_methods = filter_enabled_profiles(
                     group_spec.get('clustering_methods', {})

@@ -9,10 +9,6 @@
 from ..representation.feature_characterization import (
     FeatureExtractor,
     StatisticalExtractor,
-    TemporalExtractor,
-    MechanicsOfSolidsExtractor,
-    PressureExtractor,
-    TouchCategoryExtractor,
     AGGREGATION_NAMES,
     EXTRACTOR_REGISTRY,
     get_feature_extractor,
@@ -22,10 +18,6 @@ from ..representation.feature_characterization import (
 __all__ = [
     'FeatureExtractor',
     'StatisticalExtractor',
-    'TemporalExtractor',
-    'MechanicsOfSolidsExtractor',
-    'PressureExtractor',
-    'TouchCategoryExtractor',
     'AGGREGATION_NAMES',
     'EXTRACTOR_REGISTRY',
     'get_feature_extractor',
