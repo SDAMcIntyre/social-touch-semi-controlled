@@ -256,4 +256,5 @@ tasks:
           enabled: true
       cluster_groups: [kinematics_simple_mean, pressure_velocity_mean]
       projection_method: cylindrical_unwrap
+      disjoint_mask_distance_mm: 8.0
     depends_on: [touch_clustering]

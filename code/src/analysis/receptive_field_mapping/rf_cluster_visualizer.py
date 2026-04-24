@@ -6,6 +6,7 @@ normal to the contact surface when possible, with a sensible default fallback.
 """
 
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -21,6 +22,114 @@ from .tangent_plane_alignment import (  # noqa: F401
 )
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class RFRenderContext:
+    """Context object carrying neuron-scoped counts and contact arrays for rendering.
+
+    Parameters
+    ----------
+    neuron_touches:
+        Total touch count for this neuron (session) across all clusters.
+    neuron_cluster_touches:
+        Touch count for this neuron in the current cluster only.
+    neuron_contacts_xyz:
+        (N, 3) array of mean_contact_x/y/z for this neuron across all clusters.
+    neuron_cluster_contacts_xyz:
+        (M, 3) array of mean_contact_x/y/z for this neuron in the current cluster.
+    feature_ranges:
+        Dict from cluster_description['feature_ranges']: {name: {min, max, mean}}.
+    """
+
+    neuron_touches: int
+    neuron_cluster_touches: int
+    neuron_contacts_xyz: np.ndarray   # (N, 3)
+    neuron_cluster_contacts_xyz: np.ndarray   # (M, 3)
+    feature_ranges: dict
+
+
+def _format_metadata_overlay(context: RFRenderContext) -> str:
+    """Build the metadata text string for figure overlays.
+
+    Returns a multi-line string:
+        Touches: {cluster} / {neuron} ({pct:.1f}%)
+        {feature}: [{min}, {max}]
+        ...
+    """
+    nt = context.neuron_touches
+    nct = context.neuron_cluster_touches
+
+    if nt > 0:
+        pct = 100.0 * nct / nt
+        touch_line = f"Touches: {nct} / {nt} ({pct:.1f}%)"
+    else:
+        touch_line = f"Touches: {nct} / {nt} (—%)"
+
+    lines = [touch_line]
+    for feature_name, ranges in context.feature_ranges.items():
+        fmin = ranges.get("min", "?")
+        fmax = ranges.get("max", "?")
+        # Round floats for readability
+        if isinstance(fmin, float):
+            fmin = round(fmin, 3)
+        if isinstance(fmax, float):
+            fmax = round(fmax, 3)
+        lines.append(f"{feature_name}: [{fmin}, {fmax}]")
+
+    return "\n".join(lines)
+
+
+def _draw_hull_3d(ax, points_3d: np.ndarray, color: str, label: str) -> None:
+    """Draw convex hull edges as 3D polylines on a 3D axes.
+
+    Skips gracefully (with a log info) if fewer than 3 points are provided or
+    if scipy raises QhullError.
+
+    Parameters
+    ----------
+    ax:
+        Matplotlib 3D axes object.
+    points_3d:
+        (N, 3) array of 3D points.
+    color:
+        Line colour string.
+    label:
+        Legend label — applied to the first plotted simplex only to avoid
+        duplicate legend entries.
+    """
+    from scipy.spatial import ConvexHull, QhullError
+
+    if points_3d is None or len(points_3d) < 3:
+        logger.info(
+            "_draw_hull_3d: too few points (%d) for hull '%s' — skipping.",
+            len(points_3d) if points_3d is not None else 0,
+            label,
+        )
+        return
+
+    try:
+        hull = ConvexHull(points_3d)
+    except QhullError:
+        logger.info("_draw_hull_3d: QhullError for hull '%s' — skipping.", label)
+        return
+
+    first = True
+    for simplex in hull.simplices:
+        # Each simplex is a triangle: draw all three edges
+        for i in range(len(simplex)):
+            p1 = points_3d[simplex[i]]
+            p2 = points_3d[simplex[(i + 1) % len(simplex)]]
+            kwargs = dict(color=color, linewidth=0.8, linestyle='--', alpha=0.7)
+            if first:
+                kwargs['label'] = label
+                first = False
+            ax.plot3D(
+                [p1[0], p2[0]],
+                [p1[1], p2[1]],
+                [p1[2], p2[2]],
+                **kwargs,
+            )
 
 
 def _normal_to_view_angles(normal: np.ndarray) -> tuple:
@@ -51,6 +160,9 @@ def render_forearm_heatmap(
     interactive: bool = False,
     projection_method: str = None,
     cluster_description: str = '',
+    display_metric: str = "spike_count",
+    render_context: 'RFRenderContext' = None,
+    disjoint_mask_distance_mm: float = 8.0,
 ) -> None:
     """Render a 3D forearm heatmap of spike-count contact points and save as PNG.
 
@@ -66,7 +178,7 @@ def render_forearm_heatmap(
     forearm_ply_path:
         Path to the PCA-calibrated forearm PLY file.
     spike_counts_df:
-        DataFrame with columns (x, y, z, spike_count).
+        DataFrame with columns (x, y, z, spike_count, unique_touch_spike_count).
     output_path:
         Destination PNG file path (parent directories are created if needed).
     session_id:
@@ -82,7 +194,32 @@ def render_forearm_heatmap(
         a 2D scatter + heatmap figure instead of the 3D plot. The output filename
         should include the method name (caller's responsibility via output_path).
         Pass None (default) for the original 3D rendering path.
+    display_metric:
+        ``"spike_count"`` (default) uses raw spike counts as the colour driver.
+        ``"spike_ratio"`` uses unique_touch_spike_count / neuron_cluster_touches
+        (range [0, 1]).  Any other value raises ``ValueError``.
+    render_context:
+        Optional :class:`RFRenderContext` carrying neuron-scoped touch counts,
+        contact arrays, and feature ranges. Required when
+        ``display_metric="spike_ratio"``.
+    disjoint_mask_distance_mm:
+        In the 2D projection path, grid cells further than this distance (mm)
+        from the nearest sample point are masked to NaN. Default 8.0 mm.
     """
+    _VALID_METRICS = {"spike_count", "spike_ratio"}
+    if display_metric not in _VALID_METRICS:
+        raise ValueError(
+            f"display_metric must be one of {_VALID_METRICS!r}, got {display_metric!r}."
+        )
+
+    if display_metric == "spike_ratio":
+        if render_context is None or render_context.neuron_cluster_touches == 0:
+            raise ValueError(
+                "display_metric='spike_ratio' requires render_context with "
+                "neuron_cluster_touches > 0, but got "
+                f"render_context={render_context!r}."
+            )
+
     if spike_counts_df.empty:
         logger.warning(
             "Empty spike_counts_df for session %s, cluster %s — skipping render.",
@@ -116,6 +253,48 @@ def render_forearm_heatmap(
             except Exception:
                 logger.debug("Could not project forearm vertices to 2D for background.", exc_info=True)
 
+        # --- Compute ratio counts if requested ---
+        ratio_counts = None
+        if display_metric == "spike_ratio":
+            ratio_counts = (
+                spike_counts_df['unique_touch_spike_count'].to_numpy()
+                / render_context.neuron_cluster_touches
+            )
+
+        # --- Project neuron hull contact points if context provided ---
+        neuron_contacts_uv = None
+        neuron_cluster_contacts_uv = None
+        if render_context is not None:
+            hull_centroid = (
+                render_context.neuron_contacts_xyz.mean(axis=0)
+                if len(render_context.neuron_contacts_xyz) > 0
+                else contact_centroid
+            )
+            if len(render_context.neuron_contacts_xyz) > 0:
+                try:
+                    neuron_contacts_uv = project_to_2d(
+                        render_context.neuron_contacts_xyz,
+                        forearm_vertices,
+                        hull_centroid,
+                        method=projection_method,
+                    )
+                except Exception:
+                    logger.debug(
+                        "Could not project neuron_contacts_xyz to 2D for hull.", exc_info=True
+                    )
+            if len(render_context.neuron_cluster_contacts_xyz) > 0:
+                try:
+                    neuron_cluster_contacts_uv = project_to_2d(
+                        render_context.neuron_cluster_contacts_xyz,
+                        forearm_vertices,
+                        hull_centroid,
+                        method=projection_method,
+                    )
+                except Exception:
+                    logger.debug(
+                        "Could not project neuron_cluster_contacts_xyz to 2D for hull.", exc_info=True
+                    )
+
         render_2d_heatmap(
             uv_points=uv_points,
             counts=counts,
@@ -126,6 +305,12 @@ def render_forearm_heatmap(
             forearm_uv=forearm_uv,
             interactive=interactive,
             cluster_description=cluster_description,
+            display_metric=display_metric,
+            render_context=render_context,
+            ratio_counts=ratio_counts,
+            neuron_contacts_uv=neuron_contacts_uv,
+            neuron_cluster_contacts_uv=neuron_cluster_contacts_uv,
+            disjoint_mask_distance_mm=disjoint_mask_distance_mm,
         )
         return
 
@@ -203,30 +388,43 @@ def render_forearm_heatmap(
 
                     has_any = np.any(~np.isnan(per_vertex))
                     if has_any:
-                        vmin = max(1, float(np.nanmin(per_vertex[~np.isnan(per_vertex)])))
-                        vmax = float(np.nanmax(per_vertex[~np.isnan(per_vertex)]))
-                        if vmin < vmax:
-                            norm = LogNorm(vmin=vmin, vmax=vmax)
-                        else:
+                        # Determine colour driver
+                        if display_metric == "spike_ratio":
+                            ratio_vals = (
+                                spike_counts_df['unique_touch_spike_count'].to_numpy()
+                                / render_context.neuron_cluster_touches
+                            )
+                            per_vertex_color = map_scalars_to_mesh(
+                                forearm_mesh, spike_xyz, ratio_vals.astype(float)
+                            )
+                            vmin_c = 0.0
+                            vmax_c = 1.0
                             norm = None
+                            cbar_label = "Spike ratio"
+                        else:
+                            per_vertex_color = per_vertex
+                            vmin_c = max(1, float(np.nanmin(per_vertex[~np.isnan(per_vertex)])))
+                            vmax_c = float(np.nanmax(per_vertex[~np.isnan(per_vertex)]))
+                            norm = LogNorm(vmin=vmin_c, vmax=vmax_c) if vmin_c < vmax_c else None
+                            cbar_label = "Spike count"
 
                         import matplotlib.cm as cm
                         cmap_obj = cm.get_cmap('RdYlBu_r')
                         if norm is not None:
-                            normed = norm(np.nan_to_num(per_vertex, nan=vmin))
+                            normed = norm(np.nan_to_num(per_vertex_color, nan=vmin_c))
                         else:
-                            if vmax > vmin:
-                                normed = (np.nan_to_num(per_vertex, nan=vmin) - vmin) / (vmax - vmin)
+                            if vmax_c > vmin_c:
+                                normed = (np.nan_to_num(per_vertex_color, nan=vmin_c) - vmin_c) / (vmax_c - vmin_c)
                             else:
-                                normed = np.zeros_like(per_vertex)
+                                normed = np.zeros_like(per_vertex_color)
                         vertex_rgba = cmap_obj(normed)
-                        vertex_rgba[np.isnan(per_vertex), 3] = 0.0
+                        vertex_rgba[np.isnan(per_vertex_color), 3] = 0.0
 
                         # plot_trisurf cannot accept facecolors kwarg directly —
                         # it passes it internally and would get duplicates. Set
                         # per-face colors on the returned Poly3DCollection instead.
                         face_rgba = vertex_rgba[faces].mean(axis=1)
-                        nan_mask = np.isnan(per_vertex)
+                        nan_mask = np.isnan(per_vertex_color)
                         face_rgba[nan_mask[faces].all(axis=1), 3] = 0.0
 
                         surf = ax.plot_trisurf(
@@ -238,9 +436,11 @@ def render_forearm_heatmap(
                         surf.set_facecolor(face_rgba)
 
                         from matplotlib.cm import ScalarMappable
-                        sm = ScalarMappable(cmap='RdYlBu_r', norm=norm)
+                        from matplotlib.colors import Normalize
+                        sm_norm = norm if norm is not None else Normalize(vmin=vmin_c, vmax=vmax_c)
+                        sm = ScalarMappable(cmap='RdYlBu_r', norm=sm_norm)
                         sm.set_array([])
-                        cbar = plt.colorbar(sm, ax=ax, label='Spike count', shrink=0.6, pad=0.1)
+                        cbar = plt.colorbar(sm, ax=ax, label=cbar_label, shrink=0.6, pad=0.1)
                         cbar.ax.yaxis.set_tick_params(color='white')
                         cbar.ax.yaxis.label.set_color('white')
                         plt.setp(cbar.ax.yaxis.get_ticklabels(), color='white')
@@ -293,22 +493,65 @@ def render_forearm_heatmap(
         else:
             plot_xs, plot_ys, plot_zs = xs, ys, zs
 
-        vmin = max(1, counts.min())
-        vmax = counts.max()
-        if vmin >= vmax:
+        if display_metric == "spike_ratio":
+            color_values = (
+                spike_counts_df['unique_touch_spike_count'].to_numpy()
+                / render_context.neuron_cluster_touches
+            )
+            vmin_s = 0.0
+            vmax_s = 1.0
             norm = None
+            cbar_label = "Spike ratio"
         else:
-            norm = LogNorm(vmin=vmin, vmax=vmax)
+            color_values = counts
+            vmin_s = max(1, counts.min())
+            vmax_s = counts.max()
+            norm = LogNorm(vmin=vmin_s, vmax=vmax_s) if vmin_s < vmax_s else None
+            cbar_label = "Spike count"
 
         sc = ax.scatter(
             plot_xs, plot_ys, plot_zs,
-            c=counts, cmap='RdYlBu_r', s=20, alpha=0.9,
+            c=color_values, cmap='RdYlBu_r', s=20, alpha=0.9,
             norm=norm, depthshade=False,
+            vmin=vmin_s if norm is None else None,
+            vmax=vmax_s if norm is None else None,
         )
-        cbar = plt.colorbar(sc, ax=ax, label='Spike count', shrink=0.6, pad=0.1)
+        cbar = plt.colorbar(sc, ax=ax, label=cbar_label, shrink=0.6, pad=0.1)
         cbar.ax.yaxis.set_tick_params(color='white')
         cbar.ax.yaxis.label.set_color('white')
         plt.setp(cbar.ax.yaxis.get_ticklabels(), color='white')
+
+    # --- Draw convex hull perimeters (3D path) ---
+    if render_context is not None:
+        if R is not None:
+            all_xyz_rot = (
+                align_points(render_context.neuron_contacts_xyz, R)
+                if len(render_context.neuron_contacts_xyz) > 0
+                else render_context.neuron_contacts_xyz
+            )
+            cluster_xyz_rot = (
+                align_points(render_context.neuron_cluster_contacts_xyz, R)
+                if len(render_context.neuron_cluster_contacts_xyz) > 0
+                else render_context.neuron_cluster_contacts_xyz
+            )
+        else:
+            all_xyz_rot = render_context.neuron_contacts_xyz
+            cluster_xyz_rot = render_context.neuron_cluster_contacts_xyz
+
+        _draw_hull_3d(ax, all_xyz_rot, '#00aaff', 'neuron (all clusters)')
+        _draw_hull_3d(ax, cluster_xyz_rot, '#ffaa00', 'neuron ∩ cluster')
+
+        metadata_text = _format_metadata_overlay(render_context)
+        ax.text2D(
+            0.02, 0.02,
+            metadata_text,
+            transform=ax.transAxes,
+            va='bottom',
+            ha='left',
+            color='#aaaaaa',
+            fontsize=7,
+            fontfamily='monospace',
+        )
 
     # --- Camera orientation ---
     if R is not None:

@@ -295,6 +295,7 @@ def map_receptive_fields_clustered_flow(
     clustering_profiles: dict = None,
     camera_angle_mode: str = "manual",
     projection_method: str = None,
+    disjoint_mask_distance_mm: float = 8.0,
 ) -> List[Path]:
     """
     Cluster-based RF mapping: spike-count heatmaps per cluster from touch_clustering output.
@@ -325,6 +326,7 @@ def map_receptive_fields_clustered_flow(
         clustering_profiles=clustering_profiles,
         force=force_processing,
         projection_method=projection_method,
+        disjoint_mask_distance_mm=disjoint_mask_distance_mm,
     )
 
     from analysis.receptive_field_mapping.rf_camera_angle_task import pick_rf_camera_angle_batch
@@ -526,6 +528,8 @@ def run_batch_analysis(
                         kwargs["show_interactive"] = options["show_interactive"]
                     if options.get("projection_method"):
                         kwargs["projection_method"] = options["projection_method"]
+                    if "disjoint_mask_distance_mm" in options:
+                        kwargs["disjoint_mask_distance_mm"] = float(options["disjoint_mask_distance_mm"])
                     flow_func(**kwargs)
                 except Exception as e:
                     executor.error_msg = f"Batch analysis failed: {str(e)}"

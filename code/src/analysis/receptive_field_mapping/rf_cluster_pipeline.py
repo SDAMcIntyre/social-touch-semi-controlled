@@ -8,14 +8,14 @@ per-cluster spike_counts.csv files. Renders per-session 3D forearm heatmap PNGs.
 
 import json
 import logging
-from collections import Counter
+from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 
-from analysis.receptive_field_mapping.rf_cluster_visualizer import render_forearm_heatmap
+from analysis.receptive_field_mapping.rf_cluster_visualizer import render_forearm_heatmap, RFRenderContext
 from analysis.receptive_field_mapping.rf_data_loader import (
     parse_contact_points,
     resolve_forearm_ply,
@@ -114,13 +114,14 @@ def _build_session_touch_map(
 def _extract_spike_contact_points(
     aggregated_csv_path: Path,
     touch_keys: List[Tuple],
-) -> Counter:
+) -> Tuple[Counter, defaultdict]:
     """Extract spike-associated contact points from one session's aggregated CSV.
 
     Reads the aggregated CSV, filters to the specified touches, forward-fills
     contact_points within each touch group (30Hz -> 1kHz alignment), filters
-    rows where Nerve_spike == 1, parses contact_points, and returns a Counter
-    of (x, y, z) -> spike_count.
+    rows where Nerve_spike == 1, parses contact_points, and returns both a
+    Counter of (x, y, z) -> spike_count and a DefaultDict of
+    (x, y, z) -> set of unique (block_order_id, trial_id, single_touch_id) tuples.
 
     Parameters
     ----------
@@ -131,13 +132,16 @@ def _extract_spike_contact_points(
 
     Returns
     -------
-    Counter mapping (x, y, z) tuple -> spike count.
+    Tuple of:
+        - Counter mapping (x, y, z) tuple -> spike count.
+        - DefaultDict mapping (x, y, z) tuple -> set of unique touch keys.
     """
     spike_counter: Counter = Counter()
+    unique_touch_counter: defaultdict = defaultdict(set)
 
     if not aggregated_csv_path.exists():
         logger.warning("Aggregated CSV not found, skipping: %s", aggregated_csv_path)
-        return spike_counter
+        return spike_counter, unique_touch_counter
 
     try:
         header_df = pd.read_csv(aggregated_csv_path, nrows=0)
@@ -147,15 +151,15 @@ def _extract_spike_contact_points(
             logger.warning(
                 "Skipping %s: missing columns %s", aggregated_csv_path.name, missing
             )
-            return spike_counter
+            return spike_counter, unique_touch_counter
 
         df = pd.read_csv(aggregated_csv_path, usecols=_NEEDED_COLS)
     except Exception:
         logger.exception("Error reading %s", aggregated_csv_path.name)
-        return spike_counter
+        return spike_counter, unique_touch_counter
 
     if df.empty:
-        return spike_counter
+        return spike_counter, unique_touch_counter
 
     # Merge-based filter: much faster than row-wise apply for large DataFrames
     keys_df = pd.DataFrame(
@@ -164,7 +168,7 @@ def _extract_spike_contact_points(
     touch_df = df.merge(keys_df, on=['block_order_id', 'trial_id', 'single_touch_id'], how='inner').copy()
 
     if touch_df.empty:
-        return spike_counter
+        return spike_counter, unique_touch_counter
 
     # Forward-fill contact_points within each touch group (30Hz -> 1kHz)
     # Must be per-touch to avoid leaking contact location between touches.
@@ -172,40 +176,57 @@ def _extract_spike_contact_points(
         ['block_order_id', 'trial_id', 'single_touch_id']
     )['contact_points'].ffill()
 
-    # Filter to spike rows and parse contact points
+    # Filter to spike rows and parse contact points.
+    # Iterate rows so touch-key columns are available alongside contact_points.
     spike_rows = touch_df[touch_df['Nerve_spike'] == 1]
-    for cp_str in spike_rows['contact_points']:
+    for row in spike_rows.itertuples(index=False):
+        cp_str = row.contact_points
+        touch_key = (row.block_order_id, row.trial_id, row.single_touch_id)
         parsed = parse_contact_points(cp_str)
         for pt in parsed:
             spike_counter[pt] += 1
+            unique_touch_counter[pt].add(touch_key)
 
-    return spike_counter
+    return spike_counter, unique_touch_counter
 
 
 def _aggregate_spike_counts(
-    session_counters: List[Counter],
+    session_counters: List[Tuple[Counter, defaultdict]],
 ) -> pd.DataFrame:
     """Aggregate spike counters from multiple sessions into a DataFrame.
 
     Parameters
     ----------
     session_counters:
-        List of Counter objects, one per session.
+        List of (spike_counter, unique_touch_counter) pairs, one per session.
+        spike_counter: Counter mapping (x, y, z) -> spike count.
+        unique_touch_counter: DefaultDict mapping (x, y, z) -> set of unique touch keys.
 
     Returns
     -------
-    DataFrame with columns (x, y, z, spike_count), sorted by spike_count descending.
+    DataFrame with columns (x, y, z, spike_count, unique_touch_spike_count),
+    sorted by spike_count descending.
     """
-    total: Counter = Counter()
-    for c in session_counters:
-        total.update(c)
+    total_spike: Counter = Counter()
+    total_unique: defaultdict = defaultdict(set)
 
-    if not total:
-        return pd.DataFrame(columns=['x', 'y', 'z', 'spike_count'])
+    for spike_c, unique_c in session_counters:
+        total_spike.update(spike_c)
+        for pt, touch_set in unique_c.items():
+            total_unique[pt].update(touch_set)
+
+    if not total_spike:
+        return pd.DataFrame(columns=['x', 'y', 'z', 'spike_count', 'unique_touch_spike_count'])
 
     rows = [
-        {'x': pt[0], 'y': pt[1], 'z': pt[2], 'spike_count': count}
-        for pt, count in total.items()
+        {
+            'x': pt[0],
+            'y': pt[1],
+            'z': pt[2],
+            'spike_count': count,
+            'unique_touch_spike_count': len(total_unique[pt]),
+        }
+        for pt, count in total_spike.items()
     ]
     df = pd.DataFrame(rows).sort_values('spike_count', ascending=False).reset_index(drop=True)
     return df
@@ -223,9 +244,16 @@ def _build_cluster_description(
     clustered_df: pd.DataFrame,
     cluster_label: str,
     metadata_json_path: Path = None,
+    neuron_touches: Dict[str, int] = None,
+    neuron_cluster_touches: Dict[str, int] = None,
 ) -> dict:
     rows = clustered_df[clustered_df['cluster_label'].astype(str) == str(cluster_label)]
     desc: dict = {'cluster_label': cluster_label, 'n_touches': int(len(rows))}
+
+    if neuron_touches is not None:
+        desc['neuron_touches'] = neuron_touches
+    if neuron_cluster_touches is not None:
+        desc['neuron_cluster_touches'] = neuron_cluster_touches
 
     if 'type_metadata' in rows.columns:
         vc = rows['type_metadata'].value_counts(normalize=True)
@@ -331,6 +359,7 @@ def run_cluster_rf_mapping(
     clustering_profiles: dict = None,
     force: bool = False,
     projection_method: Optional[str] = None,
+    disjoint_mask_distance_mm: float = 8.0,
 ) -> List[Path]:
     """Orchestrate cluster-based receptive field mapping.
 
@@ -361,6 +390,11 @@ def run_cluster_rf_mapping(
         **DEPRECATED.** Companion to *feature_combinations*.
     force:
         If True, reprocess even if outputs are up-to-date.
+    disjoint_mask_distance_mm:
+        2D heatmap cells farther than this distance (mm) from the nearest spike
+        sample are set to NaN (transparent) to prevent interpolation bridging
+        across disjoint RF hotspots.  Default 8.0 mm (matches the
+        ``map_scalars_to_mesh`` search radius of 5 mm with a small margin).
 
     Returns
     -------
@@ -447,21 +481,70 @@ def run_cluster_rf_mapping(
         summary_data: dict = {}
         metrics_rows: List[dict] = []
 
+        # Task 1.3 — neuron_touches: total touches per session_id across all clusters.
+        # Computed once outside the cluster loop and reused for every cluster.
+        neuron_touches: Dict[str, int] = {
+            str(k): int(v)
+            for k, v in clustered_df.groupby('session_id').size().items()
+        }
+
+        # Task 1.4 — validate mean_contact columns exist before the cluster loop.
+        _contact_cols = ['mean_contact_x', 'mean_contact_y', 'mean_contact_z']
+        _missing_contact_cols = [c for c in _contact_cols if c not in clustered_df.columns]
+        if _missing_contact_cols:
+            raise ValueError(
+                f"run_cluster_rf_mapping: clustered_df is missing required contact "
+                f"columns: {_missing_contact_cols}. Cannot compute neuron contact arrays."
+            )
+
         for cluster_idx, (cluster_label, cluster_df) in enumerate(clustered_by_label.items(), start=1):
             n_touches = len(cluster_df)
             print(f"  Cluster {cluster_idx}/{n_clusters} (label={cluster_label}, {n_touches} touches)...")
             cluster_out = base_output / _format_cluster_folder(cluster_label)
             cluster_out.mkdir(parents=True, exist_ok=True)
 
+            # Task 1.3 — neuron_cluster_touches: touches per session_id within this cluster.
+            neuron_cluster_touches: Dict[str, int] = {
+                str(k): int(v)
+                for k, v in (
+                    clustered_df[clustered_df['cluster_label'].astype(str) == cluster_label]
+                    .groupby('session_id')
+                    .size()
+                    .items()
+                )
+            }
+
+            # Task 1.4 — per-session contact XYZ arrays.
+            neuron_contacts_xyz: Dict[str, np.ndarray] = {}
+            neuron_cluster_contacts_xyz: Dict[str, np.ndarray] = {}
+            for sid in neuron_touches:
+                neuron_contacts_xyz[sid] = (
+                    clustered_df[clustered_df['session_id'].astype(str) == sid][_contact_cols]
+                    .dropna()
+                    .to_numpy()
+                )
+                neuron_cluster_contacts_xyz[sid] = (
+                    clustered_df[
+                        (clustered_df['session_id'].astype(str) == sid)
+                        & (clustered_df['cluster_label'].astype(str) == cluster_label)
+                    ][_contact_cols]
+                    .dropna()
+                    .to_numpy()
+                )
+
             cluster_desc = _build_cluster_description(
-                clustered_df, cluster_label, cluster_metadata_path,
+                clustered_df,
+                cluster_label,
+                cluster_metadata_path,
+                neuron_touches=neuron_touches,
+                neuron_cluster_touches=neuron_cluster_touches,
             )
             with open(cluster_out / 'cluster_description.json', 'w') as _f:
                 json.dump(cluster_desc, _f, indent=2)
             description_line = _description_summary_line(cluster_desc)
 
             session_touch_map = _build_session_touch_map(cluster_df)
-            session_counters: List[Counter] = []
+            session_counters: List[Tuple[Counter, defaultdict]] = []
             session_spike_dfs: Dict[str, pd.DataFrame] = {}
 
             for session_id, touch_keys in session_touch_map.items():
@@ -484,15 +567,19 @@ def run_cluster_rf_mapping(
                     )
                     continue
 
-                session_counter = _extract_spike_contact_points(agg_csvs[0], touch_keys)
+                session_counter, session_unique_counter = _extract_spike_contact_points(
+                    agg_csvs[0], touch_keys
+                )
                 n_spikes = sum(session_counter.values())
                 print(f"    -> {n_spikes} spikes at {len(session_counter)} contact points.")
-                session_counters.append(session_counter)
+                session_counters.append((session_counter, session_unique_counter))
 
                 if session_counter:
-                    session_spike_dfs[session_id] = _aggregate_spike_counts([session_counter])
+                    session_spike_dfs[session_id] = _aggregate_spike_counts(
+                        [(session_counter, session_unique_counter)]
+                    )
 
-            # Save pooled spike_counts.csv for this cluster
+            # Save pooled spike_counts.csv for this cluster (session_counters is now a list of pairs)
             pooled_df = _aggregate_spike_counts(session_counters)
             spike_counts_csv = cluster_out / 'spike_counts.csv'
             pooled_df.to_csv(spike_counts_csv, index=False)
@@ -542,36 +629,79 @@ def run_cluster_rf_mapping(
                     f" {len(pooled_df)} unique contact points."
                 )
 
-            # Render per-session forearm heatmaps
+            # Render per-session forearm heatmaps (count + ratio PNGs)
             for session_id, spike_df in session_spike_dfs.items():
                 if spike_df.empty:
                     continue
                 session_dir = session_dir_map[session_id]
                 forearm_ply = resolve_forearm_ply(session_dir, session_id)
                 suffix = f'_{projection_method}' if projection_method else ''
-                png_path = cluster_out / f'{session_id}_rf_heatmap{suffix}.png'
-                print(f"    Rendering heatmap: {session_id}...")
+
+                render_context = RFRenderContext(
+                    neuron_touches=neuron_touches.get(session_id, 0),
+                    neuron_cluster_touches=neuron_cluster_touches.get(session_id, 0),
+                    neuron_contacts_xyz=neuron_contacts_xyz.get(session_id, np.empty((0, 3))),
+                    neuron_cluster_contacts_xyz=neuron_cluster_contacts_xyz.get(
+                        session_id, np.empty((0, 3))
+                    ),
+                    feature_ranges=cluster_desc.get('feature_ranges', {}),
+                )
+
+                print(f"    Rendering count heatmap: {session_id}...")
+                count_png = cluster_out / f'{session_id}_rf_heatmap_count{suffix}.png'
                 try:
                     render_forearm_heatmap(
                         forearm_ply_path=forearm_ply,
                         spike_counts_df=spike_df,
-                        output_path=png_path,
+                        output_path=count_png,
                         session_id=session_id,
                         cluster_label=cluster_label,
                         projection_method=projection_method,
                         cluster_description=description_line,
+                        display_metric="spike_count",
+                        render_context=render_context,
+                        disjoint_mask_distance_mm=disjoint_mask_distance_mm,
                     )
                 except Exception:
                     logger.exception(
-                        "Failed to render heatmap for session %s, cluster %s",
+                        "Failed to render count heatmap for session %s, cluster %s",
                         session_id, cluster_label,
                     )
 
+                if render_context.neuron_cluster_touches > 0:
+                    print(f"    Rendering ratio heatmap: {session_id}...")
+                    ratio_png = cluster_out / f'{session_id}_rf_heatmap_ratio{suffix}.png'
+                    try:
+                        render_forearm_heatmap(
+                            forearm_ply_path=forearm_ply,
+                            spike_counts_df=spike_df,
+                            output_path=ratio_png,
+                            session_id=session_id,
+                            cluster_label=cluster_label,
+                            projection_method=projection_method,
+                            cluster_description=description_line,
+                            display_metric="spike_ratio",
+                            render_context=render_context,
+                            disjoint_mask_distance_mm=disjoint_mask_distance_mm,
+                        )
+                    except Exception:
+                        logger.exception(
+                            "Failed to render ratio heatmap for session %s, cluster %s",
+                            session_id, cluster_label,
+                        )
+                else:
+                    logger.info(
+                        "Skipping ratio heatmap for session %s, cluster %s: neuron_cluster_touches=0.",
+                        session_id, cluster_label,
+                    )
+
+            n_unique_touch_points = int((pooled_df['unique_touch_spike_count'] > 0).sum()) if not pooled_df.empty else 0
             summary_data[cluster_label] = {
                 'n_sessions': len(session_touch_map),
                 'n_touches': n_touches,
                 'total_spike_points': len(pooled_df),
                 'total_spikes': total_spikes,
+                'n_unique_touch_points': n_unique_touch_points,
                 'rf_metrics_computed': True,
             }
 
