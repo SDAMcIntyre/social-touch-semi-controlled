@@ -27,6 +27,11 @@ from .feature_extraction import get_feature_extractor, AGGREGATION_NAMES
 from .pipeline_shared import SHARED_COLUMNS, _TqdmLineWrapper, filter_enabled_profiles, session_id_from_path
 from .preparation.interpolation import interpolate_touch_columns
 from .representation.series_level.direction import infer_direction
+from .representation.feature_characterization.statistical import _EXCLUDE_FROM_AGGREGATION
+
+TOUCH_KEYS = ['block_order_id', 'trial_id', 'single_touch_id']
+
+_PANDAS_NATIVE_AGGS = frozenset({'mean', 'median', 'std', 'min', 'max'})
 
 
 def _translate_extraction_profiles(extraction_profiles: dict) -> dict:
@@ -190,6 +195,44 @@ def _extract_session(
         if candidate.exists():
             source_file = candidate
 
+    filename = input_file.name
+    if '_semicontrolled_' in filename:
+        prefix = filename.split('_semicontrolled_')[0]
+        csv_stem = f'{prefix}_semicontrolled_touch_summary.csv'
+    else:
+        csv_stem = f'{input_file.stem}_touch_summary.csv'
+
+    stat_features = {k: v for k, v in features.items() if k in AGGREGATION_NAMES}
+    other_features = {k: v for k, v in features.items() if k not in AGGREGATION_NAMES}
+
+    if not force:
+        pre_results: dict[str, Path] = {}
+        needs_work = False
+        for feature_name in features:
+            out = output_dir / feature_name / csv_stem
+            if not out.exists():
+                needs_work = True
+                break
+            try:
+                if should_process_task(input_paths=[source_file],
+                                       output_paths=[out], force=False):
+                    needs_work = True
+                    break
+            except FileNotFoundError:
+                needs_work = True
+                break
+            pre_results[feature_name] = out
+
+        if not needs_work:
+            for feature_name, out in pre_results.items():
+                if progress is not None:
+                    progress.set_postfix_str(f"extract: {session_id}/{feature_name}",
+                                             refresh=False)
+                    progress.update(1)
+                print(f"  [extract] {session_id} / {feature_name} — up to date",
+                      flush=True)
+            return pre_results
+
     try:
         df = pd.read_csv(source_file)
     except Exception as exc:
@@ -222,19 +265,62 @@ def _extract_session(
             "'spike_elicited' will be 0."
         )
 
-    filename = input_file.name
-    if '_semicontrolled_' in filename:
-        prefix = filename.split('_semicontrolled_')[0]
-        csv_stem = f'{prefix}_semicontrolled_touch_summary.csv'
-    else:
-        csv_stem = f'{input_file.stem}_touch_summary.csv'
+    # --- Statistical features: single vectorised groupby pass ---
+    stat_to_run: dict[str, dict] = {}
+    stat_output_paths: dict[str, Path] = {}
 
-    for feature_name, feature_config in features.items():
+    for feature_name, feature_config in stat_features.items():
         feature_dir = output_dir / feature_name
         feature_dir.mkdir(parents=True, exist_ok=True)
         output_path = feature_dir / csv_stem
 
-        # Idempotency
+        if not force and output_path.exists():
+            try:
+                if not should_process_task(
+                    input_paths=[source_file],
+                    output_paths=[output_path],
+                    force=False,
+                ):
+                    results[feature_name] = output_path
+                    if progress is not None:
+                        progress.set_postfix_str(f"extract: {session_id}/{feature_name}", refresh=False)
+                        progress.update(1)
+                    print(f"  [extract] {session_id} / {feature_name} — up to date", flush=True)
+                    continue
+            except FileNotFoundError:
+                pass
+        clean_task_outputs(output_path)
+        stat_to_run[feature_name] = feature_config
+        stat_output_paths[feature_name] = output_path
+
+    if stat_to_run:
+        batch_dfs = _extract_statistical_batch(df, list(stat_to_run), has_nerve_data, session_id)
+        for feature_name, summary_df in batch_dfs.items():
+            output_path = stat_output_paths[feature_name]
+            try:
+                summary_df.to_csv(output_path, index=False)
+                logging.info(f"[{feature_name}] Saved {len(summary_df)} touches → {output_path}")
+            except Exception as exc:
+                logging.error(f"Failed to save {output_path}: {exc}")
+                if progress is not None:
+                    progress.set_postfix_str(f"extract: {session_id}/{feature_name}", refresh=False)
+                    progress.update(1)
+                print(f"  [extract] {session_id} / {feature_name} — error: save failed", flush=True)
+                continue
+            results[feature_name] = output_path
+            if progress is not None:
+                progress.set_postfix_str(f"extract: {session_id}/{feature_name}", refresh=False)
+                progress.update(1)
+            print(f"  [extract] {session_id} / {feature_name} — {len(summary_df)} touches", flush=True)
+
+    # --- Non-statistical features: per-touch loop (shared groupby) ---
+    touch_groups: list | None = None
+
+    for feature_name, feature_config in other_features.items():
+        feature_dir = output_dir / feature_name
+        feature_dir.mkdir(parents=True, exist_ok=True)
+        output_path = feature_dir / csv_stem
+
         if not force and output_path.exists():
             try:
                 if not should_process_task(
@@ -262,25 +348,19 @@ def _extract_session(
             print(f"  [extract] {session_id} / {feature_name} — error: unknown feature", flush=True)
             continue
 
-        # For aggregation features, inject the aggregation name into the config
-        # so that StatisticalExtractor produces the correct columns.
-        if feature_name in AGGREGATION_NAMES:
-            extract_config = {**feature_config, 'aggregations': [feature_name]}
-        else:
-            extract_config = feature_config
+        if touch_groups is None:
+            touch_groups = list(df.groupby(TOUCH_KEYS))
 
         rows = _extract_all_touches(
-            df, extractor, extract_config, has_nerve_data,
-            desc=f"{session_id}/{feature_name}",
+            df, extractor, feature_config, has_nerve_data,
+            desc=f"{session_id}/{feature_name}", _groups=touch_groups,
         )
         summary_df = pd.DataFrame(rows)
         summary_df['session_id'] = session_id
 
         try:
             summary_df.to_csv(output_path, index=False)
-            logging.info(
-                f"[{feature_name}] Saved {len(summary_df)} touches → {output_path}"
-            )
+            logging.info(f"[{feature_name}] Saved {len(summary_df)} touches → {output_path}")
         except Exception as exc:
             logging.error(f"Failed to save {output_path}: {exc}")
             if progress is not None:
@@ -298,15 +378,110 @@ def _extract_session(
     return results
 
 
+def _extract_statistical_batch(
+    df: pd.DataFrame,
+    enabled_aggregations: list[str],
+    has_nerve_data: bool,
+    session_id: str,
+) -> dict[str, pd.DataFrame]:
+    """
+    Compute all enabled statistical aggregations in one vectorised groupby pass.
+
+    Returns a dict mapping each aggregation name to a per-touch summary DataFrame
+    with the same schema produced by the per-touch loop path.
+    """
+    numeric_cols = [
+        col for col in df.columns
+        if col not in _EXCLUDE_FROM_AGGREGATION
+        and pd.api.types.is_numeric_dtype(df[col])
+    ]
+
+    g = df.groupby(TOUCH_KEYS, sort=False)
+
+    # Build the list of native pandas aggs to run in one call.
+    # Include min/max as auxiliaries when 'range' is requested.
+    native_needed = list(dict.fromkeys(
+        [a for a in enabled_aggregations if a in _PANDAS_NATIVE_AGGS]
+        + (['min'] if 'range' in enabled_aggregations and 'min' not in enabled_aggregations else [])
+        + (['max'] if 'range' in enabled_aggregations and 'max' not in enabled_aggregations else [])
+    ))
+
+    if native_needed and numeric_cols:
+        agg_df = g[numeric_cols].agg(native_needed)
+        agg_df.columns = [f'{col}_{agg}' for col, agg in agg_df.columns]
+        agg_df = agg_df.reset_index()
+    else:
+        agg_df = g.size().reset_index(name='_n').drop(columns=['_n'])
+
+    if 'range' in enabled_aggregations and numeric_cols:
+        for col in numeric_cols:
+            agg_df[f'{col}_range'] = agg_df[f'{col}_max'] - agg_df[f'{col}_min']
+
+    if 'skewness' in enabled_aggregations and numeric_cols:
+        skew_df = g[numeric_cols].skew().reset_index()
+        skew_df.columns = TOUCH_KEYS + [f'{col}_skewness' for col in numeric_cols]
+        agg_df = agg_df.merge(skew_df, on=TOUCH_KEYS)
+
+    # Shared metadata — all vectorised
+    meta_spec: dict = {}
+    if 'type_metadata' in df.columns:
+        meta_spec['type_metadata'] = 'first'
+    if 'contact_location_x' in df.columns:
+        meta_spec['contact_location_x'] = 'mean'
+    if 'contact_location_y' in df.columns:
+        meta_spec['contact_location_y'] = 'mean'
+    if 'contact_location_z' in df.columns:
+        meta_spec['contact_location_z'] = 'mean'
+    if has_nerve_data and 'Nerve_spike' in df.columns:
+        meta_spec['Nerve_spike'] = 'max'
+
+    meta_df = g.agg(meta_spec).reset_index() if meta_spec else g.size().reset_index(name='_n').drop(columns=['_n'])
+    meta_df.rename(columns={
+        'contact_location_x': 'mean_contact_x',
+        'contact_location_y': 'mean_contact_y',
+        'contact_location_z': 'mean_contact_z',
+    }, inplace=True)
+    if 'Nerve_spike' in meta_df.columns:
+        meta_df['spike_elicited'] = meta_df['Nerve_spike'].clip(0, 1).astype(int)
+        meta_df.drop(columns=['Nerve_spike'], inplace=True)
+    else:
+        meta_df['spike_elicited'] = 0
+    if 'type_metadata' not in meta_df.columns:
+        meta_df['type_metadata'] = 'unknown'
+
+    # Direction: one apply over all groups (runs once, not once per feature)
+    direction_s = g.apply(infer_direction)
+    direction_s.name = 'direction'
+    direction_df = direction_s.reset_index()
+
+    combined = (
+        meta_df
+        .merge(direction_df, on=TOUCH_KEYS)
+        .merge(agg_df, on=TOUCH_KEYS)
+    )
+    combined = combined[combined['single_touch_id'] != 0].copy()
+    combined['session_id'] = session_id
+
+    result: dict[str, pd.DataFrame] = {}
+    for agg in enabled_aggregations:
+        agg_cols = [c for c in combined.columns if c.endswith(f'_{agg}')]
+        meta_cols = [c for c in SHARED_COLUMNS if c in combined.columns]
+        result[agg] = combined[meta_cols + agg_cols].copy()
+
+    return result
+
+
 def _extract_all_touches(
     df: pd.DataFrame,
     extractor,
     feature_config: dict,
     has_nerve_data: bool,
     desc: str = "",
+    *,
+    _groups: list | None = None,
 ) -> list[dict]:
     rows = []
-    groups = list(df.groupby(['block_order_id', 'trial_id', 'single_touch_id']))
+    groups = _groups if _groups is not None else list(df.groupby(TOUCH_KEYS))
     for (block_order_id, trial_id, touch_id), group in tqdm(
         groups, desc=desc, leave=False, unit="touch", disable=True
     ):
