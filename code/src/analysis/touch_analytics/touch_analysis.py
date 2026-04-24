@@ -4,7 +4,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
-from .representation.series_level.kinematics import compute_velocity_magnitudes, compute_acceleration_magnitudes
+from .representation.series_level.kinematics import compute_velocity, compute_acceleration
 
 # Architectural Import
 from utils.should_process_task import should_process_task, clean_task_outputs
@@ -68,11 +68,10 @@ def _process_touch_analysis(input_path: Path, output_path: Path, show: bool) -> 
         touch_type = group['type_metadata'].iloc[0] if 'type_metadata' in group.columns else "unknown"
         block_order_id = group['block_order_id'].iloc[0]
 
-        # Velocity / Acceleration
-        velocity_magnitudes = compute_velocity_magnitudes(group)
-        acceleration_magnitudes = compute_acceleration_magnitudes(velocity_magnitudes)
-        max_velocity = velocity_magnitudes.max()
-        max_acceleration = acceleration_magnitudes.max()
+        vel_df = compute_velocity(group)
+        accel_df = compute_acceleration(vel_df)
+        max_velocity = np.sqrt(vel_df.pow(2).sum(axis=1)).max()
+        max_acceleration = np.sqrt(accel_df.pow(2).sum(axis=1)).max()
 
         # Direction
         direction = None

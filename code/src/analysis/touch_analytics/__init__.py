@@ -16,7 +16,6 @@ from .session_summary import (
 )
 from .preparation_pipeline import run_preparation
 from .extraction_pipeline import run_feature_extraction
-from .series_pipeline import run_series_transforms
 from .clustering_pipeline import run_clustering
 from .comparing_pipeline import run_comparing
 
@@ -28,7 +27,6 @@ __all__ = [
     "generate_ap_efficacy_matrix",
     "generate_session_summary",
     "run_preparation",
-    "run_series_transforms",
     "run_feature_extraction",
     "run_clustering",
     "run_comparing",

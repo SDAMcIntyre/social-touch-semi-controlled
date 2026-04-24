@@ -31,11 +31,11 @@ from analysis.touch_analytics import (
     generate_ap_efficacy_matrix,
     generate_session_summary
 )
+from analysis.touch_analytics.preparation_pipeline import run_preparation
 from analysis.touch_analytics.series_pipeline import run_series_transforms
 from analysis.touch_analytics.extraction_pipeline import run_feature_extraction
 from analysis.touch_analytics.clustering_pipeline import run_clustering
 from analysis.touch_analytics.comparing_pipeline import run_comparing
-from analysis.touch_analytics.preparation_pipeline import run_preparation
 from analysis.receptive_field_mapping import run_cluster_rf_mapping, run_simple_rf_mapping
 
 # --- Analysis Flows ---
@@ -46,7 +46,7 @@ def summarize_session_blocks_flow(
     force_processing: bool = False,
 ) -> List[Path]:
     """
-    Session Block Summary.
+    STEP 1: Session Block Summary.
     Reads all aggregated session CSVs and writes a single combined CSV
     (``4_analysed/session_block_summary.csv``) with one row per block,
     describing block IDs, trial counts, and trial ID lists.
@@ -101,25 +101,23 @@ def map_receptive_fields_simple_flow(
     )
 
 
-@flow(name="touch_data_preparation")
-def touch_data_preparation_flow(
+@flow(name="touch_preparation")
+def touch_preparation_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
-    interpolation_method: str = 'cubic',
+    preparation: dict = None,
 ) -> List[Path]:
     """
-    Stage 1 (Data Preparation): Per-session NaN-gap interpolation of touch columns.
-    Fills 30 Hz Kinect values (NaN between samples) with cubic/linear interpolation
-    per touch group, producing prepared CSVs at 1 kHz.
-    Output: ``4_analysed/prepared/<session_id>_prepared.csv``
+    Stage 1: Per-session data preparation (block-ID synthesis + NaN-gap interpolation).
+    Writes ``4_analysed/preparation/<session_id>_prepared.csv``.
     """
-    print(f"[Batch Analysis] Running touch data preparation for {len(input_items)} item(s)...")
+    print(f"[Batch Analysis] Running touch preparation for {len(input_items)} item(s)...")
     if not input_items:
         return []
-    output_dir = input_items[0][1] / '4_analysed' / 'prepared'
+    output_dir = input_items[0][1] / '4_analysed' / 'preparation'
     return run_preparation(
         input_items=input_items,
-        config={'interpolation_method': interpolation_method},
+        preparation_cfg=preparation or {},
         output_dir=output_dir,
         force=force_processing,
     )
@@ -130,24 +128,22 @@ def touch_series_transforms_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
     transforms: dict = None,
+    preparation_dir: Optional[Path] = None,
 ) -> List[Path]:
     """
-    Stage 2a (Series Transforms): Per-session kinematics computation.
-    Adds ``velocity_magnitude`` and ``acceleration_magnitude`` columns to each
-    session CSV and writes augmented files to
-    ``4_analysed/series_transforms/<session>_series_augmented.csv``.
+    Stage 2a: Per-session series-level transforms (kinematics, pressure, MoS).
+    Writes ``4_analysed/series_transforms/<session>_series_augmented.csv``.
     """
     print(f"[Batch Analysis] Running touch series transforms for {len(input_items)} item(s)...")
     if not input_items:
         return []
     output_dir = input_items[0][1] / '4_analysed' / 'series_transforms'
-    prepared_dir = input_items[0][1] / '4_analysed' / 'prepared'
     return run_series_transforms(
         input_items=input_items,
         transforms=transforms or {},
         output_dir=output_dir,
         force=force_processing,
-        prepared_dir=prepared_dir if prepared_dir.exists() else None,
+        preparation_dir=preparation_dir,
     )
 
 
@@ -156,31 +152,26 @@ def touch_feature_extraction_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
     features: dict = None,
-    touch_category: dict = None,
+    series_dir: Optional[Path] = None,
+    preparation_dir: Optional[Path] = None,
 ) -> List[Path]:
     """
-    Stage 2b (Feature Extraction): Per-session feature extraction.
+    Stage 2b: Per-session feature extraction.
     Writes one CSV per (session, feature) to
     ``4_analysed/touch_features/<feature>/<session>_touch_summary.csv``.
-    When augmented CSVs from Stage 2a are present they are used as input.
     """
     print(f"[Batch Analysis] Running touch feature extraction for {len(input_items)} item(s)...")
     if not input_items:
         return []
     feature_dict = features or {'max': {'enabled': True}}
     output_dir = input_items[0][1] / '4_analysed' / 'touch_features'
-    series_transforms_dir = input_items[0][1] / '4_analysed' / 'series_transforms'
-    series_dir = series_transforms_dir if series_transforms_dir.exists() else None
-    prepared_dir_path = input_items[0][1] / '4_analysed' / 'prepared'
-    prepared_dir = prepared_dir_path if prepared_dir_path.exists() else None
     per_feature = run_feature_extraction(
         input_items=input_items,
         features=feature_dict,
         output_dir=output_dir,
         force=force_processing,
         series_dir=series_dir,
-        prepared_dir=prepared_dir,
-        touch_category=touch_category,
+        preparation_dir=preparation_dir,
     )
     return [path for paths in per_feature.values() for path in paths]
 
@@ -189,28 +180,32 @@ def touch_feature_extraction_flow(
 def touch_clustering_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
+    cluster_groups: dict = None,
     feature_combinations: dict = None,
     clustering_profiles: dict = None,
+    reduction: dict = None,
+    evaluation: dict = None,
 ) -> List[Path]:
     """
-    Stages 3–5 (Reduction + Clustering + Evaluation): Global clustering on pooled feature CSVs.
-    Discovers CSVs written by touch_feature_extraction, merges per combination,
+    Stage 2: Global clustering on pooled feature CSVs.
+    Discovers CSVs written by touch_feature_extraction, merges per group,
     and writes
-    ``4_analysed/touch_clusters/<combination>/<clusterer>/pooled_touch_summary_clustered.csv``.
+    ``4_analysed/touch_clusters/<group>/<clusterer>/pooled_touch_summary_clustered.csv``.
     """
     print(f"[Batch Analysis] Running touch clustering for {len(input_items)} item(s)...")
     if not input_items:
         return []
-    combinations = feature_combinations or {'basic': {'enabled': True, 'features': ['max']}}
-    clusterers = clustering_profiles or {'kmeans': {'method': 'kmeans', 'min_touches_per_cluster': 30}}
     extraction_dir = input_items[0][1] / '4_analysed' / 'touch_features'
     output_dir = input_items[0][1] / '4_analysed' / 'touch_clusters'
     per_key = run_clustering(
         output_dir=output_dir,
-        feature_combinations=combinations,
-        clustering_profiles=clusterers,
+        cluster_groups=cluster_groups,
+        feature_combinations=feature_combinations,
+        clustering_profiles=clustering_profiles,
         force=force_processing,
         extraction_dir=extraction_dir,
+        reduction=reduction,
+        evaluation=evaluation,
     )
     return [path for paths in per_key.values() for path in paths]
 
@@ -219,6 +214,8 @@ def touch_clustering_flow(
 def touch_comparing_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
+    cluster_groups: list = None,
+    cluster_group_defs: dict = None,
     feature_combinations: dict = None,
     clustering_profiles: dict = None,
     comparing_profiles: dict = None,
@@ -226,25 +223,22 @@ def touch_comparing_flow(
     min_sensor_types: int = 2,
 ) -> List[Path]:
     """
-    Post-pipeline analysis: Statistical comparison of sensor measurements across strata.
+    Stage 3: Statistical comparison of sensor measurements across strata.
     Discovers clustered CSVs written by touch_clustering and writes
     per-strategy result JSONs and a dispersion-weighted synthesis report.
     """
     print(f"[Batch Analysis] Running touch comparing for {len(input_items)} item(s)...")
     if not input_items:
         return []
-    combinations = feature_combinations or {'basic': {'enabled': True, 'features': ['max']}}
-    clusterers = clustering_profiles or {'kmeans': {'method': 'kmeans'}}
-    strategies = comparing_profiles or {
-        'bias': {'method': 'bias', 'measurement_col': 'spike_elicited', 'sensor_col': 'session_id'},
-    }
     clustering_dir = input_items[0][1] / '4_analysed' / 'touch_clusters'
     output_dir = input_items[0][1] / '4_analysed' / 'touch_comparisons'
     return run_comparing(
         output_dir=output_dir,
-        feature_combinations=combinations,
-        clustering_profiles=clusterers,
-        comparing_profiles=strategies,
+        cluster_groups=cluster_groups,
+        cluster_group_defs=cluster_group_defs,
+        feature_combinations=feature_combinations,
+        clustering_profiles=clustering_profiles,
+        comparing_profiles=comparing_profiles,
         min_instances_per_sensor=min_instances_per_sensor,
         min_sensor_types=min_sensor_types,
         force=force_processing,
@@ -258,7 +252,7 @@ def analyse_ap_efficacy_flow(
     force_processing: bool = False
 ) -> List[Path]:
     """
-    Matrix Generation (Efficacy).
+    STEP 3: Matrix Generation (Efficacy).
     Generates a matrix of AP efficacy into '4_analysed/ap_efficacy'.
     """
     print(f"[Batch Analysis - AP Efficacy] Generating Efficacy Matrix...")
@@ -295,6 +289,8 @@ def analyse_ap_efficacy_flow(
 def map_receptive_fields_clustered_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
+    cluster_groups: list = None,
+    cluster_group_defs: dict = None,
     feature_combinations: dict = None,
     clustering_profiles: dict = None,
     camera_angle_mode: str = "manual",
@@ -304,7 +300,7 @@ def map_receptive_fields_clustered_flow(
     Cluster-based RF mapping: spike-count heatmaps per cluster from touch_clustering output.
     Reads pooled_touch_summary_clustered.csv, forward-fills contact_points (30Hz->1kHz),
     counts spikes per (x,y,z) point, and renders 3D forearm heatmap PNGs.
-    Output: ``4_analysed/receptive_field_maps_clustered/<combination>/<clusterer>/``
+    Output: ``4_analysed/receptive_field_maps_clustered/<group>/<clusterer>/``
 
     After mapping, assigns camera angles per session.  ``camera_angle_mode``
     controls whether this is done interactively (``"manual"``) or automatically
@@ -315,9 +311,6 @@ def map_receptive_fields_clustered_flow(
     if not input_items:
         return []
 
-    combinations = feature_combinations or {'only_mean': {'enabled': True, 'features': ['mean']}}
-    clusterers = clustering_profiles or {'kmeans': {'method': 'kmeans'}}
-
     database_path = input_items[0][1]
     clustering_dir = database_path / '4_analysed' / 'touch_clusters'
     output_dir = database_path / '4_analysed' / 'receptive_field_maps_clustered'
@@ -326,8 +319,10 @@ def map_receptive_fields_clustered_flow(
         clustering_dir=clustering_dir,
         input_items=input_items,
         output_dir=output_dir,
-        feature_combinations=combinations,
-        clustering_profiles=clusterers,
+        cluster_groups=cluster_groups,
+        cluster_group_defs=cluster_group_defs,
+        feature_combinations=feature_combinations,
+        clustering_profiles=clustering_profiles,
         force=force_processing,
         projection_method=projection_method,
     )
@@ -414,7 +409,7 @@ def run_batch_analysis(
     available_tasks = [
         ("summarize_session_blocks", summarize_session_blocks_flow),
         ("map_receptive_fields_simple", map_receptive_fields_simple_flow),
-        ("touch_data_preparation", touch_data_preparation_flow),
+        ("touch_preparation", touch_preparation_flow),
         ("touch_series_transforms", touch_series_transforms_flow),
         ("touch_feature_extraction", touch_feature_extraction_flow),
         ("touch_clustering", touch_clustering_flow),
@@ -427,12 +422,12 @@ def run_batch_analysis(
     monitor = PipelineMonitor(report_path=report_file_path, stages=task_names, data_queue=Queue())
 
     items_to_process: List[Tuple[Path, Path]] = []
-    
+
     logging.info(f"Scanning {len(session_map)} sessions for data files...")
     for search_dir in sorted(session_map.keys()):
         database_path_context = session_map[search_dir]
         candidates = list(search_dir.glob("*_semicontrolled_aggregated_session.csv"))
-        
+
         if candidates:
             target_file = candidates[0]
             items_to_process.append((target_file, database_path_context))
@@ -442,7 +437,27 @@ def run_batch_analysis(
         return
 
     logging.info(f"🚀 Starting analysis for {len(items_to_process)} collected items.")
-    
+
+    # Pre-compute inter-stage artifact dirs for forwarding to downstream flows
+    _database = items_to_process[0][1]
+
+    def _task_enabled(name: str) -> bool:
+        return bool(
+            name in dag_handler.tasks
+            and dag_handler.tasks[name].get("enabled", True)
+        )
+
+    preparation_dir: Optional[Path] = (
+        _database / '4_analysed' / 'preparation' if _task_enabled("touch_preparation") else None
+    )
+    series_dir: Optional[Path] = (
+        _database / '4_analysed' / 'series_transforms' if _task_enabled("touch_series_transforms") else None
+    )
+
+    # Extract cluster group defs from touch_clustering to forward to downstream tasks.
+    _clustering_options = dag_handler.get_task_options("touch_clustering") or {}
+    _cluster_group_defs = _clustering_options.get("cluster_groups") or {}
+
     for task_name, flow_func in available_tasks:
         if task_name not in dag_handler.tasks or not dag_handler.tasks[task_name].get("enabled", True):
             logging.info(f"Task '{task_name}' is disabled in DAG. Skipping.")
@@ -464,20 +479,36 @@ def run_batch_analysis(
                         kwargs["grouping_columns"] = options["grouping_columns"]
                     if "monitor" in options:
                         kwargs["monitor"] = options["monitor"]
-                    if "features" in options:
-                        kwargs["features"] = options["features"]
-                    if "touch_category" in options:
-                        kwargs["touch_category"] = options["touch_category"]
+                    if "preparation" in options:
+                        kwargs["preparation"] = options["preparation"]
                     if "transforms" in options:
                         kwargs["transforms"] = options["transforms"]
-                    if "interpolation_method" in options:
-                        kwargs["interpolation_method"] = options["interpolation_method"]
-                    if "series_dir" in options:
-                        kwargs["series_dir"] = Path(options["series_dir"])
+                    if "features" in options:
+                        kwargs["features"] = options["features"]
+                    if task_name == "touch_series_transforms" and preparation_dir is not None:
+                        kwargs["preparation_dir"] = preparation_dir
+                    if task_name == "touch_feature_extraction":
+                        if series_dir is not None:
+                            kwargs["series_dir"] = series_dir
+                        if preparation_dir is not None:
+                            kwargs["preparation_dir"] = preparation_dir
+                    if "cluster_groups" in options:
+                        kwargs["cluster_groups"] = options["cluster_groups"]
+                    if task_name in ("touch_comparing", "map_receptive_fields_clustered"):
+                        if _cluster_group_defs:
+                            kwargs["cluster_group_defs"] = _cluster_group_defs
                     if "feature_combinations" in options:
+                        logging.warning(
+                            f"[{task_name}] 'feature_combinations' is deprecated — "
+                            "migrate to 'cluster_groups'."
+                        )
                         kwargs["feature_combinations"] = options["feature_combinations"]
                     if "clustering_profiles" in options:
                         kwargs["clustering_profiles"] = options["clustering_profiles"]
+                    if "reduction" in options:
+                        kwargs["reduction"] = options["reduction"]
+                    if "evaluation" in options:
+                        kwargs["evaluation"] = options["evaluation"]
                     if "comparing_profiles" in options:
                         kwargs["comparing_profiles"] = options["comparing_profiles"]
                     if "min_instances_per_sensor" in options:

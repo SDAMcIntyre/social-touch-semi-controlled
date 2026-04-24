@@ -5,39 +5,42 @@ from .base import FeatureExtractor
 
 _DEFAULT_AGGREGATIONS = ['mean', 'median', 'std', 'min', 'max', 'range', 'skewness']
 
-EXCLUDED_QUANTITATIVE_COLUMNS: frozenset[str] = frozenset({
-    # Identifiers / indices
-    'block_order_id', 'trial_id', 'single_touch_id', 'frame_id',
-    # Time base
-    'time', 't', 'timestamp',
-    # Event channel — binary; spike_elicited is the aggregate
+_EXCLUDE_FROM_AGGREGATION = frozenset({
+    # Orchestrator / touch-ID columns
+    'block_order_id', 'trial_id', 'single_touch_id',
+    'type_metadata', 'direction',
+    'mean_contact_x', 'mean_contact_y', 'mean_contact_z',
+    'spike_elicited', 'session_id',
+    # Frame indexing
+    'frame', 'frame_id', 'Unnamed: 0',
+    # Source metadata
+    'source_block_file', 'contact_area_metadata',
+    # Nerve event marker (binary, not a continuous signal)
     'Nerve_spike',
-    # Raw sticker positions — subsumed by velocity_magnitude / acceleration_magnitude
+    # Raw sticker positions (consumed by hand_position transform)
     'sticker_blue_position_x', 'sticker_blue_position_y', 'sticker_blue_position_z',
     'sticker_green_position_x', 'sticker_green_position_y', 'sticker_green_position_z',
-    'sticker_red_position_x',  'sticker_red_position_y',  'sticker_red_position_z',
+    'sticker_yellow_position_x', 'sticker_yellow_position_y', 'sticker_yellow_position_z',
 })
-
-
-def _discover_quantitative_columns(df: pd.DataFrame) -> list[str]:
-    return [
-        col for col in df.select_dtypes(include='number').columns
-        if col not in EXCLUDED_QUANTITATIVE_COLUMNS
-    ]
 
 
 class StatisticalExtractor(FeatureExtractor):
     """
-    Summarizes every quantitative column (minus the exclude list) with
-    configurable statistical aggregations.
+    Generic aggregator: discovers all numeric columns in the input and
+    summarizes each with configurable statistical aggregations.
     """
 
     def extract(self, group: pd.DataFrame, config: dict) -> dict:
         aggregations = config.get('aggregations', _DEFAULT_AGGREGATIONS)
-        columns = _discover_quantitative_columns(group)
+
+        numeric_cols = [
+            col for col in group.columns
+            if col not in _EXCLUDE_FROM_AGGREGATION
+            and pd.api.types.is_numeric_dtype(group[col])
+        ]
 
         row = {}
-        for col in columns:
+        for col in numeric_cols:
             series = group[col]
             for agg in aggregations:
                 if agg == 'mean':

@@ -2,15 +2,10 @@
 import warnings
 from .base import FeatureExtractor
 from .statistical import StatisticalExtractor
-from .touch_category import TouchCategoryExtractor
 
-# Kinematic aggregations: each is a first-class feature name handled by StatisticalExtractor
 AGGREGATION_NAMES = frozenset({'max', 'min', 'mean', 'median', 'std', 'range', 'skewness'})
 
-EXTRACTOR_REGISTRY: dict[str, type[FeatureExtractor]] = {
-    'statistical': StatisticalExtractor,
-    'touch_category': TouchCategoryExtractor,
-}
+EXTRACTOR_REGISTRY: dict[str, type[FeatureExtractor]] = {}
 
 
 def get_feature_extractor(feature_name: str, feature_config: dict) -> FeatureExtractor:
@@ -22,7 +17,7 @@ def get_feature_extractor(feature_name: str, feature_config: dict) -> FeatureExt
     injecting ``aggregations: [feature_name]`` into the config before calling
     ``extract()``.
 
-    For named feature types (statistical, touch_category), instantiates the
+    For named feature types (temporal, mechanics_of_solids), instantiates the
     corresponding extractor from EXTRACTOR_REGISTRY.
 
     Raises
@@ -59,7 +54,6 @@ def get_extractor(method: str) -> FeatureExtractor:
 __all__ = [
     'FeatureExtractor',
     'StatisticalExtractor',
-    'TouchCategoryExtractor',
     'AGGREGATION_NAMES',
     'EXTRACTOR_REGISTRY',
     'get_feature_extractor',

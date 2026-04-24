@@ -1,9 +1,10 @@
 # preparation_pipeline.py
 """
-Stage 1: touch data preparation pipeline.
+Stage 1: preparation pipeline.
 
-Loads raw session CSVs, fills NaN gaps in touch columns via cubic/linear
-interpolation per touch group, and saves prepared CSVs.
+Loads raw session CSVs, synthesises the block-ID column, and fills NaN gaps
+in touch columns via cubic (or configurable) interpolation. Saves the cleaned
+DataFrame as ``<session_id>_prepared.csv``.
 
 Output layout
 -------------
@@ -11,7 +12,6 @@ Output layout
   <session_id>_prepared.csv
 """
 
-import logging
 import sys
 from pathlib import Path
 from typing import List, Tuple
@@ -25,22 +25,24 @@ from .preparation.block_id import ensure_block_id_column
 from .preparation.interpolation import interpolate_touch_columns
 
 
+_DROP_COLUMNS = ['frame_index', 'green_levels', 'time_nerve', 'time_kinect', 'trial_on']
+
+
 def run_preparation(
     input_items: List[Tuple[Path, Path]],
-    config: dict,
+    preparation_cfg: dict,
     output_dir: Path,
     force: bool = False,
 ) -> List[Path]:
     """
-    Interpolate NaN gaps in touch columns for each session.
+    Stage 1 driver: load, synthesise block IDs, interpolate NaN gaps, and save cleaned CSVs.
 
     Parameters
     ----------
     input_items
-        List of (raw_session_csv, database_root_path) tuples.
-    config
-        Preparation config dict. Recognised keys:
-        - ``interpolation_method`` (str, default ``'cubic'``)
+        List of (aggregated_session_csv, database_root_path) tuples.
+    preparation_cfg
+        Preparation config dict, e.g. ``{'interpolation': {'method': 'cubic'}}``.
     output_dir
         Directory where prepared CSVs are written.
     force
@@ -50,12 +52,16 @@ def run_preparation(
     -------
     List of paths to written prepared CSVs.
     """
-    config = config or {}
-    method = config.get('interpolation_method', 'cubic')
+    preparation_cfg = preparation_cfg or {}
+    interp_method = preparation_cfg.get('interpolation', {}).get('method', 'cubic')
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"=== preparation pipeline: {len(input_items)} sessions ===", flush=True)
+    print(
+        f"=== preparation pipeline: {len(input_items)} sessions, "
+        f"interpolation.method={interp_method} ===",
+        flush=True,
+    )
 
     written: List[Path] = []
 
@@ -65,7 +71,7 @@ def run_preparation(
             result = _prepare_session(
                 input_file=input_file,
                 output_dir=output_dir,
-                method=method,
+                interp_method=interp_method,
                 force=force,
             )
             if result is not None:
@@ -81,7 +87,7 @@ def run_preparation(
 def _prepare_session(
     input_file: Path,
     output_dir: Path,
-    method: str,
+    interp_method: str,
     force: bool,
 ) -> Path | None:
     session_id = session_id_from_path(input_file)
@@ -100,23 +106,12 @@ def _prepare_session(
             pass
     clean_task_outputs(output_path)
 
-    try:
-        df = load_session_csv(input_file)
-    except Exception as exc:
-        logging.error(f"preparation_pipeline: failed to load {input_file}: {exc}")
-        return None
-
+    df = load_session_csv(input_file)
     df = ensure_block_id_column(df)
-    df = interpolate_touch_columns(df, method=method)
+    df = interpolate_touch_columns(df, method=interp_method)
+    df = df[df['single_touch_id'] != 0]
+    df = df.drop(columns=_DROP_COLUMNS, errors='ignore')
+    df.to_csv(output_path, index=False)
 
-    try:
-        df.to_csv(output_path, index=False)
-        print(
-            f"  [preparation] {session_id} — {len(df)} rows → {output_path.name}",
-            flush=True,
-        )
-    except Exception as exc:
-        logging.error(f"preparation_pipeline: failed to save {output_path}: {exc}")
-        return None
-
+    print(f"  [preparation] {session_id} — {len(df)} rows → {output_path.name}", flush=True)
     return output_path
