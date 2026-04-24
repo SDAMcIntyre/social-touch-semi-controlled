@@ -63,16 +63,19 @@ tasks:
       # mechanics_of_solids) use their own extractor. Set enabled: true to activate.
       features:
         max:
-          enabled: false
+          enabled: true
         mean:
           enabled: true
-        min: {}
-        median: {}
-        std: {}
+        min:
+          enabled: true
+        median:
+          enabled: true
+        std:
+          enabled: true
         range:
-          enabled: false
+          enabled: true
         skewness:
-          enabled: false
+          enabled: true
         pressure_velocity_mean: {enabled: true}
         pressure_velocity_max: {enabled: true}
         temporal:
@@ -86,73 +89,62 @@ tasks:
     depends_on: [touch_series_transforms]
 
   # Stages 3–5 (Reduction + Clustering + Evaluation): Global clustering on pooled feature CSVs.
-  # Each enabled feature_combination merges the listed feature folders and runs
-  # each enabled clustering_profile — cross-product of combinations x clusterers.
-  # Output: 4_analysed/touch_clusters/<combination>/<clusterer>/
+  # Each cluster_group defines which data types / aggregations to use and its own clustering_methods.
+  # Output: 4_analysed/touch_clusters/<group_name>/<clusterer>/
   touch_clustering:
     enabled: true
     options:
       force_processing: false
-      feature_combinations:
-        basic:
-          features: [mean]
-          enabled: false
-        kinematic_full:
-          enabled: false
-          features: [max, mean]
-        all_features:
-          enabled: false
-          features: [max, mean, temporal, mechanics_of_solids]
-        only_mean:
+      cluster_groups:
+        kinematics_mean:
           enabled: true
-          features: [mean]
-        only_max:
+          features:
+            contact_depth: [mean]
+            contact_area: [mean]
+            velocity: [mean]
+            acceleration: [mean]
+            location: [mean]
+          clustering_methods:
+            binning:
+              method: binning
+              n_bins: 20
+              bin_method: equal_width
+              enabled: true
+            type_stratified:
+              method: type_stratified
+              base_method: binning
+              type_col: type_metadata
+              n_bins: 20
+              bin_method: equal_width
+              enabled: true
+        kinematics_max:
           enabled: false
-          features: [max]
-        only_median:
+          features:
+            contact_depth: [max]
+            contact_area: [max]
+            velocity: [max]
+            acceleration: [max]
+          clustering_methods:
+            binning:
+              method: binning
+              n_bins: 20
+              bin_method: equal_width
+              enabled: true
+        kinematics_with_category:
           enabled: false
-          features: [median]
-        pressure_velocity_mean:
-          enabled: true
-          features: [pressure_velocity_mean]
-        pressure_velocity_max:
-          enabled: true
-          features: [pressure_velocity_max]
-        touch_category:
-          enabled: false
-          features: [touch_category]
-        pressure_and_category:
-          enabled: false
-          features: [pressure_velocity_mean, touch_category]
-        pressure_velocity_mean_and_type:
-          enabled: true
-          features: [pressure_velocity_mean, touch_category]
-      clustering_profiles:
-        binning:
-          method: binning
-          n_bins: 20
-          bin_method: equal_width
-        kmeans:
-          method: kmeans
-          min_touches_per_cluster: 30
-          enabled: false
-        dbscan:
-          method: dbscan
-          eps: auto
-          min_touches_per_cluster: 30
-          enabled: false
-        hierarchical:
-          method: hierarchical
-          min_instances_per_sensor: 5
-          min_sensor_types: 2
-          sensor_col: session_id
-          enabled: false
-        type_stratified:
-          method: type_stratified
-          base_method: binning
-          type_col: type_metadata
-          n_bins: 20
-          bin_method: equal_width
+          features:
+            contact_depth: [mean]
+            contact_area: [mean]
+            velocity: [mean]
+            acceleration: [mean]
+            location: [mean]
+            touch_category: []
+          clustering_methods:
+            binning:
+              method: binning
+              n_bins: 20
+              bin_method: equal_width
+              enabled: true
       reduction:
         scaler: standard
         variance_filter: null
@@ -167,18 +159,13 @@ tasks:
     depends_on: [touch_feature_extraction]
 
   # Post-pipeline analysis: Statistical comparison of sensor measurements across strata.
-  # Discovers clustered CSVs on disk — no explicit file list needed.
-  # Output: 4_analysed/touch_comparisons/<combination>/<clusterer>/
+  # Discovers clustered CSVs on disk — references cluster_groups by name from touch_clustering.
+  # Output: 4_analysed/touch_comparisons/<group_name>/<clusterer>/
   touch_comparing:
     enabled: false
     options:
       force_processing: false
-      feature_combinations:
-        basic:
-          enabled: false
-          features: [max]
-      clustering_profiles:
-        hierarchical: {method: hierarchical, enabled: false}
+      cluster_groups: [kinematics_mean]
       comparing_profiles:
         bias:
           method: bias
@@ -217,35 +204,6 @@ tasks:
       camera_angle_mode:
         auto:
           enabled: true
-      feature_combinations:
-        only_mean: {enabled: true, features: [mean]}
-        only_max: {enabled: false, features: [max]}
-        only_median: {enabled: false, features: [median]}
-        pressure_velocity_mean:
-          enabled: true
-          features: [pressure_velocity_mean]
-        pressure_velocity_max:
-          enabled: true
-          features: [pressure_velocity_max]
-        touch_category:
-          enabled: false
-          features: [touch_category]
-        pressure_and_category:
-          enabled: false
-          features: [pressure_velocity_mean, touch_category]
-        pressure_velocity_mean_and_type:
-          enabled: true
-          features: [pressure_velocity_mean, touch_category]
+      cluster_groups: [kinematics_mean]
       projection_method: cylindrical_unwrap
-      clustering_profiles:
-        binning: {method: binning}
-        kmeans: {method: kmeans, enabled: false}
-        dbscan: {method: dbscan, enabled: false}
-        hierarchical: {method: hierarchical, enabled: false}
-        type_stratified:
-          method: type_stratified
-          base_method: binning
-          type_col: type_metadata
-          n_bins: 20
-          bin_method: equal_width
     depends_on: [touch_clustering]

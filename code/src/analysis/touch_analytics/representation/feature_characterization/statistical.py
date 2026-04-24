@@ -26,6 +26,9 @@ class StatisticalExtractor(FeatureExtractor):
             'velocity': vel,
             'acceleration': accel,
         }
+        for _loc_col in ('contact_location_x', 'contact_location_y', 'contact_location_z'):
+            if _loc_col in group.columns:
+                variables[_loc_col] = group[_loc_col]
 
         row = {}
         for var_name, series in variables.items():

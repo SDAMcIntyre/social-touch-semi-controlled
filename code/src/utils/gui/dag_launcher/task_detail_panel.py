@@ -25,6 +25,7 @@ from PyQt5.QtWidgets import (
 
 from ruamel.yaml.comments import CommentedSeq
 
+from utils.gui.dag_launcher.cluster_group_dialog import ClusterGroupDialog, ClusterGroupReadOnlyDialog
 from utils.gui.dag_launcher.feature_combination_dialog import FeatureCombinationDialog
 from utils.gui.dag_launcher.yaml_edit_dialog import YamlEditDialog
 from utils.pipeline.dag_config_model import DagConfigModel
@@ -64,6 +65,29 @@ def _is_feature_combinations_dict(val: Any) -> bool:
     if not isinstance(val, dict) or not val:
         return False
     return all(isinstance(v, dict) and "features" in v for v in val.values())
+
+
+def _is_cluster_groups_dict(val: Any) -> bool:
+    """Return True if *val* is a non-empty dict of sub-dicts that each have both 'features' and 'clustering_methods' keys."""
+    if not isinstance(val, dict) or not val:
+        return False
+    return all(
+        isinstance(v, dict) and "features" in v and "clustering_methods" in v
+        for v in val.values()
+    )
+
+
+def _cluster_group_summary(spec: dict) -> str:
+    features: dict = spec.get("features") or {}
+    parts: list[str] = []
+    for dtype, aggs in features.items():
+        if dtype == "touch_category":
+            parts.append("category")
+        elif aggs:
+            parts.append(f"{dtype}[{','.join(aggs)}]")
+        else:
+            parts.append(dtype)
+    return " · ".join(parts)
 
 
 def _option_header(key: str) -> str:
@@ -159,6 +183,10 @@ class TaskDetailPanel(QWidget):
                 widget = self._make_enum_section(key, val)
             elif key == "camera_angle_mode" and isinstance(val, dict) and "auto" in val:
                 widget = self._make_camera_angle_mode_section(key, val)
+            elif key == "cluster_groups" and isinstance(val, (list, CommentedSeq)):
+                widget = self._make_downstream_cluster_groups_section(key, val)
+            elif key == "cluster_groups" and _is_cluster_groups_dict(val):
+                widget = self._make_cluster_groups_section(key, val)
             elif _is_profile_dict(val):
                 widget = self._make_profile_section(key, val)
             elif _is_feature_combinations_dict(val):
@@ -379,6 +407,115 @@ class TaskDetailPanel(QWidget):
 
         return box
 
+    def _make_cluster_groups_section(self, key: str, val: dict) -> QWidget:
+        """Per-group rows with enabled checkbox, summary label, Edit and Delete buttons."""
+        box = QGroupBox(_option_header(key))
+        layout = QVBoxLayout(box)
+        layout.setContentsMargins(6, 4, 6, 4)
+        layout.setSpacing(4)
+
+        for group_name in val:
+            spec = val[group_name]
+            is_enabled = bool(spec.get("enabled", True))
+            summary = _cluster_group_summary(spec)
+
+            row = QWidget()
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.setSpacing(4)
+
+            cb = QCheckBox(group_name.replace("_", " ").title())
+            cb.setChecked(is_enabled)
+            cb.stateChanged.connect(
+                self._make_cluster_group_enabled_handler(key, group_name, cb)
+            )
+            row_layout.addWidget(cb)
+
+            summary_lbl = QLabel(summary)
+            summary_lbl.setStyleSheet(f"color: {_COMPLEX_FG.name()};")
+            row_layout.addWidget(summary_lbl)
+
+            row_layout.addStretch()
+
+            edit_btn = QPushButton("Edit")
+            edit_btn.setFixedWidth(48)
+            edit_btn.clicked.connect(
+                self._make_cluster_group_edit_handler(key, group_name, cb, summary_lbl)
+            )
+            row_layout.addWidget(edit_btn)
+
+            del_btn = QPushButton("Delete")
+            del_btn.setFixedWidth(56)
+            del_btn.clicked.connect(self._make_cluster_group_delete_handler(key, group_name))
+            row_layout.addWidget(del_btn)
+
+            layout.addWidget(row)
+
+        new_row = QWidget()
+        new_layout = QHBoxLayout(new_row)
+        new_layout.setContentsMargins(0, 0, 0, 0)
+        new_btn = QPushButton("New Group…")
+        new_btn.setFixedWidth(100)
+        new_btn.clicked.connect(self._make_cluster_group_new_handler(key))
+        new_layout.addWidget(new_btn)
+        new_layout.addStretch()
+        layout.addWidget(new_row)
+
+        return box
+
+    def _make_downstream_cluster_groups_section(self, key: str, val: list) -> QWidget:
+        """Checkbox per group defined in touch_clustering; checked if this task references it."""
+        box = QGroupBox("Cluster Groups")
+        layout = QVBoxLayout(box)
+        layout.setContentsMargins(6, 4, 6, 4)
+        layout.setSpacing(4)
+
+        sub_lbl = QLabel("From touch_clustering:")
+        sub_font = QFont()
+        sub_font.setItalic(True)
+        sub_lbl.setFont(sub_font)
+        sub_lbl.setStyleSheet("color: #555;")
+        layout.addWidget(sub_lbl)
+
+        try:
+            all_groups = self._model.get_profile_names("touch_clustering", "cluster_groups")
+        except (KeyError, AttributeError):
+            all_groups = []
+
+        if not all_groups:
+            info = QLabel("No cluster groups defined in touch_clustering.")
+            info.setStyleSheet("color: #888;")
+            layout.addWidget(info)
+            return box
+
+        selected: list[str] = list(val)
+
+        for group_name in all_groups:
+            row = QWidget()
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.setSpacing(4)
+
+            cb = QCheckBox(group_name.replace("_", " ").title())
+            cb.setChecked(group_name in selected)
+            cb.stateChanged.connect(
+                self._make_downstream_group_handler(key, group_name, cb, all_groups, selected)
+            )
+            row_layout.addWidget(cb)
+
+            row_layout.addStretch()
+
+            details_btn = QPushButton("Details…")
+            details_btn.setFixedWidth(72)
+            details_btn.clicked.connect(
+                self._make_downstream_group_details_handler(group_name)
+            )
+            row_layout.addWidget(details_btn)
+
+            layout.addWidget(row)
+
+        return box
+
     # ------------------------------------------------------------------
     # Handler factories
     # ------------------------------------------------------------------
@@ -576,4 +713,103 @@ class TaskDetailPanel(QWidget):
                     self._model.remove_combination(self._task_name, opt_key, combo_name)
                     self.task_changed.emit()
                     self.show_task(self._model, self._task_name)
+        return _handler
+
+    def _make_cluster_group_enabled_handler(
+        self, opt_key: str, group_name: str, cb: QCheckBox
+    ):
+        def _handler(_state: int) -> None:
+            if self._model is None or self._task_name is None:
+                return
+            self._model.set_profile_enabled(
+                self._task_name, opt_key, group_name, cb.isChecked()
+            )
+            self.task_changed.emit()
+        return _handler
+
+    def _make_cluster_group_edit_handler(
+        self, opt_key: str, group_name: str, cb: QCheckBox, summary_lbl: QLabel
+    ):
+        def _handler(_checked: bool = False) -> None:
+            if self._model is None or self._task_name is None:
+                return
+            spec = self._model.get_cluster_group_spec(self._task_name, group_name)
+            dlg = ClusterGroupDialog(self, name=group_name, spec=spec)
+            if dlg.exec_() == QDialog.Accepted:
+                new_name = dlg.get_group_name()
+                new_spec = dlg.get_group_spec()
+                if new_name != group_name:
+                    self._model.remove_combination(self._task_name, opt_key, group_name)
+                    self._model.set_cluster_group_spec(self._task_name, new_name, new_spec)
+                    self.task_changed.emit()
+                    self.show_task(self._model, self._task_name)
+                else:
+                    self._model.set_cluster_group_spec(self._task_name, group_name, new_spec)
+                    cb.setChecked(new_spec.get("enabled", True))
+                    summary_lbl.setText(_cluster_group_summary(new_spec))
+                    self.task_changed.emit()
+        return _handler
+
+    def _make_cluster_group_delete_handler(self, opt_key: str, group_name: str):
+        def _handler(_checked: bool = False) -> None:
+            if self._model is None or self._task_name is None:
+                return
+            reply = QMessageBox.question(
+                self,
+                "Delete Cluster Group",
+                f"Delete cluster group '{group_name}' from '{self._task_name}'?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if reply == QMessageBox.Yes:
+                self._model.remove_combination(self._task_name, opt_key, group_name)
+                self.task_changed.emit()
+                self.show_task(self._model, self._task_name)
+        return _handler
+
+    def _make_cluster_group_new_handler(self, opt_key: str):
+        def _handler(_checked: bool = False) -> None:
+            if self._model is None or self._task_name is None:
+                return
+            dlg = ClusterGroupDialog(self)
+            if dlg.exec_() == QDialog.Accepted:
+                new_name = dlg.get_group_name()
+                new_spec = dlg.get_group_spec()
+                self._model.set_cluster_group_spec(self._task_name, new_name, new_spec)
+                self.task_changed.emit()
+                self.show_task(self._model, self._task_name)
+        return _handler
+
+    def _make_downstream_group_handler(
+        self,
+        opt_key: str,
+        group_name: str,
+        cb: QCheckBox,
+        all_groups: list,
+        selected: list,
+    ):
+        def _handler(_state: int) -> None:
+            if self._model is None or self._task_name is None:
+                return
+            if cb.isChecked():
+                if group_name not in selected:
+                    selected.append(group_name)
+            else:
+                if group_name in selected:
+                    selected.remove(group_name)
+            ordered = [g for g in all_groups if g in selected]
+            self._model.set_downstream_cluster_group_names(self._task_name, ordered)
+            self.task_changed.emit()
+        return _handler
+
+    def _make_downstream_group_details_handler(self, group_name: str):
+        def _handler(_checked: bool = False) -> None:
+            if self._model is None:
+                return
+            try:
+                spec = self._model.get_cluster_group_spec("touch_clustering", group_name)
+            except KeyError:
+                return
+            dlg = ClusterGroupReadOnlyDialog(group_name, spec, self)
+            dlg.exec_()
         return _handler

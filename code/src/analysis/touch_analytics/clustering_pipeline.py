@@ -44,6 +44,122 @@ from .evaluation import compute_internal_metrics, bootstrap_stability
 # Columns that uniquely identify a single touch across feature CSVs
 _TOUCH_ID_COLS = ['block_order_id', 'trial_id', 'single_touch_id', 'session_id']
 
+# Maps cluster-group data-type names to the column name prefix(es) written by the extractor.
+# StatisticalExtractor uses shorthand variable names (depth, area, velocity, acceleration)
+# as column prefixes — not the raw input column names.
+# Empty list means the type uses its own selection logic (touch_category, location).
+DATA_TYPE_TO_COLUMNS = {
+    'contact_area':   ['area'],          # StatisticalExtractor: area_mean, area_max, …
+    'contact_depth':  ['depth'],         # depth_mean, depth_max, …
+    'velocity':       ['velocity'],      # velocity_mean, velocity_max, …
+    'acceleration':   ['acceleration'],  # acceleration_mean, …
+    'pressure':       ['geo_pressure'],  # PressureExtractor: geo_pressure_mean/max
+    'location':       [],               # dual-mapped — see _resolve_required_feature_folders
+    'touch_category': [],               # binary one-hot — no aggregation folder
+}
+
+_TOUCH_CATEGORY_COLUMNS = ['is_tap', 'is_stroke', 'dir_proximal', 'dir_distal']
+# location:mean uses these shared columns (always present in every per-aggregation CSV)
+_LOCATION_SHARED_COLS = ['mean_contact_x', 'mean_contact_y', 'mean_contact_z']
+# location:non-mean uses these as base column names; extractor writes e.g. contact_location_x_std
+_LOCATION_BASE_COLS = ['contact_location_x', 'contact_location_y', 'contact_location_z']
+
+
+def _resolve_required_feature_folders(group_spec: dict) -> tuple[list[str], bool]:
+    """Return (folder_names, needs_touch_category) for the given cluster group spec.
+
+    ``folder_names`` is the list of per-aggregation folder names to load from
+    ``touch_features/<folder>/``.  ``location: [mean]`` does NOT add ``mean`` to
+    the folder list because mean location values are already present in every
+    per-aggregation CSV as shared columns.
+    """
+    features: dict = group_spec.get('features', {})
+    folders: list[str] = []
+    needs_touch_category = False
+
+    for data_type, aggregations in features.items():
+        if data_type == 'touch_category':
+            needs_touch_category = True
+            continue
+        if data_type == 'location':
+            non_mean_aggs = [a for a in aggregations if a != 'mean']
+            folders.extend(non_mean_aggs)
+        else:
+            folders.extend(aggregations)
+
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for f in folders:
+        if f not in seen:
+            seen.add(f)
+            deduped.append(f)
+    return deduped, needs_touch_category
+
+
+def _select_feature_columns(
+    merged_df: pd.DataFrame,
+    group_spec: dict,
+    needs_touch_category: bool,
+) -> list[str]:
+    """Return the list of feature column names to pass to the clusterer.
+
+    Selects ``{base_col}_{agg}`` columns from *merged_df* per the group spec.
+    Emits a warning for any expected column that is missing.
+    """
+    features: dict = group_spec.get('features', {})
+    selected: list[str] = []
+
+    for data_type, aggregations in features.items():
+        if data_type == 'touch_category':
+            for col in _TOUCH_CATEGORY_COLUMNS:
+                if col in merged_df.columns:
+                    selected.append(col)
+                else:
+                    logging.warning(
+                        f"cluster_groups: expected touch_category column '{col}' not found — skipping."
+                    )
+            continue
+
+        if data_type == 'location':
+            for agg in aggregations:
+                if agg == 'mean':
+                    for col in _LOCATION_SHARED_COLS:
+                        if col in merged_df.columns:
+                            selected.append(col)
+                        else:
+                            logging.warning(
+                                f"cluster_groups: expected location[mean] column '{col}' not found — skipping."
+                            )
+                else:
+                    for base in _LOCATION_BASE_COLS:
+                        col = f'{base}_{agg}'
+                        if col in merged_df.columns:
+                            selected.append(col)
+                        else:
+                            logging.warning(
+                                f"cluster_groups: expected location[{agg}] column '{col}' not found — skipping."
+                            )
+            continue
+
+        base_cols = DATA_TYPE_TO_COLUMNS.get(data_type)
+        if base_cols is None:
+            logging.warning(
+                f"cluster_groups: unknown data type '{data_type}' — skipping."
+            )
+            continue
+
+        for base in base_cols:
+            for agg in aggregations:
+                col = f'{base}_{agg}'
+                if col in merged_df.columns:
+                    selected.append(col)
+                else:
+                    logging.warning(
+                        f"cluster_groups: expected column '{col}' not found — skipping."
+                    )
+
+    return selected
+
 
 def _translate_extraction_profiles_to_combinations(extraction_profiles: dict) -> dict:
     """
@@ -174,41 +290,141 @@ def _merge_feature_csvs(feature_names: list[str], extraction_dir: Path) -> pd.Da
 
 def run_clustering(
     output_dir: Path,
-    feature_combinations: dict,
-    clustering_profiles: dict,
+    cluster_groups: dict = None,
+    feature_combinations: dict = None,
+    clustering_profiles: dict = None,
     force: bool = False,
     extraction_dir: Path = None,
+    reduction: dict = None,
+    evaluation: dict = None,
 ) -> dict[str, List[Path]]:
     """
-    Merge feature CSVs per combination and run all configured clusterers.
-
-    Executes the cross-product: each enabled ``feature_combination`` x each
-    enabled ``clustering_profile`` produces one output directory.
+    Merge feature CSVs per group and run each group's clustering profiles.
 
     Parameters
     ----------
     output_dir
         Root directory for clustering outputs
         (e.g. ``database / '4_analysed' / 'touch_clusters'``).
+    cluster_groups
+        Dict mapping group_name -> group_spec.  Each spec must contain:
+        ``features: {data_type: [agg, ...]}`` and
+        ``clustering_methods: {clusterer_name: config}``.
     feature_combinations
-        Dict mapping combination_name -> combination_config.
-        Each config must contain ``features: [feature_name, ...]`` listing which
-        feature folders to merge. Supports backward-compat ``extraction_profiles``
-        format (each profile becomes a single-feature combination automatically).
+        **DEPRECATED.** Old format: dict of combination_name -> config with
+        ``features: [folder_name, ...]``.  Pass with *clustering_profiles*.
+        A deprecation warning is emitted and the old code path runs unchanged.
     clustering_profiles
-        Dict mapping clusterer_name -> clusterer_config. Profiles with
-        ``enabled: false`` are skipped.
+        **DEPRECATED.** Companion to *feature_combinations*.
     force
         Override idempotency checks.
     extraction_dir
         Root of the extraction output tree. Defaults to *output_dir* when not
         provided (backward-compatible).
+    reduction
+        Task-level reduction config injected into each group/combination as a
+        default (a per-group key wins).
+    evaluation
+        Task-level evaluation config injected into each group/combination as a
+        default (a per-group key wins).
 
     Returns
     -------
-    Dict mapping ``"<combination_name>/<clusterer_name>"`` -> list of
+    Dict mapping ``"<group_name>/<clusterer_name>"`` -> list of
     pooled-clustered CSV paths written.
     """
+    if cluster_groups is None and feature_combinations is None:
+        raise ValueError(
+            "run_clustering: either 'cluster_groups' or 'feature_combinations' must be provided."
+        )
+
+    src_dir = extraction_dir if extraction_dir is not None else output_dir
+    results: dict[str, List[Path]] = {}
+
+    # ---- New code path: cluster_groups ----------------------------------------
+    if cluster_groups is not None:
+        cluster_groups = filter_enabled_profiles(cluster_groups)
+        n_groups = len(cluster_groups)
+        print(
+            f"=== clustering pipeline: {n_groups} cluster group(s) ===",
+            flush=True,
+        )
+
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=RuntimeWarning)
+
+            for group_name, group_spec in cluster_groups.items():
+                group_spec = {**group_spec}
+                if reduction is not None and "reduction" not in group_spec:
+                    group_spec["reduction"] = reduction
+                if evaluation is not None and "evaluation" not in group_spec:
+                    group_spec["evaluation"] = evaluation
+
+                folder_names, needs_touch_category = _resolve_required_feature_folders(group_spec)
+                feature_names_to_load = folder_names[:]
+                if needs_touch_category:
+                    feature_names_to_load.append('touch_category')
+
+                if not feature_names_to_load:
+                    raise ValueError(
+                        f"[{group_name}] No feature folders resolved from group spec. "
+                        "A group with only 'location: [mean]' cannot be loaded — "
+                        "add at least one non-mean-location feature or aggregation."
+                    )
+
+                print(
+                    f"  [cluster] group '{group_name}' — folders: {feature_names_to_load}",
+                    flush=True,
+                )
+
+                pooled = _merge_feature_csvs(feature_names_to_load, src_dir)
+                if pooled.empty:
+                    logging.warning(
+                        f"[{group_name}] No data after merging feature CSVs — skipping."
+                    )
+                    continue
+
+                print(
+                    f"  [cluster] group '{group_name}' — "
+                    f"{len(pooled)} touches from "
+                    f"{pooled['session_id'].nunique() if 'session_id' in pooled.columns else '?'} "
+                    "session(s)",
+                    flush=True,
+                )
+
+                feature_cols = _select_feature_columns(pooled, group_spec, needs_touch_category)
+
+                group_clustering_methods = filter_enabled_profiles(
+                    group_spec.get('clustering_methods', {})
+                )
+                if not group_clustering_methods:
+                    logging.warning(
+                        f"[{group_name}] No clustering methods enabled — skipping."
+                    )
+                    continue
+
+                cluster_outputs = _cluster_combination(
+                    combination_name=group_name,
+                    combination_config=group_spec,
+                    pooled=pooled,
+                    output_dir=output_dir,
+                    clustering_profiles=group_clustering_methods,
+                    force=force,
+                    feature_cols_override=feature_cols,
+                )
+                for clusterer_name, paths in cluster_outputs.items():
+                    results[f"{group_name}/{clusterer_name}"] = paths
+
+        total = sum(len(v) for v in results.values())
+        print(f"=== clustering pipeline complete: {total} output(s) ===", flush=True)
+        return results
+
+    # ---- Deprecated code path: feature_combinations --------------------------
+    logging.warning(
+        "clustering_pipeline: 'feature_combinations' is deprecated — "
+        "migrate to 'cluster_groups' with per-group 'clustering_methods'."
+    )
+
     # Backward-compat: old format used extraction_profiles without a 'features' list
     if feature_combinations and not any(
         'features' in v for v in feature_combinations.values() if isinstance(v, dict)
@@ -220,11 +436,7 @@ def run_clustering(
         feature_combinations = _translate_extraction_profiles_to_combinations(feature_combinations)
 
     feature_combinations = filter_enabled_profiles(feature_combinations)
-    clustering_profiles = filter_enabled_profiles(clustering_profiles)
-
-    src_dir = extraction_dir if extraction_dir is not None else output_dir
-
-    results: dict[str, List[Path]] = {}
+    clustering_profiles = filter_enabled_profiles(clustering_profiles or {})
 
     n_combinations = len(feature_combinations)
     n_clusterers = len(clustering_profiles)
@@ -238,6 +450,12 @@ def run_clustering(
         warnings.filterwarnings("ignore", category=RuntimeWarning)
 
         for combination_name, combination_config in feature_combinations.items():
+            combination_config = {**combination_config}
+            if reduction is not None and "reduction" not in combination_config:
+                combination_config["reduction"] = reduction
+            if evaluation is not None and "evaluation" not in combination_config:
+                combination_config["evaluation"] = evaluation
+
             feature_names: list[str] = combination_config.get('features', [])
             if not feature_names:
                 logging.warning(
@@ -260,7 +478,8 @@ def run_clustering(
 
             print(
                 f"  [cluster] combination '{combination_name}' — "
-                f"{len(pooled)} touches from {pooled['session_id'].nunique() if 'session_id' in pooled.columns else '?'} session(s)",
+                f"{len(pooled)} touches from "
+                f"{pooled['session_id'].nunique() if 'session_id' in pooled.columns else '?'} session(s)",
                 flush=True,
             )
 
@@ -273,8 +492,7 @@ def run_clustering(
                 force=force,
             )
             for clusterer_name, paths in cluster_outputs.items():
-                key = f"{combination_name}/{clusterer_name}"
-                results[key] = paths
+                results[f"{combination_name}/{clusterer_name}"] = paths
 
     total = sum(len(v) for v in results.values())
     print(f"=== clustering pipeline complete: {total} output(s) ===", flush=True)
@@ -288,16 +506,28 @@ def _cluster_combination(
     output_dir: Path,
     clustering_profiles: dict,
     force: bool,
+    feature_cols_override: list[str] | None = None,
 ) -> dict[str, List[Path]]:
-    """Run each clusterer on the already-pooled *pooled* DataFrame."""
+    """Run each clusterer on the already-pooled *pooled* DataFrame.
+
+    Parameters
+    ----------
+    feature_cols_override
+        When provided, use this column list instead of auto-discovering all
+        numeric non-shared columns.  Used by the cluster_groups code path to
+        restrict features to exactly those requested in the group spec.
+    """
     outputs: dict[str, List[Path]] = {}
 
     # --- Shared reduction: build feature matrix once per combination --------
-    feature_cols = [
-        c for c in pooled.columns
-        if c not in SHARED_COLUMNS
-        and pd.api.types.is_numeric_dtype(pooled[c])
-    ]
+    if feature_cols_override is not None:
+        feature_cols = [c for c in feature_cols_override if c in pooled.columns]
+    else:
+        feature_cols = [
+            c for c in pooled.columns
+            if c not in SHARED_COLUMNS
+            and pd.api.types.is_numeric_dtype(pooled[c])
+        ]
 
     feature_df_full = pooled[feature_cols].dropna() if feature_cols else pd.DataFrame()
     valid_idx = feature_df_full.index

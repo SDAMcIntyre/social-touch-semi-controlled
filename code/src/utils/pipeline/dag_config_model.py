@@ -235,6 +235,115 @@ class DagConfigModel:
         return self._get_task(task_name).get("description")
 
     # ------------------------------------------------------------------
+    # Cluster groups — CRUD for touch_clustering groups and downstream refs
+    # ------------------------------------------------------------------
+    #
+    # get_cluster_group_names / set_profile_enabled reuse existing profile helpers
+    # with option_key="cluster_groups".
+
+    def get_cluster_group_spec(self, task_name: str, group_name: str) -> dict:
+        """Return a copy of the full spec dict for *group_name* in *task_name*."""
+        opts = self._get_task(task_name).get("options", {}) or {}
+        groups = opts.get("cluster_groups", {}) or {}
+        spec = groups.get(group_name)
+        if spec is None:
+            raise KeyError(f"Cluster group '{group_name}' not found in task '{task_name}'")
+        return dict(spec)
+
+    def set_cluster_group_spec(self, task_name: str, group_name: str, spec: dict) -> None:
+        """Write (or overwrite) the full spec dict for *group_name* in *task_name*."""
+        task = self._get_task(task_name)
+        opts = task.get("options")
+        if opts is None:
+            task["options"] = {}
+            opts = task["options"]
+        if "cluster_groups" not in opts or opts["cluster_groups"] is None:
+            opts["cluster_groups"] = {}
+        opts["cluster_groups"][group_name] = spec
+        self._dirty = True
+
+    def get_downstream_cluster_group_names(self, task_name: str) -> list[str]:
+        """Return the list of group names referenced by a downstream task.
+
+        Reads the flow-style ``cluster_groups: [name, ...]`` value.
+        Returns an empty list if the option is absent or not a sequence.
+        """
+        opts = self._get_task(task_name).get("options", {}) or {}
+        val = opts.get("cluster_groups")
+        if isinstance(val, (list, CommentedSeq)):
+            return list(val)
+        return []
+
+    def set_downstream_cluster_group_names(
+        self, task_name: str, names: list[str]
+    ) -> None:
+        """Write *names* as a flow-style ``cluster_groups: [...]`` list."""
+        task = self._get_task(task_name)
+        opts = task.get("options")
+        if opts is None:
+            task["options"] = {}
+            opts = task["options"]
+        seq = CommentedSeq(names)
+        seq.fa.set_flow_style()
+        opts["cluster_groups"] = seq
+        self._dirty = True
+
+    def get_group_clustering_methods(self, task_name: str, group_name: str) -> dict:
+        """Return the clustering_methods dict for *group_name* in *task_name*."""
+        spec = self.get_cluster_group_spec(task_name, group_name)
+        methods = spec.get("clustering_methods", {})
+        return dict(methods) if isinstance(methods, dict) else {}
+
+    def set_group_clustering_profile_enabled(
+        self,
+        task_name: str,
+        group_name: str,
+        profile_name: str,
+        enabled: bool,
+    ) -> None:
+        """Enable or disable a clustering profile inside a cluster group."""
+        task = self._get_task(task_name)
+        opts = task.get("options", {}) or {}
+        groups = opts.get("cluster_groups", {}) or {}
+        group = groups.get(group_name)
+        if group is None:
+            raise KeyError(f"Cluster group '{group_name}' not found in task '{task_name}'")
+        methods = group.get("clustering_methods", {}) or {}
+        profile = methods.get(profile_name)
+        if profile is None:
+            raise KeyError(
+                f"Clustering profile '{profile_name}' not found in group '{group_name}'"
+            )
+        if enabled:
+            profile.pop("enabled", None)
+        else:
+            profile["enabled"] = False
+        self._dirty = True
+
+    def set_group_clustering_profile_spec(
+        self,
+        task_name: str,
+        group_name: str,
+        profile_name: str,
+        spec: dict,
+    ) -> None:
+        """Write (or overwrite) a clustering profile spec inside a cluster group."""
+        task = self._get_task(task_name)
+        opts = task.get("options")
+        if opts is None:
+            task["options"] = {}
+            opts = task["options"]
+        if "cluster_groups" not in opts or opts["cluster_groups"] is None:
+            opts["cluster_groups"] = {}
+        group = opts["cluster_groups"].get(group_name)
+        if group is None:
+            raise KeyError(f"Cluster group '{group_name}' not found in task '{task_name}'")
+        if "clustering_methods" not in group or group["clustering_methods"] is None:
+            group["clustering_methods"] = {}
+        group["clustering_methods"][profile_name] = spec
+        self._dirty = True
+
+    # ------------------------------------------------------------------
     # Persistence
     # ------------------------------------------------------------------
 

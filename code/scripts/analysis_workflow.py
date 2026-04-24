@@ -128,28 +128,32 @@ def touch_feature_extraction_flow(
 def touch_clustering_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
+    cluster_groups: dict = None,
     feature_combinations: dict = None,
     clustering_profiles: dict = None,
+    reduction: dict = None,
+    evaluation: dict = None,
 ) -> List[Path]:
     """
     Stage 2: Global clustering on pooled feature CSVs.
-    Discovers CSVs written by touch_feature_extraction, merges per combination,
+    Discovers CSVs written by touch_feature_extraction, merges per group,
     and writes
-    ``4_analysed/touch_clusters/<combination>/<clusterer>/pooled_touch_summary_clustered.csv``.
+    ``4_analysed/touch_clusters/<group>/<clusterer>/pooled_touch_summary_clustered.csv``.
     """
     print(f"[Batch Analysis] Running touch clustering for {len(input_items)} item(s)...")
     if not input_items:
         return []
-    combinations = feature_combinations or {'basic': {'enabled': True, 'features': ['max']}}
-    clusterers = clustering_profiles or {'kmeans': {'method': 'kmeans', 'min_touches_per_cluster': 30}}
     extraction_dir = input_items[0][1] / '4_analysed' / 'touch_features'
     output_dir = input_items[0][1] / '4_analysed' / 'touch_clusters'
     per_key = run_clustering(
         output_dir=output_dir,
-        feature_combinations=combinations,
-        clustering_profiles=clusterers,
+        cluster_groups=cluster_groups,
+        feature_combinations=feature_combinations,
+        clustering_profiles=clustering_profiles,
         force=force_processing,
         extraction_dir=extraction_dir,
+        reduction=reduction,
+        evaluation=evaluation,
     )
     return [path for paths in per_key.values() for path in paths]
 
@@ -158,6 +162,8 @@ def touch_clustering_flow(
 def touch_comparing_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
+    cluster_groups: list = None,
+    cluster_group_defs: dict = None,
     feature_combinations: dict = None,
     clustering_profiles: dict = None,
     comparing_profiles: dict = None,
@@ -172,18 +178,15 @@ def touch_comparing_flow(
     print(f"[Batch Analysis] Running touch comparing for {len(input_items)} item(s)...")
     if not input_items:
         return []
-    combinations = feature_combinations or {'basic': {'enabled': True, 'features': ['max']}}
-    clusterers = clustering_profiles or {'kmeans': {'method': 'kmeans'}}
-    strategies = comparing_profiles or {
-        'bias': {'method': 'bias', 'measurement_col': 'spike_elicited', 'sensor_col': 'session_id'},
-    }
     clustering_dir = input_items[0][1] / '4_analysed' / 'touch_clusters'
     output_dir = input_items[0][1] / '4_analysed' / 'touch_comparisons'
     return run_comparing(
         output_dir=output_dir,
-        feature_combinations=combinations,
-        clustering_profiles=clusterers,
-        comparing_profiles=strategies,
+        cluster_groups=cluster_groups,
+        cluster_group_defs=cluster_group_defs,
+        feature_combinations=feature_combinations,
+        clustering_profiles=clustering_profiles,
+        comparing_profiles=comparing_profiles,
         min_instances_per_sensor=min_instances_per_sensor,
         min_sensor_types=min_sensor_types,
         force=force_processing,
@@ -234,6 +237,8 @@ def analyse_ap_efficacy_flow(
 def map_receptive_fields_clustered_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
+    cluster_groups: list = None,
+    cluster_group_defs: dict = None,
     feature_combinations: dict = None,
     clustering_profiles: dict = None,
     camera_angle_mode: str = "manual",
@@ -243,7 +248,7 @@ def map_receptive_fields_clustered_flow(
     Cluster-based RF mapping: spike-count heatmaps per cluster from touch_clustering output.
     Reads pooled_touch_summary_clustered.csv, forward-fills contact_points (30Hz->1kHz),
     counts spikes per (x,y,z) point, and renders 3D forearm heatmap PNGs.
-    Output: ``4_analysed/receptive_field_maps_clustered/<combination>/<clusterer>/``
+    Output: ``4_analysed/receptive_field_maps_clustered/<group>/<clusterer>/``
 
     After mapping, assigns camera angles per session.  ``camera_angle_mode``
     controls whether this is done interactively (``"manual"``) or automatically
@@ -254,9 +259,6 @@ def map_receptive_fields_clustered_flow(
     if not input_items:
         return []
 
-    combinations = feature_combinations or {'only_mean': {'enabled': True, 'features': ['mean']}}
-    clusterers = clustering_profiles or {'kmeans': {'method': 'kmeans'}}
-
     database_path = input_items[0][1]
     clustering_dir = database_path / '4_analysed' / 'touch_clusters'
     output_dir = database_path / '4_analysed' / 'receptive_field_maps_clustered'
@@ -265,8 +267,10 @@ def map_receptive_fields_clustered_flow(
         clustering_dir=clustering_dir,
         input_items=input_items,
         output_dir=output_dir,
-        feature_combinations=combinations,
-        clustering_profiles=clusterers,
+        cluster_groups=cluster_groups,
+        cluster_group_defs=cluster_group_defs,
+        feature_combinations=feature_combinations,
+        clustering_profiles=clustering_profiles,
         force=force_processing,
         projection_method=projection_method,
     )
@@ -380,6 +384,10 @@ def run_batch_analysis(
 
     logging.info(f"🚀 Starting analysis for {len(items_to_process)} collected items.")
     
+    # Extract cluster group defs from touch_clustering to forward to downstream tasks.
+    _clustering_options = dag_handler.get_task_options("touch_clustering") or {}
+    _cluster_group_defs = _clustering_options.get("cluster_groups") or {}
+
     for task_name, flow_func in available_tasks:
         if task_name not in dag_handler.tasks or not dag_handler.tasks[task_name].get("enabled", True):
             logging.info(f"Task '{task_name}' is disabled in DAG. Skipping.")
@@ -403,10 +411,23 @@ def run_batch_analysis(
                         kwargs["monitor"] = options["monitor"]
                     if "features" in options:
                         kwargs["features"] = options["features"]
+                    if "cluster_groups" in options:
+                        kwargs["cluster_groups"] = options["cluster_groups"]
+                    if task_name in ("touch_comparing", "map_receptive_fields_clustered"):
+                        if _cluster_group_defs:
+                            kwargs["cluster_group_defs"] = _cluster_group_defs
                     if "feature_combinations" in options:
+                        logging.warning(
+                            f"[{task_name}] 'feature_combinations' is deprecated — "
+                            "migrate to 'cluster_groups'."
+                        )
                         kwargs["feature_combinations"] = options["feature_combinations"]
                     if "clustering_profiles" in options:
                         kwargs["clustering_profiles"] = options["clustering_profiles"]
+                    if "reduction" in options:
+                        kwargs["reduction"] = options["reduction"]
+                    if "evaluation" in options:
+                        kwargs["evaluation"] = options["evaluation"]
                     if "comparing_profiles" in options:
                         kwargs["comparing_profiles"] = options["comparing_profiles"]
                     if "min_instances_per_sensor" in options:

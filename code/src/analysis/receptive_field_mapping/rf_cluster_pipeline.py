@@ -325,14 +325,16 @@ def run_cluster_rf_mapping(
     clustering_dir: Path,
     input_items: List[Tuple[Path, Path]],
     output_dir: Path,
-    feature_combinations: dict,
-    clustering_profiles: dict,
+    cluster_groups: list = None,
+    cluster_group_defs: dict = None,
+    feature_combinations: dict = None,
+    clustering_profiles: dict = None,
     force: bool = False,
     projection_method: Optional[str] = None,
 ) -> List[Path]:
     """Orchestrate cluster-based receptive field mapping.
 
-    For each enabled (feature_combination, clusterer) pair:
+    For each enabled (group_name, clusterer) pair:
     1. Reads pooled_touch_summary_clustered.csv
     2. Groups by cluster_label
     3. For each cluster: traces touches to aggregated CSVs, forward-fills
@@ -344,17 +346,19 @@ def run_cluster_rf_mapping(
     Parameters
     ----------
     clustering_dir:
-        Root of touch_clusters output:
-        ``database_path / '4_analysed' / 'touch_clusters'``
+        Root of touch_clusters output.
     input_items:
         List of (aggregated_csv_path, database_path) tuples.
     output_dir:
-        Root of output:
-        ``database_path / '4_analysed' / 'receptive_field_maps_clustered'``
+        Root of output directory.
+    cluster_groups:
+        List of group names (new schema).  Must accompany *cluster_group_defs*.
+    cluster_group_defs:
+        Dict mapping group_name -> group_spec. Required with *cluster_groups*.
     feature_combinations:
-        Dict of feature combination configs (from DAG options).
+        **DEPRECATED.** Dict of combination configs.
     clustering_profiles:
-        Dict of clustering profile configs (from DAG options).
+        **DEPRECATED.** Companion to *feature_combinations*.
     force:
         If True, reprocess even if outputs are up-to-date.
 
@@ -362,210 +366,237 @@ def run_cluster_rf_mapping(
     -------
     List of paths to produced spike_counts.csv files.
     """
+    if cluster_groups is None and feature_combinations is None:
+        raise ValueError(
+            "run_cluster_rf_mapping: either 'cluster_groups' or 'feature_combinations' must be provided."
+        )
 
     session_dir_map = _resolve_session_paths(input_items)
-    enabled_combinations = filter_enabled_profiles(feature_combinations)
-    enabled_clusterers = filter_enabled_profiles(clustering_profiles)
-
     produced: List[Path] = []
 
-    for combo_name in enabled_combinations:
-        for clusterer_name in enabled_clusterers:
-            print(f"[RF Cluster Mapping] {combo_name}/{clusterer_name}...")
-            clustered_csv = (
-                clustering_dir / combo_name / clusterer_name
-                / 'pooled_touch_summary_clustered.csv'
+    # Build the iterable of (combo_label, clusterer_name) pairs
+    pairs: List[Tuple[str, str]] = []
+    if cluster_groups is not None:
+        if cluster_group_defs is None:
+            raise ValueError(
+                "run_cluster_rf_mapping: 'cluster_group_defs' must be provided when using 'cluster_groups'."
             )
-            if not clustered_csv.exists():
-                print(f"  Clustered CSV not found, skipping.")
-                logger.warning(
-                    "Clustered CSV not found, skipping (%s/%s): %s",
-                    combo_name, clusterer_name, clustered_csv,
-                )
-                continue
-
-            base_output = output_dir / combo_name / clusterer_name
-            summary_json = base_output / 'rf_cluster_summary.json'
-            cluster_metadata_path = (
-                clustering_dir / combo_name / clusterer_name / 'cluster_metadata.json'
+        missing = [g for g in cluster_groups if g not in cluster_group_defs]
+        if missing:
+            raise ValueError(
+                f"run_cluster_rf_mapping: group name(s) {missing} not found in cluster_group_defs."
             )
+        for group_name in cluster_groups:
+            group_spec = cluster_group_defs[group_name]
+            for clusterer_name in filter_enabled_profiles(group_spec.get('clustering_methods', {})):
+                pairs.append((group_name, clusterer_name))
+    else:
+        logger.warning(
+            "run_cluster_rf_mapping: 'feature_combinations' is deprecated — "
+            "migrate to 'cluster_groups' with 'cluster_group_defs'."
+        )
+        enabled_combinations = filter_enabled_profiles(feature_combinations)
+        enabled_clusterers = filter_enabled_profiles(clustering_profiles or {})
+        for combo_name in enabled_combinations:
+            for clusterer_name in enabled_clusterers:
+                pairs.append((combo_name, clusterer_name))
 
-            if not should_process_task(
-                input_paths=[clustered_csv],
-                output_paths=[summary_json],
-                force=force,
-            ):
-                print(f"  Up-to-date, skipping.")
-                produced.append(summary_json)
-                continue
+    for combo_name, clusterer_name in pairs:
+        print(f"[RF Cluster Mapping] {combo_name}/{clusterer_name}...")
+        clustered_csv = (
+            clustering_dir / combo_name / clusterer_name
+            / 'pooled_touch_summary_clustered.csv'
+        )
+        if not clustered_csv.exists():
+            print(f"  Clustered CSV not found, skipping.")
+            logger.warning(
+                "Clustered CSV not found, skipping (%s/%s): %s",
+                combo_name, clusterer_name, clustered_csv,
+            )
+            continue
 
-            try:
-                clustered_df = pd.read_csv(clustered_csv)
-            except Exception:
-                logger.exception("Failed to read %s", clustered_csv)
-                continue
+        base_output = output_dir / combo_name / clusterer_name
+        summary_json = base_output / 'rf_cluster_summary.json'
+        cluster_metadata_path = (
+            clustering_dir / combo_name / clusterer_name / 'cluster_metadata.json'
+        )
 
-            if clustered_df.empty:
-                print(f"  Clustered CSV is empty, skipping.")
-                logger.warning("Clustered CSV is empty: %s", clustered_csv)
-                continue
+        if not should_process_task(
+            input_paths=[clustered_csv],
+            output_paths=[summary_json],
+            force=force,
+        ):
+            print(f"  Up-to-date, skipping.")
+            produced.append(summary_json)
+            continue
 
-            cluster_groups = _group_touches_by_cluster(clustered_df)
-            n_clusters = len(cluster_groups)
-            print(f"  {n_clusters} clusters found.")
-            summary_data: dict = {}
-            metrics_rows: List[dict] = []
+        try:
+            clustered_df = pd.read_csv(clustered_csv)
+        except Exception:
+            logger.exception("Failed to read %s", clustered_csv)
+            continue
 
-            for cluster_idx, (cluster_label, cluster_df) in enumerate(cluster_groups.items(), start=1):
-                n_touches = len(cluster_df)
-                print(f"  Cluster {cluster_idx}/{n_clusters} (label={cluster_label}, {n_touches} touches)...")
-                cluster_out = base_output / _format_cluster_folder(cluster_label)
-                cluster_out.mkdir(parents=True, exist_ok=True)
+        if clustered_df.empty:
+            print(f"  Clustered CSV is empty, skipping.")
+            logger.warning("Clustered CSV is empty: %s", clustered_csv)
+            continue
 
-                cluster_desc = _build_cluster_description(
-                    clustered_df, cluster_label, cluster_metadata_path,
-                )
-                with open(cluster_out / 'cluster_description.json', 'w') as _f:
-                    json.dump(cluster_desc, _f, indent=2)
-                description_line = _description_summary_line(cluster_desc)
+        clustered_by_label = _group_touches_by_cluster(clustered_df)
+        n_clusters = len(clustered_by_label)
+        print(f"  {n_clusters} clusters found.")
+        summary_data: dict = {}
+        metrics_rows: List[dict] = []
 
-                session_touch_map = _build_session_touch_map(cluster_df)
-                session_counters: List[Counter] = []
-                session_spike_dfs: Dict[str, pd.DataFrame] = {}
+        for cluster_idx, (cluster_label, cluster_df) in enumerate(clustered_by_label.items(), start=1):
+            n_touches = len(cluster_df)
+            print(f"  Cluster {cluster_idx}/{n_clusters} (label={cluster_label}, {n_touches} touches)...")
+            cluster_out = base_output / _format_cluster_folder(cluster_label)
+            cluster_out.mkdir(parents=True, exist_ok=True)
 
-                for session_id, touch_keys in session_touch_map.items():
-                    print(f"    {session_id}: loading {len(touch_keys)} touches...")
-                    if session_id not in session_dir_map:
-                        print(f"    -> not in input_items, skipping.")
-                        logger.warning(
-                            "Session '%s' in cluster %s not found in input_items. Skipping.",
-                            session_id, cluster_label,
-                        )
-                        continue
+            cluster_desc = _build_cluster_description(
+                clustered_df, cluster_label, cluster_metadata_path,
+            )
+            with open(cluster_out / 'cluster_description.json', 'w') as _f:
+                json.dump(cluster_desc, _f, indent=2)
+            description_line = _description_summary_line(cluster_desc)
 
-                    session_dir = session_dir_map[session_id]
-                    agg_csvs = list(session_dir.glob('*_semicontrolled_aggregated_session.csv'))
-                    if not agg_csvs:
-                        print(f"    -> no aggregated CSV found, skipping.")
-                        logger.warning(
-                            "No aggregated CSV in %s. Skipping session %s.",
-                            session_dir, session_id,
-                        )
-                        continue
+            session_touch_map = _build_session_touch_map(cluster_df)
+            session_counters: List[Counter] = []
+            session_spike_dfs: Dict[str, pd.DataFrame] = {}
 
-                    session_counter = _extract_spike_contact_points(agg_csvs[0], touch_keys)
-                    n_spikes = sum(session_counter.values())
-                    print(f"    -> {n_spikes} spikes at {len(session_counter)} contact points.")
-                    session_counters.append(session_counter)
-
-                    if session_counter:
-                        session_spike_dfs[session_id] = _aggregate_spike_counts([session_counter])
-
-                # Save pooled spike_counts.csv for this cluster
-                pooled_df = _aggregate_spike_counts(session_counters)
-                spike_counts_csv = cluster_out / 'spike_counts.csv'
-                pooled_df.to_csv(spike_counts_csv, index=False)
-                produced.append(spike_counts_csv)
-
-                # Compute and save RF metrics
-                metrics_forearm_vertices = None
-                first_session_with_data = next(iter(session_spike_dfs), None)
-                if first_session_with_data is not None:
-                    _ply_path = resolve_forearm_ply(
-                        session_dir_map[first_session_with_data],
-                        first_session_with_data,
-                    )
-                    if _ply_path is not None:
-                        try:
-                            import open3d as o3d  # type: ignore
-                            pcd = o3d.io.read_point_cloud(str(_ply_path))
-                            metrics_forearm_vertices = np.asarray(pcd.points)
-                        except Exception:
-                            logger.warning(
-                                "Failed to load forearm PLY for metrics (cluster %s): %s",
-                                cluster_label, _ply_path,
-                            )
-
-                metrics = compute_rf_metrics(
-                    pooled_df,
-                    metrics_forearm_vertices,
-                    projection_method=projection_method or "tangent_plane",
-                )
-                metrics_json_path = cluster_out / 'rf_metrics.json'
-                with open(metrics_json_path, 'w') as _f:
-                    json.dump(metrics_to_dict(metrics), _f, indent=2)
-                metrics_rows.append(
-                    metrics_to_row(metrics, cluster_label, combo_name, clusterer_name)
-                )
-
-                total_spikes = int(pooled_df['spike_count'].sum()) if not pooled_df.empty else 0
-                if pooled_df.empty:
-                    print(f"  -> No spikes found for cluster {cluster_label}. spike_counts.csv is empty.")
+            for session_id, touch_keys in session_touch_map.items():
+                print(f"    {session_id}: loading {len(touch_keys)} touches...")
+                if session_id not in session_dir_map:
+                    print(f"    -> not in input_items, skipping.")
                     logger.warning(
-                        "No spikes found for cluster %s (%s/%s). spike_counts.csv is empty.",
-                        cluster_label, combo_name, clusterer_name,
+                        "Session '%s' in cluster %s not found in input_items. Skipping.",
+                        session_id, cluster_label,
                     )
-                else:
-                    print(
-                        f"  -> spike_counts.csv: {total_spikes} total spikes,"
-                        f" {len(pooled_df)} unique contact points."
-                    )
+                    continue
 
-                # Render per-session forearm heatmaps
-                for session_id, spike_df in session_spike_dfs.items():
-                    if spike_df.empty:
-                        continue
-                    session_dir = session_dir_map[session_id]
-                    forearm_ply = resolve_forearm_ply(session_dir, session_id)
-                    suffix = f'_{projection_method}' if projection_method else ''
-                    png_path = cluster_out / f'{session_id}_rf_heatmap{suffix}.png'
-                    print(f"    Rendering heatmap: {session_id}...")
+                session_dir = session_dir_map[session_id]
+                agg_csvs = list(session_dir.glob('*_semicontrolled_aggregated_session.csv'))
+                if not agg_csvs:
+                    print(f"    -> no aggregated CSV found, skipping.")
+                    logger.warning(
+                        "No aggregated CSV in %s. Skipping session %s.",
+                        session_dir, session_id,
+                    )
+                    continue
+
+                session_counter = _extract_spike_contact_points(agg_csvs[0], touch_keys)
+                n_spikes = sum(session_counter.values())
+                print(f"    -> {n_spikes} spikes at {len(session_counter)} contact points.")
+                session_counters.append(session_counter)
+
+                if session_counter:
+                    session_spike_dfs[session_id] = _aggregate_spike_counts([session_counter])
+
+            # Save pooled spike_counts.csv for this cluster
+            pooled_df = _aggregate_spike_counts(session_counters)
+            spike_counts_csv = cluster_out / 'spike_counts.csv'
+            pooled_df.to_csv(spike_counts_csv, index=False)
+            produced.append(spike_counts_csv)
+
+            # Compute and save RF metrics
+            metrics_forearm_vertices = None
+            first_session_with_data = next(iter(session_spike_dfs), None)
+            if first_session_with_data is not None:
+                _ply_path = resolve_forearm_ply(
+                    session_dir_map[first_session_with_data],
+                    first_session_with_data,
+                )
+                if _ply_path is not None:
                     try:
-                        render_forearm_heatmap(
-                            forearm_ply_path=forearm_ply,
-                            spike_counts_df=spike_df,
-                            output_path=png_path,
-                            session_id=session_id,
-                            cluster_label=cluster_label,
-                            projection_method=projection_method,
-                            cluster_description=description_line,
-                        )
+                        import open3d as o3d  # type: ignore
+                        pcd = o3d.io.read_point_cloud(str(_ply_path))
+                        metrics_forearm_vertices = np.asarray(pcd.points)
                     except Exception:
-                        logger.exception(
-                            "Failed to render heatmap for session %s, cluster %s",
-                            session_id, cluster_label,
+                        logger.warning(
+                            "Failed to load forearm PLY for metrics (cluster %s): %s",
+                            cluster_label, _ply_path,
                         )
 
-                summary_data[cluster_label] = {
-                    'n_sessions': len(session_touch_map),
-                    'n_touches': n_touches,
-                    'total_spike_points': len(pooled_df),
-                    'total_spikes': total_spikes,
-                    'rf_metrics_computed': True,
-                }
+            metrics = compute_rf_metrics(
+                pooled_df,
+                metrics_forearm_vertices,
+                projection_method=projection_method or "tangent_plane",
+            )
+            metrics_json_path = cluster_out / 'rf_metrics.json'
+            with open(metrics_json_path, 'w') as _f:
+                json.dump(metrics_to_dict(metrics), _f, indent=2)
+            metrics_rows.append(
+                metrics_to_row(metrics, cluster_label, combo_name, clusterer_name)
+            )
 
-            # Write pooled RF metrics summary CSV
-            if metrics_rows:
-                metrics_summary_csv = base_output / 'rf_metrics_summary.csv'
-                pd.DataFrame(metrics_rows).to_csv(metrics_summary_csv, index=False)
-
-            # Save rf_cluster_summary.json (idempotency sentinel)
-            base_output.mkdir(parents=True, exist_ok=True)
-            with open(summary_json, 'w') as f:
-                json.dump(
-                    {
-                        'feature_combination': combo_name,
-                        'clusterer': clusterer_name,
-                        'clusters': summary_data,
-                    },
-                    f,
-                    indent=2,
+            total_spikes = int(pooled_df['spike_count'].sum()) if not pooled_df.empty else 0
+            if pooled_df.empty:
+                print(f"  -> No spikes found for cluster {cluster_label}. spike_counts.csv is empty.")
+                logger.warning(
+                    "No spikes found for cluster %s (%s/%s). spike_counts.csv is empty.",
+                    cluster_label, combo_name, clusterer_name,
+                )
+            else:
+                print(
+                    f"  -> spike_counts.csv: {total_spikes} total spikes,"
+                    f" {len(pooled_df)} unique contact points."
                 )
 
-            print(f"[RF Cluster Mapping] {combo_name}/{clusterer_name}: done ({n_clusters} clusters).")
-            logger.info(
-                "[%s/%s] RF cluster mapping complete: %d clusters.",
-                combo_name, clusterer_name, n_clusters,
+            # Render per-session forearm heatmaps
+            for session_id, spike_df in session_spike_dfs.items():
+                if spike_df.empty:
+                    continue
+                session_dir = session_dir_map[session_id]
+                forearm_ply = resolve_forearm_ply(session_dir, session_id)
+                suffix = f'_{projection_method}' if projection_method else ''
+                png_path = cluster_out / f'{session_id}_rf_heatmap{suffix}.png'
+                print(f"    Rendering heatmap: {session_id}...")
+                try:
+                    render_forearm_heatmap(
+                        forearm_ply_path=forearm_ply,
+                        spike_counts_df=spike_df,
+                        output_path=png_path,
+                        session_id=session_id,
+                        cluster_label=cluster_label,
+                        projection_method=projection_method,
+                        cluster_description=description_line,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Failed to render heatmap for session %s, cluster %s",
+                        session_id, cluster_label,
+                    )
+
+            summary_data[cluster_label] = {
+                'n_sessions': len(session_touch_map),
+                'n_touches': n_touches,
+                'total_spike_points': len(pooled_df),
+                'total_spikes': total_spikes,
+                'rf_metrics_computed': True,
+            }
+
+        # Write pooled RF metrics summary CSV
+        if metrics_rows:
+            metrics_summary_csv = base_output / 'rf_metrics_summary.csv'
+            pd.DataFrame(metrics_rows).to_csv(metrics_summary_csv, index=False)
+
+        # Save rf_cluster_summary.json (idempotency sentinel)
+        base_output.mkdir(parents=True, exist_ok=True)
+        with open(summary_json, 'w') as f:
+            json.dump(
+                {
+                    'feature_combination': combo_name,
+                    'clusterer': clusterer_name,
+                    'clusters': summary_data,
+                },
+                f,
+                indent=2,
             )
+
+        print(f"[RF Cluster Mapping] {combo_name}/{clusterer_name}: done ({n_clusters} clusters).")
+        logger.info(
+            "[%s/%s] RF cluster mapping complete: %d clusters.",
+            combo_name, clusterer_name, n_clusters,
+        )
 
     return produced
