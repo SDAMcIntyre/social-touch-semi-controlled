@@ -1,4 +1,4 @@
-# feature_extraction/base.py
+# representation/feature_characterization/base.py
 from abc import ABC, abstractmethod
 import pandas as pd
 

@@ -4,7 +4,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
-from .feature_extraction.kinematics import compute_velocity_magnitudes, compute_acceleration_magnitudes
+from .representation.series_level.kinematics import compute_velocity_magnitudes, compute_acceleration_magnitudes
 
 # Architectural Import
 from utils.should_process_task import should_process_task, clean_task_outputs

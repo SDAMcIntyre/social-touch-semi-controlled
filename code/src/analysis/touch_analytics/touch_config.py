@@ -1,7 +1,7 @@
 # touch_config.py
 from typing import Dict, Any
 
-KINEMATIC_SIGNALS = ('depth', 'area', 'velocity', 'acceleration')
+KINEMATIC_SIGNALS = ('contact_depth', 'contact_area', 'velocity_magnitude', 'acceleration_magnitude', 'geo_pressure')
 
 
 def get_discretization_config(aggregation: str) -> Dict[str, Any]:

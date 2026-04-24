@@ -4,7 +4,7 @@
 **Approved:** —
 **Completed:** —
 **Author:** Basil Duvernoy
-**Status:** Draft
+**Status:** In Progress
 **Branch:** `feature/align-clustering-pipeline-with-guidelines`
 
 ---
@@ -185,17 +185,17 @@ Defaults are chosen so behaviour matches the current pipeline: `scaler: standard
 
 ### Phase 1: Stage-3 reduction + Stage-5 evaluation (self-contained, no breaking changes)
 **Goal:** Introduce `reduction/` and `evaluation/` modules and route the orchestrator through them, without yet moving existing files. At the end of this phase the behaviour is equivalent (scaling still happens, just once, in the orchestrator) and new metrics appear in `cluster_metadata.json`.
-**Started:** —
-**Completed:** —
+**Started:** 2026-04-23
+**Completed:** 2026-04-23
 
-- [ ] Create `reduction/scaling.py` with `get_scaler(name: str)` factory (standard, robust, none).
-- [ ] Create `reduction/pipeline.py` with `ReductionPipeline.fit_transform`.
-- [ ] Create `evaluation/internal_metrics.py` with silhouette + Davies–Bouldin + Calinski–Harabasz.
-- [ ] Create `evaluation/stability.py` with bootstrap-resampling Adjusted Rand Index.
-- [ ] Route `clustering_pipeline._cluster_combination` through the new reduction pipeline (L342–343: where `feature_df = pooled[feature_cols].dropna()` happens).
-- [ ] Remove the inlined `StandardScaler` from `clustering/kmeans_clusterer.py:38–39`, `clustering/hierarchical_clusterer.py:74–75`, `clustering/dbscan_clusterer.py:33–34`. The clusterers now receive a scaled array from the orchestrator.
-- [ ] After `fit_predict`, call evaluation module and merge its dict into `metadata` before writing `cluster_metadata.json` (at `clustering_pipeline.py:386`).
-- [ ] Add the `reduction:` and `evaluation:` blocks to `configs/analyse_workflow_dag.yaml` with defaults that match current behaviour.
+- [x] Create `reduction/scaling.py` with `get_scaler(name: str)` factory (standard, robust, none).
+- [x] Create `reduction/pipeline.py` with `ReductionPipeline.fit_transform`.
+- [x] Create `evaluation/internal_metrics.py` with silhouette + Davies–Bouldin + Calinski–Harabasz.
+- [x] Create `evaluation/stability.py` with bootstrap-resampling Adjusted Rand Index.
+- [x] Route `clustering_pipeline._cluster_combination` through the new reduction pipeline (L342–343: where `feature_df = pooled[feature_cols].dropna()` happens).
+- [x] Remove the inlined `StandardScaler` from `clustering/kmeans_clusterer.py:38–39`, `clustering/hierarchical_clusterer.py:74–75`, `clustering/dbscan_clusterer.py:33–34`. The clusterers now receive a scaled array from the orchestrator.
+- [x] After `fit_predict`, call evaluation module and merge its dict into `metadata` before writing `cluster_metadata.json` (at `clustering_pipeline.py:386`).
+- [x] Add the `reduction:` and `evaluation:` blocks to `configs/analyse_workflow_dag.yaml` with defaults that match current behaviour.
 
 **Files Modified:**
 - `code/src/analysis/touch_analytics/reduction/__init__.py` — new
@@ -214,15 +214,15 @@ Defaults are chosen so behaviour matches the current pipeline: `scaler: standard
 
 ### Phase 2: Stage-1 preparation + Stage-2 representation split
 **Goal:** Create `preparation/` and `representation/` module layout; `git mv` existing files into their new homes; de-duplicate direction inference between `extraction_pipeline.py` and `touch_category_extractor.py`. `feature_extraction/` remains as a shim that re-exports from the new locations so outside callers (notably `feature_combination_dialog.py:19`) keep working unchanged.
-**Started:** —
-**Completed:** —
+**Started:** 2026-04-23
+**Completed:** 2026-04-23
 
-- [ ] `git mv code/src/analysis/touch_analytics/feature_extraction/kinematics.py → representation/series_level/kinematics.py`.
-- [ ] `git mv` the remaining `feature_extraction/*.py` files under `representation/feature_characterization/`.
-- [ ] Create `preparation/block_id.py`, `preparation/direction.py`, `preparation/grouping.py`, `preparation/loader.py` — move the relevant blocks out of `extraction_pipeline.py` (`_extract_session` L183–190, `_extract_all_touches` L283 / L295–299, `pd.read_csv` at L175).
-- [ ] De-duplicate direction inference. `touch_category_extractor.py:46–52` and `extraction_pipeline.py:295–299` both compute the same thing — both call into `preparation/direction.py::infer_direction(group)`.
-- [ ] Add a thin `feature_extraction/__init__.py` that re-exports `AGGREGATION_NAMES`, `EXTRACTOR_REGISTRY`, `FeatureExtractor`, all `*Extractor` classes, `get_feature_extractor`, `get_extractor` from `representation.feature_characterization`. The shim keeps `feature_combination_dialog.py:19` working verbatim.
-- [ ] Update `touch_analytics/__init__.py` to re-export from the new modules; `run_feature_extraction` / `run_clustering` / `run_comparing` exports unchanged.
+- [x] `git mv code/src/analysis/touch_analytics/feature_extraction/kinematics.py → representation/series_level/kinematics.py`.
+- [x] `git mv` the remaining `feature_extraction/*.py` files under `representation/feature_characterization/`.
+- [x] Create `preparation/block_id.py`, `preparation/direction.py`, `preparation/grouping.py`, `preparation/loader.py` — move the relevant blocks out of `extraction_pipeline.py` (`_extract_session` L183–190, `_extract_all_touches` L283 / L295–299, `pd.read_csv` at L175).
+- [x] De-duplicate direction inference. `touch_category_extractor.py:46–52` and `extraction_pipeline.py:295–299` both compute the same thing — both call into `preparation/direction.py::infer_direction(group)`.
+- [x] Add a thin `feature_extraction/__init__.py` that re-exports `AGGREGATION_NAMES`, `EXTRACTOR_REGISTRY`, `FeatureExtractor`, all `*Extractor` classes, `get_feature_extractor`, `get_extractor` from `representation.feature_characterization`. The shim keeps `feature_combination_dialog.py:19` working verbatim.
+- [x] Update `touch_analytics/__init__.py` to re-export from the new modules; `run_feature_extraction` / `run_clustering` / `run_comparing` exports unchanged.
 
 **Files Modified:**
 - `code/src/analysis/touch_analytics/preparation/*.py` — new (from `extraction_pipeline.py` extractions)
@@ -237,14 +237,14 @@ Defaults are chosen so behaviour matches the current pipeline: `scaler: standard
 
 ### Phase 3: Path declaration + ClusteringContext
 **Goal:** Remove the `_type_labels` / `_direction_labels` / `_sensor_labels` runtime string-key convention. Add `PATH` attribute to every clusterer.
-**Started:** —
-**Completed:** —
+**Started:** 2026-04-23
+**Completed:** 2026-04-23
 
-- [ ] Add `ClusteringContext` dataclass to `clustering/base.py`.
-- [ ] Change `TouchClusterer.fit_predict(feature_df, config)` signature to `fit_predict(feature_df, config, context)`. Add `PATH: ClassVar[Literal["A","B"]] = "B"` to the ABC.
-- [ ] Update all five clusterers to accept the context argument. `HierarchicalClusterer._satisfies_coverage` now reads `context.sensor_labels` instead of `config['_sensor_labels']`. `TypeStratifiedClusterer._build_group_keys` now reads `context.type_labels` / `context.direction_labels`.
-- [ ] Update `clustering_pipeline._cluster_combination` (L345–359 in current file) to construct a `ClusteringContext` from the pooled DataFrame and pass it into `fit_predict`. Remove the `_*_labels` keys from the dict that is spread into `config`.
-- [ ] Update `clustering/test_type_stratified_clusterer.py` to use the new signature.
+- [x] Add `ClusteringContext` dataclass to `clustering/base.py`.
+- [x] Change `TouchClusterer.fit_predict(feature_df, config)` signature to `fit_predict(feature_df, config, context)`. Add `PATH: ClassVar[Literal["A","B"]] = "B"` to the ABC.
+- [x] Update all five clusterers to accept the context argument. `HierarchicalClusterer._satisfies_coverage` now reads `context.sensor_labels` instead of `config['_sensor_labels']`. `TypeStratifiedClusterer._build_group_keys` now reads `context.type_labels` / `context.direction_labels`.
+- [x] Update `clustering_pipeline._cluster_combination` (L345–359 in current file) to construct a `ClusteringContext` from the pooled DataFrame and pass it into `fit_predict`. Remove the `_*_labels` keys from the dict that is spread into `config`.
+- [x] Update `clustering/test_type_stratified_clusterer.py` to use the new signature.
 
 **Files Modified:**
 - `code/src/analysis/touch_analytics/clustering/base.py` — add `ClusteringContext` + `PATH` + 3-arg signature

@@ -25,6 +25,7 @@ from PyQt5.QtWidgets import (
 
 from ruamel.yaml.comments import CommentedSeq
 
+from utils.gui.dag_launcher.clustering_config_dialog import EvaluationConfigDialog, ReductionConfigDialog
 from utils.gui.dag_launcher.feature_combination_dialog import FeatureCombinationDialog
 from utils.gui.dag_launcher.yaml_edit_dialog import YamlEditDialog
 from utils.pipeline.dag_config_model import DagConfigModel
@@ -41,6 +42,13 @@ _OPTION_ENUMS: dict[str, list[tuple[str, object]]] = {
     ],
 }
 
+_TOUCH_CLUSTERING_STAGE_ORDER: list[str] = [
+    "feature_combinations",
+    "reduction",
+    "clustering_profiles",
+    "evaluation",
+]
+
 
 def _is_profile_dict(val: Any) -> bool:
     """Return True if *val* is a non-empty dict of sub-dicts that each have a 'method' key."""
@@ -50,11 +58,15 @@ def _is_profile_dict(val: Any) -> bool:
 
 
 def _is_feature_dict(val: Any) -> bool:
-    """Return True if *val* is a non-empty dict of sub-dicts with 'enabled' but not 'method' or 'features'."""
+    """Return True if *val* is a non-empty dict of sub-dicts that are feature configs.
+
+    Feature configs are dicts with an optional 'enabled' key but no 'method' or 'features' key.
+    An empty sub-dict ``{}`` is accepted (enabled defaults to True).
+    """
     if not isinstance(val, dict) or not val:
         return False
     return all(
-        isinstance(v, dict) and "enabled" in v and "method" not in v and "features" not in v
+        isinstance(v, dict) and "method" not in v and "features" not in v
         for v in val.values()
     )
 
@@ -80,6 +92,29 @@ def _preview_text(val: Any) -> str:
         preview = "{" + ", ".join(str(k) for k in keys) + (", ..." if len(val) > 3 else "") + "}"
         return f"{preview} ({len(val)} keys)"
     return str(val)
+
+
+def _reduction_preview(cfg: dict) -> str:
+    parts = []
+    scaler = (cfg or {}).get("scaler") or "standard"
+    parts.append(f"scaler={scaler}")
+    vf = (cfg or {}).get("variance_filter")
+    if vf is not None:
+        parts.append(f"variance_filter({vf.get('threshold', '?')})")
+    decomp = (cfg or {}).get("decomposition")
+    if decomp is not None:
+        parts.append(f"{decomp.get('method', 'pca')}({decomp.get('n_components', '?')})")
+    return " · ".join(parts)
+
+
+def _evaluation_preview(cfg: dict) -> str:
+    parts = []
+    stab = (cfg or {}).get("stability")
+    if stab is not None:
+        parts.append(f"stability={stab.get('method', 'bootstrap')}({stab.get('n_rounds', '?')})")
+    else:
+        parts.append("stability=off")
+    return " · ".join(parts)
 
 
 class TaskDetailPanel(QWidget):
@@ -154,24 +189,140 @@ class TaskDetailPanel(QWidget):
             self._layout.insertWidget(0, lbl)
             return
 
-        for i, (key, val) in enumerate(options.items()):
-            if key in _OPTION_ENUMS:
-                widget = self._make_enum_section(key, val)
-            elif key == "camera_angle_mode" and isinstance(val, dict) and "auto" in val:
-                widget = self._make_camera_angle_mode_section(key, val)
-            elif _is_profile_dict(val):
-                widget = self._make_profile_section(key, val)
-            elif _is_feature_combinations_dict(val):
-                widget = self._make_combination_section(key, val)
-            elif _is_feature_dict(val):
-                widget = self._make_feature_section(key, val)
-            else:
-                widget = self._make_scalar_section(key, val)
-            self._layout.insertWidget(i, widget)
+        insert_idx = 0
+        if task_name == "touch_clustering":
+            # Iterate in pipeline-stage order; fall through unlisted keys after
+            ordered_keys = [k for k in _TOUCH_CLUSTERING_STAGE_ORDER if k in options]
+            extra_keys = [k for k in options if k not in _TOUCH_CLUSTERING_STAGE_ORDER]
+            for key in ordered_keys + extra_keys:
+                val = options[key]
+                if key == "reduction":
+                    widget = self._make_reduction_section()
+                elif key == "evaluation":
+                    widget = self._make_evaluation_section()
+                elif key == "feature_combinations":
+                    widget = self._make_representation_section(key, val)
+                elif key in _OPTION_ENUMS:
+                    widget = self._make_enum_section(key, val)
+                elif key == "camera_angle_mode" and isinstance(val, dict) and "auto" in val:
+                    widget = self._make_camera_angle_mode_section(key, val)
+                elif _is_profile_dict(val):
+                    widget = self._make_profile_section(key, val)
+                elif _is_feature_combinations_dict(val):
+                    widget = self._make_combination_section(key, val)
+                elif _is_feature_dict(val):
+                    widget = self._make_feature_section(key, val)
+                else:
+                    widget = self._make_scalar_section(key, val)
+                self._layout.insertWidget(insert_idx, widget)
+                insert_idx += 1
+        elif task_name == "touch_feature_extraction":
+            # touch_category renders as its own checkbox section above the aggregation grid
+            if "touch_category" in options:
+                widget = self._make_touch_category_section(options["touch_category"])
+                self._layout.insertWidget(insert_idx, widget)
+                insert_idx += 1
+            for key, val in options.items():
+                if key == "touch_category":
+                    continue
+                if key in _OPTION_ENUMS:
+                    widget = self._make_enum_section(key, val)
+                elif _is_feature_dict(val):
+                    widget = self._make_feature_section(key, val)
+                else:
+                    widget = self._make_scalar_section(key, val)
+                self._layout.insertWidget(insert_idx, widget)
+                insert_idx += 1
+        else:
+            for key, val in options.items():
+                if key in _OPTION_ENUMS:
+                    widget = self._make_enum_section(key, val)
+                elif key == "camera_angle_mode" and isinstance(val, dict) and "auto" in val:
+                    widget = self._make_camera_angle_mode_section(key, val)
+                elif _is_profile_dict(val):
+                    widget = self._make_profile_section(key, val)
+                elif _is_feature_combinations_dict(val):
+                    widget = self._make_combination_section(key, val)
+                elif _is_feature_dict(val):
+                    widget = self._make_feature_section(key, val)
+                else:
+                    widget = self._make_scalar_section(key, val)
+                self._layout.insertWidget(insert_idx, widget)
+                insert_idx += 1
 
     # ------------------------------------------------------------------
     # Section builders
     # ------------------------------------------------------------------
+
+    def _make_reduction_section(self) -> QWidget:
+        """QGroupBox for Stage 3 (Reduction) with preview label and Configure button."""
+        reduction = self._model.get_task_option(self._task_name, "reduction") or {}
+        box = QGroupBox("Reduction")
+        layout = QVBoxLayout(box)
+        layout.setContentsMargins(6, 4, 6, 4)
+        preview = QLabel(_reduction_preview(reduction))
+        preview.setStyleSheet(f"color: {_COMPLEX_FG.name()};")
+        layout.addWidget(preview)
+        row = QWidget()
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        btn = QPushButton("Configure…")
+        btn.clicked.connect(self._make_reduction_handler())
+        row_layout.addWidget(btn)
+        row_layout.addStretch()
+        layout.addWidget(row)
+        return box
+
+    def _make_reduction_handler(self):
+        def _handler(_checked: bool = False) -> None:
+            if self._model is None or self._task_name is None:
+                return
+            reduction = self._model.get_task_option(self._task_name, "reduction") or {}
+            dlg = ReductionConfigDialog(
+                self._task_name,
+                reduction_cfg=dict(reduction),
+                parent=self,
+            )
+            if dlg.exec_() == QDialog.Accepted:
+                self._model.set_task_option(self._task_name, "reduction", dlg.get_reduction())
+                self.task_changed.emit()
+                self.show_task(self._model, self._task_name)
+        return _handler
+
+    def _make_evaluation_section(self) -> QWidget:
+        """QGroupBox for Stage 5 (Evaluation) with preview label and Configure button."""
+        evaluation = self._model.get_task_option(self._task_name, "evaluation") or {}
+        box = QGroupBox("Evaluation")
+        layout = QVBoxLayout(box)
+        layout.setContentsMargins(6, 4, 6, 4)
+        preview = QLabel(_evaluation_preview(evaluation))
+        preview.setStyleSheet(f"color: {_COMPLEX_FG.name()};")
+        layout.addWidget(preview)
+        row = QWidget()
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        btn = QPushButton("Configure…")
+        btn.clicked.connect(self._make_evaluation_handler())
+        row_layout.addWidget(btn)
+        row_layout.addStretch()
+        layout.addWidget(row)
+        return box
+
+    def _make_evaluation_handler(self):
+        def _handler(_checked: bool = False) -> None:
+            if self._model is None or self._task_name is None:
+                return
+            evaluation = self._model.get_task_option(self._task_name, "evaluation") or {}
+            dlg = EvaluationConfigDialog(
+                self._task_name,
+                evaluation_cfg=dict(evaluation),
+                parent=self,
+            )
+            if dlg.exec_() == QDialog.Accepted:
+                self._model.set_task_option(self._task_name, "evaluation", dlg.get_evaluation())
+                self.task_changed.emit()
+                self.show_task(self._model, self._task_name)
+        return _handler
 
     def _make_enum_section(self, key: str, val: Any) -> QWidget:
         """QComboBox for options with a fixed set of allowed values."""
@@ -245,6 +396,31 @@ class TaskDetailPanel(QWidget):
         cb.stateChanged.connect(self._make_camera_angle_mode_handler(key, cb))
         layout.addWidget(cb)
         return box
+
+    def _make_touch_category_section(self, cfg: dict) -> QWidget:
+        """Single-checkbox group box for the touch_category segmentation toggle."""
+        box = QGroupBox("Touch Category")
+        layout = QVBoxLayout(box)
+        layout.setContentsMargins(6, 4, 6, 4)
+        enabled = cfg.get("enabled", False) if isinstance(cfg, dict) else bool(cfg)
+        cb = QCheckBox("Enabled")
+        cb.setChecked(enabled)
+        cb.stateChanged.connect(self._make_touch_category_handler(cb))
+        layout.addWidget(cb)
+        return box
+
+    def _make_touch_category_handler(self, cb: QCheckBox):
+        def _handler(_state: int) -> None:
+            if self._model is None or self._task_name is None:
+                return
+            cfg = self._model.get_task_option(self._task_name, "touch_category") or {}
+            if isinstance(cfg, dict):
+                cfg["enabled"] = cb.isChecked()
+                self._model.set_task_option(self._task_name, "touch_category", cfg)
+            else:
+                self._model.set_task_option(self._task_name, "touch_category", {"enabled": cb.isChecked()})
+            self.task_changed.emit()
+        return _handler
 
     def _make_feature_section(self, key: str, val: dict) -> QWidget:
         """Checkbox grid (3 columns) with optional '...' param buttons."""
@@ -323,6 +499,35 @@ class TaskDetailPanel(QWidget):
 
             row_layout.addStretch()
             layout.addWidget(row)
+
+        return box
+
+    def _make_representation_section(self, key: str, val: Any) -> QWidget:
+        """QGroupBox("Representation") exposing Stage 2a (informational) and 2b (combination widgets)."""
+        box = QGroupBox("Representation")
+        layout = QVBoxLayout(box)
+        layout.setContentsMargins(6, 4, 6, 4)
+        layout.setSpacing(6)
+
+        lbl_2a = QLabel(
+            "2a. Series-level transformations (velocity, acceleration)\n"
+            "— configured in touch_feature_extraction"
+        )
+        lbl_2a.setStyleSheet("color: #888; font-style: italic;")
+        layout.addWidget(lbl_2a)
+
+        sep = QFrame()
+        sep.setFrameShape(QFrame.HLine)
+        sep.setFrameShadow(QFrame.Sunken)
+        layout.addWidget(sep)
+
+        lbl_2b = QLabel("2b. Feature Characterization")
+        lbl_2b.setStyleSheet("font-weight: bold;")
+        layout.addWidget(lbl_2b)
+
+        combo_box = self._make_combination_section(key, val)
+        combo_box.setTitle("")
+        layout.addWidget(combo_box)
 
         return box
 

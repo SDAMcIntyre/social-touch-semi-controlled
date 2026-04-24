@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from .base import ClusteringContext
 from .type_stratified_clusterer import TypeStratifiedClusterer
 
 
@@ -13,30 +14,31 @@ def _feature_df(n: int, seed: int = 0) -> pd.DataFrame:
     return pd.DataFrame({'pressure': rng.random(n), 'velocity': rng.random(n)})
 
 
-def _config(type_labels, direction_labels=None, base_method='binning', n_bins=3):
-    cfg = {
+def _config(base_method='binning', n_bins=3):
+    return {
         'base_method': base_method,
         'n_bins': n_bins,
-        '_type_labels': np.asarray(type_labels, dtype=object),
     }
-    if direction_labels is not None:
-        cfg['_direction_labels'] = np.asarray(direction_labels, dtype=object)
-    return cfg
+
+
+def _context(type_labels, direction_labels=None) -> ClusteringContext:
+    return ClusteringContext(
+        type_labels=np.asarray(type_labels, dtype=object),
+        direction_labels=np.asarray(direction_labels, dtype=object) if direction_labels is not None else None,
+    )
 
 
 class TestSingleTypeTapOnly:
     def test_labels_are_tap_prefixed(self):
         n = 10
         df = _feature_df(n)
-        cfg = _config(['tap'] * n)
-        labels, _ = TypeStratifiedClusterer().fit_predict(df, cfg)
+        labels, _ = TypeStratifiedClusterer().fit_predict(df, _config(), _context(['tap'] * n))
         assert all(str(lbl).startswith('tap_') for lbl in labels)
 
     def test_no_stroke_labels(self):
         n = 10
         df = _feature_df(n)
-        cfg = _config(['tap'] * n)
-        labels, _ = TypeStratifiedClusterer().fit_predict(df, cfg)
+        labels, _ = TypeStratifiedClusterer().fit_predict(df, _config(), _context(['tap'] * n))
         assert not any('stroke' in str(lbl) for lbl in labels)
 
 
@@ -45,8 +47,7 @@ class TestMultipleTypes:
         types = ['tap'] * 5 + ['stroke'] * 5 + ['stroke'] * 5
         directions = [None] * 5 + ['proximal'] * 5 + ['distal'] * 5
         df = _feature_df(15)
-        cfg = _config(types, directions)
-        labels, meta = TypeStratifiedClusterer().fit_predict(df, cfg)
+        labels, meta = TypeStratifiedClusterer().fit_predict(df, _config(), _context(types, directions))
         prefixes = {str(lbl).rsplit('_', 1)[0] for lbl in labels}
         assert 'tap' in prefixes
         assert 'stroke_proximal' in prefixes
@@ -56,8 +57,7 @@ class TestMultipleTypes:
         types = ['tap'] * 5 + ['stroke'] * 5 + ['stroke'] * 5
         directions = [None] * 5 + ['proximal'] * 5 + ['distal'] * 5
         df = _feature_df(15)
-        cfg = _config(types, directions)
-        _, meta = TypeStratifiedClusterer().fit_predict(df, cfg)
+        _, meta = TypeStratifiedClusterer().fit_predict(df, _config(), _context(types, directions))
         assert 'tap' in meta['per_type']
         assert 'stroke_proximal' in meta['per_type']
         assert 'stroke_distal' in meta['per_type']
@@ -68,15 +68,13 @@ class TestDirectionFallback:
         types = ['stroke'] * 6
         directions = [None, float('nan'), 'distal', None, None, None]
         df = _feature_df(6)
-        cfg = _config(types, directions)
-        labels, _ = TypeStratifiedClusterer().fit_predict(df, cfg)
+        labels, _ = TypeStratifiedClusterer().fit_predict(df, _config(), _context(types, directions))
         assert all(str(lbl).startswith('stroke_distal') for lbl in labels)
 
     def test_missing_direction_labels_key_defaults_to_distal(self):
         types = ['stroke'] * 4
         df = _feature_df(4)
-        cfg = _config(types, direction_labels=None)
-        labels, _ = TypeStratifiedClusterer().fit_predict(df, cfg)
+        labels, _ = TypeStratifiedClusterer().fit_predict(df, _config(), _context(types, direction_labels=None))
         assert all(str(lbl).startswith('stroke_distal') for lbl in labels)
 
 
@@ -86,8 +84,7 @@ class TestLabelFormat:
         types = ['tap'] * 4 + ['stroke'] * 4 + ['stroke'] * 4
         directions = [None] * 4 + ['proximal'] * 4 + ['distal'] * 4
         df = _feature_df(12)
-        cfg = _config(types, directions)
-        labels, _ = TypeStratifiedClusterer().fit_predict(df, cfg)
+        labels, _ = TypeStratifiedClusterer().fit_predict(df, _config(), _context(types, directions))
         for lbl in labels:
             assert pattern.match(str(lbl)), f"Label '{lbl}' does not match expected format"
 
@@ -96,8 +93,8 @@ class TestMissingTypeLabelsRaises:
     def test_raises_value_error(self):
         df = _feature_df(5)
         cfg = {'base_method': 'binning', 'n_bins': 3}
-        with pytest.raises(ValueError, match='_type_labels'):
-            TypeStratifiedClusterer().fit_predict(df, cfg)
+        with pytest.raises(ValueError, match='type_labels'):
+            TypeStratifiedClusterer().fit_predict(df, cfg, ClusteringContext())
 
 
 class TestEmptyGroupSkipped:
@@ -105,8 +102,7 @@ class TestEmptyGroupSkipped:
         types = ['stroke'] * 8
         directions = ['proximal'] * 4 + ['distal'] * 4
         df = _feature_df(8)
-        cfg = _config(types, directions)
-        labels, _ = TypeStratifiedClusterer().fit_predict(df, cfg)
+        labels, _ = TypeStratifiedClusterer().fit_predict(df, _config(), _context(types, directions))
         assert not any('tap' in str(lbl) for lbl in labels)
 
     def test_warning_logged_for_empty_group(self, caplog):
@@ -114,9 +110,8 @@ class TestEmptyGroupSkipped:
         types = ['stroke'] * 6
         directions = ['distal'] * 6
         df = _feature_df(6)
-        cfg = _config(types, directions)
         with caplog.at_level(logging.WARNING):
-            TypeStratifiedClusterer().fit_predict(df, cfg)
+            TypeStratifiedClusterer().fit_predict(df, _config(), _context(types, directions))
         messages = ' '.join(caplog.messages)
         assert 'tap' in messages
 
@@ -170,8 +165,7 @@ class TestRowOrderPreserved:
         types = ['tap', 'stroke', 'stroke', 'tap', 'stroke']
         directions = [None, 'proximal', 'distal', None, 'proximal']
         df = _feature_df(5)
-        cfg = _config(types, directions)
-        labels, _ = TypeStratifiedClusterer().fit_predict(df, cfg)
+        labels, _ = TypeStratifiedClusterer().fit_predict(df, _config(), _context(types, directions))
         assert str(labels[0]).startswith('tap_')
         assert str(labels[1]).startswith('stroke_proximal_')
         assert str(labels[2]).startswith('stroke_distal_')
@@ -183,6 +177,5 @@ class TestRowOrderPreserved:
         types = ['tap'] * 10 + ['stroke'] * 10
         directions = [None] * 10 + ['distal'] * 10
         df = _feature_df(n)
-        cfg = _config(types, directions)
-        labels, _ = TypeStratifiedClusterer().fit_predict(df, cfg)
+        labels, _ = TypeStratifiedClusterer().fit_predict(df, _config(), _context(types, directions))
         assert len(labels) == n

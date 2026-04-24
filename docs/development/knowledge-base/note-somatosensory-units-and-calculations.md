@@ -8,7 +8,7 @@ metrics computed from Kinect point-cloud data.
 |-------|-------|
 | Scope | `objects_interaction_processor.py`, `touch_analysis.py`, `sticker_velocity_compass.py` |
 | Upstream source | Azure Kinect SDK (`k4a_transformation_depth_image_to_point_cloud`) via pyk4a |
-| Capture FPS | 30 Hz |
+| Capture FPS | 30 Hz (Kinect); 1 kHz after Stage 1 preparation |
 
 ---
 
@@ -47,8 +47,16 @@ velocity_magnitudes = compute_velocity_magnitudes(group, fps=fps)
 ```
 
 Frame-to-frame Euclidean displacement of the blue sticker multiplied by the
-capture frame rate (fps, default 30). The result is a physical velocity in
+capture frame rate (fps, default 1000). The result is a physical velocity in
 mm/s.
+
+**Stage 1 preparation (1 kHz pipeline):** The analysis pipeline includes a
+`touch_data_preparation` stage that interpolates touch columns (contact_depth,
+contact_area, sticker positions) from their native 30 Hz sample rate to a
+continuous 1 kHz signal. After preparation, all `fps` defaults are `1000.0`.
+Velocity is computed as `displacement * 1000` (mm/s) rather than
+`displacement * 30`, producing a smooth continuous profile instead of
+spike-at-boundary artifacts.
 
 ---
 
