@@ -26,8 +26,8 @@ __all__ = ["ClusterGroupDialog", "ClusterGroupReadOnlyDialog"]
 _DATA_TYPES: list[str] = [
     "contact_area",
     "contact_depth",
-    "velocity_magnitude",
-    "acceleration_magnitude",
+    "hand_velocity",
+    "hand_acceleration",
     "pressure",
     "hand_position",
     "mos_strain",

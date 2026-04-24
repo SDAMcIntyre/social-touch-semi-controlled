@@ -65,8 +65,11 @@ class TypeStratifiedClusterer(TouchClusterer):
             mask = group_keys == group
             if not mask.any():
                 _logger.warning(
-                    "TypeStratifiedClusterer: group '%s' has zero touches — skipping.",
+                    "TypeStratifiedClusterer: group '%s' has zero touches — skipping. "
+                    "(n_touches=%d, groups_present=%s)",
                     group,
+                    len(feature_df),
+                    np.unique(group_keys).tolist(),
                 )
                 continue
 
