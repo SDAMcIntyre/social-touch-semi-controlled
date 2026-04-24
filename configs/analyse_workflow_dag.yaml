@@ -50,7 +50,7 @@ tasks:
   touch_series_transforms:
     enabled: true
     options:
-      force_processing: true
+      force_processing: false
       transforms:
         hand_position:
           enabled: true
@@ -105,13 +105,12 @@ tasks:
     options:
       force_processing: false
       cluster_groups:
-        kinematics_mean:
+        kinematics_simple_mean:
           enabled: true
           features:
             contact_depth: [mean]
             contact_area: [mean]
             hand_velocity: [mean]
-            hand_acceleration: [mean]
             location: [mean]
           clustering_methods:
             binning:
@@ -139,6 +138,25 @@ tasks:
               n_bins: 20
               bin_method: equal_width
               enabled: true
+        pressure_velocity_mean:
+          enabled: true
+          features:
+            pressure: [mean]
+            hand_velocity: [mean]
+            location: [mean]
+          clustering_methods:
+            binning:
+              method: binning
+              n_bins: 20
+              bin_method: equal_width
+              enabled: true
+            type_stratified:
+              method: type_stratified
+              base_method: binning
+              type_col: type_metadata
+              n_bins: 20
+              bin_method: equal_width
+              enabled: true
         kinematics_with_category:
           enabled: false
           features:
@@ -154,7 +172,7 @@ tasks:
               bin_method: equal_width
               enabled: true
         all_touch_features_mean:
-          enabled: true
+          enabled: false
           features:
             contact_depth: [mean]
             contact_area: [mean]
@@ -236,6 +254,6 @@ tasks:
       camera_angle_mode:
         auto:
           enabled: true
-      cluster_groups: [kinematics_mean]
+      cluster_groups: [kinematics_simple_mean, pressure_velocity_mean]
       projection_method: cylindrical_unwrap
     depends_on: [touch_clustering]
