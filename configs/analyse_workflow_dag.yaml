@@ -44,7 +44,7 @@ tasks:
     depends_on: []
 
   # Stage 2a (Series Transforms): Per-session kinematics, pressure, and MoS computation.
-  # Adds velocity_magnitude, acceleration_magnitude, geo_pressure, and (when enabled) MoS
+  # Adds velocity_magnitude, acceleration_magnitude, pressure, and (when enabled) MoS
   # columns to each session CSV.
   # Output: 4_analysed/series_transforms/<session>_series_augmented.csv
   touch_series_transforms:
@@ -54,10 +54,9 @@ tasks:
       transforms:
         hand_position:
           enabled: true
-          drop_used_inputs: false
+          drop_used_inputs: true
         hand_velocity:
           enabled: true
-          fps: 30.0
           drop_used_inputs: false
         hand_acceleration:
           enabled: true
@@ -66,7 +65,8 @@ tasks:
           enabled: true
           drop_used_inputs: false
         mechanics_of_solids:
-          enabled: false
+          enabled: true
+          drop_used_inputs: false
           youngs_modulus_kpa: 100.0
           poissons_ratio: 0.45
           skin_thickness_mm: 1.5
@@ -78,9 +78,8 @@ tasks:
     enabled: true
     options:
       force_processing: false
-      # Each key is a feature name. Kinematic aggregations (max, mean, min, median, std, range,
-      # skewness) use StatisticalExtractor internally. Whole-touch features (temporal,
-      # mechanics_of_solids) use their own extractor. Set enabled: true to activate.
+      # Each key is an aggregation family. StatisticalExtractor auto-discovers all numeric
+      # columns from the series-augmented CSV and applies the requested aggregation.
       features:
         max:
           enabled: true
@@ -96,16 +95,6 @@ tasks:
           enabled: true
         skewness:
           enabled: true
-        pressure_velocity_mean: {enabled: true}
-        pressure_velocity_max: {enabled: true}
-        temporal:
-          enabled: false
-        mechanics_of_solids:
-          enabled: false
-          youngs_modulus_kpa: 100.0
-          poissons_ratio: 0.45
-          skin_thickness_mm: 1.5
-        touch_category: {enabled: true}
     depends_on: [touch_series_transforms]
 
   # Stages 3–5 (Reduction + Clustering + Evaluation): Global clustering on pooled feature CSVs.
@@ -121,8 +110,8 @@ tasks:
           features:
             contact_depth: [mean]
             contact_area: [mean]
-            velocity: [mean]
-            acceleration: [mean]
+            velocity_magnitude: [mean]
+            acceleration_magnitude: [mean]
             location: [mean]
           clustering_methods:
             binning:
@@ -142,8 +131,8 @@ tasks:
           features:
             contact_depth: [max]
             contact_area: [max]
-            velocity: [max]
-            acceleration: [max]
+            velocity_magnitude: [max]
+            acceleration_magnitude: [max]
           clustering_methods:
             binning:
               method: binning
@@ -155,20 +144,43 @@ tasks:
           features:
             contact_depth: [mean]
             contact_area: [mean]
-            velocity: [mean]
-            acceleration: [mean]
+            velocity_magnitude: [mean]
+            acceleration_magnitude: [mean]
             location: [mean]
-            touch_category: []
           clustering_methods:
             binning:
               method: binning
               n_bins: 20
               bin_method: equal_width
               enabled: true
+        all_touch_features_mean:
+          enabled: true
+          features:
+            contact_depth: [mean]
+            contact_area: [mean]
+            velocity_magnitude: [mean]
+            acceleration_magnitude: [mean]
+            pressure: [mean]
+            hand_position: [mean]
+            mechanics_of_solids: [mean]
+            location: [mean]
+          clustering_methods:
+            binning:
+              method: binning
+              n_bins: 20
+              bin_method: equal_width
+              enabled: true
+            type_stratified:
+              method: type_stratified
+              base_method: binning
+              type_col: type_metadata
+              n_bins: 20
+              bin_method: equal_width
+              enabled: true
       reduction:
         scaler: standard
-        variance_filter: null
-        decomposition: null
+        variance_filter:
+        decomposition:
       evaluation:
         internal_metrics: [silhouette, davies_bouldin, calinski_harabasz]
         stability:

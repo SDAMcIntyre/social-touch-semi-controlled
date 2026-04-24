@@ -32,8 +32,8 @@ from .representation.series_level.kinematics import (
     STICKER_INPUT_COLUMNS,
     HAND_POSITION_COLUMNS,
 )
-from .representation.series_level.pressure import compute_geo_pressure, PRESSURE_INPUT_COLUMNS
-from .representation.series_level.mechanics import compute_mos_series, MOS_COLUMNS
+from .representation.series_level.pressure import compute_pressure, PRESSURE_INPUT_COLUMNS
+from .representation.series_level.mechanics import compute_mos_series, MOS_COLUMNS, MOS_INPUT_COLUMNS
 
 
 def run_series_transforms(
@@ -55,7 +55,7 @@ def run_series_transforms(
 
             {
                 'hand_position': {'enabled': True, 'drop_used_inputs': False},
-                'hand_velocity': {'enabled': True, 'fps': 30.0, 'drop_used_inputs': False},
+                'hand_velocity': {'enabled': True, 'drop_used_inputs': False},
                 'hand_acceleration': {'enabled': True, 'drop_used_inputs': False},
                 'pressure': {'enabled': True, 'drop_used_inputs': False},
                 'mechanics_of_solids': {'enabled': False, ...},
@@ -78,7 +78,6 @@ def run_series_transforms(
     hand_vel_cfg = transforms.get('hand_velocity', {})
     hand_vel_enabled = hand_vel_cfg.get('enabled', True)
     hand_vel_drop = hand_vel_cfg.get('drop_used_inputs', False)
-    fps = hand_vel_cfg.get('fps', 30.0)
 
     hand_accel_cfg = transforms.get('hand_acceleration', {})
     hand_accel_enabled = hand_accel_cfg.get('enabled', True)
@@ -90,6 +89,7 @@ def run_series_transforms(
 
     mos_cfg = transforms.get('mechanics_of_solids', {})
     mos_enabled = mos_cfg.get('enabled', False)
+    mos_drop = mos_cfg.get('drop_used_inputs', False)
     mos_E_kpa = mos_cfg.get('youngs_modulus_kpa', 100.0)
     mos_h_mm = mos_cfg.get('skin_thickness_mm', 1.5)
 
@@ -119,10 +119,10 @@ def run_series_transforms(
                 hand_vel_drop=hand_vel_drop,
                 hand_accel_enabled=hand_accel_enabled,
                 hand_accel_drop=hand_accel_drop,
-                fps=fps,
                 pressure_enabled=pressure_enabled,
                 pressure_drop=pressure_drop,
                 mos_enabled=mos_enabled,
+                mos_drop=mos_drop,
                 mos_E_kpa=mos_E_kpa,
                 mos_h_mm=mos_h_mm,
                 force=force,
@@ -147,10 +147,10 @@ def _transform_session(
     hand_vel_drop: bool,
     hand_accel_enabled: bool,
     hand_accel_drop: bool,
-    fps: float,
     pressure_enabled: bool,
     pressure_drop: bool,
     mos_enabled: bool,
+    mos_drop: bool,
     mos_E_kpa: float,
     mos_h_mm: float,
     force: bool,
@@ -209,8 +209,8 @@ def _transform_session(
         hand_pos_series[id(group)] = hand_pos
 
         if need_velocity:
-            vel = compute_velocity_magnitudes(hand_pos, fps)
-            accel = compute_acceleration_magnitudes(vel, fps)
+            vel = compute_velocity_magnitudes(hand_pos)
+            accel = compute_acceleration_magnitudes(vel)
 
             if hand_vel_enabled:
                 vel_series[id(group)] = vel
@@ -221,10 +221,10 @@ def _transform_session(
                 aug_group = pd.concat([group, hand_pos], axis=1).copy()
                 aug_group['velocity_magnitude'] = vel
                 aug_group['acceleration_magnitude'] = accel
-                mos_cols_series[id(group)] = compute_mos_series(aug_group, mos_E_kpa, mos_h_mm, fps)
+                mos_cols_series[id(group)] = compute_mos_series(aug_group, mos_E_kpa, mos_h_mm)
 
         if pressure_enabled:
-            pressure_series[id(group)] = compute_geo_pressure(group)
+            pressure_series[id(group)] = compute_pressure(group)
 
     df = df.copy()
 
@@ -235,7 +235,7 @@ def _transform_session(
     if accel_series:
         df['acceleration_magnitude'] = pd.concat(accel_series.values()).reindex(df.index)
     if pressure_series:
-        df['geo_pressure'] = pd.concat(pressure_series.values()).reindex(df.index)
+        df['pressure'] = pd.concat(pressure_series.values()).reindex(df.index)
     if mos_cols_series:
         for col in MOS_COLUMNS:
             df[col] = pd.concat(
@@ -251,6 +251,8 @@ def _transform_session(
         cols_to_drop.append('velocity_magnitude')
     if pressure_drop:
         cols_to_drop.extend([c for c in PRESSURE_INPUT_COLUMNS if c in df.columns])
+    if mos_drop:
+        cols_to_drop.extend([c for c in MOS_INPUT_COLUMNS if c in df.columns and c not in cols_to_drop])
 
     if cols_to_drop:
         df = df.drop(columns=cols_to_drop)

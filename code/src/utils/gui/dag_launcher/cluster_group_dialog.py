@@ -17,7 +17,6 @@ from PyQt5.QtWidgets import (
     QLineEdit,
     QPushButton,
     QScrollArea,
-    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -27,16 +26,20 @@ __all__ = ["ClusterGroupDialog", "ClusterGroupReadOnlyDialog"]
 _DATA_TYPES: list[str] = [
     "contact_area",
     "contact_depth",
-    "velocity",
-    "acceleration",
+    "velocity_magnitude",
+    "acceleration_magnitude",
     "pressure",
+    "hand_position",
+    "mos_strain",
+    "mos_stress_kpa",
+    "mos_strain_rate",
+    "mos_elastic_energy_mj",
+    "mos_impulse_mns",
+    "mechanics_of_solids",
     "location",
-    "touch_category",
 ]
 
 _AGGREGATIONS: list[str] = ["mean", "min", "max", "median", "std", "range", "skewness"]
-
-_NON_AGGREGATABLE: set[str] = {"touch_category"}
 
 _CLUSTERING_METHODS: list[str] = [
     "binning",
@@ -127,7 +130,9 @@ class _ParamEditDialog(QDialog):
 
 
 class ClusterGroupDialog(QDialog):
-    """Two-tab dialog for creating or editing a cluster group.
+    """Single-window dialog for creating or editing a cluster group.
+
+    Shows group name, features, and clustering methods in one view.
 
     Create mode: ``name=""`` and ``spec=None``.
     Edit mode: ``name`` is the existing group name, ``spec`` is pre-populated.
@@ -149,16 +154,16 @@ class ClusterGroupDialog(QDialog):
 
         self.setWindowTitle("Cluster Group" if not name else f"Cluster Group — {name}")
         self.setMinimumWidth(480)
-        self.setMinimumHeight(520)
+        self.setMinimumHeight(560)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(8)
 
-        tabs = QTabWidget()
-        tabs.addTab(self._build_features_tab(), "Features")
-        tabs.addTab(self._build_algorithms_tab(), "Algorithms")
-        layout.addWidget(tabs)
+        layout.addWidget(self._build_name_section())
+        layout.addWidget(self._build_features_section(), stretch=1)
+        layout.addWidget(self._build_methods_section())
 
         self._error_label = QLabel()
         self._error_label.setStyleSheet("color: red;")
@@ -172,13 +177,22 @@ class ClusterGroupDialog(QDialog):
         layout.addWidget(buttons)
 
     # ------------------------------------------------------------------
-    # Tab builders
+    # Section builders
     # ------------------------------------------------------------------
 
-    def _build_features_tab(self) -> QWidget:
-        tab = QWidget()
-        outer = QVBoxLayout(tab)
-        outer.setContentsMargins(0, 0, 0, 0)
+    def _build_name_section(self) -> QWidget:
+        box = QGroupBox("Group Name")
+        name_layout = QHBoxLayout(box)
+        self._name_edit = QLineEdit(self._correct_name(self._initial_name))
+        self._name_edit.setPlaceholderText("e.g. depth_velocity_group")
+        self._name_edit.textChanged.connect(self._on_name_changed)
+        name_layout.addWidget(self._name_edit)
+        return box
+
+    def _build_features_section(self) -> QWidget:
+        box = QGroupBox("Features")
+        outer = QVBoxLayout(box)
+        outer.setContentsMargins(6, 4, 6, 4)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -187,7 +201,7 @@ class ClusterGroupDialog(QDialog):
 
         container = QWidget()
         container_layout = QVBoxLayout(container)
-        container_layout.setContentsMargins(8, 8, 8, 8)
+        container_layout.setContentsMargins(4, 4, 4, 4)
         container_layout.setSpacing(6)
 
         existing_features: dict = self._spec.get("features", {}) or {}
@@ -208,49 +222,35 @@ class ClusterGroupDialog(QDialog):
             self._type_checks[dtype] = cb
             dtype_layout.addWidget(cb)
 
-            if dtype not in _NON_AGGREGATABLE:
-                agg_widget = QWidget()
-                agg_layout = QHBoxLayout(agg_widget)
-                agg_layout.setContentsMargins(20, 0, 0, 0)
-                agg_layout.setSpacing(4)
+            agg_widget = QWidget()
+            agg_layout = QHBoxLayout(agg_widget)
+            agg_layout.setContentsMargins(20, 0, 0, 0)
+            agg_layout.setSpacing(4)
 
-                self._agg_checks[dtype] = {}
-                existing_aggs = set(existing_features.get(dtype) or [])
-                for agg in _AGGREGATIONS:
-                    agg_cb = QCheckBox(agg)
-                    agg_cb.setChecked(agg in existing_aggs)
-                    agg_layout.addWidget(agg_cb)
-                    self._agg_checks[dtype][agg] = agg_cb
-                agg_layout.addStretch()
+            self._agg_checks[dtype] = {}
+            existing_aggs = set(existing_features.get(dtype) or [])
+            for agg in _AGGREGATIONS:
+                agg_cb = QCheckBox(agg)
+                agg_cb.setChecked(agg in existing_aggs)
+                agg_layout.addWidget(agg_cb)
+                self._agg_checks[dtype][agg] = agg_cb
+            agg_layout.addStretch()
 
-                self._agg_rows[dtype] = agg_widget
-                agg_widget.setVisible(is_checked)
-                cb.toggled.connect(self._make_type_toggle(dtype))
-                dtype_layout.addWidget(agg_widget)
-            else:
-                cb.toggled.connect(lambda _checked: None)
+            self._agg_rows[dtype] = agg_widget
+            agg_widget.setVisible(is_checked)
+            cb.toggled.connect(self._make_type_toggle(dtype))
+            dtype_layout.addWidget(agg_widget)
 
             container_layout.addWidget(dtype_row)
 
         container_layout.addStretch()
         scroll.setWidget(container)
-        return tab
+        return box
 
-    def _build_algorithms_tab(self) -> QWidget:
-        tab = QWidget()
-        layout = QVBoxLayout(tab)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(6)
-
-        name_box = QGroupBox("Group Name")
-        name_layout = QHBoxLayout(name_box)
-        self._name_edit = QLineEdit(self._initial_name)
-        self._name_edit.setPlaceholderText("e.g. depth_velocity_group")
-        name_layout.addWidget(self._name_edit)
-        layout.addWidget(name_box)
-
-        methods_box = QGroupBox("Clustering Methods")
-        methods_layout = QVBoxLayout(methods_box)
+    def _build_methods_section(self) -> QWidget:
+        box = QGroupBox("Clustering Methods")
+        methods_layout = QVBoxLayout(box)
+        methods_layout.setContentsMargins(6, 4, 6, 4)
         methods_layout.setSpacing(4)
 
         existing_methods: dict = (self._spec.get("clustering_methods") or {})
@@ -297,13 +297,24 @@ class ClusterGroupDialog(QDialog):
 
             methods_layout.addWidget(row)
 
-        layout.addWidget(methods_box)
-        layout.addStretch()
-        return tab
+        return box
 
     # ------------------------------------------------------------------
     # Handler factories
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _correct_name(text: str) -> str:
+        return re.sub(r"[^a-z0-9_]", "", text.lower().replace(" ", "_"))
+
+    def _on_name_changed(self, text: str) -> None:
+        corrected = self._correct_name(text)
+        if corrected != text:
+            self._name_edit.blockSignals(True)
+            pos = self._name_edit.cursorPosition()
+            self._name_edit.setText(corrected)
+            self._name_edit.setCursorPosition(min(pos, len(corrected)))
+            self._name_edit.blockSignals(False)
 
     def _make_type_toggle(self, dtype: str):
         def _handler(checked: bool) -> None:
@@ -327,11 +338,9 @@ class ClusterGroupDialog(QDialog):
     # ------------------------------------------------------------------
 
     def _on_ok(self) -> None:
-        name = self._name_edit.text().strip()
-        if not re.fullmatch(r"[a-z0-9_]+", name):
-            self._show_error(
-                "Group name must contain only lowercase letters, digits, and underscores."
-            )
+        name = self._name_edit.text()
+        if not name:
+            self._show_error("Group name must not be empty.")
             return
 
         selected_types = [dt for dt in _DATA_TYPES if self._type_checks[dt].isChecked()]
@@ -340,8 +349,6 @@ class ClusterGroupDialog(QDialog):
             return
 
         for dtype in selected_types:
-            if dtype in _NON_AGGREGATABLE:
-                continue
             selected_aggs = [
                 agg for agg in _AGGREGATIONS
                 if self._agg_checks[dtype][agg].isChecked()
@@ -378,13 +385,10 @@ class ClusterGroupDialog(QDialog):
         for dtype in _DATA_TYPES:
             if not self._type_checks[dtype].isChecked():
                 continue
-            if dtype in _NON_AGGREGATABLE:
-                features[dtype] = []
-            else:
-                features[dtype] = [
-                    agg for agg in _AGGREGATIONS
-                    if self._agg_checks[dtype][agg].isChecked()
-                ]
+            features[dtype] = [
+                agg for agg in _AGGREGATIONS
+                if self._agg_checks[dtype][agg].isChecked()
+            ]
 
         clustering_methods: dict = {}
         for method in _CLUSTERING_METHODS:
@@ -431,9 +435,7 @@ class ClusterGroupReadOnlyDialog(QDialog):
         features: dict = spec.get("features") or {}
         if features:
             for dtype, aggs in features.items():
-                if dtype == "touch_category":
-                    text = dtype
-                elif aggs:
+                if aggs:
                     text = f"{dtype}:  [{', '.join(str(a) for a in aggs)}]"
                 else:
                     text = dtype
