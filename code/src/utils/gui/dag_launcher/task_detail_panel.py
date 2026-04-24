@@ -19,6 +19,7 @@ from PyQt5.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -488,9 +489,10 @@ class TaskDetailPanel(QWidget):
 
             summary_lbl = QLabel(summary)
             summary_lbl.setStyleSheet(f"color: {_COMPLEX_FG.name()};")
-            row_layout.addWidget(summary_lbl)
-
-            row_layout.addStretch()
+            summary_lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+            summary_lbl.setMinimumWidth(0)
+            summary_lbl.setToolTip(summary)
+            row_layout.addWidget(summary_lbl, stretch=1)
 
             edit_btn = QPushButton("Edit")
             edit_btn.setFixedWidth(48)
