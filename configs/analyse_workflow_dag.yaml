@@ -37,20 +37,20 @@ tasks:
   touch_preparation:
     enabled: true
     options:
-      force_processing: true
+      force_processing: false
       preparation:
         interpolation:
           method: cubic
     depends_on: []
 
   # Stage 2a (Series Transforms): Per-session kinematics, pressure, and MoS computation.
-  # Adds velocity_magnitude, acceleration_magnitude, pressure, and (when enabled) MoS
+  # Adds hand_velocity_x/y/z, hand_acceleration_x/y/z, pressure, and (when enabled) MoS
   # columns to each session CSV.
   # Output: 4_analysed/series_transforms/<session>_series_augmented.csv
   touch_series_transforms:
     enabled: true
     options:
-      force_processing: false
+      force_processing: true
       transforms:
         hand_position:
           enabled: true
@@ -110,8 +110,8 @@ tasks:
           features:
             contact_depth: [mean]
             contact_area: [mean]
-            velocity_magnitude: [mean]
-            acceleration_magnitude: [mean]
+            hand_velocity: [mean]
+            hand_acceleration: [mean]
             location: [mean]
           clustering_methods:
             binning:
@@ -131,8 +131,8 @@ tasks:
           features:
             contact_depth: [max]
             contact_area: [max]
-            velocity_magnitude: [max]
-            acceleration_magnitude: [max]
+            hand_velocity: [max]
+            hand_acceleration: [max]
           clustering_methods:
             binning:
               method: binning
@@ -144,8 +144,8 @@ tasks:
           features:
             contact_depth: [mean]
             contact_area: [mean]
-            velocity_magnitude: [mean]
-            acceleration_magnitude: [mean]
+            hand_velocity: [mean]
+            hand_acceleration: [mean]
             location: [mean]
           clustering_methods:
             binning:
@@ -158,8 +158,8 @@ tasks:
           features:
             contact_depth: [mean]
             contact_area: [mean]
-            velocity_magnitude: [mean]
-            acceleration_magnitude: [mean]
+            hand_velocity: [mean]
+            hand_acceleration: [mean]
             pressure: [mean]
             hand_position: [mean]
             mechanics_of_solids: [mean]

@@ -16,6 +16,7 @@ import sys
 from pathlib import Path
 from typing import List, Tuple
 
+import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
@@ -27,10 +28,12 @@ from .preparation.grouping import group_touches
 from .preparation.interpolation import interpolate_touch_columns
 from .representation.series_level.kinematics import (
     resolve_hand_position,
-    compute_velocity_magnitudes,
-    compute_acceleration_magnitudes,
+    compute_velocity,
+    compute_acceleration,
     STICKER_INPUT_COLUMNS,
     HAND_POSITION_COLUMNS,
+    HAND_VELOCITY_COLUMNS,
+    HAND_ACCELERATION_COLUMNS,
 )
 from .representation.series_level.pressure import compute_pressure, PRESSURE_INPUT_COLUMNS
 from .representation.series_level.mechanics import compute_mos_series, MOS_COLUMNS, MOS_INPUT_COLUMNS
@@ -196,8 +199,8 @@ def _transform_session(
     need_velocity = hand_vel_enabled or hand_accel_enabled or mos_enabled
 
     hand_pos_series: dict[int, pd.DataFrame] = {}
-    vel_series: dict[int, pd.Series] = {}
-    accel_series: dict[int, pd.Series] = {}
+    vel_series: dict[int, pd.DataFrame] = {}
+    accel_series: dict[int, pd.DataFrame] = {}
     pressure_series: dict[int, pd.Series] = {}
     mos_cols_series: dict[int, dict[str, pd.Series]] = {}
 
@@ -209,8 +212,8 @@ def _transform_session(
         hand_pos_series[id(group)] = hand_pos
 
         if need_velocity:
-            vel = compute_velocity_magnitudes(hand_pos)
-            accel = compute_acceleration_magnitudes(vel)
+            vel = compute_velocity(hand_pos)
+            accel = compute_acceleration(vel)
 
             if hand_vel_enabled:
                 vel_series[id(group)] = vel
@@ -219,8 +222,8 @@ def _transform_session(
 
             if mos_enabled:
                 aug_group = pd.concat([group, hand_pos], axis=1).copy()
-                aug_group['velocity_magnitude'] = vel
-                aug_group['acceleration_magnitude'] = accel
+                aug_group['velocity_magnitude'] = np.sqrt(vel.pow(2).sum(axis=1))
+                aug_group['acceleration_magnitude'] = np.sqrt(accel.pow(2).sum(axis=1))
                 mos_cols_series[id(group)] = compute_mos_series(aug_group, mos_E_kpa, mos_h_mm)
 
         if pressure_enabled:
@@ -231,9 +234,9 @@ def _transform_session(
     if hand_pos_enabled and hand_pos_series:
         df[HAND_POSITION_COLUMNS] = pd.concat(hand_pos_series.values()).reindex(df.index)
     if vel_series:
-        df['velocity_magnitude'] = pd.concat(vel_series.values()).reindex(df.index)
+        df[HAND_VELOCITY_COLUMNS] = pd.concat(vel_series.values()).reindex(df.index)
     if accel_series:
-        df['acceleration_magnitude'] = pd.concat(accel_series.values()).reindex(df.index)
+        df[HAND_ACCELERATION_COLUMNS] = pd.concat(accel_series.values()).reindex(df.index)
     if pressure_series:
         df['pressure'] = pd.concat(pressure_series.values()).reindex(df.index)
     if mos_cols_series:
@@ -247,8 +250,8 @@ def _transform_session(
         cols_to_drop.extend([c for c in STICKER_INPUT_COLUMNS if c in df.columns])
     if hand_vel_drop:
         cols_to_drop.extend([c for c in HAND_POSITION_COLUMNS if c in df.columns])
-    if hand_accel_drop and 'velocity_magnitude' in df.columns:
-        cols_to_drop.append('velocity_magnitude')
+    if hand_accel_drop:
+        cols_to_drop.extend([c for c in HAND_VELOCITY_COLUMNS if c in df.columns])
     if pressure_drop:
         cols_to_drop.extend([c for c in PRESSURE_INPUT_COLUMNS if c in df.columns])
     if mos_drop:

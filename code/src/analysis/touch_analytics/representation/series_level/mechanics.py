@@ -1,4 +1,5 @@
 # representation/series_level/mechanics.py
+import numpy as np
 import pandas as pd
 from .kinematics import get_kinematics, DATA_RATE_HZ
 
@@ -16,8 +17,8 @@ def compute_mos_series(
     dt = 1.0 / DATA_RATE_HZ
     depth_m = group['contact_depth'] * 1e-3
     area_m2 = group['contact_area'] * 1e-6
-    vel_m_s, _ = get_kinematics(group)
-    vel_m_s = vel_m_s * 1e-3
+    vel_df, _ = get_kinematics(group)
+    vel_m_s = np.sqrt(vel_df.pow(2).sum(axis=1)) * 1e-3
     mos_strain = depth_m / h
     mos_stress_kpa = E_kpa * mos_strain
     mos_strain_rate = vel_m_s / h

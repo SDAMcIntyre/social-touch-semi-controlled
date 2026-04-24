@@ -46,13 +46,13 @@ _TOUCH_ID_COLS = ['block_order_id', 'trial_id', 'single_touch_id', 'session_id']
 
 # Maps cluster-group data-type names to the column name prefix(es) written by
 # StatisticalExtractor.  Column names match the raw input columns directly
-# (e.g. contact_depth_mean, velocity_magnitude_max).
+# (e.g. contact_depth_mean, hand_velocity_x_max).
 # Empty list means the type uses its own selection logic (location).
 DATA_TYPE_TO_COLUMNS = {
     'contact_area':           ['contact_area'],
     'contact_depth':          ['contact_depth'],
-    'velocity_magnitude':     ['velocity_magnitude'],
-    'acceleration_magnitude': ['acceleration_magnitude'],
+    'hand_velocity':     ['hand_velocity_x', 'hand_velocity_y', 'hand_velocity_z'],
+    'hand_acceleration': ['hand_acceleration_x', 'hand_acceleration_y', 'hand_acceleration_z'],
     'pressure':               ['pressure'],
     'hand_position':          ['hand_position_x', 'hand_position_y', 'hand_position_z'],
     'mos_strain':             ['mos_strain'],

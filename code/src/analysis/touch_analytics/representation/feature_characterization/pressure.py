@@ -7,8 +7,8 @@ for contact pressure concentration.  Unlike the model-based stress in
 ``MechanicsOfSolidsExtractor``, this metric carries no tissue assumptions and
 is robust for cross-session / cross-subject comparisons.
 
-Also computes contact velocity from sticker 3-D position using
-``compute_velocity_magnitudes()`` from ``series_level.kinematics``.
+Also computes contact velocity magnitude from sticker 3-D position using
+``get_kinematics()`` from ``series_level.kinematics``.
 
 Units: pressure in mm⁻¹  (depth in mm, area in mm²  → ratio in mm⁻¹)
        geo_velocity  in mm/s
@@ -57,9 +57,8 @@ class PressureExtractor(FeatureExtractor):
 
         pressure = get_pressure(group).values.astype(float)
 
-        # Velocity magnitudes (mm/s) — always computed, NaN-free
-        vel, _ = get_kinematics(group)
-        velocity = vel.values.astype(float)
+        vel_df, _ = get_kinematics(group)
+        velocity = np.sqrt((vel_df.values ** 2).sum(axis=1)).astype(float)
 
         if aggregation == 'mean':
             pressure_val = float(np.nan) if np.all(np.isnan(pressure)) else float(np.nanmean(pressure))
