@@ -5,7 +5,7 @@ Touch category feature extractor.
 Encodes touch type (tap / stroke) and stroke direction (proximal / distal)
 as one-hot binary integer columns.
 
-Direction inference is delegated to preparation.direction.infer_direction,
+Direction inference is delegated to representation.series_level.direction.infer_direction,
 which is the single source of truth for the proximal/distal rule:
     proximal if end_y > start_y, else distal.
 Single-frame strokes (start_y == end_y) resolve to distal (end_y <= start_y).
@@ -16,7 +16,7 @@ return 0 without raising.
 
 import pandas as pd
 from .base import FeatureExtractor
-from ...preparation.direction import infer_direction
+from ..series_level.direction import infer_direction
 
 
 class TouchCategoryExtractor(FeatureExtractor):

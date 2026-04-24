@@ -192,7 +192,8 @@ class TaskDetailPanel(QWidget):
             elif _is_feature_combinations_dict(val):
                 widget = self._make_combination_section(key, val)
             elif _is_feature_dict(val):
-                widget = self._make_feature_section(key, val)
+                cols = 1 if len(val) <= 6 else 3
+                widget = self._make_feature_section(key, val, cols=cols)
             else:
                 widget = self._make_scalar_section(key, val)
             self._layout.insertWidget(i, widget)
@@ -274,14 +275,69 @@ class TaskDetailPanel(QWidget):
         layout.addWidget(cb)
         return box
 
-    def _make_feature_section(self, key: str, val: dict) -> QWidget:
-        """Checkbox grid (3 columns) with optional '...' param buttons."""
+    def _make_feature_section(self, key: str, val: dict, cols: int = 3) -> QWidget:
+        """Checkbox grid with optional '...' param buttons. cols=1 gives expanded per-item layout."""
         box = QGroupBox(_option_header(key))
         flow = QVBoxLayout(box)
         flow.setContentsMargins(6, 4, 6, 4)
-        flow.setSpacing(4)
+        flow.setSpacing(2)
 
-        cols = 3
+        if cols == 1:
+            for i, (feature_name, feature_cfg) in enumerate(val.items()):
+                if i > 0:
+                    flow.addSpacing(6)
+
+                lbl_row = QWidget()
+                lbl_row_layout = QHBoxLayout(lbl_row)
+                lbl_row_layout.setContentsMargins(0, 0, 0, 0)
+                lbl = QLabel(feature_name.replace("_", " ") + ":")
+                font = QFont()
+                font.setBold(True)
+                lbl.setFont(font)
+                lbl_row_layout.addWidget(lbl)
+                lbl_row_layout.addStretch()
+                flow.addWidget(lbl_row)
+
+                for param_key, param_val in feature_cfg.items():
+                    if not isinstance(param_val, bool):
+                        continue
+                    param_row = QWidget()
+                    param_layout = QHBoxLayout(param_row)
+                    param_layout.setContentsMargins(14, 0, 0, 0)
+                    param_layout.setSpacing(4)
+                    cb = QCheckBox(param_key.replace("_", " "))
+                    if param_key == "enabled":
+                        cb.setChecked(
+                            self._model.get_profile_enabled(self._task_name, key, feature_name)
+                        )
+                        cb.stateChanged.connect(self._make_profile_handler(key, feature_name, cb))
+                    else:
+                        cb.setChecked(bool(param_val))
+                        cb.stateChanged.connect(
+                            self._make_transform_bool_param_handler(key, feature_name, param_key, cb)
+                        )
+                    param_layout.addWidget(cb)
+                    param_layout.addStretch()
+                    flow.addWidget(param_row)
+
+                has_other_params = any(
+                    k != "enabled" and not isinstance(v, bool)
+                    for k, v in feature_cfg.items()
+                )
+                if has_other_params:
+                    btn_row = QWidget()
+                    btn_layout = QHBoxLayout(btn_row)
+                    btn_layout.setContentsMargins(14, 0, 0, 0)
+                    btn = QPushButton("Parameters…")
+                    btn.setFixedWidth(90)
+                    btn.clicked.connect(self._make_transform_params_handler(key, feature_name))
+                    btn_layout.addWidget(btn)
+                    btn_layout.addStretch()
+                    flow.addWidget(btn_row)
+
+            return box
+
+        flow.setSpacing(4)
         row_widget: QWidget | None = None
         row_layout: QHBoxLayout | None = None
 
@@ -315,7 +371,6 @@ class TaskDetailPanel(QWidget):
             else:
                 row_layout.addWidget(cb)
 
-        # Pad the last row if incomplete
         remainder = len(val) % cols
         if remainder != 0 and row_layout is not None:
             for _ in range(cols - remainder):
@@ -588,6 +643,41 @@ class TaskDetailPanel(QWidget):
                 return
             self._model.set_profile_enabled(self._task_name, opt_key, profile_name, cb.isChecked())
             self.task_changed.emit()
+        return _handler
+
+    def _make_transform_bool_param_handler(
+        self, opt_key: str, feature_name: str, param_key: str, cb: QCheckBox
+    ):
+        def _handler(_state: int) -> None:
+            if self._model is None or self._task_name is None:
+                return
+            feature = self._model.get_task_option(self._task_name, opt_key)[feature_name]
+            feature[param_key] = cb.isChecked()
+            self._model._dirty = True
+            self.task_changed.emit()
+        return _handler
+
+    def _make_transform_params_handler(self, opt_key: str, feature_name: str):
+        def _handler(_checked: bool = False) -> None:
+            if self._model is None or self._task_name is None:
+                return
+            opts = self._model.get_task_option(self._task_name, opt_key) or {}
+            feature_cfg = dict(opts.get(feature_name) or {})
+            params = {
+                k: v for k, v in feature_cfg.items()
+                if k != "enabled" and not isinstance(v, bool)
+            }
+            dlg = YamlEditDialog(feature_name, opt_key, params, self)
+            if dlg.exec_() == QDialog.Accepted:
+                new_params = dlg.get_value() or {}
+                feature = self._model.get_task_option(self._task_name, opt_key)[feature_name]
+                for k, v in new_params.items():
+                    feature[k] = v
+                for k in list(params.keys()):
+                    if k not in new_params:
+                        feature.pop(k, None)
+                self._model._dirty = True
+                self.task_changed.emit()
         return _handler
 
     def _make_feature_params_handler(self, opt_key: str, feature_name: str):

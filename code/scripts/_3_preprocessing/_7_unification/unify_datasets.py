@@ -99,7 +99,11 @@ def _merge_dataframes(dataframes: Dict[str, pd.DataFrame]) -> pd.DataFrame:
         logger.info(f"Removing {is_duplicate.sum()} duplicate columns found during merge.")
         # retain only columns that are NOT duplicates
         merged_df = merged_df.loc[:, ~is_duplicate]
-    
+
+    if 'contact_points' in merged_df.columns:
+        other_cols = [c for c in merged_df.columns if c != 'contact_points']
+        merged_df = merged_df[other_cols + ['contact_points']]
+
     return merged_df
 
 

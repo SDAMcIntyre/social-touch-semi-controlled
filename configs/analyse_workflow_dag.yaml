@@ -37,7 +37,7 @@ tasks:
   touch_preparation:
     enabled: true
     options:
-      force_processing: false
+      force_processing: true
       preparation:
         interpolation:
           method: cubic

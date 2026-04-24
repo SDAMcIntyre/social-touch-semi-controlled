@@ -159,21 +159,14 @@ class DagConfigModel:
         return bool(profile.get("enabled", True))
 
     def set_profile_enabled(self, task_name: str, option_key: str, profile_name: str, enabled: bool) -> None:
-        """Set or remove the ``enabled`` key on a profile dict.
-
-        When *enabled* is False, writes ``enabled: false``.
-        When *enabled* is True, removes the key so the YAML stays clean.
-        """
+        """Set the ``enabled`` key on a profile dict."""
         task = self._get_task(task_name)
         opts = task.get("options") or {}
         container = opts.get(option_key) or {}
         profile = container.get(profile_name)
         if profile is None:
             return
-        if enabled:
-            profile.pop("enabled", None)
-        else:
-            profile["enabled"] = False
+        profile["enabled"] = enabled
         self._dirty = True
 
     # ------------------------------------------------------------------

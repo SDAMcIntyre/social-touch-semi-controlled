@@ -9,7 +9,6 @@ Default tissue parameters (from literature):
   Young's modulus  : 100.0 kPa
   Poisson's ratio  : 0.45
   Skin thickness   : 1.5 mm
-  Frame rate       : 30 fps  (used for strain-rate calculation)
 
 See: docs/development/knowledge-base/note-somatosensory-units-and-calculations.md
 """
@@ -22,7 +21,6 @@ _DEFAULTS = {
     'youngs_modulus_kpa': 100.0,
     'poissons_ratio': 0.45,
     'skin_thickness_mm': 1.5,
-    'fps': 30.0,
 }
 
 
@@ -42,9 +40,8 @@ class MechanicsOfSolidsExtractor(FeatureExtractor):
     def extract(self, group: pd.DataFrame, config: dict) -> dict:
         E = config.get('youngs_modulus_kpa', _DEFAULTS['youngs_modulus_kpa'])
         h_mm = config.get('skin_thickness_mm', _DEFAULTS['skin_thickness_mm'])
-        fps = config.get('fps', _DEFAULTS['fps'])
 
-        mos = get_mechanics(group, E, h_mm, fps)
+        mos = get_mechanics(group, E, h_mm)
         strain = mos['mos_strain'].values
         stress = mos['mos_stress_kpa'].values
         strain_rate = mos['mos_strain_rate'].values

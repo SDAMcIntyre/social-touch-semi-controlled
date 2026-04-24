@@ -31,6 +31,8 @@ from analysis.touch_analytics import (
     generate_ap_efficacy_matrix,
     generate_session_summary
 )
+from analysis.touch_analytics.preparation_pipeline import run_preparation
+from analysis.touch_analytics.series_pipeline import run_series_transforms
 from analysis.touch_analytics.extraction_pipeline import run_feature_extraction
 from analysis.touch_analytics.clustering_pipeline import run_clustering
 from analysis.touch_analytics.comparing_pipeline import run_comparing
@@ -99,14 +101,62 @@ def map_receptive_fields_simple_flow(
     )
 
 
+@flow(name="touch_preparation")
+def touch_preparation_flow(
+    input_items: List[Tuple[Path, Path]],
+    force_processing: bool = False,
+    preparation: dict = None,
+) -> List[Path]:
+    """
+    Stage 1: Per-session data preparation (block-ID synthesis + NaN-gap interpolation).
+    Writes ``4_analysed/preparation/<session_id>_prepared.csv``.
+    """
+    print(f"[Batch Analysis] Running touch preparation for {len(input_items)} item(s)...")
+    if not input_items:
+        return []
+    output_dir = input_items[0][1] / '4_analysed' / 'preparation'
+    return run_preparation(
+        input_items=input_items,
+        preparation_cfg=preparation or {},
+        output_dir=output_dir,
+        force=force_processing,
+    )
+
+
+@flow(name="touch_series_transforms")
+def touch_series_transforms_flow(
+    input_items: List[Tuple[Path, Path]],
+    force_processing: bool = False,
+    transforms: dict = None,
+    preparation_dir: Optional[Path] = None,
+) -> List[Path]:
+    """
+    Stage 2a: Per-session series-level transforms (kinematics, pressure, MoS).
+    Writes ``4_analysed/series_transforms/<session>_series_augmented.csv``.
+    """
+    print(f"[Batch Analysis] Running touch series transforms for {len(input_items)} item(s)...")
+    if not input_items:
+        return []
+    output_dir = input_items[0][1] / '4_analysed' / 'series_transforms'
+    return run_series_transforms(
+        input_items=input_items,
+        transforms=transforms or {},
+        output_dir=output_dir,
+        force=force_processing,
+        preparation_dir=preparation_dir,
+    )
+
+
 @flow(name="touch_feature_extraction")
 def touch_feature_extraction_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
     features: dict = None,
+    series_dir: Optional[Path] = None,
+    preparation_dir: Optional[Path] = None,
 ) -> List[Path]:
     """
-    Stage 1: Per-session feature extraction.
+    Stage 2b: Per-session feature extraction.
     Writes one CSV per (session, feature) to
     ``4_analysed/touch_features/<feature>/<session>_touch_summary.csv``.
     """
@@ -120,6 +170,8 @@ def touch_feature_extraction_flow(
         features=feature_dict,
         output_dir=output_dir,
         force=force_processing,
+        series_dir=series_dir,
+        preparation_dir=preparation_dir,
     )
     return [path for paths in per_feature.values() for path in paths]
 
@@ -357,6 +409,8 @@ def run_batch_analysis(
     available_tasks = [
         ("summarize_session_blocks", summarize_session_blocks_flow),
         ("map_receptive_fields_simple", map_receptive_fields_simple_flow),
+        ("touch_preparation", touch_preparation_flow),
+        ("touch_series_transforms", touch_series_transforms_flow),
         ("touch_feature_extraction", touch_feature_extraction_flow),
         ("touch_clustering", touch_clustering_flow),
         ("touch_comparing", touch_comparing_flow),
@@ -368,12 +422,12 @@ def run_batch_analysis(
     monitor = PipelineMonitor(report_path=report_file_path, stages=task_names, data_queue=Queue())
 
     items_to_process: List[Tuple[Path, Path]] = []
-    
+
     logging.info(f"Scanning {len(session_map)} sessions for data files...")
     for search_dir in sorted(session_map.keys()):
         database_path_context = session_map[search_dir]
         candidates = list(search_dir.glob("*_semicontrolled_aggregated_session.csv"))
-        
+
         if candidates:
             target_file = candidates[0]
             items_to_process.append((target_file, database_path_context))
@@ -383,7 +437,23 @@ def run_batch_analysis(
         return
 
     logging.info(f"🚀 Starting analysis for {len(items_to_process)} collected items.")
-    
+
+    # Pre-compute inter-stage artifact dirs for forwarding to downstream flows
+    _database = items_to_process[0][1]
+
+    def _task_enabled(name: str) -> bool:
+        return bool(
+            name in dag_handler.tasks
+            and dag_handler.tasks[name].get("enabled", True)
+        )
+
+    preparation_dir: Optional[Path] = (
+        _database / '4_analysed' / 'preparation' if _task_enabled("touch_preparation") else None
+    )
+    series_dir: Optional[Path] = (
+        _database / '4_analysed' / 'series_transforms' if _task_enabled("touch_series_transforms") else None
+    )
+
     # Extract cluster group defs from touch_clustering to forward to downstream tasks.
     _clustering_options = dag_handler.get_task_options("touch_clustering") or {}
     _cluster_group_defs = _clustering_options.get("cluster_groups") or {}
@@ -409,8 +479,19 @@ def run_batch_analysis(
                         kwargs["grouping_columns"] = options["grouping_columns"]
                     if "monitor" in options:
                         kwargs["monitor"] = options["monitor"]
+                    if "preparation" in options:
+                        kwargs["preparation"] = options["preparation"]
+                    if "transforms" in options:
+                        kwargs["transforms"] = options["transforms"]
                     if "features" in options:
                         kwargs["features"] = options["features"]
+                    if task_name == "touch_series_transforms" and preparation_dir is not None:
+                        kwargs["preparation_dir"] = preparation_dir
+                    if task_name == "touch_feature_extraction":
+                        if series_dir is not None:
+                            kwargs["series_dir"] = series_dir
+                        if preparation_dir is not None:
+                            kwargs["preparation_dir"] = preparation_dir
                     if "cluster_groups" in options:
                         kwargs["cluster_groups"] = options["cluster_groups"]
                     if task_name in ("touch_comparing", "map_receptive_fields_clustered"):
