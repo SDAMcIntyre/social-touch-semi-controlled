@@ -1,5 +1,9 @@
 # representation/series_level/pressure.py
+from typing import List
+
 import pandas as pd
+
+PRESSURE_INPUT_COLUMNS: List[str] = ['contact_depth', 'contact_area']
 
 
 def compute_geo_pressure(group: pd.DataFrame) -> pd.Series:

@@ -2,7 +2,7 @@
 import pandas as pd
 import numpy as np
 from .base import FeatureExtractor
-from ..series_level.kinematics import compute_velocity_magnitudes, compute_acceleration_magnitudes
+from ..series_level.kinematics import get_kinematics
 
 _DEFAULT_AGGREGATIONS = ['mean', 'median', 'std', 'min', 'max', 'range', 'skewness']
 
@@ -17,8 +17,7 @@ class StatisticalExtractor(FeatureExtractor):
         aggregations = config.get('aggregations', _DEFAULT_AGGREGATIONS)
         fps = config.get('fps', 30.0)
 
-        vel = compute_velocity_magnitudes(group, fps=fps)
-        accel = compute_acceleration_magnitudes(vel, fps=fps)
+        vel, accel = get_kinematics(group, fps=fps)
 
         variables = {
             'depth': group['contact_depth'],
