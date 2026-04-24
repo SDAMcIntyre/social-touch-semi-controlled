@@ -146,7 +146,7 @@ def _generate_matrix_internal(
         legend_data = []
         hierarchy_order = ['type_metadata']
         if agg is not None:
-            hierarchy_order += [f'velocity_{agg}', f'depth_{agg}', f'area_{agg}']
+            hierarchy_order += [f'velocity_magnitude_{agg}', f'contact_depth_{agg}', f'contact_area_{agg}']
 
         for col, params in agg_config['continuous_vars'].items():
             if col not in full_df.columns:
@@ -215,9 +215,9 @@ def _run_advanced_visualizations(full_df, output_dir, log_scale, log_axis, mode,
     columns are not present in *full_df*.
     """
     logging.info(f"Generating advanced visualizations (Mode: {mode}, Agg: {aggregation})...")
-    heat_x = f'velocity_{aggregation}'
-    heat_y1 = f'depth_{aggregation}'
-    heat_y2 = f'area_{aggregation}'
+    heat_x = f'velocity_magnitude_{aggregation}'
+    heat_y1 = f'contact_depth_{aggregation}'
+    heat_y2 = f'contact_area_{aggregation}'
     facet_type = 'type_metadata'
     pop_col = 'source_file_id'
 

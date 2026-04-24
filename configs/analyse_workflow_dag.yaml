@@ -56,7 +56,6 @@ tasks:
         pressure:
           enabled: true
         mechanics_of_solids:
-          enabled: false
           youngs_modulus_kpa: 100.0
           poissons_ratio: 0.45
           skin_thickness_mm: 1.5
@@ -71,17 +70,14 @@ tasks:
       # Each key is an aggregation name applied to every quantitative Stage 2a column.
       # Set enabled: true to activate.
       features:
-        max:
-          enabled: false
+        max: {}
         mean:
           enabled: true
         min: {}
         median: {}
         std: {}
-        range:
-          enabled: false
-        skewness:
-          enabled: false
+        range: {}
+        skewness: {}
       touch_category:
         enabled: true
     depends_on: [touch_series_transforms]
@@ -138,8 +134,8 @@ tasks:
           bin_method: equal_width
       reduction:
         scaler: standard
-        variance_filter: null
-        decomposition: null
+        variance_filter:
+        decomposition:
       evaluation:
         internal_metrics: [silhouette, davies_bouldin, calinski_harabasz]
         stability:
