@@ -2,7 +2,8 @@
 
 **Date:** 2026-04-23
 **Author:** Basil Duvernoy
-**Status:** In Progress
+**Status:** Completed
+**Completed:** 2026-04-24 07:59
 **Branch:** `feature/stage-2b-aggregations-only`
 
 ---
