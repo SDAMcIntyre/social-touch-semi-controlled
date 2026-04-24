@@ -619,8 +619,13 @@ def _cluster_combination(
             internal = compute_internal_metrics(X_scaled, labels)
             metadata['internal_metrics'] = internal
         except Exception as exc:
+            _sessions = result_df['session_id'].unique().tolist() if 'session_id' in result_df.columns else 'N/A'
+            _trials = sorted(result_df['trial_id'].unique().tolist()) if 'trial_id' in result_df.columns else 'N/A'
+            _blocks = sorted(result_df['block_order_id'].unique().tolist()) if 'block_order_id' in result_df.columns else 'N/A'
             logging.warning(
-                f"[{combination_name}/{clusterer_name}] Internal metrics failed: {exc}"
+                f"[{combination_name}/{clusterer_name}] Internal metrics failed: {exc} "
+                f"| file={pooled_csv} | n_touches={len(result_df)} "
+                f"| sessions={_sessions} | trials={_trials} | blocks={_blocks}"
             )
 
         # --- Stability (bootstrap) -----------------------------------------
@@ -639,8 +644,13 @@ def _cluster_combination(
             )
             metadata['stability'] = stability
         except Exception as exc:
+            _sessions = result_df['session_id'].unique().tolist() if 'session_id' in result_df.columns else 'N/A'
+            _trials = sorted(result_df['trial_id'].unique().tolist()) if 'trial_id' in result_df.columns else 'N/A'
+            _blocks = sorted(result_df['block_order_id'].unique().tolist()) if 'block_order_id' in result_df.columns else 'N/A'
             logging.warning(
-                f"[{combination_name}/{clusterer_name}] Stability estimation failed: {exc}"
+                f"[{combination_name}/{clusterer_name}] Stability estimation failed: {exc} "
+                f"| file={pooled_csv} | n_touches={len(result_df)} "
+                f"| sessions={_sessions} | trials={_trials} | blocks={_blocks}"
             )
 
         # --- Reduction metadata -------------------------------------------
