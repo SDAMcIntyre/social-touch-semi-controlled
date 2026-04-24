@@ -3,6 +3,11 @@ import pandas as pd
 import numpy as np
 from .base import FeatureExtractor
 
+try:
+    from scipy.stats import skew as _scipy_skew
+except ImportError:
+    _scipy_skew = None
+
 _DEFAULT_AGGREGATIONS = ['mean', 'median', 'std', 'min', 'max', 'range', 'skewness']
 
 _EXCLUDE_FROM_AGGREGATION = frozenset({
@@ -56,9 +61,8 @@ class StatisticalExtractor(FeatureExtractor):
                 elif agg == 'range':
                     row[f'{col}_range'] = series.max() - series.min()
                 elif agg == 'skewness':
-                    try:
-                        from scipy.stats import skew
-                        row[f'{col}_skewness'] = float(skew(series.dropna()))
-                    except ImportError:
+                    if _scipy_skew is not None:
+                        row[f'{col}_skewness'] = float(_scipy_skew(series.dropna()))
+                    else:
                         row[f'{col}_skewness'] = np.nan
         return row
