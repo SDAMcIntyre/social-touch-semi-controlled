@@ -247,7 +247,7 @@ tasks:
   map_receptive_fields_clustered:
     enabled: true
     options:
-      force_processing: false
+      force_processing: true
       # enabled: true → face-on camera computed automatically (no GUI).
       # enabled: false → interactive picker (manual). force_processing also
       # controls whether sessions with existing camera_params.json are re-shown.
@@ -256,4 +256,5 @@ tasks:
           enabled: true
       cluster_groups: [kinematics_simple_mean, pressure_velocity_mean]
       projection_method: cylindrical_unwrap
+      disjoint_mask_distance_mm: 8.0
     depends_on: [touch_clustering]
