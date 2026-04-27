@@ -35,9 +35,13 @@ class RFRenderContext:
     neuron_cluster_touches:
         Touch count for this neuron in the current cluster only.
     neuron_contacts_xyz:
-        (N, 3) array of mean_contact_x/y/z for this neuron across all clusters.
+        (N, 3) unique mm-rounded contact points parsed from the session's aggregated CSV
+        ``contact_points`` column, across all clusters.
+        Invariant: heatmap spike contacts ⊆ neuron_cluster_contacts_xyz ⊆ neuron_contacts_xyz.
     neuron_cluster_contacts_xyz:
-        (M, 3) array of mean_contact_x/y/z for this neuron in the current cluster.
+        (M, 3) unique mm-rounded contact points parsed from the session's aggregated CSV
+        ``contact_points`` column, for this cluster only.
+        Invariant: heatmap spike contacts ⊆ neuron_cluster_contacts_xyz ⊆ neuron_contacts_xyz.
     feature_ranges:
         Dict from cluster_description['feature_ranges']: {name: {min, max, mean}}.
     """
@@ -220,6 +224,14 @@ def render_forearm_heatmap(
                 f"render_context={render_context!r}."
             )
 
+    if render_context is None or len(render_context.neuron_contacts_xyz) == 0:
+        raise ValueError(
+            "render_forearm_heatmap: render_context with non-empty neuron_contacts_xyz "
+            f"is required (session={session_id}, cluster={cluster_label}). "
+            "Pipeline contract violation — see rf_cluster_pipeline.py."
+        )
+    projection_centroid = render_context.neuron_contacts_xyz.mean(axis=0)
+
     if spike_counts_df.empty:
         logger.warning(
             "Empty spike_counts_df for session %s, cluster %s — skipping render.",
@@ -231,7 +243,6 @@ def render_forearm_heatmap(
     if projection_method is not None:
         spike_xyz = spike_counts_df[['x', 'y', 'z']].to_numpy()
         counts = spike_counts_df['spike_count'].to_numpy()
-        contact_centroid = spike_xyz.mean(axis=0) if len(spike_xyz) > 0 else None
 
         forearm_vertices = None
         if forearm_ply_path is not None and forearm_ply_path.exists():
@@ -244,12 +255,12 @@ def render_forearm_heatmap(
             except Exception:
                 logger.warning("Could not load forearm PLY for 2D projection: %s", forearm_ply_path, exc_info=True)
 
-        uv_points = project_to_2d(spike_xyz, forearm_vertices, contact_centroid, method=projection_method)
+        uv_points = project_to_2d(spike_xyz, forearm_vertices, projection_centroid, method=projection_method)
 
         forearm_uv = None
         if forearm_vertices is not None:
             try:
-                forearm_uv = project_to_2d(forearm_vertices, forearm_vertices, contact_centroid, method=projection_method)
+                forearm_uv = project_to_2d(forearm_vertices, forearm_vertices, projection_centroid, method=projection_method)
             except Exception:
                 logger.debug("Could not project forearm vertices to 2D for background.", exc_info=True)
 
@@ -264,36 +275,30 @@ def render_forearm_heatmap(
         # --- Project neuron hull contact points if context provided ---
         neuron_contacts_uv = None
         neuron_cluster_contacts_uv = None
-        if render_context is not None:
-            hull_centroid = (
-                render_context.neuron_contacts_xyz.mean(axis=0)
-                if len(render_context.neuron_contacts_xyz) > 0
-                else contact_centroid
-            )
-            if len(render_context.neuron_contacts_xyz) > 0:
-                try:
-                    neuron_contacts_uv = project_to_2d(
-                        render_context.neuron_contacts_xyz,
-                        forearm_vertices,
-                        hull_centroid,
-                        method=projection_method,
-                    )
-                except Exception:
-                    logger.debug(
-                        "Could not project neuron_contacts_xyz to 2D for hull.", exc_info=True
-                    )
-            if len(render_context.neuron_cluster_contacts_xyz) > 0:
-                try:
-                    neuron_cluster_contacts_uv = project_to_2d(
-                        render_context.neuron_cluster_contacts_xyz,
-                        forearm_vertices,
-                        hull_centroid,
-                        method=projection_method,
-                    )
-                except Exception:
-                    logger.debug(
-                        "Could not project neuron_cluster_contacts_xyz to 2D for hull.", exc_info=True
-                    )
+        if len(render_context.neuron_contacts_xyz) > 0:
+            try:
+                neuron_contacts_uv = project_to_2d(
+                    render_context.neuron_contacts_xyz,
+                    forearm_vertices,
+                    projection_centroid,
+                    method=projection_method,
+                )
+            except Exception:
+                logger.debug(
+                    "Could not project neuron_contacts_xyz to 2D for hull.", exc_info=True
+                )
+        if len(render_context.neuron_cluster_contacts_xyz) > 0:
+            try:
+                neuron_cluster_contacts_uv = project_to_2d(
+                    render_context.neuron_cluster_contacts_xyz,
+                    forearm_vertices,
+                    projection_centroid,
+                    method=projection_method,
+                )
+            except Exception:
+                logger.debug(
+                    "Could not project neuron_cluster_contacts_xyz to 2D for hull.", exc_info=True
+                )
 
         render_2d_heatmap(
             uv_points=uv_points,
@@ -331,11 +336,10 @@ def render_forearm_heatmap(
     ax.yaxis.pane.set_edgecolor('black')
     ax.zaxis.pane.set_edgecolor('black')
 
-    # --- Compute contact centroid and tangent-plane rotation early ---
+    # --- Load spike coordinates for 3D scatter ---
     xs = spike_counts_df['x'].to_numpy()
     ys = spike_counts_df['y'].to_numpy()
     zs = spike_counts_df['z'].to_numpy()
-    contact_centroid = np.array([xs.mean(), ys.mean(), zs.mean()]) if len(xs) > 0 else None
 
     # --- Plot forearm point cloud ---
     forearm_vertices = None
@@ -354,11 +358,7 @@ def render_forearm_heatmap(
             if pts.size > 0:
                 forearm_vertices = pts
 
-                R = (
-                    compute_tangent_plane_rotation(forearm_vertices, contact_centroid)
-                    if contact_centroid is not None
-                    else None
-                )
+                R = compute_tangent_plane_rotation(forearm_vertices, projection_centroid)
 
                 forearm_mesh = load_or_build_forearm_mesh(forearm_ply_path)
 
@@ -558,8 +558,8 @@ def render_forearm_heatmap(
         ax.view_init(elev=90, azim=-90)
     else:
         elev, azim = 30.0, 45.0  # sensible default
-        if forearm_vertices is not None and contact_centroid is not None:
-            normal = _compute_surface_normal(forearm_vertices, contact_centroid)
+        if forearm_vertices is not None:
+            normal = _compute_surface_normal(forearm_vertices, projection_centroid)
             if normal is not None:
                 elev, azim = _normal_to_view_angles(normal)
         ax.view_init(elev=elev, azim=azim)

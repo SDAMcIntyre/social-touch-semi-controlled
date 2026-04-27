@@ -111,83 +111,81 @@ def _build_session_touch_map(
     return session_map
 
 
-def _extract_spike_contact_points(
-    aggregated_csv_path: Path,
-    touch_keys: List[Tuple],
-) -> Tuple[Counter, defaultdict]:
-    """Extract spike-associated contact points from one session's aggregated CSV.
+def _unique_mm(points_xyz: np.ndarray, mm: float = 1.0) -> np.ndarray:
+    """Round points to mm-grid and return unique rows."""
+    if len(points_xyz) == 0:
+        return points_xyz
+    rounded = np.round(points_xyz / mm) * mm
+    return np.unique(rounded, axis=0)
 
-    Reads the aggregated CSV, filters to the specified touches, forward-fills
-    contact_points within each touch group (30Hz -> 1kHz alignment), filters
-    rows where Nerve_spike == 1, parses contact_points, and returns both a
-    Counter of (x, y, z) -> spike_count and a DefaultDict of
-    (x, y, z) -> set of unique (block_order_id, trial_id, single_touch_id) tuples.
 
-    Parameters
-    ----------
-    aggregated_csv_path:
-        Path to the session's *_semicontrolled_aggregated_session.csv.
-    touch_keys:
-        List of (block_order_id, trial_id, single_touch_id) tuples for this cluster.
+def _load_session_aggregated(agg_csv: Path) -> pd.DataFrame:
+    """Load the aggregated CSV with required columns, ffill contact_points per touch group.
 
-    Returns
-    -------
-    Tuple of:
-        - Counter mapping (x, y, z) tuple -> spike count.
-        - DefaultDict mapping (x, y, z) tuple -> set of unique touch keys.
+    Raises ValueError if required columns are missing or the file is empty.
+    """
+    header_df = pd.read_csv(agg_csv, nrows=0)
+    available = set(header_df.columns)
+    missing = [c for c in _NEEDED_COLS if c not in available]
+    if missing:
+        raise ValueError(f"_load_session_aggregated: {agg_csv.name} missing columns {missing}")
+
+    df = pd.read_csv(agg_csv, usecols=_NEEDED_COLS)
+    if df.empty:
+        raise ValueError(f"_load_session_aggregated: {agg_csv.name} is empty")
+
+    df['contact_points'] = df.groupby(
+        ['block_order_id', 'trial_id', 'single_touch_id']
+    )['contact_points'].ffill()
+
+    return df
+
+
+def _parse_contacts_for_keys(
+    df_session: pd.DataFrame,
+    touch_keys: Optional[List[Tuple]],
+    dedup_mm: float = 1.0,
+) -> Tuple[Counter, defaultdict, np.ndarray]:
+    """Filter df_session to touch_keys (or all rows if None), then return:
+      - spike_counter: Counter mapping xyz_tuple -> spike count (Nerve_spike==1 rows).
+      - unique_touch_counter: defaultdict mapping xyz_tuple -> set of touch keys.
+      - all_contacts_xyz: (N, 3) mm-rounded unique cloud across ALL filtered rows.
     """
     spike_counter: Counter = Counter()
     unique_touch_counter: defaultdict = defaultdict(set)
 
-    if not aggregated_csv_path.exists():
-        logger.warning("Aggregated CSV not found, skipping: %s", aggregated_csv_path)
-        return spike_counter, unique_touch_counter
-
-    try:
-        header_df = pd.read_csv(aggregated_csv_path, nrows=0)
-        available = set(header_df.columns)
-        missing = [c for c in _NEEDED_COLS if c not in available]
-        if missing:
-            logger.warning(
-                "Skipping %s: missing columns %s", aggregated_csv_path.name, missing
-            )
-            return spike_counter, unique_touch_counter
-
-        df = pd.read_csv(aggregated_csv_path, usecols=_NEEDED_COLS)
-    except Exception:
-        logger.exception("Error reading %s", aggregated_csv_path.name)
-        return spike_counter, unique_touch_counter
-
-    if df.empty:
-        return spike_counter, unique_touch_counter
-
-    # Merge-based filter: much faster than row-wise apply for large DataFrames
-    keys_df = pd.DataFrame(
-        touch_keys, columns=['block_order_id', 'trial_id', 'single_touch_id']
-    ).drop_duplicates()
-    touch_df = df.merge(keys_df, on=['block_order_id', 'trial_id', 'single_touch_id'], how='inner').copy()
+    if touch_keys is not None:
+        keys_df = pd.DataFrame(
+            touch_keys, columns=['block_order_id', 'trial_id', 'single_touch_id']
+        ).drop_duplicates()
+        touch_df = df_session.merge(
+            keys_df, on=['block_order_id', 'trial_id', 'single_touch_id'], how='inner'
+        )
+    else:
+        touch_df = df_session
 
     if touch_df.empty:
-        return spike_counter, unique_touch_counter
+        return spike_counter, unique_touch_counter, np.empty((0, 3))
 
-    # Forward-fill contact_points within each touch group (30Hz -> 1kHz)
-    # Must be per-touch to avoid leaking contact location between touches.
-    touch_df['contact_points'] = touch_df.groupby(
-        ['block_order_id', 'trial_id', 'single_touch_id']
-    )['contact_points'].ffill()
-
-    # Filter to spike rows and parse contact points.
-    # Iterate rows so touch-key columns are available alongside contact_points.
-    spike_rows = touch_df[touch_df['Nerve_spike'] == 1]
-    for row in spike_rows.itertuples(index=False):
+    # Single pass: collect mm-rounded hull points and spike counts simultaneously.
+    # contact_points ffill was applied at load time (per touch group).
+    all_pts_mm: set = set()
+    for row in touch_df.itertuples(index=False):
         cp_str = row.contact_points
         touch_key = (row.block_order_id, row.trial_id, row.single_touch_id)
         parsed = parse_contact_points(cp_str)
         for pt in parsed:
-            spike_counter[pt] += 1
-            unique_touch_counter[pt].add(touch_key)
+            all_pts_mm.add(tuple(round(v / dedup_mm) * dedup_mm for v in pt))
+            if row.Nerve_spike == 1:
+                spike_counter[pt] += 1
+                unique_touch_counter[pt].add(touch_key)
 
-    return spike_counter, unique_touch_counter
+    if all_pts_mm:
+        all_contacts_xyz = np.array(sorted(all_pts_mm), dtype=float)
+    else:
+        all_contacts_xyz = np.empty((0, 3))
+
+    return spike_counter, unique_touch_counter, all_contacts_xyz
 
 
 def _aggregate_spike_counts(
@@ -488,14 +486,48 @@ def run_cluster_rf_mapping(
             for k, v in clustered_df.groupby('session_id').size().items()
         }
 
-        # Task 1.4 — validate mean_contact columns exist before the cluster loop.
-        _contact_cols = ['mean_contact_x', 'mean_contact_y', 'mean_contact_z']
-        _missing_contact_cols = [c for c in _contact_cols if c not in clustered_df.columns]
-        if _missing_contact_cols:
-            raise ValueError(
-                f"run_cluster_rf_mapping: clustered_df is missing required contact "
-                f"columns: {_missing_contact_cols}. Cannot compute neuron contact arrays."
+        # Load each session's aggregated CSV once per (combo, clusterer) pass and build
+        # neuron_contacts_xyz from all touches of that session (all clusters combined).
+        # Both are shared across the cluster loop below.
+        session_dfs: Dict[str, pd.DataFrame] = {}
+        neuron_contacts_xyz: Dict[str, np.ndarray] = {}
+
+        for sid in list(neuron_touches.keys()):
+            if sid not in session_dir_map:
+                logger.warning(
+                    "Session '%s' in clustered_df not found in input_items. Skipping.", sid
+                )
+                continue
+            _session_dir_pre = session_dir_map[sid]
+            _agg_csvs_pre = list(_session_dir_pre.glob('*_semicontrolled_aggregated_session.csv'))
+            if not _agg_csvs_pre:
+                logger.warning(
+                    "No aggregated CSV in %s. Skipping session %s.", _session_dir_pre, sid
+                )
+                continue
+            try:
+                _session_df = _load_session_aggregated(_agg_csvs_pre[0])
+            except ValueError as _exc:
+                logger.warning("Skipping session %s: %s", sid, _exc)
+                continue
+            except Exception:
+                logger.exception("Error reading %s", _agg_csvs_pre[0].name)
+                continue
+
+            session_dfs[sid] = _session_df
+
+            _all_session_keys = list(
+                clustered_df[clustered_df['session_id'].astype(str) == sid][_KEY_COLS]
+                .drop_duplicates()
+                .itertuples(index=False, name=None)
             )
+            _, _, _neuron_xyz = _parse_contacts_for_keys(_session_df, touch_keys=_all_session_keys)
+            if len(_neuron_xyz) == 0:
+                raise ValueError(
+                    f"Session '{sid}': aggregated CSV yields zero parseable contact_points "
+                    f"across all {len(_all_session_keys)} touches. Data is malformed."
+                )
+            neuron_contacts_xyz[sid] = _neuron_xyz
 
         for cluster_idx, (cluster_label, cluster_df) in enumerate(clustered_by_label.items(), start=1):
             n_touches = len(cluster_df)
@@ -514,23 +546,8 @@ def run_cluster_rf_mapping(
                 )
             }
 
-            # Task 1.4 — per-session contact XYZ arrays.
-            neuron_contacts_xyz: Dict[str, np.ndarray] = {}
+            # Populated per session inside the inner loop below.
             neuron_cluster_contacts_xyz: Dict[str, np.ndarray] = {}
-            for sid in neuron_touches:
-                neuron_contacts_xyz[sid] = (
-                    clustered_df[clustered_df['session_id'].astype(str) == sid][_contact_cols]
-                    .dropna()
-                    .to_numpy()
-                )
-                neuron_cluster_contacts_xyz[sid] = (
-                    clustered_df[
-                        (clustered_df['session_id'].astype(str) == sid)
-                        & (clustered_df['cluster_label'].astype(str) == cluster_label)
-                    ][_contact_cols]
-                    .dropna()
-                    .to_numpy()
-                )
 
             cluster_desc = _build_cluster_description(
                 clustered_df,
@@ -549,34 +566,25 @@ def run_cluster_rf_mapping(
 
             for session_id, touch_keys in session_touch_map.items():
                 print(f"    {session_id}: loading {len(touch_keys)} touches...")
-                if session_id not in session_dir_map:
-                    print(f"    -> not in input_items, skipping.")
+                if session_id not in session_dfs:
+                    print(f"    -> not loaded, skipping.")
                     logger.warning(
-                        "Session '%s' in cluster %s not found in input_items. Skipping.",
+                        "Session '%s' in cluster %s: no loaded session df, skipping.",
                         session_id, cluster_label,
                     )
                     continue
 
-                session_dir = session_dir_map[session_id]
-                agg_csvs = list(session_dir.glob('*_semicontrolled_aggregated_session.csv'))
-                if not agg_csvs:
-                    print(f"    -> no aggregated CSV found, skipping.")
-                    logger.warning(
-                        "No aggregated CSV in %s. Skipping session %s.",
-                        session_dir, session_id,
-                    )
-                    continue
-
-                session_counter, session_unique_counter = _extract_spike_contact_points(
-                    agg_csvs[0], touch_keys
+                spike_counter, session_unique_counter, cluster_xyz = _parse_contacts_for_keys(
+                    session_dfs[session_id], touch_keys
                 )
-                n_spikes = sum(session_counter.values())
-                print(f"    -> {n_spikes} spikes at {len(session_counter)} contact points.")
-                session_counters.append((session_counter, session_unique_counter))
+                neuron_cluster_contacts_xyz[session_id] = cluster_xyz
+                n_spikes = sum(spike_counter.values())
+                print(f"    -> {n_spikes} spikes at {len(spike_counter)} contact points.")
+                session_counters.append((spike_counter, session_unique_counter))
 
-                if session_counter:
+                if spike_counter:
                     session_spike_dfs[session_id] = _aggregate_spike_counts(
-                        [(session_counter, session_unique_counter)]
+                        [(spike_counter, session_unique_counter)]
                     )
 
             # Save pooled spike_counts.csv for this cluster (session_counters is now a list of pairs)
@@ -633,6 +641,16 @@ def run_cluster_rf_mapping(
             for session_id, spike_df in session_spike_dfs.items():
                 if spike_df.empty:
                     continue
+                if session_id in neuron_contacts_xyz and session_id in neuron_cluster_contacts_xyz:
+                    _spike_mm = np.round(spike_df[['x', 'y', 'z']].to_numpy())
+                    _spike_set = set(map(tuple, _spike_mm))
+                    _cluster_set = set(map(tuple, np.round(neuron_cluster_contacts_xyz[session_id])))
+                    _neuron_set = set(map(tuple, np.round(neuron_contacts_xyz[session_id])))
+                    if not (_spike_set <= _cluster_set <= _neuron_set):
+                        logger.warning(
+                            "RF hull invariant violated for session=%s, cluster=%s",
+                            session_id, cluster_label,
+                        )
                 session_dir = session_dir_map[session_id]
                 forearm_ply = resolve_forearm_ply(session_dir, session_id)
                 suffix = f'_{projection_method}' if projection_method else ''
