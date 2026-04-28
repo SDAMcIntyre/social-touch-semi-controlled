@@ -103,10 +103,10 @@ tasks:
   touch_clustering:
     enabled: true
     options:
-      force_processing: false
+      force_processing: true
       cluster_groups:
         kinematics_simple_mean:
-          enabled: true
+          enabled: false
           features:
             contact_depth: [mean]
             contact_area: [mean]
@@ -141,22 +141,35 @@ tasks:
         pressure_velocity_mean:
           enabled: true
           features:
-            pressure: [mean]
-            hand_velocity: [mean]
-            location: [mean]
+            hand_velocity:
+            - mean
+            pressure:
+            - mean
           clustering_methods:
             binning:
               method: binning
               n_bins: 20
               bin_method: equal_width
-              enabled: true
+            kmeans:
+              method: kmeans
+              n_clusters: 8
+              enabled: false
+            dbscan:
+              method: dbscan
+              eps: 0.5
+              min_samples: 5
+              enabled: false
+            hierarchical:
+              method: hierarchical
+              n_clusters: 8
+              linkage: ward
+              enabled: false
             type_stratified:
               method: type_stratified
               base_method: binning
               type_col: type_metadata
               n_bins: 20
               bin_method: equal_width
-              enabled: true
         kinematics_with_category:
           enabled: false
           features:
@@ -241,16 +254,13 @@ tasks:
       force_processing: false
     depends_on: [touch_feature_extraction]
 
-  # Cluster-based RF mapping: spike-count heatmaps grouped by data-driven cluster labels.
-  # Reads from touch_clustering output; renders 3D forearm heatmap PNGs per (cluster, session).
+  # Cluster-based RF mapping (legacy): calls extraction then visualization in one step.
+  # Use extract_receptive_fields_clustered + visualize_receptive_fields_clustered instead.
   # Output: 4_analysed/receptive_field_maps_clustered/<combination>/<clusterer>/
   map_receptive_fields_clustered:
-    enabled: true
+    enabled: false
     options:
-      force_processing: true
-      # enabled: true → face-on camera computed automatically (no GUI).
-      # enabled: false → interactive picker (manual). force_processing also
-      # controls whether sessions with existing camera_params.json are re-shown.
+      force_processing: false
       camera_angle_mode:
         auto:
           enabled: true
@@ -258,3 +268,29 @@ tasks:
       projection_method: cylindrical_unwrap
       disjoint_mask_distance_mm: 8.0
     depends_on: [touch_clustering]
+
+  # Step 1 of split pipeline: CSV parsing, spike counting, artifact writing.
+  # Idempotent against clustered CSV mtime; does not re-run on vis-param changes.
+  extract_receptive_fields_clustered:
+    enabled: true
+    options:
+      force_processing: false
+      cluster_groups: [pressure_velocity_mean]
+    depends_on: [touch_clustering]
+
+  # Step 2 of split pipeline: RF metrics, 2D heatmap rendering.
+  # Re-runs only when projection_method / disjoint_mask_distance_mm change or force=true.
+  visualize_receptive_fields_clustered:
+    enabled: true
+    options:
+      force_processing: false
+      cluster_groups: [pressure_velocity_mean]
+      projection_method: cylindrical_unwrap
+      disjoint_mask_distance_mm: 8.0
+      gallery_viewer: true
+      # enabled: true → face-on camera computed automatically (no GUI).
+      # enabled: false → interactive picker (manual).
+      camera_angle_mode:
+        auto:
+          enabled: false
+    depends_on: [extract_receptive_fields_clustered]

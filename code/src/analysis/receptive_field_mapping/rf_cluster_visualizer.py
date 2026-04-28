@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 
 from .rf_2d_renderer import render_2d_heatmap
+from .rf_data_loader import load_forearm_vertices
 from .rf_projection import project_to_2d
 from .rf_surface_utils import load_or_build_forearm_mesh, map_scalars_to_mesh
 from .tangent_plane_alignment import (  # noqa: F401
@@ -56,32 +57,16 @@ class RFRenderContext:
 def _format_metadata_overlay(context: RFRenderContext) -> str:
     """Build the metadata text string for figure overlays.
 
-    Returns a multi-line string:
+    Returns a single-line string:
         Touches: {cluster} / {neuron} ({pct:.1f}%)
-        {feature}: [{min}, {max}]
-        ...
     """
     nt = context.neuron_touches
     nct = context.neuron_cluster_touches
 
     if nt > 0:
         pct = 100.0 * nct / nt
-        touch_line = f"Touches: {nct} / {nt} ({pct:.1f}%)"
-    else:
-        touch_line = f"Touches: {nct} / {nt} (—%)"
-
-    lines = [touch_line]
-    for feature_name, ranges in context.feature_ranges.items():
-        fmin = ranges.get("min", "?")
-        fmax = ranges.get("max", "?")
-        # Round floats for readability
-        if isinstance(fmin, float):
-            fmin = round(fmin, 3)
-        if isinstance(fmax, float):
-            fmax = round(fmax, 3)
-        lines.append(f"{feature_name}: [{fmin}, {fmax}]")
-
-    return "\n".join(lines)
+        return f"Touches: {nct} / {nt} ({pct:.1f}%)"
+    return f"Touches: {nct} / {nt} (—%)"
 
 
 def _draw_hull_3d(ax, points_3d: np.ndarray, color: str, label: str) -> None:
@@ -245,13 +230,9 @@ def render_forearm_heatmap(
         counts = spike_counts_df['spike_count'].to_numpy()
 
         forearm_vertices = None
-        if forearm_ply_path is not None and forearm_ply_path.exists():
+        if forearm_ply_path is not None:
             try:
-                import open3d as o3d
-                pcd = o3d.io.read_point_cloud(str(forearm_ply_path))
-                pts = np.asarray(pcd.points)
-                if pts.size > 0:
-                    forearm_vertices = pts
+                forearm_vertices = load_forearm_vertices(forearm_ply_path)
             except Exception:
                 logger.warning("Could not load forearm PLY for 2D projection: %s", forearm_ply_path, exc_info=True)
 
@@ -348,14 +329,16 @@ def render_forearm_heatmap(
     sc = None
     cbar_created = False
 
-    if forearm_ply_path is not None and forearm_ply_path.exists():
+    if forearm_ply_path is None:
+        logger.warning("No forearm PLY resolved for session %s", session_id)
+    elif not forearm_ply_path.exists():
+        logger.warning("Forearm PLY not found: %s", forearm_ply_path)
+    else:
         try:
-            import open3d as o3d
             from scipy.spatial import KDTree
 
-            pcd = o3d.io.read_point_cloud(str(forearm_ply_path))
-            pts = np.asarray(pcd.points)
-            if pts.size > 0:
+            pts = load_forearm_vertices(forearm_ply_path)
+            if pts is not None and pts.size > 0:
                 forearm_vertices = pts
 
                 R = compute_tangent_plane_rotation(forearm_vertices, projection_centroid)
@@ -447,11 +430,9 @@ def render_forearm_heatmap(
                         cbar_created = True
 
                 else:
-                    # Scatter fallback
+                    # Scatter fallback (forearm mesh build failed; PLY colors not available via .npy cache)
                     stride = max(1, len(pts) // 10000)
                     forearm_sub = pts[::stride]
-                    colors = np.asarray(pcd.colors)
-                    sub_colors = colors[::stride] if colors.size > 0 else None
                     spike_xyz = spike_counts_df[['x', 'y', 'z']].to_numpy()
                     if len(spike_xyz) > 0:
                         tree = KDTree(forearm_sub[:, :3])
@@ -460,28 +441,18 @@ def render_forearm_heatmap(
                         mask = np.ones(len(forearm_sub), dtype=bool)
                         mask[list(exclude)] = False
                         forearm_sub = forearm_sub[mask]
-                        if sub_colors is not None:
-                            sub_colors = sub_colors[mask]
 
                     if R is not None:
                         forearm_sub = align_points(forearm_sub, R)
 
-                    if sub_colors is not None:
-                        point_colors = sub_colors
-                    else:
-                        point_colors = 'lightgrey'
                     sc_forearm = ax.scatter(
                         forearm_sub[:, 0], forearm_sub[:, 1], forearm_sub[:, 2],
-                        c=point_colors, s=20, alpha=1.0, rasterized=True,
+                        c='lightgrey', s=20, alpha=1.0, rasterized=True,
                         linewidths=0, depthshade=False,
                     )
 
         except Exception:
             logger.warning("Could not load forearm PLY: %s", forearm_ply_path, exc_info=True)
-    elif forearm_ply_path is None:
-        logger.warning("No forearm PLY resolved for session %s", session_id)
-    else:
-        logger.warning("Forearm PLY not found: %s", forearm_ply_path)
 
     # --- Overlay contact points coloured by spike_count (scatter fallback path only) ---
     counts = spike_counts_df['spike_count'].to_numpy()
@@ -568,10 +539,12 @@ def render_forearm_heatmap(
     ax.set_xlabel('X (mm)', color='white')
     ax.set_ylabel('Y (mm)', color='white')
     ax.set_zlabel('Z (mm)', color='white')
-    title_3d = f'RF Heatmap — {session_id} | cluster {cluster_label}'
+    ax.set_title(
+        f'RF Heatmap — {session_id} | cluster {cluster_label}',
+        fontsize=11, color='white',
+    )
     if cluster_description:
-        title_3d += f'\n{cluster_description}'
-    ax.set_title(title_3d, fontsize=11, color='white')
+        fig.suptitle(cluster_description, color='#aaaaaa', fontsize=9, y=1.02, style='italic')
     ax.tick_params(axis='x', colors='white')
     ax.tick_params(axis='y', colors='white')
     ax.tick_params(axis='z', colors='white')

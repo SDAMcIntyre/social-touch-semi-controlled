@@ -2,7 +2,8 @@
 
 **Date:** 2026-04-25
 **Author:** Basil Duvernoy
-**Status:** In Progress
+**Status:** Completed
+**Completed:** 2026-04-27 11:53
 **Branch:** `feature/rf-cluster-visualization-improvements` (extends the active plan `rf-cluster-per-neuron-projection-frame.md`)
 
 ---
