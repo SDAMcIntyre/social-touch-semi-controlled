@@ -12,6 +12,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+import numpy as np
 import pandas as pd
 
 from analysis.touch_analytics.touch_config import DISCRETIZATION_CONFIG
@@ -24,6 +25,43 @@ logger = logging.getLogger(__name__)
 # ------------------------------------------------------------------
 # PLY path resolution
 # ------------------------------------------------------------------
+
+def load_forearm_vertices(ply_path: Optional[Path]) -> Optional[np.ndarray]:
+    """Load forearm point-cloud vertices with a .npy sidecar cache.
+
+    Cache path: ``{ply_path.parent}/{ply_path.stem}_vertices.npy``.
+    Returns ``None`` when *ply_path* is ``None`` or the file does not exist.
+    On cache hit (sidecar mtime ≥ PLY mtime) loads the .npy directly.
+    On cache miss, loads via open3d, saves the sidecar, then returns the array.
+    Raises ``ValueError`` for a cached .npy with the wrong shape.
+    """
+    if ply_path is None or not ply_path.exists():
+        return None
+
+    npy_path = ply_path.parent / f"{ply_path.stem}_vertices.npy"
+
+    if npy_path.exists() and npy_path.stat().st_mtime >= ply_path.stat().st_mtime:
+        arr = np.load(npy_path)
+        if arr.ndim != 2 or arr.shape[1] != 3:
+            raise ValueError(
+                f"load_forearm_vertices: cached .npy has unexpected shape {arr.shape} "
+                f"(expected (N, 3)): {npy_path}"
+            )
+        return arr
+
+    import open3d as o3d  # type: ignore
+    pcd = o3d.io.read_point_cloud(str(ply_path))
+    pts = np.asarray(pcd.points)
+    if pts.size == 0:
+        return None
+
+    try:
+        np.save(npy_path, pts.astype(np.float64))
+    except Exception:
+        logger.warning("Could not save forearm vertices cache: %s", npy_path)
+
+    return pts
+
 
 def resolve_forearm_ply(session_dir: Path, session_id: str) -> Optional[Path]:
     """Resolve the forearm PLY path for a session in RF-centered coordinate space.

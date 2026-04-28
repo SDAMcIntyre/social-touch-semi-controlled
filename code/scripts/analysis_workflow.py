@@ -36,7 +36,12 @@ from analysis.touch_analytics.series_pipeline import run_series_transforms
 from analysis.touch_analytics.extraction_pipeline import run_feature_extraction
 from analysis.touch_analytics.clustering_pipeline import run_clustering
 from analysis.touch_analytics.comparing_pipeline import run_comparing
-from analysis.receptive_field_mapping import run_cluster_rf_mapping, run_simple_rf_mapping
+from analysis.receptive_field_mapping import (
+    run_cluster_rf_extraction,
+    run_cluster_rf_mapping,
+    run_cluster_rf_visualization,
+    run_simple_rf_mapping,
+)
 
 # --- Analysis Flows ---
 
@@ -345,6 +350,95 @@ def map_receptive_fields_clustered_flow(
     return result
 
 
+@flow(name="extract_receptive_fields_clustered")
+def extract_receptive_fields_clustered_flow(
+    input_items: List[Tuple[Path, Path]],
+    force_processing: bool = False,
+    cluster_groups: list = None,
+    cluster_group_defs: dict = None,
+    feature_combinations: dict = None,
+    clustering_profiles: dict = None,
+) -> List[Path]:
+    """
+    Extraction-only step: load aggregated CSVs, count spikes per contact point,
+    and write intermediate artifacts to disk.
+    Output: ``4_analysed/receptive_field_maps_clustered/<group>/<clusterer>/``
+    """
+    print(f"[Batch Analysis] Running RF extraction for {len(input_items)} item(s)...")
+    if not input_items:
+        return []
+
+    database_path = input_items[0][1]
+    clustering_dir = database_path / '4_analysed' / 'touch_clusters'
+    output_dir = database_path / '4_analysed' / 'receptive_field_maps_clustered'
+
+    return run_cluster_rf_extraction(
+        clustering_dir=clustering_dir,
+        input_items=input_items,
+        output_dir=output_dir,
+        cluster_groups=cluster_groups,
+        cluster_group_defs=cluster_group_defs,
+        feature_combinations=feature_combinations,
+        clustering_profiles=clustering_profiles,
+        force=force_processing,
+    )
+
+
+@flow(name="visualize_receptive_fields_clustered")
+def visualize_receptive_fields_clustered_flow(
+    input_items: List[Tuple[Path, Path]],
+    force_processing: bool = False,
+    cluster_groups: list = None,
+    cluster_group_defs: dict = None,
+    feature_combinations: dict = None,
+    clustering_profiles: dict = None,
+    camera_angle_mode: str = "manual",
+    projection_method: str = None,
+    disjoint_mask_distance_mm: float = 8.0,
+    gallery_viewer: bool = False,
+) -> List[Path]:
+    """
+    Visualization-only step: load extraction artifacts, compute RF metrics,
+    and render per-session heatmap PNGs.
+    Output: ``4_analysed/receptive_field_maps_clustered/<group>/<clusterer>/``
+
+    After rendering, assigns camera angles per session.
+    """
+    print(f"[Batch Analysis] Running RF visualization for {len(input_items)} item(s)...")
+    if not input_items:
+        return []
+
+    database_path = input_items[0][1]
+    output_dir = database_path / '4_analysed' / 'receptive_field_maps_clustered'
+
+    result = run_cluster_rf_visualization(
+        output_dir=output_dir,
+        cluster_groups=cluster_groups,
+        cluster_group_defs=cluster_group_defs,
+        feature_combinations=feature_combinations,
+        clustering_profiles=clustering_profiles,
+        projection_method=projection_method,
+        disjoint_mask_distance_mm=disjoint_mask_distance_mm,
+        force=force_processing,
+        gallery_viewer=gallery_viewer,
+    )
+
+    from analysis.receptive_field_mapping.rf_camera_angle_task import pick_rf_camera_angle_batch
+    from analysis.touch_analytics.pipeline_shared import session_id_from_path
+
+    session_output_dirs = {
+        session_id_from_path(csv_path): csv_path.parent
+        for csv_path, _ in input_items
+    }
+    pick_rf_camera_angle_batch(
+        session_output_dirs,
+        force_processing=force_processing,
+        camera_angle_mode=camera_angle_mode,
+    )
+
+    return result
+
+
 def _collect_unified_files(input_items: List[Tuple[Path, Path]]) -> List[Path]:
     """
     Reconstruct expected paths of touch-summary CSVs written by touch_feature_extraction.
@@ -418,6 +512,8 @@ def run_batch_analysis(
         ("touch_comparing", touch_comparing_flow),
         ("analyse_ap_efficacy", analyse_ap_efficacy_flow),
         ("map_receptive_fields_clustered", map_receptive_fields_clustered_flow),
+        ("extract_receptive_fields_clustered", extract_receptive_fields_clustered_flow),
+        ("visualize_receptive_fields_clustered", visualize_receptive_fields_clustered_flow),
     ]
     
     task_names = [t[0] for t in available_tasks]
@@ -496,7 +592,12 @@ def run_batch_analysis(
                             kwargs["preparation_dir"] = preparation_dir
                     if "cluster_groups" in options:
                         kwargs["cluster_groups"] = options["cluster_groups"]
-                    if task_name in ("touch_comparing", "map_receptive_fields_clustered"):
+                    if task_name in (
+                        "touch_comparing",
+                        "map_receptive_fields_clustered",
+                        "extract_receptive_fields_clustered",
+                        "visualize_receptive_fields_clustered",
+                    ):
                         if _cluster_group_defs:
                             kwargs["cluster_group_defs"] = _cluster_group_defs
                     if "feature_combinations" in options:
@@ -530,6 +631,8 @@ def run_batch_analysis(
                         kwargs["projection_method"] = options["projection_method"]
                     if "disjoint_mask_distance_mm" in options:
                         kwargs["disjoint_mask_distance_mm"] = float(options["disjoint_mask_distance_mm"])
+                    if "gallery_viewer" in options:
+                        kwargs["gallery_viewer"] = bool(options["gallery_viewer"])
                     flow_func(**kwargs)
                 except Exception as e:
                     executor.error_msg = f"Batch analysis failed: {str(e)}"

@@ -58,6 +58,34 @@ class SessionSceneData:
     camera_params_path: Path = field(default_factory=lambda: Path())
 
 
+def _selectivity_cache_path(output_dir: Path) -> Tuple[Path, Path]:
+    return output_dir / "selectivity_points.npy", output_dir / "selectivity_scores.npy"
+
+
+def _selectivity_cache_is_valid(output_dir: Path, rf_csvs: List[Path]) -> bool:
+    points_path, scores_path = _selectivity_cache_path(output_dir)
+    if not points_path.exists() or not scores_path.exists():
+        return False
+    cache_mtime = min(points_path.stat().st_mtime, scores_path.stat().st_mtime)
+    csv_mtimes = [p.stat().st_mtime for p in rf_csvs if p.exists()]
+    if not csv_mtimes:
+        return False
+    return cache_mtime > max(csv_mtimes)
+
+
+def _load_selectivity_cache(output_dir: Path) -> Tuple[np.ndarray, np.ndarray]:
+    points_path, scores_path = _selectivity_cache_path(output_dir)
+    return np.load(str(points_path)), np.load(str(scores_path))
+
+
+def _save_selectivity_cache(
+    output_dir: Path, points: np.ndarray, scores: np.ndarray
+) -> None:
+    points_path, scores_path = _selectivity_cache_path(output_dir)
+    np.save(str(points_path), points)
+    np.save(str(scores_path), scores)
+
+
 def _compute_selectivity_overlay(
     rf_centered_files: List[Path],
 ) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
@@ -123,23 +151,6 @@ def collect_session_scene_data(
     sessions: Dict[str, SessionSceneData] = {}
 
     for session_id, output_dir in session_output_dirs.items():
-        # Check RF centering status
-        rf_origin_path = output_dir / "rf_center_origin.json"
-        if not rf_origin_path.exists():
-            logger.info("[%s] No rf_center_origin.json — skipping.", session_id)
-            continue
-        try:
-            rf_meta = json.loads(rf_origin_path.read_text())
-        except Exception:
-            logger.warning("[%s] Could not read RF origin file — skipping.", session_id)
-            continue
-        if rf_meta.get("status") != "ok":
-            logger.info(
-                "[%s] RF centering status is '%s' — skipping.",
-                session_id, rf_meta.get("status"),
-            )
-            continue
-
         # Find forearm PLY
         forearm_dir = output_dir / "forearm_rf_centered"
         forearm_plys = sorted(forearm_dir.glob("*.ply")) if forearm_dir.exists() else []
@@ -155,10 +166,21 @@ def collect_session_scene_data(
 
         forearm_mesh = load_or_build_forearm_mesh(forearm_ply)
 
-        # Compute selectivity overlay from RF-centered CSVs
+        # Compute selectivity overlay from RF-centered CSVs (with NPY cache)
         rf_centered_dir = output_dir / "blocks_rf_centered"
         rf_csvs = sorted(rf_centered_dir.glob("*.csv")) if rf_centered_dir.exists() else []
-        contact_points, selectivity_scores = _compute_selectivity_overlay(rf_csvs)
+        if rf_csvs and _selectivity_cache_is_valid(output_dir, rf_csvs):
+            try:
+                contact_points, selectivity_scores = _load_selectivity_cache(output_dir)
+            except Exception:
+                logger.exception("[%s] Failed to load selectivity cache — recomputing.", session_id)
+                contact_points, selectivity_scores = _compute_selectivity_overlay(rf_csvs)
+                if contact_points is not None:
+                    _save_selectivity_cache(output_dir, contact_points, selectivity_scores)
+        else:
+            contact_points, selectivity_scores = _compute_selectivity_overlay(rf_csvs)
+            if contact_points is not None:
+                _save_selectivity_cache(output_dir, contact_points, selectivity_scores)
 
         # Compute centroid for normal / rotation
         if contact_points is not None and len(contact_points) > 0:
@@ -209,17 +231,16 @@ def pick_rf_camera_angle_batch(
     """Assign camera angles for RF heatmap sessions.
 
     Two modes:
-    - ``"manual"``: opens the interactive PyVista picker; the researcher
-      adjusts and saves camera angles per session.  ``force_processing``
-      controls whether sessions with existing ``camera_params.json`` are
-      re-shown.
+    - ``"manual"``: opens the interactive PyVista picker for all sessions;
+      existing ``camera_params.json`` are pre-loaded so the researcher can
+      review and adjust them.  ``force_processing`` is ignored in this mode.
     - ``"auto"``: computes a face-on tangent-plane camera for every session
       automatically (no GUI).  ``force_processing`` controls whether sessions
       with existing params are overwritten.
 
     Args:
         session_output_dirs: Mapping of session_id → session output directory.
-        force_processing: See mode descriptions above.
+        force_processing: Only relevant in ``"auto"`` mode (see above).
         camera_angle_mode: ``"manual"`` (default) or ``"auto"``.
     """
     if camera_angle_mode == "auto":
@@ -227,17 +248,22 @@ def pick_rf_camera_angle_batch(
         return
 
     # --- manual mode ---
+    # Always show all sessions — the user explicitly chose manual mode to interact.
+    print(f"[Camera Picker] Manual mode — checking {len(session_output_dirs)} session(s)...")
+    for sid, d in session_output_dirs.items():
+        print(f"  {sid}: {d}")
+        ply_dir = d / "forearm_rf_centered"
+        print(f"    forearm_rf_centered exists: {ply_dir.exists()}")
+        if ply_dir.exists():
+            plys = list(ply_dir.glob("*.ply"))
+            print(f"    PLY files: {[p.name for p in plys]}")
+
     sessions = collect_session_scene_data(
         session_output_dirs, apply_tangent_rotation=False,
     )
 
-    if not force_processing:
-        sessions = {
-            sid: data for sid, data in sessions.items()
-            if data.saved_camera_params is None
-        }
-
     if not sessions:
+        print("[Camera Picker] No sessions passed scene-data check — skipping viewer.")
         logger.info("No sessions need camera angle picking. Skipping viewer.")
         return
 
