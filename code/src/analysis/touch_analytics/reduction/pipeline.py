@@ -97,6 +97,8 @@ class ReductionPipeline:
                 "dropped_columns": dropped_columns,
                 "retained_columns": retained_columns,
                 "scaler": scaler_name,
+                "scaler_mean": None,
+                "scaler_scale": None,
                 "decomposition": None,
             }
             return X, meta
@@ -105,8 +107,13 @@ class ReductionPipeline:
         # Step 2: Scaling
         # ------------------------------------------------------------------ #
         scaler = get_scaler(scaler_name)
+        scaler_mean_list = None
+        scaler_scale_list = None
         if scaler is not None:
             X = scaler.fit_transform(X)
+            if hasattr(scaler, 'mean_') and hasattr(scaler, 'scale_'):
+                scaler_mean_list = scaler.mean_.tolist()
+                scaler_scale_list = scaler.scale_.tolist()
 
         # ------------------------------------------------------------------ #
         # Step 3: Optional PCA decomposition
@@ -134,6 +141,8 @@ class ReductionPipeline:
             "dropped_columns": dropped_columns,
             "retained_columns": retained_columns,
             "scaler": scaler_name,
+            "scaler_mean": scaler_mean_list,
+            "scaler_scale": scaler_scale_list,
             "decomposition": decomposition_meta,
         }
         return X, metadata
