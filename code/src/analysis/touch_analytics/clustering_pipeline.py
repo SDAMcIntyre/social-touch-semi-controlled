@@ -31,6 +31,7 @@ from tqdm import tqdm
 from utils.should_process_task import should_process_task, clean_task_outputs
 from .clustering import get_clusterer
 from .clustering.base import ClusteringContext
+from .clustering.feature_space_renderer import render_gmm_feature_space
 from .reporting import VisualReportingStrategy
 from .pipeline_shared import (
     SHARED_COLUMNS,
@@ -541,6 +542,7 @@ def _cluster_combination(
 
         pooled_csv = out_dir / 'pooled_touch_summary_clustered.csv'
         metadata_json = out_dir / 'cluster_metadata.json'
+        feature_space_png = out_dir / 'feature_space.png'
 
         # Idempotency: use session CSVs as conceptual inputs — skip if up to date
         if not force and pooled_csv.exists():
@@ -558,7 +560,7 @@ def _cluster_combination(
                     continue
             except FileNotFoundError:
                 pass
-        clean_task_outputs([pooled_csv, metadata_json])
+        clean_task_outputs([pooled_csv, metadata_json, feature_space_png])
 
         if not feature_cols:
             print(
@@ -591,6 +593,18 @@ def _cluster_combination(
             type_labels=pooled.loc[valid_idx, type_col].to_numpy() if type_col and type_col in pooled.columns else None,
             direction_labels=pooled.loc[valid_idx, direction_col].to_numpy() if direction_col in pooled.columns else None,
         )
+
+        if method == 'gmm':
+            max_k = min(
+                clusterer_config.get('max_components', 15),
+                len(scaled_df) // clusterer_config.get('min_touches_per_component', 30),
+            )
+            print(
+                f"  [gmm] starting: {combination_name} / {clusterer_name}"
+                f"  ({len(scaled_df)} touches, {len(retained_cols)} features,"
+                f" max_k={max_k})",
+                flush=True,
+            )
 
         try:
             labels, metadata = clusterer.fit_predict(scaled_df, clusterer_config, context)
@@ -656,6 +670,22 @@ def _cluster_combination(
         # --- Reduction metadata -------------------------------------------
         metadata['reduction'] = reduction_meta
 
+        # --- GMM: inject scaler params for feature-space visualisation ------
+        if metadata.get('algorithm') == 'gmm':
+            scaler_mean = reduction_meta.get('scaler_mean')
+            scaler_scale = reduction_meta.get('scaler_scale')
+            if scaler_mean is None or scaler_scale is None:
+                raise ValueError(
+                    f"[{combination_name}/{clusterer_name}] GMM feature-space "
+                    "visualisation requires StandardScaler, but scaler="
+                    f"'{reduction_meta.get('scaler')}' does not provide per-axis "
+                    "mean/scale. Set `reduction.scaler: standard` in the cluster "
+                    "group config."
+                )
+            metadata['scaler_mean'] = scaler_mean
+            metadata['scaler_scale'] = scaler_scale
+            metadata['retained_columns'] = reduction_meta['retained_columns']
+
         try:
             result_df.to_csv(pooled_csv, index=False)
             with open(metadata_json, 'w') as f:
@@ -672,6 +702,40 @@ def _cluster_combination(
                 flush=True,
             )
             continue
+
+        # --- GMM: render feature-space PNG ----------------------------------
+        if metadata.get('algorithm') == 'gmm':
+            vis_cfg: dict = (combination_config or {}).get('visualization', {})
+            x_feat: str = vis_cfg.get('x_feature', 'pressure_mean')
+            retained = metadata['retained_columns']
+            default_y = next(
+                (c for c in retained if c.startswith('hand_velocity_') and c.endswith('_mean')),
+                retained[1] if len(retained) > 1 else retained[0],
+            )
+            y_feat: str = vis_cfg.get('y_feature', default_y)
+            for feat_name in (x_feat, y_feat):
+                if feat_name not in retained:
+                    raise KeyError(
+                        f"[{combination_name}/{clusterer_name}] visualization feature "
+                        f"'{feat_name}' not in retained_columns {retained}."
+                    )
+            try:
+                render_gmm_feature_space(
+                    result_df=result_df,
+                    metadata=metadata,
+                    x_feature=x_feat,
+                    y_feature=y_feat,
+                    output_path=feature_space_png,
+                )
+                print(
+                    f"  [feature_space] {combination_name} / {clusterer_name} — "
+                    f"{x_feat} × {y_feat}",
+                    flush=True,
+                )
+            except Exception as exc:
+                logging.error(
+                    f"[{combination_name}/{clusterer_name}] Feature-space render failed: {exc}"
+                )
 
         if 'k' in metadata:
             cluster_desc = f"{metadata['k']} clusters, {len(result_df)} samples"

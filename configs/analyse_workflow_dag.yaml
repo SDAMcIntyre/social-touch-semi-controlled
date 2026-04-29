@@ -145,11 +145,15 @@ tasks:
             - mean
             pressure:
             - mean
+          visualization:
+            x_feature: pressure_mean
+            y_feature: hand_velocity_y_mean
           clustering_methods:
             binning:
               method: binning
               n_bins: 20
               bin_method: equal_width
+              enabled: false
             kmeans:
               method: kmeans
               n_clusters: 8
@@ -170,6 +174,13 @@ tasks:
               type_col: type_metadata
               n_bins: 20
               bin_method: equal_width
+              enabled: false
+            gmm:
+              method: gmm
+              max_components: 15
+              covariance_type: full
+              n_init: 10
+              min_touches_per_component: 30
         kinematics_with_category:
           enabled: false
           features:
@@ -262,8 +273,7 @@ tasks:
     options:
       force_processing: false
       camera_angle_mode:
-        auto:
-          enabled: true
+        enabled: true
       cluster_groups: [kinematics_simple_mean, pressure_velocity_mean]
       projection_method: cylindrical_unwrap
       disjoint_mask_distance_mm: 8.0
@@ -288,9 +298,8 @@ tasks:
       projection_method: cylindrical_unwrap
       disjoint_mask_distance_mm: 8.0
       gallery_viewer: true
-      # enabled: true → face-on camera computed automatically (no GUI).
-      # enabled: false → interactive picker (manual).
+      # enabled: true → face-on tangent-plane camera computed automatically.
+      # enabled: false → skip camera assignment.
       camera_angle_mode:
-        auto:
-          enabled: false
+        enabled: false
     depends_on: [extract_receptive_fields_clustered]

@@ -397,6 +397,12 @@ def _build_cluster_description(
                         generation['primary_feature'] = per_type.get('primary_feature')
                     elif base == 'kmeans':
                         generation['k'] = per_type.get('k')
+            elif algo == 'gmm':
+                generation['k'] = meta.get('k')
+                generation['covariance_type'] = meta.get('covariance_type')
+                retained = meta.get('reduction', {}).get('retained_columns', [])
+                if retained:
+                    generation['features'] = retained
             desc['generation_params'] = generation
         except Exception:
             pass
@@ -450,6 +456,17 @@ def _format_generation_params(gen: dict, desc: dict, separator: str) -> str:
         header = 'hierarchical'
         if gen.get('k') is not None:
             parts.append(f"k: {gen['k']}")
+    elif algo == 'gmm':
+        header = 'gmm'
+        if gen.get('k') is not None:
+            parts.append(f"k: {gen['k']}")
+        if gen.get('covariance_type'):
+            parts.append(f"cov: {gen['covariance_type']}")
+        if gen.get('features'):
+            parts.append(f"features: {', '.join(gen['features'])}")
+        dr = desc.get('display_ranges') or {}
+        for label, r in dr.items():
+            parts.append(f"{label}: [{r['min']}, {r['max']}]")
     else:
         header = algo
 

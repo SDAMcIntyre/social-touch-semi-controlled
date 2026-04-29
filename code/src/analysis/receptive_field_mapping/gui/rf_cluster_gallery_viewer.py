@@ -7,13 +7,13 @@ one cluster) and "By Session" (all clusters for one session).
 """
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pyvista as pv
 from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtGui import QColor, QImage, QPixmap
+from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -33,20 +33,24 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 from pyvistaqt import QtInteractor
-from scipy.spatial import ConvexHull
+from scipy.sparse import csr_matrix
+from scipy.sparse.csgraph import connected_components
+from scipy.spatial import Delaunay, QhullError
 
 from analysis.receptive_field_mapping.rf_cluster_pipeline import description_summary_line
+from analysis.receptive_field_mapping.rf_extraction_io import (
+    load_delaunay_thresholds,
+    save_delaunay_thresholds,
+)
 from analysis.receptive_field_mapping.rf_gallery_data import GalleryCell, GalleryData
 from analysis.receptive_field_mapping.rf_surface_utils import (
-    apply_rotation_to_mesh,
+    build_delaunay_mesh,
     map_scalars_to_mesh,
     mesh_to_pyvista,
 )
 
 logger = logging.getLogger(__name__)
 
-THUMB_W = 120
-THUMB_H = 90
 SIDEBAR_W = 160
 
 _COLORMAPS = ["YlOrRd", "viridis", "plasma", "inferno", "magma", "coolwarm", "RdBu_r", "jet"]
@@ -63,68 +67,99 @@ class _GallerySettings:
     render_as_surface: bool = True
     forearm_size: int = 3
     forearm_spheres: bool = False
+    use_vertex_colors: bool = True
     contact_cmap: str = "jet"
     contact_size: float = 5.0
     contact_spheres: bool = False
     cmap: str = "jet"
     display_metric: str = "spike_ratio"
     show_scalar_bar: bool = True
-    show_hull_wireframes: bool = True
-    hull_max_edge_mm: float = 15.0
+    hull_display_mode: str = "perimeter"
+    hull_show_points: bool = False
+    hull_blob_sep_mm: float = 20.0
+    hull_alpha_mm: float = 15.0
+    hull_line_width: float = 2.0
     hull_neuron_color: str = "#00aaff"
     hull_cluster_color: str = "#ffaa00"
     show_axes: bool = False
 
 
-def _numpy_to_qpixmap(img: np.ndarray) -> QPixmap:
-    """Convert HxWx3 or HxWx4 uint8 numpy array to QPixmap."""
-    img = np.ascontiguousarray(img)
-    h, w = img.shape[:2]
-    if img.ndim == 3 and img.shape[2] == 4:
-        img = img[:, :, :3]
-    bytes_per_line = 3 * w
-    qimage = QImage(img.tobytes(), w, h, bytes_per_line, QImage.Format_RGB888)
-    return QPixmap.fromImage(qimage)
+
+def _separate_blobs(pts_2d: np.ndarray, max_dist_mm: float) -> np.ndarray:
+    from scipy.spatial import KDTree
+    n = len(pts_2d)
+    tree = KDTree(pts_2d)
+    pairs = list(tree.query_pairs(max_dist_mm))
+    if not pairs:
+        return np.arange(n)
+    rows, cols = zip(*pairs)
+    data = np.ones(len(rows))
+    adj = csr_matrix((data, (rows, cols)), shape=(n, n))
+    _, labels = connected_components(adj, directed=False)
+    return labels
 
 
-def _build_convex_hull_mesh(
-    points: np.ndarray,
-    max_edge_length: Optional[float] = None,
-) -> Optional[pv.PolyData]:
-    """Build a PyVista wireframe polydata from the convex hull of *points*.
-
-    Returns None when hull computation fails or the point set is too small.
-    """
-    if points is None or len(points) < 4:
-        return None
+def _alpha_shape_edges(pts_2d: np.ndarray, alpha_mm: float) -> set:
+    if len(pts_2d) < 3:
+        return set()
     try:
-        hull = ConvexHull(points)
-    except Exception:
+        tri = Delaunay(pts_2d)
+    except QhullError:
+        return set()
+    edge_count: dict = {}
+    for simplex in tri.simplices:
+        a, b, c = simplex
+        pa, pb, pc = pts_2d[a], pts_2d[b], pts_2d[c]
+        ab = pb - pa
+        ac = pc - pa
+        area = abs(ab[0] * ac[1] - ab[1] * ac[0]) / 2.0
+        if area <= 0:
+            continue
+        side_a = np.linalg.norm(pb - pc)
+        side_b = np.linalg.norm(pc - pa)
+        side_c = np.linalg.norm(pa - pb)
+        R = (side_a * side_b * side_c) / (4.0 * area)
+        if R < alpha_mm:
+            for edge in (
+                (min(a, b), max(a, b)),
+                (min(b, c), max(b, c)),
+                (min(a, c), max(a, c)),
+            ):
+                edge_count[edge] = edge_count.get(edge, 0) + 1
+    return {e for e, cnt in edge_count.items() if cnt == 1}
+
+
+def _build_perimeter_mesh(
+    points: np.ndarray,
+    blob_sep_mm: float,
+    alpha_mm: float,
+) -> Optional[pv.PolyData]:
+    if points is None or len(points) < 3:
         return None
-
-    edge_set = set()
-    for simplex in hull.simplices:
-        for i in range(len(simplex)):
-            a = simplex[i]
-            b = simplex[(i + 1) % len(simplex)]
-            edge_set.add((min(a, b), max(a, b)))
-
-    if max_edge_length is not None:
-        edge_set = {
-            (a, b) for a, b in edge_set
-            if np.linalg.norm(points[a] - points[b]) <= max_edge_length
-        }
-
-    if not edge_set:
+    pts_2d = points[:, :2]
+    labels = _separate_blobs(pts_2d, blob_sep_mm)
+    lines: list = []
+    for label in np.unique(labels):
+        mask = labels == label
+        blob_2d = pts_2d[mask]
+        global_indices = np.where(mask)[0]
+        if len(blob_2d) < 3:
+            continue
+        local_edges = _alpha_shape_edges(blob_2d, alpha_mm)
+        for local_a, local_b in local_edges:
+            lines.extend([2, global_indices[local_a], global_indices[local_b]])
+    if not lines:
         return None
-
-    lines = []
-    for a, b in edge_set:
-        lines.extend([2, a, b])
-
-    hull_pv = pv.PolyData(points)
-    hull_pv.lines = np.array(lines, dtype=np.int_)
-    return hull_pv
+    lines_arr = np.array(lines, dtype=np.int_)
+    n_edges = len(lines_arr) // 3
+    edge_pairs = lines_arr.reshape(n_edges, 3)[:, 1:]
+    unique_verts, inverse = np.unique(edge_pairs.ravel(), return_inverse=True)
+    new_lines = np.hstack(
+        [np.full((n_edges, 1), 2, dtype=np.int_), inverse.reshape(n_edges, 2)]
+    ).ravel()
+    mesh = pv.PolyData(points[unique_verts])
+    mesh.lines = new_lines
+    return mesh
 
 
 class _ThumbnailWidget(QWidget):
@@ -148,12 +183,6 @@ class _ThumbnailWidget(QWidget):
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(2)
 
-        self._img_label = QLabel()
-        self._img_label.setFixedSize(THUMB_W, THUMB_H)
-        self._img_label.setAlignment(Qt.AlignCenter)
-        self._img_label.setStyleSheet("background-color: #333;")
-        layout.addWidget(self._img_label, alignment=Qt.AlignHCenter)
-
         self._text_label = QLabel(label_text)
         self._text_label.setAlignment(Qt.AlignCenter)
         self._text_label.setWordWrap(True)
@@ -163,9 +192,6 @@ class _ThumbnailWidget(QWidget):
 
         self.setFixedWidth(SIDEBAR_W - 8)
         self._update_style()
-
-    def set_thumbnail(self, pixmap: QPixmap) -> None:
-        self._img_label.setPixmap(pixmap)
 
     def set_selected(self, selected: bool) -> None:
         self._selected = selected
@@ -211,9 +237,18 @@ class RFClusterGalleryViewer(QMainWindow):
         self._current_cell: Optional[GalleryCell] = None
         self._thumb_widgets: Dict[Tuple[str, str], _ThumbnailWidget] = {}
         self._initial_render_done = False
-        self._thumbnail_keys: List[Tuple[str, str]] = []
-        self._thumbnail_index: int = 0
         self._session_cameras: Dict[str, dict] = {}
+
+        self._default_threshold: float = 20.0
+        self._session_thresholds: Dict[str, float] = self._load_thresholds()
+        self._delaunay_cache: Dict[Tuple[str, float], Optional["trimesh.Trimesh"]] = {}
+        self._heatmap_cache: Dict[Tuple[str, str, float, str], np.ndarray] = {}
+        self._perimeter_cache: Dict[
+            Tuple[str, Optional[str], str, float, float], Optional[pv.PolyData]
+        ] = {}
+
+        self._last_rendered_settings: Optional[_GallerySettings] = None
+        self._last_rendered_threshold: Optional[float] = None
 
         self._build_ui()
 
@@ -262,6 +297,10 @@ class RFClusterGalleryViewer(QMainWindow):
         self._select_combo.currentIndexChanged.connect(self._on_selection_changed)
         bar.addWidget(self._select_combo, stretch=1)
 
+        self._export_btn = QPushButton("Export images")
+        self._export_btn.clicked.connect(self._on_export_all_clicked)
+        bar.addWidget(self._export_btn)
+
         close_btn = QPushButton("Close")
         close_btn.clicked.connect(self.close)
         bar.addWidget(close_btn)
@@ -290,12 +329,17 @@ class RFClusterGalleryViewer(QMainWindow):
 
         return container
 
-    def _build_right_settings_panel(self) -> QScrollArea:
+    def _build_right_settings_panel(self) -> QWidget:
         s = self._settings
+
+        outer = QWidget()
+        outer.setFixedWidth(260)
+        outer_layout = QVBoxLayout(outer)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        outer_layout.setSpacing(0)
 
         settings_scroll = QScrollArea()
         settings_scroll.setWidgetResizable(True)
-        settings_scroll.setFixedWidth(260)
         settings_widget = QWidget()
         settings_layout = QVBoxLayout(settings_widget)
 
@@ -327,24 +371,42 @@ class RFClusterGalleryViewer(QMainWindow):
         self._fa_surface_cb.stateChanged.connect(self._on_surface_toggle)
         fa_lay.addWidget(self._fa_surface_cb)
 
+        row_threshold = QHBoxLayout()
+        row_threshold.addWidget(QLabel("Max edge:"))
+        self._threshold_spin = QDoubleSpinBox()
+        self._threshold_spin.setRange(1.0, 200.0)
+        self._threshold_spin.setSingleStep(1.0)
+        self._threshold_spin.setDecimals(1)
+        self._threshold_spin.setValue(self._default_threshold)
+        self._threshold_spin.setSuffix(" mm")
+        row_threshold.addWidget(self._threshold_spin)
+        fa_lay.addLayout(row_threshold)
+
         self._fa_size_slider = self._slider("Point size:", 1, 20, s.forearm_size, fa_lay)
         self._fa_size_slider.valueChanged.connect(
-            lambda v: self._set_and_rebuild("forearm_size", v)
+            lambda v: self._stage_setting("forearm_size", v)
         )
 
         self._fa_opacity_slider = self._slider(
             "Opacity:", 0, 100, int(s.forearm_opacity * 100), fa_lay
         )
         self._fa_opacity_slider.valueChanged.connect(
-            lambda v: self._set_and_rebuild("forearm_opacity", v / 100.0)
+            lambda v: self._stage_setting("forearm_opacity", v / 100.0)
         )
 
         self._fa_spheres_cb = QCheckBox("Render as spheres")
         self._fa_spheres_cb.setChecked(s.forearm_spheres)
         self._fa_spheres_cb.stateChanged.connect(
-            lambda st: self._set_and_rebuild("forearm_spheres", st == Qt.Checked)
+            lambda st: self._stage_setting("forearm_spheres", st == Qt.Checked)
         )
         fa_lay.addWidget(self._fa_spheres_cb)
+
+        self._fa_vertex_colors_cb = QCheckBox("Use vertex colors")
+        self._fa_vertex_colors_cb.setChecked(s.use_vertex_colors)
+        self._fa_vertex_colors_cb.stateChanged.connect(
+            lambda st: self._stage_setting("use_vertex_colors", st == Qt.Checked)
+        )
+        fa_lay.addWidget(self._fa_vertex_colors_cb)
         settings_layout.addWidget(fa_box)
 
         # --- Contact Points ---
@@ -366,20 +428,20 @@ class RFClusterGalleryViewer(QMainWindow):
         self._metric_combo.addItems(["spike_count", "spike_ratio"])
         self._metric_combo.setCurrentText(s.display_metric)
         self._metric_combo.currentTextChanged.connect(
-            lambda t: self._set_and_rebuild("display_metric", t)
+            lambda t: self._stage_setting("display_metric", t)
         )
         row_metric.addWidget(self._metric_combo)
         cp_lay.addLayout(row_metric)
 
         self._cp_size_slider = self._slider("Point size:", 1, 30, int(s.contact_size), cp_lay)
         self._cp_size_slider.valueChanged.connect(
-            lambda v: self._set_and_rebuild("contact_size", float(v))
+            lambda v: self._stage_setting("contact_size", float(v))
         )
 
         self._cp_spheres_cb = QCheckBox("Render as spheres")
         self._cp_spheres_cb.setChecked(s.contact_spheres)
         self._cp_spheres_cb.stateChanged.connect(
-            lambda st: self._set_and_rebuild("contact_spheres", st == Qt.Checked)
+            lambda st: self._stage_setting("contact_spheres", st == Qt.Checked)
         )
         cp_lay.addWidget(self._cp_spheres_cb)
         settings_layout.addWidget(cp_box)
@@ -391,30 +453,73 @@ class RFClusterGalleryViewer(QMainWindow):
         self._scalar_bar_cb = QCheckBox("Scalar bar")
         self._scalar_bar_cb.setChecked(s.show_scalar_bar)
         self._scalar_bar_cb.stateChanged.connect(
-            lambda st: self._set_and_rebuild("show_scalar_bar", st == Qt.Checked)
+            lambda st: self._stage_setting("show_scalar_bar", st == Qt.Checked)
         )
         disp_lay.addWidget(self._scalar_bar_cb)
 
-        self._hull_cb = QCheckBox("Hull wireframes")
-        self._hull_cb.setChecked(s.show_hull_wireframes)
-        self._hull_cb.stateChanged.connect(
-            lambda st: self._set_and_rebuild("show_hull_wireframes", st == Qt.Checked)
+        _hull_mode_items = ["Perimeter", "Point cloud", "Off"]
+        _hull_mode_values = ["perimeter", "pointcloud", "off"]
+        row_hull_mode = QHBoxLayout()
+        row_hull_mode.addWidget(QLabel("Hull:"))
+        self._hull_mode_combo = QComboBox()
+        self._hull_mode_combo.addItems(_hull_mode_items)
+        self._hull_mode_combo.setCurrentIndex(
+            _hull_mode_values.index(s.hull_display_mode)
+            if s.hull_display_mode in _hull_mode_values else 0
         )
-        disp_lay.addWidget(self._hull_cb)
+        self._hull_mode_combo.currentIndexChanged.connect(
+            lambda i: self._stage_setting("hull_display_mode", _hull_mode_values[i])
+        )
+        row_hull_mode.addWidget(self._hull_mode_combo)
+        disp_lay.addLayout(row_hull_mode)
 
-        row_edge = QHBoxLayout()
-        row_edge.addWidget(QLabel("Max hull edge:"))
-        self._hull_edge_spin = QDoubleSpinBox()
-        self._hull_edge_spin.setRange(1.0, 100.0)
-        self._hull_edge_spin.setSingleStep(1.0)
-        self._hull_edge_spin.setDecimals(1)
-        self._hull_edge_spin.setValue(s.hull_max_edge_mm)
-        self._hull_edge_spin.setSuffix(" mm")
-        self._hull_edge_spin.valueChanged.connect(
-            lambda v: self._set_and_rebuild("hull_max_edge_mm", v)
+        row_lw = QHBoxLayout()
+        row_lw.addWidget(QLabel("Line width:"))
+        self._hull_lw_spin = QDoubleSpinBox()
+        self._hull_lw_spin.setRange(0.5, 20.0)
+        self._hull_lw_spin.setSingleStep(0.5)
+        self._hull_lw_spin.setDecimals(1)
+        self._hull_lw_spin.setValue(s.hull_line_width)
+        self._hull_lw_spin.valueChanged.connect(
+            lambda v: self._stage_setting("hull_line_width", v)
         )
-        row_edge.addWidget(self._hull_edge_spin)
-        disp_lay.addLayout(row_edge)
+        row_lw.addWidget(self._hull_lw_spin)
+        disp_lay.addLayout(row_lw)
+
+        self._hull_show_pts_cb = QCheckBox("Show points")
+        self._hull_show_pts_cb.setChecked(s.hull_show_points)
+        self._hull_show_pts_cb.stateChanged.connect(
+            lambda st: self._stage_setting("hull_show_points", st == Qt.Checked)
+        )
+        disp_lay.addWidget(self._hull_show_pts_cb)
+
+        row_blob = QHBoxLayout()
+        row_blob.addWidget(QLabel("Blob sep:"))
+        self._hull_blob_spin = QDoubleSpinBox()
+        self._hull_blob_spin.setRange(1.0, 200.0)
+        self._hull_blob_spin.setSingleStep(5.0)
+        self._hull_blob_spin.setDecimals(1)
+        self._hull_blob_spin.setValue(s.hull_blob_sep_mm)
+        self._hull_blob_spin.setSuffix(" mm")
+        self._hull_blob_spin.valueChanged.connect(
+            lambda v: self._stage_setting("hull_blob_sep_mm", v)
+        )
+        row_blob.addWidget(self._hull_blob_spin)
+        disp_lay.addLayout(row_blob)
+
+        row_alpha = QHBoxLayout()
+        row_alpha.addWidget(QLabel("Alpha radius:"))
+        self._hull_alpha_spin = QDoubleSpinBox()
+        self._hull_alpha_spin.setRange(1.0, 100.0)
+        self._hull_alpha_spin.setSingleStep(1.0)
+        self._hull_alpha_spin.setDecimals(1)
+        self._hull_alpha_spin.setValue(s.hull_alpha_mm)
+        self._hull_alpha_spin.setSuffix(" mm")
+        self._hull_alpha_spin.valueChanged.connect(
+            lambda v: self._stage_setting("hull_alpha_mm", v)
+        )
+        row_alpha.addWidget(self._hull_alpha_spin)
+        disp_lay.addLayout(row_alpha)
 
         row_hn = QHBoxLayout()
         row_hn.addWidget(QLabel("Neuron hull:"))
@@ -437,17 +542,29 @@ class RFClusterGalleryViewer(QMainWindow):
         self._axes_cb = QCheckBox("Axes")
         self._axes_cb.setChecked(s.show_axes)
         self._axes_cb.stateChanged.connect(
-            lambda st: self._set_and_rebuild("show_axes", st == Qt.Checked)
+            lambda st: self._stage_setting("show_axes", st == Qt.Checked)
         )
         disp_lay.addWidget(self._axes_cb)
         settings_layout.addWidget(disp_box)
 
         settings_layout.addStretch()
         settings_scroll.setWidget(settings_widget)
+        outer_layout.addWidget(settings_scroll, stretch=1)
+
+        btn_bar = QWidget()
+        btn_layout = QHBoxLayout(btn_bar)
+        btn_layout.setContentsMargins(8, 6, 8, 6)
+        self._process_btn = QPushButton("Process")
+        self._process_all_btn = QPushButton("Process All")
+        btn_layout.addWidget(self._process_btn)
+        btn_layout.addWidget(self._process_all_btn)
+        self._process_btn.clicked.connect(self._on_process_current)
+        self._process_all_btn.clicked.connect(self._on_process_all)
+        outer_layout.addWidget(btn_bar)
 
         self._on_surface_toggle(Qt.Checked if s.render_as_surface else Qt.Unchecked)
 
-        return settings_scroll
+        return outer
 
     # ------------------------------------------------------------------
     # Widget helpers
@@ -478,7 +595,7 @@ class RFClusterGalleryViewer(QMainWindow):
         color = QColorDialog.getColor(current, self, f"Pick {attr}")
         if color.isValid():
             btn.setStyleSheet(f"background-color: {color.name()};")
-            self._set_and_rebuild(attr, color.name())
+            setattr(self._settings, attr, color.name())
 
     def _on_surface_toggle(self, state) -> None:
         is_surface = state == Qt.Checked
@@ -489,7 +606,6 @@ class RFClusterGalleryViewer(QMainWindow):
     def _on_cmap_changed(self, text: str) -> None:
         self._settings.cmap = text
         self._settings.contact_cmap = text
-        self._apply_setting_change()
 
     # ------------------------------------------------------------------
     # Sidebar population
@@ -553,9 +669,6 @@ class RFClusterGalleryViewer(QMainWindow):
                 is_noise=cell.is_noise,
                 on_click=self._on_thumbnail_click,
             )
-            if cell.thumbnail is not None:
-                widget.set_thumbnail(cell.thumbnail)
-
             tooltip_lines = []
             if cell.cluster_description:
                 desc_type = cell.cluster_description.get("touch_type", "")
@@ -598,7 +711,15 @@ class RFClusterGalleryViewer(QMainWindow):
             w.set_selected(k == key)
 
         self._current_cell = self._gallery_data.cells[key]
+
+        self._threshold_spin.blockSignals(True)
+        self._threshold_spin.setValue(
+            self._current_threshold(self._current_cell.session_id)
+        )
+        self._threshold_spin.blockSignals(False)
+
         self._build_scene(self._current_cell)
+        self._record_rendered_state()
 
         stored_cam = self._session_cameras.get(self._current_cell.session_id)
         if stored_cam is not None:
@@ -608,9 +729,26 @@ class RFClusterGalleryViewer(QMainWindow):
     # Settings
     # ------------------------------------------------------------------
 
+    def _stage_setting(self, attr: str, value) -> None:
+        setattr(self._settings, attr, value)
+
     def _set_and_rebuild(self, attr: str, value) -> None:
         setattr(self._settings, attr, value)
         self._apply_setting_change()
+
+    def _record_rendered_state(self) -> None:
+        self._last_rendered_settings = replace(self._settings)
+        if self._current_cell is not None:
+            self._last_rendered_threshold = self._current_threshold(self._current_cell.session_id)
+
+    def _has_pending_changes(self) -> bool:
+        if self._last_rendered_settings is None:
+            return True
+        if self._settings != self._last_rendered_settings:
+            return True
+        if self._current_cell is None:
+            return False
+        return self._threshold_spin.value() != self._last_rendered_threshold
 
     def _apply_setting_change(self) -> None:
         if self._current_cell is None:
@@ -618,6 +756,109 @@ class RFClusterGalleryViewer(QMainWindow):
         cam = self._capture_camera()
         self._build_scene(self._current_cell)
         self._restore_camera(cam)
+        self._record_rendered_state()
+
+    def _on_process_current(self) -> None:
+        if self._current_cell is None:
+            return
+        if not self._has_pending_changes():
+            return
+        self._session_thresholds[self._current_cell.session_id] = self._threshold_spin.value()
+        self._apply_setting_change()
+        self._save_thresholds()
+
+    def _on_process_all(self) -> None:
+        if self._current_cell is None:
+            return
+        self._session_thresholds[self._current_cell.session_id] = self._threshold_spin.value()
+        for key in self._visible_keys():
+            self._get_delaunay_mesh(self._gallery_data.cells[key])
+        if self._has_pending_changes():
+            self._apply_setting_change()
+        self._save_thresholds()
+
+    # ------------------------------------------------------------------
+    # Delaunay threshold persistence
+    # ------------------------------------------------------------------
+
+    def _load_thresholds(self) -> Dict[str, float]:
+        return load_delaunay_thresholds(self._gallery_data.output_base_dir)
+
+    def _save_thresholds(self) -> None:
+        save_delaunay_thresholds(
+            self._gallery_data.output_base_dir, self._session_thresholds
+        )
+
+    def _current_threshold(self, session_id: str) -> float:
+        return self._session_thresholds.get(session_id, self._default_threshold)
+
+    def _get_delaunay_mesh(self, cell: GalleryCell):
+        if cell.forearm_vertices is None:
+            return None
+        threshold = self._current_threshold(cell.session_id)
+        key = (cell.session_id, threshold)
+        if key not in self._delaunay_cache:
+            vertices = cell.forearm_vertices
+            if cell.tangent_rotation is not None:
+                vertices = (cell.tangent_rotation @ vertices.T).T
+            self._delaunay_cache[key] = build_delaunay_mesh(vertices, max_edge_mm=threshold)
+        return self._delaunay_cache[key]
+
+    def _get_heatmap(
+        self,
+        cell: GalleryCell,
+        mesh: "trimesh.Trimesh",
+        threshold: float,
+        metric_col: str,
+    ) -> np.ndarray:
+        key = (cell.session_id, cell.cluster_label, threshold, metric_col)
+        if key not in self._heatmap_cache:
+            df = cell.spike_counts_df
+            contact_pts = df[["x", "y", "z"]].to_numpy()
+            scalar_vals = df[metric_col].to_numpy().astype(np.float64)
+            if cell.tangent_rotation is not None:
+                contact_pts = (cell.tangent_rotation @ contact_pts.T).T
+            self._heatmap_cache[key] = map_scalars_to_mesh(
+                mesh, contact_pts, scalar_vals
+            )
+        return self._heatmap_cache[key]
+
+    def _get_perimeter_mesh(
+        self,
+        cell: GalleryCell,
+        role: str,
+        raw_pts: np.ndarray,
+        blob_sep_mm: float,
+        alpha_mm: float,
+    ) -> Optional[pv.PolyData]:
+        cluster_key = None if role == "neuron" else cell.cluster_label
+        key = (cell.session_id, cluster_key, role, blob_sep_mm, alpha_mm)
+        if key not in self._perimeter_cache:
+            pts = raw_pts
+            if cell.tangent_rotation is not None:
+                pts = (cell.tangent_rotation @ pts.T).T
+            self._perimeter_cache[key] = _build_perimeter_mesh(pts, blob_sep_mm, alpha_mm)
+        return self._perimeter_cache[key]
+
+    @staticmethod
+    def _compose_spike_vertex_colors(
+        spike_values: np.ndarray,
+        max_val: float,
+        cmap_name: str,
+        vertex_colors: np.ndarray,
+    ) -> np.ndarray:
+        from matplotlib import colormaps
+
+        nan_mask = np.isnan(spike_values)
+        rgb = vertex_colors.copy()
+
+        if not np.all(nan_mask) and max_val > 0:
+            cmap = colormaps[cmap_name]
+            normed = np.clip(spike_values[~nan_mask] / max_val, 0.0, 1.0)
+            mapped = cmap(normed)[:, :3]
+            rgb[~nan_mask] = (mapped * 255).astype(np.uint8)
+
+        return rgb
 
     # ------------------------------------------------------------------
     # Scene construction
@@ -634,41 +875,68 @@ class RFClusterGalleryViewer(QMainWindow):
             else "unique_touch_spike_count"
         )
 
-        if s.render_as_surface and cell.forearm_mesh is not None:
-            mesh_pv = mesh_to_pyvista(cell.forearm_mesh)
-            if cell.tangent_rotation is not None:
-                mesh_pv = mesh_to_pyvista(
-                    apply_rotation_to_mesh(cell.forearm_mesh, cell.tangent_rotation)
-                )
+        delaunay_mesh = self._get_delaunay_mesh(cell) if s.render_as_surface else None
+
+        has_vertex_colors = (
+            s.use_vertex_colors
+            and cell.forearm_vertex_colors is not None
+        )
+
+        if delaunay_mesh is not None:
+            # delaunay_mesh is already in rotated space (rotation applied in _get_delaunay_mesh)
+            mesh_pv = mesh_to_pyvista(delaunay_mesh)
+
+            vc_match = (
+                has_vertex_colors
+                and len(cell.forearm_vertex_colors) == len(delaunay_mesh.vertices)
+            )
 
             df = cell.spike_counts_df
-            if len(df) > 0 and metric_col in df.columns:
-                contact_pts = df[["x", "y", "z"]].to_numpy()
-                scalar_vals = df[metric_col].to_numpy().astype(np.float64)
+            has_spike_data = len(df) > 0 and metric_col in df.columns
 
-                target_mesh = cell.forearm_mesh
-                if cell.tangent_rotation is not None:
-                    target_mesh = apply_rotation_to_mesh(
-                        cell.forearm_mesh, cell.tangent_rotation
-                    )
-
-                spike_values = map_scalars_to_mesh(target_mesh, contact_pts, scalar_vals)
-                if cell.tangent_rotation is not None:
-                    contact_pts = (cell.tangent_rotation @ contact_pts.T).T
-                mesh_pv["spike_values"] = spike_values
+            if has_spike_data:
+                threshold = self._current_threshold(cell.session_id)
+                spike_values = self._get_heatmap(
+                    cell, delaunay_mesh, threshold, metric_col
+                )
                 max_val = float(np.nanmax(spike_values)) if not np.all(np.isnan(spike_values)) else 1.0
 
-                sbar_args = {"title": s.display_metric} if s.show_scalar_bar else None
+                if vc_match:
+                    rgb = self._compose_spike_vertex_colors(
+                        spike_values, max_val, s.cmap, cell.forearm_vertex_colors
+                    )
+                    mesh_pv["rgb"] = rgb
+                    self.plotter.add_mesh(
+                        mesh_pv,
+                        scalars="rgb",
+                        rgb=True,
+                        opacity=s.forearm_opacity,
+                        smooth_shading=True,
+                        name="forearm",
+                    )
+                else:
+                    mesh_pv["spike_values"] = spike_values
+                    sbar_args = {"title": s.display_metric} if s.show_scalar_bar else None
+                    self.plotter.add_mesh(
+                        mesh_pv,
+                        scalars="spike_values",
+                        cmap=s.cmap,
+                        clim=[0, max_val],
+                        nan_color=s.forearm_color,
+                        opacity=s.forearm_opacity,
+                        smooth_shading=True,
+                        scalar_bar_args=sbar_args,
+                        show_scalar_bar=s.show_scalar_bar,
+                        name="forearm",
+                    )
+            elif vc_match:
+                mesh_pv["rgb"] = cell.forearm_vertex_colors
                 self.plotter.add_mesh(
                     mesh_pv,
-                    scalars="spike_values",
-                    cmap=s.cmap,
-                    clim=[0, max_val],
-                    nan_color=s.forearm_color,
+                    scalars="rgb",
+                    rgb=True,
                     opacity=s.forearm_opacity,
                     smooth_shading=True,
-                    scalar_bar_args=sbar_args,
-                    show_scalar_bar=s.show_scalar_bar,
                     name="forearm",
                 )
             else:
@@ -685,14 +953,32 @@ class RFClusterGalleryViewer(QMainWindow):
             if cell.tangent_rotation is not None:
                 pts = (cell.tangent_rotation @ pts.T).T
             cloud = pv.PolyData(pts)
-            self.plotter.add_mesh(
-                cloud,
-                color=s.forearm_color,
-                point_size=s.forearm_size,
-                opacity=s.forearm_opacity,
-                render_points_as_spheres=s.forearm_spheres,
-                name="forearm",
+
+            vc_match = (
+                has_vertex_colors
+                and len(cell.forearm_vertex_colors) == len(cell.forearm_vertices)
             )
+
+            if vc_match:
+                cloud["rgb"] = cell.forearm_vertex_colors
+                self.plotter.add_mesh(
+                    cloud,
+                    scalars="rgb",
+                    rgb=True,
+                    point_size=s.forearm_size,
+                    opacity=s.forearm_opacity,
+                    render_points_as_spheres=s.forearm_spheres,
+                    name="forearm",
+                )
+            else:
+                self.plotter.add_mesh(
+                    cloud,
+                    color=s.forearm_color,
+                    point_size=s.forearm_size,
+                    opacity=s.forearm_opacity,
+                    render_points_as_spheres=s.forearm_spheres,
+                    name="forearm",
+                )
 
             df = cell.spike_counts_df
             if len(df) > 0 and metric_col in df.columns:
@@ -716,25 +1002,42 @@ class RFClusterGalleryViewer(QMainWindow):
                     name="contacts",
                 )
 
-        if s.show_hull_wireframes:
-            neuron_pts = cell.neuron_contacts_xyz
-            if cell.tangent_rotation is not None and neuron_pts is not None and len(neuron_pts) >= 4:
-                neuron_pts = (cell.tangent_rotation @ neuron_pts.T).T
-            hull_neuron = _build_convex_hull_mesh(neuron_pts, max_edge_length=s.hull_max_edge_mm)
-            if hull_neuron is not None:
-                self.plotter.add_mesh(
-                    hull_neuron, color=s.hull_neuron_color, style="wireframe", line_width=2,
-                    name="hull_neuron",
-                )
+        if s.hull_display_mode != "off":
+            for raw_pts, color, name, role in [
+                (cell.neuron_contacts_xyz, s.hull_neuron_color, "hull_neuron", "neuron"),
+                (cell.cluster_contacts_xyz, s.hull_cluster_color, "hull_cluster", "cluster"),
+            ]:
+                if raw_pts is None or len(raw_pts) == 0:
+                    continue
+                if s.hull_display_mode == "perimeter":
+                    mesh = self._get_perimeter_mesh(
+                        cell, role, raw_pts, s.hull_blob_sep_mm, s.hull_alpha_mm
+                    )
+                    if mesh is not None:
+                        self.plotter.add_mesh(
+                            mesh, color=color, style="wireframe", line_width=s.hull_line_width, name=name
+                        )
+                else:
+                    pts = raw_pts
+                    if cell.tangent_rotation is not None:
+                        pts = (cell.tangent_rotation @ pts.T).T
+                    cloud = pv.PolyData(pts)
+                    self.plotter.add_mesh(
+                        cloud, color=color, point_size=s.contact_size, name=name
+                    )
 
-            cluster_pts = cell.cluster_contacts_xyz
-            if cell.tangent_rotation is not None and cluster_pts is not None and len(cluster_pts) >= 4:
-                cluster_pts = (cell.tangent_rotation @ cluster_pts.T).T
-            hull_cluster = _build_convex_hull_mesh(cluster_pts, max_edge_length=s.hull_max_edge_mm)
-            if hull_cluster is not None:
+        if s.hull_show_points:
+            for raw_pts, color, name in [
+                (cell.neuron_contacts_xyz, s.hull_neuron_color, "hull_neuron_pts"),
+                (cell.cluster_contacts_xyz, s.hull_cluster_color, "hull_cluster_pts"),
+            ]:
+                if raw_pts is None or len(raw_pts) == 0:
+                    continue
+                pts = raw_pts
+                if cell.tangent_rotation is not None:
+                    pts = (cell.tangent_rotation @ pts.T).T
                 self.plotter.add_mesh(
-                    hull_cluster, color=s.hull_cluster_color, style="wireframe", line_width=2,
-                    name="hull_cluster",
+                    pv.PolyData(pts), color=color, point_size=s.contact_size, name=name
                 )
 
         if s.show_axes:
@@ -779,38 +1082,57 @@ class RFClusterGalleryViewer(QMainWindow):
         self.plotter.renderer.ResetCameraClippingRange()
         self.plotter.render()
 
+    def _set_auto_face_on_camera(self, cell: GalleryCell) -> None:
+        if cell.tangent_rotation is not None:
+            self.plotter.view_xy()
+        else:
+            self.plotter.view_isometric()
+        self.plotter.reset_camera()
+
     # ------------------------------------------------------------------
-    # Thumbnail generation
+    # Batch export
     # ------------------------------------------------------------------
 
-    def _generate_thumbnails(self) -> None:
-        self._thumbnail_keys = list(self._gallery_data.cells.keys())
-        self._thumbnail_index = 0
-        self._generate_next_thumbnail()
-
-    def _generate_next_thumbnail(self) -> None:
-        if self._thumbnail_index >= len(self._thumbnail_keys):
-            if self._current_cell is not None:
-                self._build_scene(self._current_cell)
+    def _on_export_all_clicked(self) -> None:
+        cells = self._gallery_data.cells
+        if not cells:
+            self.statusBar().showMessage("No cells to export.")
             return
 
-        key = self._thumbnail_keys[self._thumbnail_index]
-        cell = self._gallery_data.cells[key]
-        self._build_scene(cell)
-        try:
-            img = self.plotter.screenshot()
-            pixmap = _numpy_to_qpixmap(img).scaled(
-                THUMB_W, THUMB_H, Qt.KeepAspectRatio, Qt.SmoothTransformation
-            )
-            cell.thumbnail = pixmap
-            widget = self._thumb_widgets.get(key)
-            if widget is not None:
-                widget.set_thumbnail(pixmap)
-        except Exception:
-            logger.exception("Failed to capture thumbnail for %s/%s", key[0], key[1])
+        export_dir = self._gallery_data.output_base_dir / "_gallery_exports"
+        export_dir.mkdir(parents=True, exist_ok=True)
 
-        self._thumbnail_index += 1
-        QTimer.singleShot(0, self._generate_next_thumbnail)
+        sorted_keys = sorted(cells.keys())
+        n = len(sorted_keys)
+
+        saved_cell = self._current_cell
+        saved_cameras = dict(self._session_cameras)
+
+        self._export_btn.setEnabled(False)
+        try:
+            for i, (sid, lbl) in enumerate(sorted_keys, start=1):
+                self.statusBar().showMessage(f"Exporting {i}/{n}: {sid}__cluster_{lbl}")
+                QApplication.processEvents()
+
+                cell = cells[(sid, lbl)]
+                self._build_scene(cell)
+                self._set_auto_face_on_camera(cell)
+                QApplication.processEvents()
+
+                out_path = export_dir / f"{sid}__cluster_{lbl}.png"
+                self.plotter.screenshot(str(out_path))
+
+            self.statusBar().showMessage(
+                f"Export complete: {n} image(s) saved to {export_dir}"
+            )
+        finally:
+            self._session_cameras = saved_cameras
+            if saved_cell is not None:
+                self._build_scene(saved_cell)
+                stored_cam = self._session_cameras.get(saved_cell.session_id)
+                if stored_cam is not None:
+                    self._restore_camera(stored_cam)
+            self._export_btn.setEnabled(True)
 
     # ------------------------------------------------------------------
     # Deferred start
@@ -838,4 +1160,8 @@ class RFClusterGalleryViewer(QMainWindow):
         self._populate_select_combo()
         self._repopulate_sidebar()
 
-        QTimer.singleShot(0, self._generate_thumbnails)
+    def closeEvent(self, event) -> None:  # noqa: N802
+        self._save_thresholds()
+        self.plotter.close()
+        super().closeEvent(event)
+
