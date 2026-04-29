@@ -27,6 +27,8 @@ _DATA_TYPES: list[str] = [
     "contact_area",
     "contact_depth",
     "hand_velocity",
+    "hand_velocity_amplitude",
+    "hand_velocity_signed",
     "hand_acceleration",
     "pressure",
     "hand_position",
@@ -47,6 +49,8 @@ _CLUSTERING_METHODS: list[str] = [
     "dbscan",
     "hierarchical",
     "type_stratified",
+    "gmm",
+    "cartesian_binning",
 ]
 
 _DEFAULT_PARAMS: dict[str, dict] = {
@@ -55,6 +59,8 @@ _DEFAULT_PARAMS: dict[str, dict] = {
     "dbscan": {"eps": 0.5, "min_samples": 5},
     "hierarchical": {"n_clusters": 8, "linkage": "ward"},
     "type_stratified": {},
+    "gmm": {"max_components": 15, "covariance_type": "full", "n_init": 10, "min_touches_per_component": 30},
+    "cartesian_binning": {"n_bins": 5, "bin_method": "equal_width"},
 }
 
 

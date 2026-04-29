@@ -70,6 +70,12 @@ tasks:
           youngs_modulus_kpa: 100.0
           poissons_ratio: 0.45
           skin_thickness_mm: 1.5
+        hand_velocity_amplitude:
+          enabled: true
+          drop_used_inputs: false
+        hand_velocity_signed:
+          enabled: true
+          drop_used_inputs: false
     depends_on: [touch_preparation]
 
   # Stage 2b (Feature Extraction): Per-session feature extraction. Each enabled feature extracts to its own folder.
@@ -121,10 +127,15 @@ tasks:
             type_stratified:
               method: type_stratified
               base_method: binning
-              type_col: type_metadata
               n_bins: 20
               bin_method: equal_width
               enabled: true
+            cartesian_binning:
+              method: cartesian_binning
+              n_bins: 5
+              n_bins_per_feature: {}
+              bin_method: equal_width
+              enabled: false
         kinematics_max:
           enabled: false
           features:
@@ -171,7 +182,6 @@ tasks:
             type_stratified:
               method: type_stratified
               base_method: binning
-              type_col: type_metadata
               n_bins: 20
               bin_method: equal_width
               enabled: false
@@ -215,7 +225,6 @@ tasks:
             type_stratified:
               method: type_stratified
               base_method: binning
-              type_col: type_metadata
               n_bins: 20
               bin_method: equal_width
               enabled: true
