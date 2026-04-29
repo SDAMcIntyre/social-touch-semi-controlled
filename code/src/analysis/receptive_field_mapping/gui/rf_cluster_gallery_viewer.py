@@ -7,7 +7,7 @@ one cluster) and "By Session" (all clusters for one session).
 """
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -242,6 +242,13 @@ class RFClusterGalleryViewer(QMainWindow):
         self._default_threshold: float = 20.0
         self._session_thresholds: Dict[str, float] = self._load_thresholds()
         self._delaunay_cache: Dict[Tuple[str, float], Optional["trimesh.Trimesh"]] = {}
+        self._heatmap_cache: Dict[Tuple[str, str, float, str], np.ndarray] = {}
+        self._perimeter_cache: Dict[
+            Tuple[str, Optional[str], str, float, float], Optional[pv.PolyData]
+        ] = {}
+
+        self._last_rendered_settings: Optional[_GallerySettings] = None
+        self._last_rendered_threshold: Optional[float] = None
 
         self._build_ui()
 
@@ -289,6 +296,10 @@ class RFClusterGalleryViewer(QMainWindow):
         self._select_combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self._select_combo.currentIndexChanged.connect(self._on_selection_changed)
         bar.addWidget(self._select_combo, stretch=1)
+
+        self._export_btn = QPushButton("Export images")
+        self._export_btn.clicked.connect(self._on_export_all_clicked)
+        bar.addWidget(self._export_btn)
 
         close_btn = QPushButton("Close")
         close_btn.clicked.connect(self.close)
@@ -708,6 +719,7 @@ class RFClusterGalleryViewer(QMainWindow):
         self._threshold_spin.blockSignals(False)
 
         self._build_scene(self._current_cell)
+        self._record_rendered_state()
 
         stored_cam = self._session_cameras.get(self._current_cell.session_id)
         if stored_cam is not None:
@@ -724,15 +736,32 @@ class RFClusterGalleryViewer(QMainWindow):
         setattr(self._settings, attr, value)
         self._apply_setting_change()
 
+    def _record_rendered_state(self) -> None:
+        self._last_rendered_settings = replace(self._settings)
+        if self._current_cell is not None:
+            self._last_rendered_threshold = self._current_threshold(self._current_cell.session_id)
+
+    def _has_pending_changes(self) -> bool:
+        if self._last_rendered_settings is None:
+            return True
+        if self._settings != self._last_rendered_settings:
+            return True
+        if self._current_cell is None:
+            return False
+        return self._threshold_spin.value() != self._last_rendered_threshold
+
     def _apply_setting_change(self) -> None:
         if self._current_cell is None:
             return
         cam = self._capture_camera()
         self._build_scene(self._current_cell)
         self._restore_camera(cam)
+        self._record_rendered_state()
 
     def _on_process_current(self) -> None:
         if self._current_cell is None:
+            return
+        if not self._has_pending_changes():
             return
         self._session_thresholds[self._current_cell.session_id] = self._threshold_spin.value()
         self._apply_setting_change()
@@ -744,7 +773,8 @@ class RFClusterGalleryViewer(QMainWindow):
         self._session_thresholds[self._current_cell.session_id] = self._threshold_spin.value()
         for key in self._visible_keys():
             self._get_delaunay_mesh(self._gallery_data.cells[key])
-        self._apply_setting_change()
+        if self._has_pending_changes():
+            self._apply_setting_change()
         self._save_thresholds()
 
     # ------------------------------------------------------------------
@@ -773,6 +803,42 @@ class RFClusterGalleryViewer(QMainWindow):
                 vertices = (cell.tangent_rotation @ vertices.T).T
             self._delaunay_cache[key] = build_delaunay_mesh(vertices, max_edge_mm=threshold)
         return self._delaunay_cache[key]
+
+    def _get_heatmap(
+        self,
+        cell: GalleryCell,
+        mesh: "trimesh.Trimesh",
+        threshold: float,
+        metric_col: str,
+    ) -> np.ndarray:
+        key = (cell.session_id, cell.cluster_label, threshold, metric_col)
+        if key not in self._heatmap_cache:
+            df = cell.spike_counts_df
+            contact_pts = df[["x", "y", "z"]].to_numpy()
+            scalar_vals = df[metric_col].to_numpy().astype(np.float64)
+            if cell.tangent_rotation is not None:
+                contact_pts = (cell.tangent_rotation @ contact_pts.T).T
+            self._heatmap_cache[key] = map_scalars_to_mesh(
+                mesh, contact_pts, scalar_vals
+            )
+        return self._heatmap_cache[key]
+
+    def _get_perimeter_mesh(
+        self,
+        cell: GalleryCell,
+        role: str,
+        raw_pts: np.ndarray,
+        blob_sep_mm: float,
+        alpha_mm: float,
+    ) -> Optional[pv.PolyData]:
+        cluster_key = None if role == "neuron" else cell.cluster_label
+        key = (cell.session_id, cluster_key, role, blob_sep_mm, alpha_mm)
+        if key not in self._perimeter_cache:
+            pts = raw_pts
+            if cell.tangent_rotation is not None:
+                pts = (cell.tangent_rotation @ pts.T).T
+            self._perimeter_cache[key] = _build_perimeter_mesh(pts, blob_sep_mm, alpha_mm)
+        return self._perimeter_cache[key]
 
     @staticmethod
     def _compose_spike_vertex_colors(
@@ -829,11 +895,10 @@ class RFClusterGalleryViewer(QMainWindow):
             has_spike_data = len(df) > 0 and metric_col in df.columns
 
             if has_spike_data:
-                contact_pts = df[["x", "y", "z"]].to_numpy()
-                scalar_vals = df[metric_col].to_numpy().astype(np.float64)
-                if cell.tangent_rotation is not None:
-                    contact_pts = (cell.tangent_rotation @ contact_pts.T).T
-                spike_values = map_scalars_to_mesh(delaunay_mesh, contact_pts, scalar_vals)
+                threshold = self._current_threshold(cell.session_id)
+                spike_values = self._get_heatmap(
+                    cell, delaunay_mesh, threshold, metric_col
+                )
                 max_val = float(np.nanmax(spike_values)) if not np.all(np.isnan(spike_values)) else 1.0
 
                 if vc_match:
@@ -938,22 +1003,24 @@ class RFClusterGalleryViewer(QMainWindow):
                 )
 
         if s.hull_display_mode != "off":
-            for raw_pts, color, name in [
-                (cell.neuron_contacts_xyz, s.hull_neuron_color, "hull_neuron"),
-                (cell.cluster_contacts_xyz, s.hull_cluster_color, "hull_cluster"),
+            for raw_pts, color, name, role in [
+                (cell.neuron_contacts_xyz, s.hull_neuron_color, "hull_neuron", "neuron"),
+                (cell.cluster_contacts_xyz, s.hull_cluster_color, "hull_cluster", "cluster"),
             ]:
                 if raw_pts is None or len(raw_pts) == 0:
                     continue
-                pts = raw_pts
-                if cell.tangent_rotation is not None:
-                    pts = (cell.tangent_rotation @ pts.T).T
                 if s.hull_display_mode == "perimeter":
-                    mesh = _build_perimeter_mesh(pts, s.hull_blob_sep_mm, s.hull_alpha_mm)
+                    mesh = self._get_perimeter_mesh(
+                        cell, role, raw_pts, s.hull_blob_sep_mm, s.hull_alpha_mm
+                    )
                     if mesh is not None:
                         self.plotter.add_mesh(
                             mesh, color=color, style="wireframe", line_width=s.hull_line_width, name=name
                         )
                 else:
+                    pts = raw_pts
+                    if cell.tangent_rotation is not None:
+                        pts = (cell.tangent_rotation @ pts.T).T
                     cloud = pv.PolyData(pts)
                     self.plotter.add_mesh(
                         cloud, color=color, point_size=s.contact_size, name=name
@@ -1014,6 +1081,58 @@ class RFClusterGalleryViewer(QMainWindow):
         self.plotter.camera.view_angle = params["view_angle"]
         self.plotter.renderer.ResetCameraClippingRange()
         self.plotter.render()
+
+    def _set_auto_face_on_camera(self, cell: GalleryCell) -> None:
+        if cell.tangent_rotation is not None:
+            self.plotter.view_xy()
+        else:
+            self.plotter.view_isometric()
+        self.plotter.reset_camera()
+
+    # ------------------------------------------------------------------
+    # Batch export
+    # ------------------------------------------------------------------
+
+    def _on_export_all_clicked(self) -> None:
+        cells = self._gallery_data.cells
+        if not cells:
+            self.statusBar().showMessage("No cells to export.")
+            return
+
+        export_dir = self._gallery_data.output_base_dir / "_gallery_exports"
+        export_dir.mkdir(parents=True, exist_ok=True)
+
+        sorted_keys = sorted(cells.keys())
+        n = len(sorted_keys)
+
+        saved_cell = self._current_cell
+        saved_cameras = dict(self._session_cameras)
+
+        self._export_btn.setEnabled(False)
+        try:
+            for i, (sid, lbl) in enumerate(sorted_keys, start=1):
+                self.statusBar().showMessage(f"Exporting {i}/{n}: {sid}__cluster_{lbl}")
+                QApplication.processEvents()
+
+                cell = cells[(sid, lbl)]
+                self._build_scene(cell)
+                self._set_auto_face_on_camera(cell)
+                QApplication.processEvents()
+
+                out_path = export_dir / f"{sid}__cluster_{lbl}.png"
+                self.plotter.screenshot(str(out_path))
+
+            self.statusBar().showMessage(
+                f"Export complete: {n} image(s) saved to {export_dir}"
+            )
+        finally:
+            self._session_cameras = saved_cameras
+            if saved_cell is not None:
+                self._build_scene(saved_cell)
+                stored_cam = self._session_cameras.get(saved_cell.session_id)
+                if stored_cam is not None:
+                    self._restore_camera(stored_cam)
+            self._export_btn.setEnabled(True)
 
     # ------------------------------------------------------------------
     # Deferred start

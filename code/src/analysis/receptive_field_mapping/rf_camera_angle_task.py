@@ -15,7 +15,6 @@ except Exception:
 
 import json
 import logging
-import sys
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -226,70 +225,23 @@ def pick_rf_camera_angle_batch(
     session_output_dirs: Dict[str, Path],
     *,
     force_processing: bool = False,
-    camera_angle_mode: str = "manual",
+    enabled: bool = False,
 ) -> None:
-    """Assign camera angles for RF heatmap sessions.
+    """Compute and persist face-on tangent-plane camera params for RF heatmap sessions.
 
-    Two modes:
-    - ``"manual"``: opens the interactive PyVista picker for all sessions;
-      existing ``camera_params.json`` are pre-loaded so the researcher can
-      review and adjust them.  ``force_processing`` is ignored in this mode.
-    - ``"auto"``: computes a face-on tangent-plane camera for every session
-      automatically (no GUI).  ``force_processing`` controls whether sessions
-      with existing params are overwritten.
+    When ``enabled`` is ``False`` the function is a no-op.  When ``True`` it
+    runs the auto camera assignment without a GUI.  ``force_processing``
+    controls whether sessions with an existing ``camera_params.json`` are
+    overwritten.
 
     Args:
         session_output_dirs: Mapping of session_id → session output directory.
-        force_processing: Only relevant in ``"auto"`` mode (see above).
-        camera_angle_mode: ``"manual"`` (default) or ``"auto"``.
+        force_processing: When ``True``, overwrite existing ``camera_params.json``.
+        enabled: When ``False`` (default), skip camera assignment entirely.
     """
-    if camera_angle_mode == "auto":
-        _auto_assign_cameras(session_output_dirs, force_processing=force_processing)
+    if not enabled:
         return
-
-    # --- manual mode ---
-    # Always show all sessions — the user explicitly chose manual mode to interact.
-    print(f"[Camera Picker] Manual mode — checking {len(session_output_dirs)} session(s)...")
-    for sid, d in session_output_dirs.items():
-        print(f"  {sid}: {d}")
-        ply_dir = d / "forearm_rf_centered"
-        print(f"    forearm_rf_centered exists: {ply_dir.exists()}")
-        if ply_dir.exists():
-            plys = list(ply_dir.glob("*.ply"))
-            print(f"    PLY files: {[p.name for p in plys]}")
-
-    sessions = collect_session_scene_data(
-        session_output_dirs, apply_tangent_rotation=False,
-    )
-
-    if not sessions:
-        print("[Camera Picker] No sessions passed scene-data check — skipping viewer.")
-        logger.info("No sessions need camera angle picking. Skipping viewer.")
-        return
-
-    logger.info(
-        "Launching camera angle picker for %d session(s): %s",
-        len(sessions), ", ".join(sorted(sessions)),
-    )
-
-    from PyQt5.QtWidgets import QApplication
-    from analysis.receptive_field_mapping.gui.rf_camera_angle_picker import RFCameraAnglePicker
-
-    app = QApplication.instance()
-    own_app = app is None
-    if own_app:
-        app = QApplication(sys.argv)
-
-    viewer = RFCameraAnglePicker(sessions)
-    viewer.show()
-    app.exec_()
-
-    # Write saved cameras to disk
-    for session_id, cam_params in viewer.saved_cameras.items():
-        path = sessions[session_id].camera_params_path
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(cam_params, indent=2))
-        logger.info("Saved camera parameters for %s", session_id)
+    _auto_assign_cameras(session_output_dirs, force_processing=force_processing)
 
 
 def _auto_assign_cameras(

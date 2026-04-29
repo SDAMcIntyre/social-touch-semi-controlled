@@ -298,7 +298,7 @@ def map_receptive_fields_clustered_flow(
     cluster_group_defs: dict = None,
     feature_combinations: dict = None,
     clustering_profiles: dict = None,
-    camera_angle_mode: str = "manual",
+    camera_angle_mode: bool = False,
     projection_method: str = None,
     disjoint_mask_distance_mm: float = 8.0,
 ) -> List[Path]:
@@ -308,10 +308,8 @@ def map_receptive_fields_clustered_flow(
     counts spikes per (x,y,z) point, and renders 3D forearm heatmap PNGs.
     Output: ``4_analysed/receptive_field_maps_clustered/<group>/<clusterer>/``
 
-    After mapping, assigns camera angles per session.  ``camera_angle_mode``
-    controls whether this is done interactively (``"manual"``) or automatically
-    (``"auto"``).  In manual mode, ``force_processing`` also forces the picker
-    open for sessions that already have ``camera_params.json``.
+    After mapping, assigns camera angles per session automatically when
+    ``camera_angle_mode`` is ``True``.
     """
     print(f"[Batch Analysis] Running cluster-based RF mapping for {len(input_items)} item(s)...")
     if not input_items:
@@ -344,7 +342,7 @@ def map_receptive_fields_clustered_flow(
     pick_rf_camera_angle_batch(
         session_output_dirs,
         force_processing=force_processing,
-        camera_angle_mode=camera_angle_mode,
+        enabled=camera_angle_mode,
     )
 
     return result
@@ -392,7 +390,7 @@ def visualize_receptive_fields_clustered_flow(
     cluster_group_defs: dict = None,
     feature_combinations: dict = None,
     clustering_profiles: dict = None,
-    camera_angle_mode: str = "manual",
+    camera_angle_mode: bool = False,
     projection_method: str = None,
     disjoint_mask_distance_mm: float = 8.0,
     gallery_viewer: bool = False,
@@ -402,7 +400,8 @@ def visualize_receptive_fields_clustered_flow(
     and render per-session heatmap PNGs.
     Output: ``4_analysed/receptive_field_maps_clustered/<group>/<clusterer>/``
 
-    After rendering, assigns camera angles per session.
+    After rendering, assigns camera angles per session automatically when
+    ``camera_angle_mode`` is ``True``.
     """
     print(f"[Batch Analysis] Running RF visualization for {len(input_items)} item(s)...")
     if not input_items:
@@ -433,7 +432,7 @@ def visualize_receptive_fields_clustered_flow(
     pick_rf_camera_angle_batch(
         session_output_dirs,
         force_processing=force_processing,
-        camera_angle_mode=camera_angle_mode,
+        enabled=camera_angle_mode,
     )
 
     return result
@@ -620,11 +619,23 @@ def run_batch_analysis(
                         kwargs["min_sensor_types"] = options["min_sensor_types"]
                     if "camera_angle_mode" in options:
                         mode_cfg = options["camera_angle_mode"]
-                        if isinstance(mode_cfg, dict):
-                            auto_enabled = mode_cfg.get("auto", {}).get("enabled", False)
-                            kwargs["camera_angle_mode"] = "auto" if auto_enabled else "manual"
-                        else:
-                            kwargs["camera_angle_mode"] = mode_cfg
+                        if not isinstance(mode_cfg, dict):
+                            raise ValueError(
+                                f"[{task_name}] 'camera_angle_mode' must be a mapping with "
+                                f"an 'enabled' key, got: {mode_cfg!r}"
+                            )
+                        if "auto" in mode_cfg:
+                            raise ValueError(
+                                f"[{task_name}] Legacy 'camera_angle_mode.auto.enabled' "
+                                "shape is no longer supported. "
+                                "Use 'camera_angle_mode: {enabled: true|false}' instead."
+                            )
+                        if "enabled" not in mode_cfg:
+                            raise ValueError(
+                                f"[{task_name}] 'camera_angle_mode' must contain an 'enabled' "
+                                f"key, got keys: {list(mode_cfg.keys())!r}"
+                            )
+                        kwargs["camera_angle_mode"] = bool(mode_cfg["enabled"])
                     if "show_interactive" in options:
                         kwargs["show_interactive"] = options["show_interactive"]
                     if options.get("projection_method"):
