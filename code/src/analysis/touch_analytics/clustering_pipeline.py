@@ -46,7 +46,7 @@ from .evaluation import compute_internal_metrics, bootstrap_stability
 # Columns that uniquely identify a single touch across feature CSVs
 _TOUCH_ID_COLS = ['block_order_id', 'trial_id', 'single_touch_id', 'session_id']
 
-_GESTURE_TYPES = ['tap', 'stroke_proximal', 'stroke_distal']
+GESTURE_TYPES = ['tap', 'stroke_proximal', 'stroke_distal']
 
 # Maps cluster-group data-type names to the column name prefix(es) written by
 # StatisticalExtractor.  Column names match the raw input columns directly
@@ -843,7 +843,7 @@ def _cluster_combination(
 
     if per_type:
         outputs: dict[str, List[Path]] = {}
-        for gesture_type in _GESTURE_TYPES:
+        for gesture_type in GESTURE_TYPES:
             type_pooled = pooled[pooled['gesture_type'] == gesture_type]
             if type_pooled.empty:
                 logging.warning(
