@@ -16,8 +16,7 @@ class ClusteringContext:
     """
 
     sensor_labels: np.ndarray | None = field(default=None)
-    type_labels: np.ndarray | None = field(default=None)
-    direction_labels: np.ndarray | None = field(default=None)
+    gesture_type_labels: np.ndarray | None = field(default=None)
 
 
 class TouchClusterer(ABC):
@@ -42,7 +41,7 @@ class TouchClusterer(ABC):
         config : dict
             Clustering-profile options from YAML.
         context : ClusteringContext
-            Runtime arrays (sensor_labels, type_labels, direction_labels)
+            Runtime arrays (sensor_labels, gesture_type_labels)
             aligned with the rows of *feature_df*.
 
         Returns

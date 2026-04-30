@@ -299,7 +299,7 @@ class VisualReportingStrategy:
         df: pd.DataFrame,
         x_col: str,
         y_cols: list,
-        type_col: str = 'type_metadata',
+        type_col: str = 'gesture_type',
         num_bins: int = 20,
         log_axis: bool = False,
         title_suffix: str = '',
@@ -308,9 +308,9 @@ class VisualReportingStrategy:
         global_max_count: Optional[int] = None,
     ):
         """
-        Render an N×2 per-session touch density heatmap and save to disk.
+        Render an N×3 per-session touch density heatmap and save to disk.
 
-        Layout: N rows (one per entry in *y_cols*) × 2 columns (tap | stroke).
+        Layout: N rows (one per entry in *y_cols*) × 3 columns (tap | stroke_proximal | stroke_distal).
         The shared X-axis is *x_col* (typically the highest-variance feature).
         Color encodes touch count with LogNorm scaling; bins with zero touches
         are masked.
@@ -349,7 +349,7 @@ class VisualReportingStrategy:
             y_edges_list.append(edges)
             y_cats_list.append(cats)
 
-        interaction_types = ['tap', 'stroke']
+        interaction_types = ['tap', 'stroke_proximal', 'stroke_distal']
 
         # 2. Pre-compute count matrices and determine global max for shared LogNorm
         plot_cache: Dict[Tuple, Tuple[pd.DataFrame, int]] = {}
@@ -383,7 +383,8 @@ class VisualReportingStrategy:
             global_max = 1
 
         # 3. Render
-        fig, axes = plt.subplots(n_rows, 2, figsize=(14, 5 * n_rows))
+        n_types = len(interaction_types)
+        fig, axes = plt.subplots(n_rows, n_types, figsize=(7 * n_types, 5 * n_rows))
         if n_rows == 1:
             axes = axes[np.newaxis, :]
 

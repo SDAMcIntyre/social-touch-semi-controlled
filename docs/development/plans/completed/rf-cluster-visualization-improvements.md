@@ -2,9 +2,9 @@
 
 **Created:** 2026-04-24
 **Approved:** —
-**Completed:** —
+**Completed:** 2026-04-30
 **Author:** Basil Duvernoy
-**Status:** In Progress
+**Status:** Completed
 **Branch:** `feature/rf-cluster-visualization-improvements`
 
 ---
@@ -181,7 +181,7 @@ code/src/analysis/receptive_field_mapping/
 ### Phase 4: Manual verification
 **Goal:** Confirm outputs match expectations on a known multi-region session.
 **Started:** —
-**Completed:** —
+**Completed:** 2026-04-30
 
 - [ ] 4.1 — Pick a session from `kinematics_simple_mean` + `type_stratified` that has multiple clusters (e.g., ST13-01 or ST14-01).
 - [ ] 4.2 — Run the `map_receptive_fields_clustered` stage end-to-end via the existing DAG launcher (GUI) on that session.

@@ -8,7 +8,7 @@ import numpy as np
 from numpy import ndarray
 import open3d as o3d
 import pyvista as pv
-from scipy.spatial import KDTree
+from scipy.spatial import Delaunay, KDTree
 import trimesh
 
 logger = logging.getLogger(__name__)
@@ -164,8 +164,53 @@ def mesh_to_pyvista(mesh: trimesh.Trimesh) -> pv.PolyData:
     return pv.PolyData(vertices, faces_vtk)
 
 
+def build_delaunay_mesh(
+    vertices: ndarray,
+    max_edge_mm: Optional[float] = None,
+) -> Optional[trimesh.Trimesh]:
+    """Build a 2.5D Delaunay mesh from a forearm point cloud.
+
+    Projects vertices onto XY for triangulation, keeping original 3D
+    coordinates.  Optionally removes triangles whose longest edge
+    exceeds *max_edge_mm*.
+    """
+    if vertices is None or len(vertices) < 3:
+        return None
+
+    tri = Delaunay(vertices[:, :2])
+    mesh = trimesh.Trimesh(
+        vertices=vertices, faces=tri.simplices, process=False
+    )
+
+    if np.mean(mesh.face_normals[:, 2]) < 0:
+        mesh.invert()
+    mesh.fix_normals()
+
+    if max_edge_mm is not None:
+        faces = mesh.faces
+        v0 = vertices[faces[:, 0]]
+        v1 = vertices[faces[:, 1]]
+        v2 = vertices[faces[:, 2]]
+        longest = np.maximum(
+            np.linalg.norm(v1 - v0, axis=1),
+            np.maximum(
+                np.linalg.norm(v2 - v1, axis=1),
+                np.linalg.norm(v0 - v2, axis=1),
+            ),
+        )
+        keep = longest <= max_edge_mm
+        if not np.any(keep):
+            return None
+        mesh = trimesh.Trimesh(
+            vertices=vertices, faces=faces[keep], process=False
+        )
+        mesh.fix_normals()
+
+    return mesh
+
+
 def apply_rotation_to_mesh(mesh: trimesh.Trimesh, R: ndarray) -> trimesh.Trimesh:
     rotated_verts = (R @ mesh.vertices.T).T
-    new_mesh = trimesh.Trimesh(vertices=rotated_verts, faces=mesh.faces.copy())
+    new_mesh = trimesh.Trimesh(vertices=rotated_verts, faces=mesh.faces.copy(), process=False)
     new_mesh.fix_normals()
     return new_mesh

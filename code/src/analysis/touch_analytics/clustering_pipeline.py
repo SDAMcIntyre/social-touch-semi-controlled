@@ -32,6 +32,7 @@ from utils.should_process_task import should_process_task, clean_task_outputs
 from .clustering import get_clusterer
 from .clustering.base import ClusteringContext
 from .clustering.feature_space_renderer import render_gmm_feature_space
+from .clustering.cartesian_binning_renderer import render_cartesian_bin_partition
 from .reporting import VisualReportingStrategy
 from .pipeline_shared import (
     SHARED_COLUMNS,
@@ -45,6 +46,8 @@ from .evaluation import compute_internal_metrics, bootstrap_stability
 # Columns that uniquely identify a single touch across feature CSVs
 _TOUCH_ID_COLS = ['block_order_id', 'trial_id', 'single_touch_id', 'session_id']
 
+GESTURE_TYPES = ['tap', 'stroke_proximal', 'stroke_distal']
+
 # Maps cluster-group data-type names to the column name prefix(es) written by
 # StatisticalExtractor.  Column names match the raw input columns directly
 # (e.g. contact_depth_mean, hand_velocity_x_max).
@@ -52,8 +55,9 @@ _TOUCH_ID_COLS = ['block_order_id', 'trial_id', 'single_touch_id', 'session_id']
 DATA_TYPE_TO_COLUMNS = {
     'contact_area':           ['contact_area'],
     'contact_depth':          ['contact_depth'],
-    'hand_velocity':     ['hand_velocity_x', 'hand_velocity_y', 'hand_velocity_z'],
-    'hand_acceleration': ['hand_acceleration_x', 'hand_acceleration_y', 'hand_acceleration_z'],
+    'hand_velocity':           ['hand_velocity_x', 'hand_velocity_y', 'hand_velocity_z'],
+    'hand_velocity_amplitude': ['hand_velocity_amplitude'],
+    'hand_acceleration':       ['hand_acceleration_x', 'hand_acceleration_y', 'hand_acceleration_z'],
     'pressure':               ['pressure'],
     'hand_position':          ['hand_position_x', 'hand_position_y', 'hand_position_z'],
     'mos_strain':             ['mos_strain'],
@@ -488,35 +492,42 @@ def run_clustering(
     return results
 
 
-def _cluster_combination(
+def _run_reduction_and_clusterers(
     combination_name: str,
     combination_config: dict,
     pooled: pd.DataFrame,
-    output_dir: Path,
+    out_base: Path,
     clustering_profiles: dict,
     force: bool,
-    feature_cols_override: list[str] | None = None,
+    feature_cols: list[str],
+    gesture_type: str | None,
 ) -> dict[str, List[Path]]:
-    """Run each clusterer on the already-pooled *pooled* DataFrame.
+    """Run reduction + every clusterer on *pooled*, writing outputs under *out_base*.
 
     Parameters
     ----------
-    feature_cols_override
-        When provided, use this column list instead of auto-discovering all
-        numeric non-shared columns.  Used by the cluster_groups code path to
-        restrict features to exactly those requested in the group spec.
+    combination_name
+        Group/combination name used in log messages.
+    combination_config
+        Full group/combination config dict (reduction, evaluation, visualization …).
+    pooled
+        Feature DataFrame to cluster (may be the full pool or a type-filtered subset).
+    out_base
+        ``output_dir / combination_name``; each clusterer appends its own name,
+        then optionally *gesture_type*.
+    clustering_profiles
+        Enabled clusterer name → config dict.
+    force
+        Override idempotency checks.
+    feature_cols
+        Feature column names selected from the full pooled DataFrame.
+    gesture_type
+        When ``None``, outputs go to ``out_base / clusterer_name``.
+        When a string, outputs go to ``out_base / clusterer_name / gesture_type``.
     """
     outputs: dict[str, List[Path]] = {}
 
-    # --- Shared reduction: build feature matrix once per combination --------
-    if feature_cols_override is not None:
-        feature_cols = [c for c in feature_cols_override if c in pooled.columns]
-    else:
-        feature_cols = [
-            c for c in pooled.columns
-            if c not in SHARED_COLUMNS
-            and pd.api.types.is_numeric_dtype(pooled[c])
-        ]
+    feature_cols = [c for c in feature_cols if c in pooled.columns]
 
     feature_df_full = pooled[feature_cols].dropna() if feature_cols else pd.DataFrame()
     valid_idx = feature_df_full.index
@@ -533,11 +544,12 @@ def _cluster_combination(
         rp = ReductionPipeline()
         X_scaled, reduction_meta = rp.fit_transform(feature_df_full, combination_config)
 
-    # -----------------------------------------------------------------------
-
     for clusterer_name, clusterer_config in clustering_profiles.items():
         method = clusterer_config.get('method', clusterer_name)
-        out_dir = output_dir / combination_name / clusterer_name
+        if gesture_type is None:
+            out_dir = out_base / clusterer_name
+        else:
+            out_dir = out_base / clusterer_name / gesture_type
         out_dir.mkdir(parents=True, exist_ok=True)
 
         pooled_csv = out_dir / 'pooled_touch_summary_clustered.csv'
@@ -545,6 +557,7 @@ def _cluster_combination(
         feature_space_png = out_dir / 'feature_space.png'
 
         # Idempotency: use session CSVs as conceptual inputs — skip if up to date
+        _IMAGE_GENERATING_METHODS = {'gmm', 'cartesian_binning'}
         if not force and pooled_csv.exists():
             try:
                 if not should_process_task(
@@ -552,12 +565,15 @@ def _cluster_combination(
                     output_paths=[pooled_csv],
                     force=False,
                 ):
-                    outputs.setdefault(clusterer_name, []).append(pooled_csv)
-                    print(
-                        f"  [cluster] {combination_name} / {clusterer_name} — up to date",
-                        flush=True,
-                    )
-                    continue
+                    if method in _IMAGE_GENERATING_METHODS and not feature_space_png.exists():
+                        pass  # fall through: re-run to generate the missing feature-space image
+                    else:
+                        outputs.setdefault(clusterer_name, []).append(pooled_csv)
+                        print(
+                            f"  [cluster] {combination_name} / {clusterer_name} — up to date",
+                            flush=True,
+                        )
+                        continue
             except FileNotFoundError:
                 pass
         clean_task_outputs([pooled_csv, metadata_json, feature_space_png])
@@ -586,12 +602,9 @@ def _cluster_combination(
 
         # Build ClusteringContext with runtime arrays for clusterers that need them
         sensor_col = clusterer_config.get('sensor_col')
-        type_col = clusterer_config.get('type_col')
-        direction_col = 'direction'
         context = ClusteringContext(
             sensor_labels=pooled.loc[valid_idx, sensor_col].to_numpy() if sensor_col and sensor_col in pooled.columns else None,
-            type_labels=pooled.loc[valid_idx, type_col].to_numpy() if type_col and type_col in pooled.columns else None,
-            direction_labels=pooled.loc[valid_idx, direction_col].to_numpy() if direction_col in pooled.columns else None,
+            gesture_type_labels=pooled.loc[valid_idx, 'gesture_type'].to_numpy() if 'gesture_type' in pooled.columns else None,
         )
 
         if method == 'gmm':
@@ -737,6 +750,47 @@ def _cluster_combination(
                     f"[{combination_name}/{clusterer_name}] Feature-space render failed: {exc}"
                 )
 
+        # --- Cartesian binning: render feature-space PNG ---------------------
+        elif metadata.get('algorithm') == 'cartesian_binning':
+            binned = metadata.get('binned_features', [])
+            if len(binned) >= 2:
+                vis_cfg: dict = (combination_config or {}).get('visualization', {})
+                default_x = 'pressure_mean' if 'pressure_mean' in binned else binned[0]
+                x_feat: str = vis_cfg.get('x_feature', default_x)
+                default_y = next(
+                    (c for c in binned if 'velocity' in c),
+                    binned[1],
+                )
+                y_feat: str = vis_cfg.get('y_feature', default_y)
+                for feat_name in (x_feat, y_feat):
+                    if feat_name not in metadata['bin_edges']:
+                        raise KeyError(
+                            f"[{combination_name}/{clusterer_name}] visualization feature "
+                            f"'{feat_name}' not in bin_edges {list(metadata['bin_edges'])}."
+                        )
+                try:
+                    render_cartesian_bin_partition(
+                        result_df=result_df,
+                        metadata=metadata,
+                        x_feature=x_feat,
+                        y_feature=y_feat,
+                        output_path=feature_space_png,
+                    )
+                    print(
+                        f"  [feature_space] {combination_name} / {clusterer_name} — "
+                        f"{x_feat} × {y_feat}",
+                        flush=True,
+                    )
+                except Exception as exc:
+                    logging.error(
+                        f"[{combination_name}/{clusterer_name}] Cartesian bin render failed: {exc}"
+                    )
+                    print(
+                        f"  [feature_space] {combination_name} / {clusterer_name} — "
+                        f"ERROR: {exc}",
+                        flush=True,
+                    )
+
         if 'k' in metadata:
             cluster_desc = f"{metadata['k']} clusters, {len(result_df)} samples"
         elif 'n_bins' in metadata:
@@ -756,6 +810,70 @@ def _cluster_combination(
             print(f"  [heatmap] {combination_name} / {clusterer_name} — skipped", flush=True)
 
     return outputs
+
+
+def _cluster_combination(
+    combination_name: str,
+    combination_config: dict,
+    pooled: pd.DataFrame,
+    output_dir: Path,
+    clustering_profiles: dict,
+    force: bool,
+    feature_cols_override: list[str] | None = None,
+) -> dict[str, List[Path]]:
+    """Run each clusterer on the already-pooled *pooled* DataFrame.
+
+    Parameters
+    ----------
+    feature_cols_override
+        When provided, use this column list instead of auto-discovering all
+        numeric non-shared columns.  Used by the cluster_groups code path to
+        restrict features to exactly those requested in the group spec.
+    """
+    if feature_cols_override is not None:
+        feature_cols = [c for c in feature_cols_override if c in pooled.columns]
+    else:
+        feature_cols = [
+            c for c in pooled.columns
+            if c not in SHARED_COLUMNS
+            and pd.api.types.is_numeric_dtype(pooled[c])
+        ]
+
+    per_type: bool = combination_config.get('per_type_clustering', False)
+
+    if per_type:
+        outputs: dict[str, List[Path]] = {}
+        for gesture_type in GESTURE_TYPES:
+            type_pooled = pooled[pooled['gesture_type'] == gesture_type]
+            if type_pooled.empty:
+                logging.warning(
+                    f"[{combination_name}] No touches for type '{gesture_type}' — skipping."
+                )
+                continue
+            type_outputs = _run_reduction_and_clusterers(
+                combination_name=combination_name,
+                combination_config=combination_config,
+                pooled=type_pooled,
+                out_base=output_dir / combination_name,
+                clustering_profiles=clustering_profiles,
+                force=force,
+                feature_cols=feature_cols,
+                gesture_type=gesture_type,
+            )
+            for clusterer_name, paths in type_outputs.items():
+                outputs.setdefault(clusterer_name, []).extend(paths)
+        return outputs
+
+    return _run_reduction_and_clusterers(
+        combination_name=combination_name,
+        combination_config=combination_config,
+        pooled=pooled,
+        out_base=output_dir / combination_name,
+        clustering_profiles=clustering_profiles,
+        force=force,
+        feature_cols=feature_cols,
+        gesture_type=None,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -807,8 +925,8 @@ def _generate_session_heatmaps(
     global_max_count = 0
     for session_id in result_df['session_id'].unique():
         session_df = result_df[result_df['session_id'] == session_id]
-        for i_type in ('tap', 'stroke'):
-            subset = session_df[session_df['type_metadata'] == i_type]
+        for i_type in ('tap', 'stroke_proximal', 'stroke_distal'):
+            subset = session_df[session_df['gesture_type'] == i_type]
             if subset.empty:
                 continue
             x_binned = pd.cut(subset[x_col], bins=global_edges[x_col], include_lowest=True)
@@ -828,7 +946,7 @@ def _generate_session_heatmaps(
                 df=session_df,
                 x_col=x_col,
                 y_cols=y_cols,
-                type_col='type_metadata',
+                type_col='gesture_type',
                 num_bins=num_bins,
                 log_axis=True,
                 title_suffix=str(session_id),

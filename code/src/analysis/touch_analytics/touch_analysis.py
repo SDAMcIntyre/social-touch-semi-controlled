@@ -4,6 +4,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
+from .preparation.gesture_type import classify_gesture_type
 from .representation.series_level.kinematics import compute_velocity, compute_acceleration
 
 # Architectural Import
@@ -73,14 +74,7 @@ def _process_touch_analysis(input_path: Path, output_path: Path, show: bool) -> 
         max_velocity = np.sqrt(vel_df.pow(2).sum(axis=1)).max()
         max_acceleration = np.sqrt(accel_df.pow(2).sum(axis=1)).max()
 
-        # Direction
-        direction = None
-        if touch_type == "stroke":
-            start_y = group['sticker_blue_position_y'].iloc[0]
-            end_y = group['sticker_blue_position_y'].iloc[-1]
-            direction = "proximal" if end_y > start_y else "distal"
-        else:
-            direction = "static" 
+        gesture_type = classify_gesture_type(group)
 
         # --- Contact Location (mean per touch) ---
         mean_contact_x = group['contact_location_x'].mean() if 'contact_location_x' in group.columns else None
@@ -99,7 +93,7 @@ def _process_touch_analysis(input_path: Path, output_path: Path, show: bool) -> 
             'single_touch_id': touch_id,
             'block_order_id': block_order_id,
             'type_metadata': touch_type,
-            'direction': direction,
+            'gesture_type': gesture_type,
             'depth_max': max_depth,
             'area_max': max_contact_area,
             'velocity_max': max_velocity,

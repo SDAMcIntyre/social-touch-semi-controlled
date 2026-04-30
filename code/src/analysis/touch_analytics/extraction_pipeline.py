@@ -26,7 +26,6 @@ from utils.should_process_task import should_process_task, clean_task_outputs
 from .feature_extraction import get_feature_extractor, AGGREGATION_NAMES
 from .pipeline_shared import SHARED_COLUMNS, _TqdmLineWrapper, filter_enabled_profiles, session_id_from_path
 from .preparation.interpolation import interpolate_touch_columns
-from .representation.series_level.direction import infer_direction
 from .representation.feature_characterization.statistical import _EXCLUDE_FROM_AGGREGATION
 
 TOUCH_KEYS = ['block_order_id', 'trial_id', 'single_touch_id']
@@ -426,6 +425,8 @@ def _extract_statistical_batch(
     meta_spec: dict = {}
     if 'type_metadata' in df.columns:
         meta_spec['type_metadata'] = 'first'
+    if 'gesture_type' in df.columns:
+        meta_spec['gesture_type'] = 'first'
     if 'contact_location_x' in df.columns:
         meta_spec['contact_location_x'] = 'mean'
     if 'contact_location_y' in df.columns:
@@ -442,23 +443,14 @@ def _extract_statistical_batch(
         'contact_location_z': 'mean_contact_z',
     }, inplace=True)
     if 'Nerve_spike' in meta_df.columns:
-        meta_df['spike_elicited'] = meta_df['Nerve_spike'].clip(0, 1).astype(int)
+        meta_df['spike_elicited'] = meta_df['Nerve_spike'].clip(0, 1).fillna(0).astype(int)
         meta_df.drop(columns=['Nerve_spike'], inplace=True)
     else:
         meta_df['spike_elicited'] = 0
     if 'type_metadata' not in meta_df.columns:
         meta_df['type_metadata'] = 'unknown'
 
-    # Direction: one apply over all groups (runs once, not once per feature)
-    direction_s = g.apply(infer_direction)
-    direction_s.name = 'direction'
-    direction_df = direction_s.reset_index()
-
-    combined = (
-        meta_df
-        .merge(direction_df, on=TOUCH_KEYS)
-        .merge(agg_df, on=TOUCH_KEYS)
-    )
+    combined = meta_df.merge(agg_df, on=TOUCH_KEYS)
     combined = combined[combined['single_touch_id'] != 0].copy()
     combined['session_id'] = session_id
 
@@ -493,8 +485,6 @@ def _extract_all_touches(
             if 'type_metadata' in group.columns else 'unknown'
         )
 
-        direction = infer_direction(group)
-
         mean_contact_x = (
             group['contact_location_x'].mean()
             if 'contact_location_x' in group.columns else None
@@ -517,7 +507,7 @@ def _extract_all_touches(
             'trial_id': trial_id,
             'single_touch_id': touch_id,
             'type_metadata': touch_type,
-            'direction': direction,
+            'gesture_type': group['gesture_type'].iloc[0] if 'gesture_type' in group.columns else None,
             'mean_contact_x': mean_contact_x,
             'mean_contact_y': mean_contact_y,
             'mean_contact_z': mean_contact_z,

@@ -5,6 +5,8 @@ from .dbscan_clusterer import DBSCANClusterer
 from .binning_clusterer import BinningClusterer
 from .hierarchical_clusterer import HierarchicalClusterer
 from .type_stratified_clusterer import TypeStratifiedClusterer
+from .gmm_clusterer import GMMClusterer
+from .cartesian_binning_clusterer import CartesianBinningClusterer
 
 CLUSTERER_REGISTRY: dict[str, type[TouchClusterer]] = {
     'kmeans': KMeansClusterer,
@@ -12,6 +14,8 @@ CLUSTERER_REGISTRY: dict[str, type[TouchClusterer]] = {
     'binning': BinningClusterer,
     'hierarchical': HierarchicalClusterer,
     'type_stratified': TypeStratifiedClusterer,
+    'gmm': GMMClusterer,
+    'cartesian_binning': CartesianBinningClusterer,
 }
 
 
@@ -39,6 +43,8 @@ __all__ = [
     'BinningClusterer',
     'HierarchicalClusterer',
     'TypeStratifiedClusterer',
+    'GMMClusterer',
+    'CartesianBinningClusterer',
     'CLUSTERER_REGISTRY',
     'get_clusterer',
 ]

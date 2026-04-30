@@ -298,3 +298,56 @@ def visualization_is_up_to_date(
         and vis.get('disjoint_mask_distance_mm') == disjoint_mask_distance_mm
         and vis.get('extraction_summary_mtime') == extraction_path.stat().st_mtime
     )
+
+
+# ---------------------------------------------------------------------------
+# Delaunay threshold persistence (user-preference file, not a pipeline artifact)
+# ---------------------------------------------------------------------------
+
+def load_delaunay_thresholds(output_dir: Path) -> Dict[str, float]:
+    """Load per-session Delaunay max-edge thresholds from JSON sidecar.
+
+    Returns an empty dict when the file does not exist (first launch).
+    """
+    path = output_dir / 'delaunay_thresholds.json'
+    if not path.exists():
+        return {}
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def save_delaunay_thresholds(output_dir: Path, thresholds: Dict[str, float]) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    with open(output_dir / 'delaunay_thresholds.json', 'w') as f:
+        json.dump(thresholds, f, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# Session camera persistence (user-preference file, not a pipeline artifact)
+# ---------------------------------------------------------------------------
+
+def load_session_cameras(output_dir: Path) -> Dict[str, dict]:
+    """Load per-session camera parameters from JSON sidecar.
+
+    Returns an empty dict when the file does not exist (first launch).
+    Raises ValueError on malformed JSON.
+    """
+    path = output_dir / 'session_cameras.json'
+    if not path.exists():
+        return {}
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except Exception as exc:
+        raise ValueError(
+            f"load_session_cameras: corrupt session_cameras.json: {path}"
+        ) from exc
+
+
+def save_session_cameras(output_dir: Path, cameras: Dict[str, dict]) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    with open(output_dir / 'session_cameras.json', 'w') as f:
+        json.dump(cameras, f, indent=2)

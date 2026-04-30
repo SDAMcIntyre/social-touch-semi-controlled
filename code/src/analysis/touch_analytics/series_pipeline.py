@@ -37,6 +37,12 @@ from .representation.series_level.kinematics import (
 )
 from .representation.series_level.pressure import compute_pressure, PRESSURE_INPUT_COLUMNS
 from .representation.series_level.mechanics import compute_mos_series, MOS_COLUMNS, MOS_INPUT_COLUMNS
+from .representation.series_level.velocity_scalar import (
+    compute_velocity_amplitude,
+    compute_velocity_signed,
+    HAND_VELOCITY_AMPLITUDE_COLUMN,
+    HAND_VELOCITY_SIGNED_COLUMN,
+)
 
 
 def run_series_transforms(
@@ -96,6 +102,14 @@ def run_series_transforms(
     mos_E_kpa = mos_cfg.get('youngs_modulus_kpa', 100.0)
     mos_h_mm = mos_cfg.get('skin_thickness_mm', 1.5)
 
+    vel_amp_cfg = transforms.get('hand_velocity_amplitude', {})
+    vel_amp_enabled = vel_amp_cfg.get('enabled', False)
+    vel_amp_drop = vel_amp_cfg.get('drop_used_inputs', False)
+
+    vel_signed_cfg = transforms.get('hand_velocity_signed', {})
+    vel_signed_enabled = vel_signed_cfg.get('enabled', False)
+    vel_signed_drop = vel_signed_cfg.get('drop_used_inputs', False)
+
     output_dir.mkdir(parents=True, exist_ok=True)
 
     print(
@@ -104,7 +118,9 @@ def run_series_transforms(
         f"hand_velocity={'enabled' if hand_vel_enabled else 'disabled'}, "
         f"hand_acceleration={'enabled' if hand_accel_enabled else 'disabled'}, "
         f"pressure={'enabled' if pressure_enabled else 'disabled'}, "
-        f"mos={'enabled' if mos_enabled else 'disabled'} ===",
+        f"mos={'enabled' if mos_enabled else 'disabled'}, "
+        f"hand_velocity_amplitude={'enabled' if vel_amp_enabled else 'disabled'}, "
+        f"hand_velocity_signed={'enabled' if vel_signed_enabled else 'disabled'} ===",
         flush=True,
     )
 
@@ -128,6 +144,10 @@ def run_series_transforms(
                 mos_drop=mos_drop,
                 mos_E_kpa=mos_E_kpa,
                 mos_h_mm=mos_h_mm,
+                vel_amp_enabled=vel_amp_enabled,
+                vel_amp_drop=vel_amp_drop,
+                vel_signed_enabled=vel_signed_enabled,
+                vel_signed_drop=vel_signed_drop,
                 force=force,
                 preparation_dir=preparation_dir,
             )
@@ -156,6 +176,10 @@ def _transform_session(
     mos_drop: bool,
     mos_E_kpa: float,
     mos_h_mm: float,
+    vel_amp_enabled: bool,
+    vel_amp_drop: bool,
+    vel_signed_enabled: bool,
+    vel_signed_drop: bool,
     force: bool,
     preparation_dir: Path | None = None,
 ) -> Path | None:
@@ -196,13 +220,15 @@ def _transform_session(
         df = interpolate_touch_columns(df)
     groups = group_touches(df)
 
-    need_velocity = hand_vel_enabled or hand_accel_enabled or mos_enabled
+    need_velocity = hand_vel_enabled or hand_accel_enabled or mos_enabled or vel_amp_enabled or vel_signed_enabled
 
     hand_pos_series: dict[int, pd.DataFrame] = {}
     vel_series: dict[int, pd.DataFrame] = {}
     accel_series: dict[int, pd.DataFrame] = {}
     pressure_series: dict[int, pd.Series] = {}
     mos_cols_series: dict[int, dict[str, pd.Series]] = {}
+    vel_amp_series: dict[int, pd.Series] = {}
+    vel_signed_series: dict[int, pd.Series] = {}
 
     for (_, _, touch_id), group in groups:
         if group.empty or touch_id == 0:
@@ -226,6 +252,11 @@ def _transform_session(
                 aug_group['acceleration_magnitude'] = np.sqrt(accel.pow(2).sum(axis=1))
                 mos_cols_series[id(group)] = compute_mos_series(aug_group, mos_E_kpa, mos_h_mm)
 
+            if vel_amp_enabled:
+                vel_amp_series[id(group)] = compute_velocity_amplitude(vel)
+            if vel_signed_enabled:
+                vel_signed_series[id(group)] = compute_velocity_signed(vel)
+
         if pressure_enabled:
             pressure_series[id(group)] = compute_pressure(group)
 
@@ -244,6 +275,10 @@ def _transform_session(
             df[col] = pd.concat(
                 [group_mos[col] for group_mos in mos_cols_series.values()]
             ).reindex(df.index)
+    if vel_amp_series:
+        df[HAND_VELOCITY_AMPLITUDE_COLUMN] = pd.concat(vel_amp_series.values()).reindex(df.index)
+    if vel_signed_series:
+        df[HAND_VELOCITY_SIGNED_COLUMN] = pd.concat(vel_signed_series.values()).reindex(df.index)
 
     cols_to_drop = []
     if hand_pos_drop:
@@ -256,6 +291,10 @@ def _transform_session(
         cols_to_drop.extend([c for c in PRESSURE_INPUT_COLUMNS if c in df.columns])
     if mos_drop:
         cols_to_drop.extend([c for c in MOS_INPUT_COLUMNS if c in df.columns and c not in cols_to_drop])
+    if vel_amp_drop:
+        cols_to_drop.extend([c for c in HAND_VELOCITY_COLUMNS if c in df.columns and c not in cols_to_drop])
+    if vel_signed_drop:
+        cols_to_drop.extend([c for c in HAND_VELOCITY_COLUMNS if c in df.columns and c not in cols_to_drop])
 
     if cols_to_drop:
         df = df.drop(columns=cols_to_drop)

@@ -14,12 +14,11 @@ _logger = logging.getLogger(__name__)
 
 class TypeStratifiedClusterer(TouchClusterer):
     """
-    Wrapper clusterer that splits touches by type, clusters each group
+    Wrapper clusterer that splits touches by gesture type, clusters each group
     independently via a delegate base clusterer, and merges results with
     type-prefixed string labels (e.g. ``tap_00``, ``stroke_proximal_01``).
 
-    Type and direction labels are provided via ``context.type_labels`` and
-    ``context.direction_labels``.
+    Gesture type labels are provided via ``context.gesture_type_labels``.
 
     Config keys
     -----------
@@ -44,18 +43,20 @@ class TypeStratifiedClusterer(TouchClusterer):
     ) -> Tuple[np.ndarray, dict]:
         from . import get_clusterer
 
-        if context.type_labels is None:
+        if context.gesture_type_labels is None:
             raise ValueError(
-                "TypeStratifiedClusterer requires context.type_labels. "
-                "Ensure 'type_col' is set in the clustering profile YAML and "
-                "the column exists in the pooled DataFrame so the pipeline "
-                "populates ClusteringContext.type_labels before calling fit_predict."
+                "TypeStratifiedClusterer requires context.gesture_type_labels. "
+                "Ensure the 'gesture_type' column exists in the pooled DataFrame and "
+                "the pipeline populates ClusteringContext.gesture_type_labels."
             )
 
-        type_labels = context.type_labels
-        direction_labels = context.direction_labels
-
-        group_keys = _build_group_keys(type_labels, direction_labels, len(feature_df))
+        group_keys = context.gesture_type_labels
+        invalid = set(group_keys) - set(_GROUPS)
+        if invalid:
+            raise ValueError(
+                f"TypeStratifiedClusterer: invalid gesture_type values {invalid}; "
+                f"expected values from {_GROUPS}"
+            )
 
         labels = np.empty(len(feature_df), dtype=object)
         per_type_meta: dict[str, dict] = {}
@@ -99,28 +100,6 @@ class TypeStratifiedClusterer(TouchClusterer):
             'extra_columns': merged_extra_columns,
         }
         return labels, metadata
-
-
-def _build_group_keys(
-    type_labels: np.ndarray,
-    direction_labels,
-    n: int,
-) -> np.ndarray:
-    keys = np.empty(n, dtype=object)
-    for i in range(n):
-        t = type_labels[i]
-        if isinstance(t, str) and 'tap' in t.lower():
-            keys[i] = 'tap'
-        else:
-            if direction_labels is not None and not pd.isna(direction_labels[i]):
-                d = direction_labels[i]
-                if isinstance(d, str) and 'proximal' in d.lower():
-                    keys[i] = 'stroke_proximal'
-                else:
-                    keys[i] = 'stroke_distal'
-            else:
-                keys[i] = 'stroke_distal'
-    return keys
 
 
 def _merge_extra_columns(

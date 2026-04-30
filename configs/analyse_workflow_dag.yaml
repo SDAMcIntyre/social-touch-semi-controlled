@@ -70,6 +70,12 @@ tasks:
           youngs_modulus_kpa: 100.0
           poissons_ratio: 0.45
           skin_thickness_mm: 1.5
+        hand_velocity_amplitude:
+          enabled: true
+          drop_used_inputs: false
+        hand_velocity_signed:
+          enabled: true
+          drop_used_inputs: false
     depends_on: [touch_preparation]
 
   # Stage 2b (Feature Extraction): Per-session feature extraction. Each enabled feature extracts to its own folder.
@@ -103,7 +109,7 @@ tasks:
   touch_clustering:
     enabled: true
     options:
-      force_processing: true
+      force_processing: false
       cluster_groups:
         kinematics_simple_mean:
           enabled: false
@@ -121,10 +127,15 @@ tasks:
             type_stratified:
               method: type_stratified
               base_method: binning
-              type_col: type_metadata
               n_bins: 20
               bin_method: equal_width
               enabled: true
+            cartesian_binning:
+              method: cartesian_binning
+              n_bins: 5
+              n_bins_per_feature: {}
+              bin_method: equal_width
+              enabled: false
         kinematics_max:
           enabled: false
           features:
@@ -139,7 +150,7 @@ tasks:
               bin_method: equal_width
               enabled: true
         pressure_velocity_mean:
-          enabled: true
+          enabled: false
           features:
             hand_velocity:
             - mean
@@ -171,7 +182,6 @@ tasks:
             type_stratified:
               method: type_stratified
               base_method: binning
-              type_col: type_metadata
               n_bins: 20
               bin_method: equal_width
               enabled: false
@@ -215,10 +225,52 @@ tasks:
             type_stratified:
               method: type_stratified
               base_method: binning
-              type_col: type_metadata
               n_bins: 20
               bin_method: equal_width
               enabled: true
+        pressure_velocity_mean_cartesian_binning:
+          enabled: true
+          per_type_clustering: true
+          features:
+            hand_velocity_amplitude:
+            - mean
+            pressure:
+            - mean
+          clustering_methods:
+            binning:
+              method: binning
+              n_bins: 20
+              bin_method: equal_width
+              enabled: false
+            kmeans:
+              method: kmeans
+              n_clusters: 8
+              enabled: false
+            dbscan:
+              method: dbscan
+              eps: 0.5
+              min_samples: 5
+              enabled: false
+            hierarchical:
+              method: hierarchical
+              n_clusters: 8
+              linkage: ward
+              enabled: false
+            type_stratified:
+              method: type_stratified
+              enabled: false
+            gmm:
+              method: gmm
+              max_components: 15
+              covariance_type: full
+              n_init: 10
+              min_touches_per_component: 30
+              enabled: false
+            cartesian_binning:
+              method: cartesian_binning
+              n_bins: 7
+              bin_method: equal_frequency
+              outlier_method: iqr
       reduction:
         scaler: standard
         variance_filter:
@@ -239,7 +291,7 @@ tasks:
     enabled: false
     options:
       force_processing: false
-      cluster_groups: [kinematics_mean]
+      cluster_groups: [pressure_velocity_mean_cartesian_binning]
       comparing_profiles:
         bias:
           method: bias
@@ -285,7 +337,7 @@ tasks:
     enabled: true
     options:
       force_processing: false
-      cluster_groups: [pressure_velocity_mean]
+      cluster_groups: [pressure_velocity_mean_cartesian_binning]
     depends_on: [touch_clustering]
 
   # Step 2 of split pipeline: RF metrics, 2D heatmap rendering.
@@ -294,7 +346,7 @@ tasks:
     enabled: true
     options:
       force_processing: false
-      cluster_groups: [pressure_velocity_mean]
+      cluster_groups: [pressure_velocity_mean_cartesian_binning]
       projection_method: cylindrical_unwrap
       disjoint_mask_distance_mm: 8.0
       gallery_viewer: true

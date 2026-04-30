@@ -8,6 +8,7 @@ from typing import Optional
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
@@ -27,6 +28,8 @@ _DATA_TYPES: list[str] = [
     "contact_area",
     "contact_depth",
     "hand_velocity",
+    "hand_velocity_amplitude",
+    "hand_velocity_signed",
     "hand_acceleration",
     "pressure",
     "hand_position",
@@ -47,6 +50,8 @@ _CLUSTERING_METHODS: list[str] = [
     "dbscan",
     "hierarchical",
     "type_stratified",
+    "gmm",
+    "cartesian_binning",
 ]
 
 _DEFAULT_PARAMS: dict[str, dict] = {
@@ -55,24 +60,61 @@ _DEFAULT_PARAMS: dict[str, dict] = {
     "dbscan": {"eps": 0.5, "min_samples": 5},
     "hierarchical": {"n_clusters": 8, "linkage": "ward"},
     "type_stratified": {},
+    "gmm": {"max_components": 15, "covariance_type": "full", "n_init": 10, "min_touches_per_component": 30},
+    "cartesian_binning": {"n_bins": 5, "bin_method": "equal_width"},
+}
+
+_OUTLIER_METHODS: dict[str, dict[str, float]] = {
+    "none":       {},
+    "iqr":        {"k": 1.5},
+    "mad":        {"threshold": 3.5},
+    "percentile": {"p": 1.0},
+    "tukey":      {"k_outer": 3.0},
+}
+
+_OUTLIER_DESCRIPTIONS: dict[str, str] = {
+    "none":       "Disabled",
+    "iqr":        "IQR fences  (Q1 - k*IQR .. Q3 + k*IQR)",
+    "mad":        "Modified Z-score  (median +/- threshold*MAD/0.6745)",
+    "percentile": "Percentile trim  (below p-th, above (100-p)-th)",
+    "tukey":      "Tukey outer fences  (Q1 - k*IQR .. Q3 + k*IQR, k=3)",
 }
 
 
 def _params_summary(params: dict) -> str:
     if not params:
         return ""
-    parts = [f"{k}={v}" for k, v in params.items()]
+    _HIDDEN = {"outlier_method", "outlier_params"}
+    parts = [f"{k}={v}" for k, v in params.items() if k not in _HIDDEN]
+    om = params.get("outlier_method")
+    if om is not None and str(om).lower() not in ("none", "null"):
+        op = params.get("outlier_params", {})
+        if op:
+            param_str = ", ".join(f"{pk}={pv}" for pk, pv in op.items())
+            parts.append(f"outliers={om}({param_str})")
+        else:
+            parts.append(f"outliers={om}")
+    if not parts:
+        return ""
     return "  " + ", ".join(parts)
 
 
 class _ParamEditDialog(QDialog):
-    """Simple key-value param editing dialog for a clustering method."""
+    """Key-value param editing dialog for a clustering method.
+
+    Plain parameters are rendered as ``QLineEdit`` fields.  The special
+    ``outlier_method`` / ``outlier_params`` pair (used by
+    *cartesian_binning*) is rendered as a ``QComboBox`` with a description
+    label plus a dynamic sub-parameter ``QLineEdit`` that appears only when
+    a technique is selected.
+    """
 
     def __init__(self, method_name: str, params: dict, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._params = dict(params)
+        self._method_name = method_name
         self.setWindowTitle(f"Configure — {method_name}")
-        self.setMinimumWidth(320)
+        self.setMinimumWidth(380)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
 
         layout = QVBoxLayout(self)
@@ -80,15 +122,25 @@ class _ParamEditDialog(QDialog):
 
         form = QFormLayout()
         self._edits: dict[str, QLineEdit] = {}
+
+        self._has_outlier_section = (
+            "outlier_method" in self._params or method_name == "cartesian_binning"
+        )
+
         for key, val in self._params.items():
+            if key in ("outlier_method", "outlier_params"):
+                continue
             edit = QLineEdit(str(val))
             form.addRow(f"{key}:", edit)
             self._edits[key] = edit
 
-        if not self._params:
+        if not self._params and not self._has_outlier_section:
             layout.addWidget(QLabel("No parameters to configure."))
         else:
             layout.addLayout(form)
+
+        if self._has_outlier_section:
+            layout.addWidget(self._build_outlier_section())
 
         self._error_label = QLabel()
         self._error_label.setStyleSheet("color: red;")
@@ -100,6 +152,67 @@ class _ParamEditDialog(QDialog):
         buttons.accepted.connect(self._on_ok)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+    # ------------------------------------------------------------------
+    # Outlier section
+    # ------------------------------------------------------------------
+
+    def _build_outlier_section(self) -> QWidget:
+        box = QGroupBox("Outlier Detection")
+        box_layout = QVBoxLayout(box)
+        box_layout.setContentsMargins(6, 4, 6, 4)
+        box_layout.setSpacing(4)
+
+        current_method = self._params.get("outlier_method") or "none"
+        if current_method is None or str(current_method).lower() in ("none", "null"):
+            current_method = "none"
+        current_params: dict = self._params.get("outlier_params", {})
+
+        self._outlier_combo = QComboBox()
+        for method_key in _OUTLIER_METHODS:
+            self._outlier_combo.addItem(
+                f"{method_key}  —  {_OUTLIER_DESCRIPTIONS[method_key]}", method_key
+            )
+        idx = list(_OUTLIER_METHODS).index(current_method) if current_method in _OUTLIER_METHODS else 0
+        self._outlier_combo.setCurrentIndex(idx)
+        box_layout.addWidget(self._outlier_combo)
+
+        self._outlier_param_row = QWidget()
+        row_layout = QHBoxLayout(self._outlier_param_row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(4)
+        self._outlier_param_label = QLabel()
+        self._outlier_param_edit = QLineEdit()
+        self._outlier_param_edit.setFixedWidth(80)
+        row_layout.addWidget(self._outlier_param_label)
+        row_layout.addWidget(self._outlier_param_edit)
+        row_layout.addStretch()
+        box_layout.addWidget(self._outlier_param_row)
+
+        self._outlier_combo.currentIndexChanged.connect(self._on_outlier_method_changed)
+        self._sync_outlier_param_row(current_method, current_params)
+
+        return box
+
+    def _on_outlier_method_changed(self, _index: int) -> None:
+        method_key = self._outlier_combo.currentData()
+        self._sync_outlier_param_row(method_key, {})
+
+    def _sync_outlier_param_row(self, method_key: str, current_params: dict) -> None:
+        defaults = _OUTLIER_METHODS.get(method_key, {})
+        if not defaults:
+            self._outlier_param_row.setVisible(False)
+            return
+        param_name = next(iter(defaults))
+        default_val = defaults[param_name]
+        actual_val = current_params.get(param_name, default_val)
+        self._outlier_param_label.setText(f"{param_name}:")
+        self._outlier_param_edit.setText(str(actual_val))
+        self._outlier_param_row.setVisible(True)
+
+    # ------------------------------------------------------------------
+    # Accept
+    # ------------------------------------------------------------------
 
     def _on_ok(self) -> None:
         new_params: dict = {}
@@ -121,6 +234,30 @@ class _ParamEditDialog(QDialog):
                 )
                 self._error_label.setVisible(True)
                 return
+
+        if self._has_outlier_section:
+            method_key = self._outlier_combo.currentData()
+            if method_key == "none":
+                new_params["outlier_method"] = None
+                new_params.pop("outlier_params", None)
+            else:
+                new_params["outlier_method"] = method_key
+                defaults = _OUTLIER_METHODS[method_key]
+                param_name = next(iter(defaults))
+                text = self._outlier_param_edit.text().strip()
+                try:
+                    val = float(text)
+                except (ValueError, TypeError):
+                    self._error_label.setText(
+                        f"Invalid value for '{param_name}': expected a number."
+                    )
+                    self._error_label.setVisible(True)
+                    return
+                if val != defaults[param_name]:
+                    new_params["outlier_params"] = {param_name: val}
+                else:
+                    new_params.pop("outlier_params", None)
+
         self._result_params = new_params
         self._error_label.setVisible(False)
         self.accept()
@@ -263,10 +400,11 @@ class ClusterGroupDialog(QDialog):
             method_cfg = existing_methods.get(method)
             if method_cfg is not None:
                 is_enabled = method_cfg.get("enabled", True)
-                params = {
+                saved_params = {
                     k: v for k, v in method_cfg.items()
                     if k not in ("method", "enabled")
                 }
+                params = {**_DEFAULT_PARAMS.get(method, {}), **saved_params}
             else:
                 is_enabled = False
                 params = dict(_DEFAULT_PARAMS.get(method, {}))
