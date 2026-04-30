@@ -10,12 +10,14 @@ Output layout
 -------------
 <output_dir>/
   <session_id>_prepared.csv
+  gesture_type_summary.csv
 """
 
 import sys
 from pathlib import Path
 from typing import List, Tuple
 
+import pandas as pd
 from tqdm import tqdm
 
 from utils.should_process_task import should_process_task, clean_task_outputs
@@ -23,9 +25,28 @@ from .pipeline_shared import _TqdmLineWrapper, session_id_from_path
 from .preparation.loader import load_session_csv
 from .preparation.block_id import ensure_block_id_column
 from .preparation.interpolation import interpolate_touch_columns
+from .preparation.gesture_type import assign_gesture_type
 
 
 _DROP_COLUMNS = ['frame_index', 'green_levels', 'time_nerve', 'time_kinect', 'trial_on']
+_GESTURE_TYPES = ('tap', 'stroke_proximal', 'stroke_distal')
+
+
+def _count_gesture_types(df: pd.DataFrame) -> dict[str, int]:
+    touch_rows = df.drop_duplicates(subset=['block_order_id', 'trial_id', 'single_touch_id'])
+    counts = touch_rows['gesture_type'].value_counts()
+    return {g: int(counts.get(g, 0)) for g in _GESTURE_TYPES}
+
+
+def _write_gesture_type_summary(
+    output_dir: Path,
+    session_counts: dict[str, dict[str, int]],
+) -> None:
+    rows = [{'session_id': sid, **counts} for sid, counts in session_counts.items()]
+    summary_df = pd.DataFrame(rows, columns=['session_id', *_GESTURE_TYPES])
+    summary_path = output_dir / 'gesture_type_summary.csv'
+    summary_df.to_csv(summary_path, index=False)
+    print(f"  [preparation] gesture type summary → {summary_path.name}", flush=True)
 
 
 def run_preparation(
@@ -64,10 +85,12 @@ def run_preparation(
     )
 
     written: List[Path] = []
+    session_counts: dict[str, dict[str, int]] = {}
 
     with tqdm(total=len(input_items), desc="preparation", unit="session",
               file=_TqdmLineWrapper(sys.stdout)) as progress:
         for input_file, _ in input_items:
+            session_id = session_id_from_path(input_file)
             result = _prepare_session(
                 input_file=input_file,
                 output_dir=output_dir,
@@ -75,10 +98,14 @@ def run_preparation(
                 force=force,
             )
             if result is not None:
-                written.append(result)
-            session_id = session_id_from_path(input_file)
+                output_path, counts = result
+                written.append(output_path)
+                session_counts[session_id] = counts
             progress.set_postfix_str(f"preparation: {session_id}", refresh=False)
             progress.update(1)
+
+    if session_counts:
+        _write_gesture_type_summary(output_dir, session_counts)
 
     print(f"=== preparation pipeline complete: {len(written)} outputs ===", flush=True)
     return written
@@ -89,7 +116,7 @@ def _prepare_session(
     output_dir: Path,
     interp_method: str,
     force: bool,
-) -> Path | None:
+) -> tuple[Path, dict[str, int]] | None:
     session_id = session_id_from_path(input_file)
     output_path = output_dir / f"{session_id}_prepared.csv"
 
@@ -100,8 +127,15 @@ def _prepare_session(
                 output_paths=[output_path],
                 force=False,
             ):
-                print(f"  [preparation] {session_id} — up to date", flush=True)
-                return output_path
+                counts = _count_gesture_types(pd.read_csv(output_path))
+                print(
+                    f"  [preparation] {session_id} — up to date  "
+                    f"tap={counts['tap']}  "
+                    f"stroke_proximal={counts['stroke_proximal']}  "
+                    f"stroke_distal={counts['stroke_distal']}",
+                    flush=True,
+                )
+                return output_path, counts
         except FileNotFoundError:
             pass
     clean_task_outputs(output_path)
@@ -109,9 +143,18 @@ def _prepare_session(
     df = load_session_csv(input_file)
     df = ensure_block_id_column(df)
     df = interpolate_touch_columns(df, method=interp_method)
+    df = assign_gesture_type(df)
     df = df[df['single_touch_id'] != 0]
     df = df.drop(columns=_DROP_COLUMNS, errors='ignore')
     df.to_csv(output_path, index=False)
 
-    print(f"  [preparation] {session_id} — {len(df)} rows → {output_path.name}", flush=True)
-    return output_path
+    counts = _count_gesture_types(df)
+    print(
+        f"  [preparation] {session_id} — {len(df)} rows  "
+        f"tap={counts['tap']}  "
+        f"stroke_proximal={counts['stroke_proximal']}  "
+        f"stroke_distal={counts['stroke_distal']}  "
+        f"→ {output_path.name}",
+        flush=True,
+    )
+    return output_path, counts
