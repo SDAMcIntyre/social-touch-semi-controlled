@@ -49,6 +49,20 @@ def _write_gesture_type_summary(
     print(f"  [preparation] gesture type summary → {summary_path.name}", flush=True)
 
 
+def _load_cached_counts(output_dir: Path) -> dict[str, dict[str, int]]:
+    summary_path = output_dir / 'gesture_type_summary.csv'
+    if not summary_path.exists():
+        return {}
+    try:
+        df = pd.read_csv(summary_path)
+        return {
+            row['session_id']: {g: int(row[g]) for g in _GESTURE_TYPES}
+            for _, row in df.iterrows()
+        }
+    except Exception:
+        return {}
+
+
 def run_preparation(
     input_items: List[Tuple[Path, Path]],
     preparation_cfg: dict,
@@ -77,6 +91,7 @@ def run_preparation(
     interp_method = preparation_cfg.get('interpolation', {}).get('method', 'cubic')
 
     output_dir.mkdir(parents=True, exist_ok=True)
+    cached_counts = _load_cached_counts(output_dir)
 
     print(
         f"=== preparation pipeline: {len(input_items)} sessions, "
@@ -96,6 +111,7 @@ def run_preparation(
                 output_dir=output_dir,
                 interp_method=interp_method,
                 force=force,
+                cached_counts=cached_counts,
             )
             if result is not None:
                 output_path, counts = result
@@ -116,6 +132,7 @@ def _prepare_session(
     output_dir: Path,
     interp_method: str,
     force: bool,
+    cached_counts: dict[str, dict[str, int]],
 ) -> tuple[Path, dict[str, int]] | None:
     session_id = session_id_from_path(input_file)
     output_path = output_dir / f"{session_id}_prepared.csv"
@@ -127,7 +144,9 @@ def _prepare_session(
                 output_paths=[output_path],
                 force=False,
             ):
-                counts = _count_gesture_types(pd.read_csv(output_path))
+                counts = cached_counts.get(session_id)
+                if counts is None:
+                    counts = _count_gesture_types(pd.read_csv(output_path))
                 print(
                     f"  [preparation] {session_id} — up to date  "
                     f"tap={counts['tap']}  "

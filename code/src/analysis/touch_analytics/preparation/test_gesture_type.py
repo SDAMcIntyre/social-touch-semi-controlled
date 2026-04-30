@@ -27,6 +27,21 @@ def _stroke_group(start_x: float, end_x: float, **kwargs):
     return pd.DataFrame(data)
 
 
+def _stroke_group_with_nans(x_values: list, **kwargs):
+    n = len(x_values)
+    data = {
+        'block_order_id': [1] * n,
+        'trial_id': [1] * n,
+        'single_touch_id': [1] * n,
+        'type_metadata': ['stroke'] * n,
+        'contact_location_x': x_values,
+        'contact_location_y': [0.0] * n,
+        'contact_location_z': [0.0] * n,
+    }
+    data.update(kwargs)
+    return pd.DataFrame(data)
+
+
 class TestClassifyGestureType:
     def test_tap_returns_tap(self):
         assert classify_gesture_type(_tap_group()) == 'tap'
@@ -63,6 +78,25 @@ class TestClassifyGestureType:
         df = pd.DataFrame({'type_metadata': ['stroke', 'stroke']})
         with pytest.raises(ValueError, match="contact_location"):
             classify_gesture_type(df)
+
+    def test_stroke_proximal_nan_at_start(self):
+        # NaN at iloc[0]; first valid x=1.0, last valid x=3.0 → proximal
+        group = _stroke_group_with_nans([float('nan'), 1.0, 2.0, 3.0])
+        assert classify_gesture_type(group) == 'stroke_proximal'
+
+    def test_stroke_distal_nan_at_end(self):
+        # NaN at iloc[-1]; first valid x=3.0, last valid x=1.0 → distal
+        group = _stroke_group_with_nans([3.0, 2.0, 1.0, float('nan')])
+        assert classify_gesture_type(group) == 'stroke_distal'
+
+    def test_stroke_nan_at_both_ends(self):
+        # NaN at both boundaries; interior goes 1.0→4.0 → proximal
+        group = _stroke_group_with_nans([float('nan'), 1.0, 4.0, float('nan')])
+        assert classify_gesture_type(group) == 'stroke_proximal'
+
+    def test_stroke_unknown_when_all_nan_contact_location(self):
+        group = _stroke_group_with_nans([float('nan'), float('nan')])
+        assert classify_gesture_type(group) == 'stroke_unknown'
 
 
 class TestAssignGestureType:

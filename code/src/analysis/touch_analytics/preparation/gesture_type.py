@@ -1,5 +1,8 @@
 # preparation/gesture_type.py
+import logging
 import pandas as pd
+
+_log = logging.getLogger(__name__)
 
 _KNOWN_TYPES = {'tap', 'stroke'}
 _GROUP_COLS = ['block_order_id', 'trial_id', 'single_touch_id']
@@ -22,7 +25,8 @@ def classify_gesture_type(group: pd.DataFrame) -> str:
     Returns
     -------
     str
-        ``'tap'``, ``'stroke_proximal'``, or ``'stroke_distal'``.
+        ``'tap'``, ``'stroke_proximal'``, ``'stroke_distal'``, or
+        ``'stroke_unknown'`` (when all ``contact_location_x`` values are NaN).
 
     Raises
     ------
@@ -51,8 +55,20 @@ def classify_gesture_type(group: pd.DataFrame) -> str:
             f"{missing}"
         )
 
-    start_x = group['contact_location_x'].iloc[0]
-    end_x = group['contact_location_x'].iloc[-1]
+    valid_x = group['contact_location_x'].dropna()
+    if valid_x.empty:
+        # No valid contact location — Kinect tracking was entirely absent for this touch.
+        # Explicitly requested exception to fail-fast: return sentinel rather than raise.
+        _log.warning(
+            "classify_gesture_type: all contact_location_x values are NaN for a stroke "
+            "group (block=%s, trial=%s, touch=%s) — labelled 'stroke_unknown'",
+            group['block_order_id'].iloc[0],
+            group['trial_id'].iloc[0],
+            group['single_touch_id'].iloc[0],
+        )
+        return 'stroke_unknown'
+    start_x = valid_x.iloc[0]
+    end_x = valid_x.iloc[-1]
     return 'stroke_proximal' if end_x > start_x else 'stroke_distal'
 
 

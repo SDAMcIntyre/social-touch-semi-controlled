@@ -13,7 +13,7 @@ _DEFAULT_AGGREGATIONS = ['mean', 'median', 'std', 'min', 'max', 'range', 'skewne
 _EXCLUDE_FROM_AGGREGATION = frozenset({
     # Orchestrator / touch-ID columns
     'block_order_id', 'trial_id', 'single_touch_id',
-    'type_metadata', 'direction',
+    'type_metadata', 'gesture_type',
     'mean_contact_x', 'mean_contact_y', 'mean_contact_z',
     'spike_elicited', 'session_id',
     # Frame indexing
