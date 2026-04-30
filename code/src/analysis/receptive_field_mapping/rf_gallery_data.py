@@ -21,8 +21,7 @@ from .rf_extraction_io import (
     load_neuron_touches,
     load_sessions_metadata,
 )
-from .rf_surface_utils import load_or_build_forearm_mesh
-from .rf_data_loader import load_forearm_vertices
+from .rf_data_loader import load_forearm_vertex_colors, load_forearm_vertices
 from .tangent_plane_alignment import compute_tangent_plane_rotation
 
 logger = logging.getLogger(__name__)
@@ -44,6 +43,7 @@ class GalleryCell:
     # Geometry
     forearm_mesh: Optional[trimesh.Trimesh]
     forearm_vertices: Optional[np.ndarray]
+    forearm_vertex_colors: Optional[np.ndarray]
     tangent_rotation: Optional[np.ndarray]
 
     # Spike data
@@ -59,8 +59,6 @@ class GalleryCell:
     cluster_description: dict
     rf_metrics: Optional[dict]
 
-    # Populated later by the GUI
-    thumbnail: Optional[object] = None
 
 
 @dataclass
@@ -69,9 +67,11 @@ class GalleryData:
 
     combo_name: str
     clusterer_name: str
+    output_base_dir: Path = field(default_factory=lambda: Path("."))
     cells: Dict[Tuple[str, str], GalleryCell] = field(default_factory=dict)
     session_ids: List[str] = field(default_factory=list)
     cluster_labels: List[str] = field(default_factory=list)
+    gesture_type: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -120,7 +120,12 @@ def _sort_key_for_cluster_label(label: str) -> Tuple[int, int]:
 # Main loader
 # ---------------------------------------------------------------------------
 
-def load_gallery_data(output_dir: Path, combo_name: str, clusterer_name: str) -> GalleryData:
+def load_gallery_data(
+    output_dir: Path,
+    combo_name: str,
+    clusterer_name: str,
+    gesture_type: str | None = None,
+) -> GalleryData:
     """Scan extraction output for one combo/clusterer pair and load all artifacts.
 
     Parameters
@@ -132,6 +137,10 @@ def load_gallery_data(output_dir: Path, combo_name: str, clusterer_name: str) ->
         Feature combination name (e.g. 'pressure_velocity_mean').
     clusterer_name:
         Clustering profile name (e.g. 'kmeans_k5').
+    gesture_type:
+        When the cluster group used ``per_type_clustering``, pass the gesture type
+        (``"tap"``, ``"stroke_proximal"``, ``"stroke_distal"``) to load the correct
+        per-type artifact tree.  ``None`` loads the flat artifact tree.
 
     Returns
     -------
@@ -147,6 +156,8 @@ def load_gallery_data(output_dir: Path, combo_name: str, clusterer_name: str) ->
         session spike data).
     """
     base_output = output_dir / combo_name / clusterer_name
+    if gesture_type is not None:
+        base_output = base_output / gesture_type
 
     if not base_output.exists():
         raise FileNotFoundError(
@@ -163,7 +174,12 @@ def load_gallery_data(output_dir: Path, combo_name: str, clusterer_name: str) ->
     neuron_touches_map = load_neuron_touches(base_output)
     sessions_metadata = load_sessions_metadata(base_output)
 
-    gallery = GalleryData(combo_name=combo_name, clusterer_name=clusterer_name)
+    gallery = GalleryData(
+        combo_name=combo_name,
+        clusterer_name=clusterer_name,
+        output_base_dir=base_output,
+        gesture_type=gesture_type,
+    )
 
     cluster_dirs = sorted(base_output.glob("cluster_*"))
     if not cluster_dirs:
@@ -220,7 +236,7 @@ def load_gallery_data(output_dir: Path, combo_name: str, clusterer_name: str) ->
                     f"'{session_id}': {exc}"
                 ) from exc
 
-            forearm_vertices, forearm_mesh = _load_forearm_geometry(
+            forearm_vertices, forearm_colors, forearm_mesh = _load_forearm_geometry(
                 base_output, session_id, sessions_metadata, cluster_folder,
             )
 
@@ -242,6 +258,7 @@ def load_gallery_data(output_dir: Path, combo_name: str, clusterer_name: str) ->
                 is_noise=is_noise,
                 forearm_mesh=forearm_mesh,
                 forearm_vertices=forearm_vertices,
+                forearm_vertex_colors=forearm_colors,
                 tangent_rotation=tangent_rotation,
                 spike_counts_df=spike_counts_df,
                 neuron_contacts_xyz=neuron_contacts_xyz,
@@ -313,10 +330,14 @@ def _load_forearm_geometry(
     session_id: str,
     sessions_metadata: Dict[str, dict],
     cluster_folder: str,
-) -> Tuple[Optional[np.ndarray], Optional[trimesh.Trimesh]]:
-    """Load forearm vertices and mesh for a session.
+) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], Optional[trimesh.Trimesh]]:
+    """Load forearm vertices and vertex colors for a session.
 
-    Edge case: missing forearm PLY → returns (None, None) with a warning.
+    Mesh construction (Delaunay) is deferred to the gallery viewer so it
+    can apply per-session thresholds interactively.
+
+    Returns (vertices, vertex_colors, mesh).  *mesh* is always None
+    (Delaunay is built on demand in the viewer).
     """
     ply_str = sessions_metadata.get(session_id, {}).get("forearm_ply")
     if not ply_str:
@@ -325,7 +346,7 @@ def _load_forearm_geometry(
             "cell will be rendered without mesh.",
             session_id, cluster_folder,
         )
-        return None, None
+        return None, None, None
 
     forearm_ply = Path(ply_str)
     if not forearm_ply.exists():
@@ -334,7 +355,7 @@ def _load_forearm_geometry(
             "(cluster '%s'): %s — cell will be rendered without mesh.",
             session_id, cluster_folder, forearm_ply,
         )
-        return None, None
+        return None, None, None
 
     forearm_vertices = load_forearm_vertices(forearm_ply)
     if forearm_vertices is None:
@@ -343,15 +364,8 @@ def _load_forearm_geometry(
             "(cluster '%s') — cell will be rendered without mesh.",
             session_id, cluster_folder,
         )
-        return None, None
+        return None, None, None
 
-    forearm_mesh = load_or_build_forearm_mesh(forearm_ply)
-    if forearm_mesh is None:
-        logger.warning(
-            "load_gallery_data: could not build forearm mesh for session '%s' "
-            "(cluster '%s') — cell will be rendered without mesh.",
-            session_id, cluster_folder,
-        )
-        return forearm_vertices, None
+    forearm_colors = load_forearm_vertex_colors(forearm_ply)
 
-    return forearm_vertices, forearm_mesh
+    return forearm_vertices, forearm_colors, None

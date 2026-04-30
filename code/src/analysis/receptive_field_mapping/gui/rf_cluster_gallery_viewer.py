@@ -40,7 +40,9 @@ from scipy.spatial import Delaunay, QhullError
 from analysis.receptive_field_mapping.rf_cluster_pipeline import description_summary_line
 from analysis.receptive_field_mapping.rf_extraction_io import (
     load_delaunay_thresholds,
+    load_session_cameras,
     save_delaunay_thresholds,
+    save_session_cameras,
 )
 from analysis.receptive_field_mapping.rf_gallery_data import GalleryCell, GalleryData
 from analysis.receptive_field_mapping.rf_surface_utils import (
@@ -228,8 +230,9 @@ class RFClusterGalleryViewer(QMainWindow):
 
     def __init__(self, gallery_data: GalleryData, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
+        _type_suffix = f" — {gallery_data.gesture_type}" if gallery_data.gesture_type else ""
         self.setWindowTitle(
-            f"RF Cluster Gallery — {gallery_data.combo_name} / {gallery_data.clusterer_name}"
+            f"RF Cluster Gallery — {gallery_data.combo_name} / {gallery_data.clusterer_name}{_type_suffix}"
         )
 
         self._gallery_data = gallery_data
@@ -237,7 +240,7 @@ class RFClusterGalleryViewer(QMainWindow):
         self._current_cell: Optional[GalleryCell] = None
         self._thumb_widgets: Dict[Tuple[str, str], _ThumbnailWidget] = {}
         self._initial_render_done = False
-        self._session_cameras: Dict[str, dict] = {}
+        self._session_cameras: Dict[str, dict] = self._load_cameras()
 
         self._default_threshold: float = 20.0
         self._session_thresholds: Dict[str, float] = self._load_thresholds()
@@ -297,6 +300,11 @@ class RFClusterGalleryViewer(QMainWindow):
         self._select_combo.currentIndexChanged.connect(self._on_selection_changed)
         bar.addWidget(self._select_combo, stretch=1)
 
+        self._preload_btn = QPushButton("Load All")
+        self._preload_btn.setToolTip("Pre-compute Delaunay meshes, heatmaps, and perimeter hulls for every cell so navigation is instant.")
+        self._preload_btn.clicked.connect(self._on_preload_all_clicked)
+        bar.addWidget(self._preload_btn)
+
         self._export_btn = QPushButton("Export images")
         self._export_btn.clicked.connect(self._on_export_all_clicked)
         bar.addWidget(self._export_btn)
@@ -342,6 +350,16 @@ class RFClusterGalleryViewer(QMainWindow):
         settings_scroll.setWidgetResizable(True)
         settings_widget = QWidget()
         settings_layout = QVBoxLayout(settings_widget)
+
+        # --- Cluster Info ---
+        info_box = QGroupBox("Cluster Info")
+        info_lay = QVBoxLayout(info_box)
+        self._cluster_info_label = QLabel("—")
+        self._cluster_info_label.setWordWrap(True)
+        self._cluster_info_label.setAlignment(Qt.AlignTop)
+        self._cluster_info_label.setStyleSheet("font-size: 11px;")
+        info_lay.addWidget(self._cluster_info_label)
+        settings_layout.addWidget(info_box)
 
         # --- Background ---
         bg_box = QGroupBox("Background")
@@ -607,6 +625,30 @@ class RFClusterGalleryViewer(QMainWindow):
         self._settings.cmap = text
         self._settings.contact_cmap = text
 
+    def _update_cluster_info(self, cell: GalleryCell) -> None:
+        desc = cell.cluster_description or {}
+        lines = []
+
+        n = desc.get('n_touches')
+        if n is not None:
+            lines.append(f"n_touches: {n}")
+
+        gtd = desc.get('gesture_type_distribution') or {}
+        if gtd:
+            dominant = max(gtd, key=gtd.get)
+            lines.append(f"type: {dominant} ({gtd[dominant]:.0%})")
+
+        dr = desc.get('display_ranges') or {}
+        if dr:
+            for label, r in dr.items():
+                lines.append(f"{label}: [{r['min']}, {r['max']}]")
+        else:
+            fr = desc.get('feature_ranges') or {}
+            for col, r in fr.items():
+                lines.append(f"{col}: [{r['min']}, {r['max']}]")
+
+        self._cluster_info_label.setText("\n".join(lines) if lines else "—")
+
     # ------------------------------------------------------------------
     # Sidebar population
     # ------------------------------------------------------------------
@@ -711,6 +753,7 @@ class RFClusterGalleryViewer(QMainWindow):
             w.set_selected(k == key)
 
         self._current_cell = self._gallery_data.cells[key]
+        self._update_cluster_info(self._current_cell)
 
         self._threshold_spin.blockSignals(True)
         self._threshold_spin.setValue(
@@ -787,6 +830,18 @@ class RFClusterGalleryViewer(QMainWindow):
     def _save_thresholds(self) -> None:
         save_delaunay_thresholds(
             self._gallery_data.output_base_dir, self._session_thresholds
+        )
+
+    # ------------------------------------------------------------------
+    # Camera persistence
+    # ------------------------------------------------------------------
+
+    def _load_cameras(self) -> Dict[str, dict]:
+        return load_session_cameras(self._gallery_data.output_base_dir)
+
+    def _save_cameras(self) -> None:
+        save_session_cameras(
+            self._gallery_data.output_base_dir, self._session_cameras
         )
 
     def _current_threshold(self, session_id: str) -> float:
@@ -1090,6 +1145,57 @@ class RFClusterGalleryViewer(QMainWindow):
         self.plotter.reset_camera()
 
     # ------------------------------------------------------------------
+    # Batch preload
+    # ------------------------------------------------------------------
+
+    def _on_preload_all_clicked(self) -> None:
+        """Pre-warm all caches for every cell so switching is instant."""
+        cells = self._gallery_data.cells
+        if not cells:
+            return
+
+        s = self._settings
+        metric_col = (
+            "spike_count" if s.display_metric == "spike_count" else "unique_touch_spike_count"
+        )
+
+        all_keys = sorted(cells.keys())
+        n = len(all_keys)
+
+        self._preload_btn.setEnabled(False)
+        self._export_btn.setEnabled(False)
+        try:
+            for i, key in enumerate(all_keys, start=1):
+                cell = cells[key]
+                self.statusBar().showMessage(
+                    f"Preloading {i}/{n}: {cell.session_id} / cluster_{cell.cluster_label}"
+                )
+                QApplication.processEvents()
+
+                mesh = self._get_delaunay_mesh(cell)
+
+                if mesh is not None:
+                    df = cell.spike_counts_df
+                    if len(df) > 0 and metric_col in df.columns:
+                        threshold = self._current_threshold(cell.session_id)
+                        self._get_heatmap(cell, mesh, threshold, metric_col)
+
+                if s.hull_display_mode == "perimeter":
+                    for raw_pts, role in [
+                        (cell.neuron_contacts_xyz, "neuron"),
+                        (cell.cluster_contacts_xyz, "cluster"),
+                    ]:
+                        if raw_pts is not None and len(raw_pts) >= 3:
+                            self._get_perimeter_mesh(
+                                cell, role, raw_pts, s.hull_blob_sep_mm, s.hull_alpha_mm
+                            )
+
+            self.statusBar().showMessage(f"Preload complete: {n} cells cached.")
+        finally:
+            self._preload_btn.setEnabled(True)
+            self._export_btn.setEnabled(True)
+
+    # ------------------------------------------------------------------
     # Batch export
     # ------------------------------------------------------------------
 
@@ -1106,6 +1212,8 @@ class RFClusterGalleryViewer(QMainWindow):
         n = len(sorted_keys)
 
         saved_cell = self._current_cell
+        if saved_cell is not None:
+            self._session_cameras[saved_cell.session_id] = self._capture_camera()
         saved_cameras = dict(self._session_cameras)
 
         self._export_btn.setEnabled(False)
@@ -1116,7 +1224,11 @@ class RFClusterGalleryViewer(QMainWindow):
 
                 cell = cells[(sid, lbl)]
                 self._build_scene(cell)
-                self._set_auto_face_on_camera(cell)
+                stored_cam = saved_cameras.get(cell.session_id)
+                if stored_cam is not None:
+                    self._restore_camera(stored_cam)
+                else:
+                    self._set_auto_face_on_camera(cell)
                 QApplication.processEvents()
 
                 out_path = export_dir / f"{sid}__cluster_{lbl}.png"
@@ -1161,6 +1273,9 @@ class RFClusterGalleryViewer(QMainWindow):
         self._repopulate_sidebar()
 
     def closeEvent(self, event) -> None:  # noqa: N802
+        if self._current_cell is not None:
+            self._session_cameras[self._current_cell.session_id] = self._capture_camera()
+        self._save_cameras()
         self._save_thresholds()
         self.plotter.close()
         super().closeEvent(event)
