@@ -2,7 +2,7 @@
 
 **Date:** 2026-04-29
 **Author:** Basil Duvernoy
-**Status:** In Progress
+**Status:** Completed
 **Base Branch:** `feature/hand-velocity-scalars-and-cartesian-binning`
 **Branch:** `feature/per-type-clustering-outputs`
 

@@ -2,9 +2,9 @@
 
 **Created:** 2026-04-29 11:08
 **Approved:** —
-**Completed:** —
+**Completed:** 2026-04-30
 **Author:** Basil Duvernoy
-**Status:** In Progress
+**Status:** Completed
 **Branch:** `feature/hand-velocity-scalars-and-cartesian-binning`
 
 ---
