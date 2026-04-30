@@ -110,3 +110,156 @@ class TestNBinsTooSmallRaises:
         config = {'n_bins': 1}
         with pytest.raises(ValueError, match='n_bins must be >= 2'):
             _clusterer().fit_predict(df, config, _ctx())
+
+
+# ---------------------------------------------------------------------------
+# Outlier detection integration
+# ---------------------------------------------------------------------------
+
+def _make_df_with_outliers() -> pd.DataFrame:
+    """Single feature with clear high-end outliers for IQR detection."""
+    normal = list(range(1, 21))
+    outliers = [200, 300]
+    return pd.DataFrame({'x': normal + outliers})
+
+
+class TestOutlierDisabledByDefault:
+    def test_no_outlier_method_in_config(self):
+        df = _make_df_with_outliers()
+        config = {'n_bins': 4, 'bin_method': 'equal_width'}
+        _labels, meta = _clusterer().fit_predict(df, config, _ctx())
+        assert meta['outlier_method'] is None
+        assert meta['outlier_info'] == {}
+
+    def test_explicit_none(self):
+        df = _make_df_with_outliers()
+        config = {'n_bins': 4, 'outlier_method': None}
+        _labels, meta = _clusterer().fit_predict(df, config, _ctx())
+        assert meta['outlier_method'] is None
+
+
+class TestOutlierIQR:
+    def test_high_outliers_get_dedicated_bin(self):
+        df = _make_df_with_outliers()
+        config = {'n_bins': 4, 'bin_method': 'equal_width', 'outlier_method': 'iqr'}
+        labels, meta = _clusterer().fit_predict(df, config, _ctx())
+
+        bin_x = meta['extra_columns']['bin_x']
+        # Rows at index 20 and 21 are the outlier values (200, 300)
+        normal_bins = bin_x[:20]
+        outlier_indices = bin_x[20:]
+        normal_max_bin = max(b for b in normal_bins if b >= 0)
+        assert all(b > normal_max_bin for b in outlier_indices)
+
+        assert 'x' in meta['outlier_info']
+        info = meta['outlier_info']['x']
+        assert info['method'] == 'iqr'
+        assert info['n_high_outliers'] == 2
+        assert info['n_low_outliers'] == 0
+
+
+class TestOutlierMAD:
+    def test_detects_outliers(self):
+        df = _make_df_with_outliers()
+        config = {'n_bins': 4, 'outlier_method': 'mad'}
+        _labels, meta = _clusterer().fit_predict(df, config, _ctx())
+        assert 'x' in meta['outlier_info']
+        assert meta['outlier_info']['x']['n_high_outliers'] >= 1
+
+
+class TestOutlierPercentile:
+    def test_detects_outliers(self):
+        normal = list(range(1, 101))
+        outliers = [1000, 2000]
+        df = pd.DataFrame({'x': normal + outliers})
+        config = {'n_bins': 5, 'outlier_method': 'percentile', 'outlier_params': {'p': 1.0}}
+        _labels, meta = _clusterer().fit_predict(df, config, _ctx())
+        assert meta['outlier_method'] == 'percentile'
+
+
+class TestOutlierTukey:
+    def test_detects_outliers(self):
+        df = _make_df_with_outliers()
+        config = {'n_bins': 4, 'outlier_method': 'tukey'}
+        _labels, meta = _clusterer().fit_predict(df, config, _ctx())
+        assert meta['outlier_method'] == 'tukey'
+        assert 'x' in meta['outlier_info']
+
+
+class TestOutlierOneSided:
+    def test_low_only(self):
+        values = [-500, -400] + list(range(1, 21))
+        df = pd.DataFrame({'x': values})
+        config = {'n_bins': 4, 'outlier_method': 'iqr'}
+        _labels, meta = _clusterer().fit_predict(df, config, _ctx())
+
+        bin_x = meta['extra_columns']['bin_x']
+        assert -2 in bin_x
+        info = meta['outlier_info']['x']
+        assert info['n_low_outliers'] == 2
+        assert info['n_high_outliers'] == 0
+
+    def test_high_only(self):
+        values = list(range(1, 21)) + [500, 600]
+        df = pd.DataFrame({'x': values})
+        config = {'n_bins': 4, 'outlier_method': 'iqr'}
+        _labels, meta = _clusterer().fit_predict(df, config, _ctx())
+
+        info = meta['outlier_info']['x']
+        assert info['n_low_outliers'] == 0
+        assert info['n_high_outliers'] == 2
+
+
+class TestOutlierNoOutliersDetected:
+    def test_clean_data(self):
+        rng = np.random.default_rng(99)
+        df = pd.DataFrame({'x': rng.uniform(0, 1, 100)})
+        config = {'n_bins': 5, 'outlier_method': 'iqr'}
+        _labels, meta = _clusterer().fit_predict(df, config, _ctx())
+        assert meta['outlier_info'] == {}
+
+
+class TestOutlierInvalidConfig:
+    def test_invalid_method_raises(self):
+        df = pd.DataFrame({'x': list(range(20))})
+        config = {'n_bins': 3, 'outlier_method': 'zscore'}
+        with pytest.raises(ValueError, match='outlier_method must be one of'):
+            _clusterer().fit_predict(df, config, _ctx())
+
+    def test_invalid_params_raises(self):
+        df = pd.DataFrame({'x': list(range(20))})
+        config = {'n_bins': 3, 'outlier_method': 'iqr', 'outlier_params': {'bogus': 5}}
+        with pytest.raises(ValueError):
+            _clusterer().fit_predict(df, config, _ctx())
+
+
+class TestOutlierCartesianProduct:
+    def test_outlier_bins_participate_in_combinations(self):
+        normal_a = list(range(1, 21))
+        normal_b = list(range(1, 21))
+        df = pd.DataFrame({
+            'A': normal_a + [500],
+            'B': normal_b + [1],
+        })
+        config = {'n_bins': 3, 'outlier_method': 'iqr', 'bin_method': 'equal_width'}
+        labels, meta = _clusterer().fit_predict(df, config, _ctx())
+
+        assert len(labels) == len(df)
+        combos = meta['cluster_combinations']
+        flat = [v for row in combos for v in row]
+        # The high outlier in A should produce a bin index outside [0, 2]
+        assert any(v < 0 or v > 2 for v in flat)
+
+
+class TestOutlierMetadataStructure:
+    def test_keys_present(self):
+        df = _make_df_with_outliers()
+        config = {'n_bins': 4, 'outlier_method': 'iqr'}
+        _labels, meta = _clusterer().fit_predict(df, config, _ctx())
+
+        assert 'outlier_method' in meta
+        assert 'outlier_info' in meta
+        info = meta['outlier_info']['x']
+        for key in ('method', 'params', 'lower_bound', 'upper_bound',
+                     'n_low_outliers', 'n_high_outliers'):
+            assert key in info, f"Missing key '{key}' in outlier_info"
