@@ -4,15 +4,31 @@
 # Drives postprocess_visualization.py.
 # Point kinect_configs at the block configs for the session to view.
 #
-# Two tasks (enable exactly one at a time):
+# Session-level tasks (run once for all sessions):
+#   view_forearm_stage_inspector — 3D viewer: navigate sessions/stages via dropdown
+#
+# Per-block tasks (enable exactly one at a time):
 #   view_postprocessed_simple   — forearm PLY + contact points + neural panels
 #   view_postprocessed_advanced — adds sticker spheres + hand mesh (ICP+PCA)
 # ==============================================================================
 
 parameters:
-  kinect_configs: valid_configs_ST13-02
+  kinect_configs: [valid_configs_ST13-01, valid_configs_ST13-02, 
+      valid_configs_ST13-03, valid_configs_ST14-01, valid_configs_ST14-02, 
+      valid_configs_ST14-03, valid_configs_ST14-04, valid_configs_ST15-01, 
+      valid_configs_ST15-02, valid_configs_ST16-02, valid_configs_ST16-03, 
+      valid_configs_ST16-04, valid_configs_ST16-05, valid_configs_ST18-01, 
+      valid_configs_ST18-04]
 
 tasks:
+  view_forearm_stage_inspector:
+    enabled: true
+    description: "Launch ForearmStageInspector: single window with session and stage
+      dropdowns to inspect forearm pointclouds at Raw, PCA-Calibrated, and RF-Centered
+      stages. Optional Delaunay mesh overlay. Runs once per batch (session-level)."
+    options: {}
+    depends_on: []
+
   view_postprocessed_simple:
     enabled: false
     description: "Launch PostprocessedSceneViewer in simple mode: static PCA-calibrated
@@ -29,7 +45,7 @@ tasks:
     depends_on: []
 
   view_before_after_steps:
-    enabled: true
+    enabled: false
     description: "Launch BeforeAfterStepViewer for each of the 4 postprocessing steps
       (ICP registration, PCA calibration, forearm projection, RF centering). Opens
       one side-by-side dual-plotter window per step sequentially; steps with missing

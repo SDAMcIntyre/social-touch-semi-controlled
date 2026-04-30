@@ -54,7 +54,8 @@ from preprocessing.forearm_extraction import (
     get_forearms_with_fallback,
 )
 
-from postprocessing.gui import PostprocessedSceneViewer, BeforeAfterStepViewer
+from postprocessing.gui import PostprocessedSceneViewer, BeforeAfterStepViewer, ForearmStageInspector
+from postprocessing.gui.forearm_stage_inspector import resolve_all_session_stage_paths
 from postprocessing.xyz_reference_from_gestures.calibration_pca_engine import CalibrationResult
 
 
@@ -424,6 +425,38 @@ def run_single_session_pipeline_before_after(
 
 
 # ---------------------------------------------------------------------------
+# Session-level viewers
+# ---------------------------------------------------------------------------
+
+
+def run_forearm_stage_inspector(
+    session_map: Dict[str, List[KinectConfig]],
+    dag_handler: DagConfigHandler,
+) -> None:
+    """Launch ForearmStageInspector for all sessions in *session_map*.
+
+    Checks can_run("view_forearm_stage_inspector") before opening the viewer.
+    Resolves all PLY paths from the session map and opens a single window
+    that lets the user navigate sessions and stages via dropdowns.
+    """
+    task_name = "view_forearm_stage_inspector"
+    if not dag_handler.can_run(task_name):
+        print(f"Task '{task_name}' disabled — skipping.")
+        return
+
+    stage_index = resolve_all_session_stage_paths(session_map)
+    print(
+        f"Launching ForearmStageInspector for {len(stage_index)} session(s)..."
+    )
+    app = QApplication.instance() or QApplication(sys.argv)
+    viewer = ForearmStageInspector(stage_index)
+    viewer.show()
+    app.exec_()
+    QCoreApplication.processEvents()
+    dag_handler.mark_completed(task_name)
+
+
+# ---------------------------------------------------------------------------
 # Batch dispatcher
 # ---------------------------------------------------------------------------
 
@@ -434,21 +467,32 @@ def run_batch_sequentially(
     dag_config_path: Path,
 ) -> None:
     """Run the viewer for each block config file sequentially."""
+    from collections import defaultdict
+
     dag_handler_template = DagConfigHandler(dag_config_path)
 
+    # First pass: load all configs and group by session_id for session-level tasks.
+    session_map: Dict[str, List[KinectConfig]] = defaultdict(list)
+    loaded_configs: List[tuple] = []
     for block_file in block_files:
-        print(f"--- Opening block: {block_file.name} ---")
         try:
             config_data = KinectConfigFileHandler.load_and_resolve_config(block_file)
             config = KinectConfig(config_data=config_data, database_path=project_data_root)
-            dag_handler_instance = dag_handler_template.copy()
-
-            run_single_session_pipeline(config, dag_handler_instance)
-            run_single_session_pipeline_advanced(config, dag_handler_instance)
-            run_single_session_pipeline_before_after(config, dag_handler_instance)
+            session_map[config.session_id].append(config)
+            loaded_configs.append((block_file, config))
         except Exception as exc:
             print(f"Failed to initialise session {block_file.name}: {exc}")
-            continue
+
+    # Session-level stage inspector (one window for all sessions)
+    run_forearm_stage_inspector(dict(session_map), dag_handler_template)
+
+    # Per-block viewers
+    for block_file, config in loaded_configs:
+        print(f"--- Opening block: {block_file.name} ---")
+        dag_handler_instance = dag_handler_template.copy()
+        run_single_session_pipeline(config, dag_handler_instance)
+        run_single_session_pipeline_advanced(config, dag_handler_instance)
+        run_single_session_pipeline_before_after(config, dag_handler_instance)
 
     print("All postprocessed viewer sessions completed.")
 
