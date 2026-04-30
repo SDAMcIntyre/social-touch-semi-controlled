@@ -44,7 +44,7 @@ from analysis.receptive_field_mapping.rf_metrics import (
     metrics_to_dict,
     metrics_to_row,
 )
-from analysis.touch_analytics.clustering_pipeline import DATA_TYPE_TO_COLUMNS
+from analysis.touch_analytics.clustering_pipeline import DATA_TYPE_TO_COLUMNS, GESTURE_TYPES
 from analysis.touch_analytics.pipeline_shared import (
     SHARED_COLUMNS,
     filter_enabled_profiles,
@@ -278,9 +278,9 @@ def _build_cluster_description(
         vc = rows['type_metadata'].value_counts(normalize=True)
         desc['type_distribution'] = {str(k): round(float(v), 3) for k, v in vc.items()}
 
-    if 'direction' in rows.columns:
-        vc = rows['direction'].value_counts(normalize=True)
-        desc['direction_distribution'] = {str(k): round(float(v), 3) for k, v in vc.items()}
+    if 'gesture_type' in rows.columns:
+        vc = rows['gesture_type'].value_counts(normalize=True)
+        desc['gesture_type_distribution'] = {str(k): round(float(v), 3) for k, v in vc.items()}
 
     feature_cols = [
         c for c in rows.columns
@@ -464,15 +464,21 @@ def _format_generation_params(gen: dict, desc: dict, separator: str) -> str:
             parts.append(f"cov: {gen['covariance_type']}")
         if gen.get('features'):
             parts.append(f"features: {', '.join(gen['features'])}")
-        dr = desc.get('display_ranges') or {}
-        for label, r in dr.items():
-            parts.append(f"{label}: [{r['min']}, {r['max']}]")
     else:
         header = algo
 
     br = desc.get('bin_range')
     if br:
         parts.append(f"{br['feature']}: [{br['low']}, {br['high']}]")
+
+    dr = desc.get('display_ranges') or {}
+    if dr:
+        for label, r in dr.items():
+            parts.append(f"{label}: [{r['min']}, {r['max']}]")
+    else:
+        fr = desc.get('feature_ranges') or {}
+        for col, r in fr.items():
+            parts.append(f"{col}: [{r['min']}, {r['max']}]")
 
     if parts:
         return header + separator + separator.join(parts)
@@ -586,213 +592,234 @@ def run_cluster_rf_extraction(
     produced: List[Path] = []
 
     for combo_name, clusterer_name in pairs:
-        print(f"[RF Extraction] {combo_name}/{clusterer_name}...")
-        clustered_csv = (
-            clustering_dir / combo_name / clusterer_name
-            / 'pooled_touch_summary_clustered.csv'
-        )
-        if not clustered_csv.exists():
-            print(f"  Clustered CSV not found, skipping.")
-            logger.warning(
-                "Clustered CSV not found, skipping (%s/%s): %s",
-                combo_name, clusterer_name, clustered_csv,
-            )
-            continue
+        group_spec = (cluster_group_defs or {}).get(combo_name, {})
+        per_type = group_spec.get('per_type_clustering', False)
+        if per_type:
+            runs = [
+                (
+                    gt,
+                    clustering_dir / combo_name / clusterer_name / gt
+                    / 'pooled_touch_summary_clustered.csv',
+                    output_dir / combo_name / clusterer_name / gt,
+                    clustering_dir / combo_name / clusterer_name / gt / 'cluster_metadata.json',
+                )
+                for gt in GESTURE_TYPES
+            ]
+        else:
+            runs = [(
+                None,
+                clustering_dir / combo_name / clusterer_name
+                / 'pooled_touch_summary_clustered.csv',
+                output_dir / combo_name / clusterer_name,
+                clustering_dir / combo_name / clusterer_name / 'cluster_metadata.json',
+            )]
 
-        base_output = output_dir / combo_name / clusterer_name
-        extraction_json = base_output / 'extraction_summary.json'
-        cluster_metadata_path = (
-            clustering_dir / combo_name / clusterer_name / 'cluster_metadata.json'
-        )
-
-        if not should_process_task(
-            input_paths=[clustered_csv],
-            output_paths=[extraction_json],
-            force=force,
-        ):
-            print(f"  Extraction up-to-date, skipping.")
-            for cluster_dir in sorted(base_output.glob('cluster_*')):
-                sc = cluster_dir / 'spike_counts.csv'
-                if sc.exists():
-                    produced.append(sc)
-            continue
-
-        try:
-            clustered_df = pd.read_csv(clustered_csv)
-        except Exception:
-            logger.exception("Failed to read %s", clustered_csv)
-            continue
-
-        if clustered_df.empty:
-            print(f"  Clustered CSV is empty, skipping.")
-            logger.warning("Clustered CSV is empty: %s", clustered_csv)
-            continue
-
-        clustered_by_label = _group_touches_by_cluster(clustered_df)
-        n_clusters = len(clustered_by_label)
-        print(f"  {n_clusters} clusters found.")
-
-        neuron_touches: Dict[str, int] = {
-            str(k): int(v)
-            for k, v in clustered_df.groupby('session_id').size().items()
-        }
-
-        session_dfs: Dict[str, pd.DataFrame] = {}
-        neuron_contacts_xyz: Dict[str, np.ndarray] = {}
-        sessions_metadata: Dict[str, dict] = {}
-
-        for sid in list(neuron_touches.keys()):
-            if sid not in session_dir_map:
+        for gesture_type, clustered_csv, base_output, cluster_metadata_path in runs:
+            _type_label = f"/{gesture_type}" if gesture_type else ""
+            print(f"[RF Extraction] {combo_name}/{clusterer_name}{_type_label}...")
+            if not clustered_csv.exists():
+                print(f"  Clustered CSV not found, skipping.")
                 logger.warning(
-                    "Session '%s' in clustered_df not found in input_items. Skipping.", sid
+                    "Clustered CSV not found, skipping (%s/%s%s): %s",
+                    combo_name, clusterer_name, _type_label, clustered_csv,
                 )
                 continue
-            _session_dir = session_dir_map[sid]
-            _agg_csvs = list(_session_dir.glob('*_semicontrolled_aggregated_session.csv'))
-            if not _agg_csvs:
-                logger.warning(
-                    "No aggregated CSV in %s. Skipping session %s.", _session_dir, sid
-                )
+
+            extraction_json = base_output / 'extraction_summary.json'
+
+            if not should_process_task(
+                input_paths=[clustered_csv],
+                output_paths=[extraction_json],
+                force=force,
+            ):
+                print(f"  Extraction up-to-date, skipping.")
+                for cluster_dir in sorted(base_output.glob('cluster_*')):
+                    sc = cluster_dir / 'spike_counts.csv'
+                    if sc.exists():
+                        produced.append(sc)
                 continue
+
             try:
-                _session_df = _load_session_aggregated(_agg_csvs[0])
-            except ValueError as _exc:
-                logger.warning("Skipping session %s: %s", sid, _exc)
-                continue
+                clustered_df = pd.read_csv(clustered_csv)
             except Exception:
-                logger.exception("Error reading %s", _agg_csvs[0].name)
+                logger.exception("Failed to read %s", clustered_csv)
                 continue
 
-            session_dfs[sid] = _session_df
+            if clustered_df.empty:
+                print(f"  Clustered CSV is empty, skipping.")
+                logger.warning("Clustered CSV is empty: %s", clustered_csv)
+                continue
 
-            _all_session_keys = list(
-                clustered_df[clustered_df['session_id'].astype(str) == sid][_KEY_COLS]
-                .drop_duplicates()
-                .itertuples(index=False, name=None)
-            )
-            _, _, _neuron_xyz = _parse_contacts_for_keys(_session_df, touch_keys=_all_session_keys)
-            if len(_neuron_xyz) == 0:
-                raise ValueError(
-                    f"Session '{sid}': aggregated CSV yields zero parseable contact_points "
-                    f"across all {len(_all_session_keys)} touches. Data is malformed."
-                )
-            neuron_contacts_xyz[sid] = _neuron_xyz
-            save_neuron_contacts(base_output, sid, _neuron_xyz)
+            clustered_by_label = _group_touches_by_cluster(clustered_df)
+            n_clusters = len(clustered_by_label)
+            print(f"  {n_clusters} clusters found.")
 
-            _ply_path = resolve_forearm_ply(_session_dir, sid)
-            sessions_metadata[sid] = {'forearm_ply': str(_ply_path) if _ply_path else None}
-            if _ply_path is not None:
-                try:
-                    _verts = load_forearm_vertices(_ply_path)
-                    if _verts is not None:
-                        save_forearm_vertices(base_output, sid, _verts)
-                except Exception:
-                    logger.warning("Failed to cache forearm vertices for session %s", sid)
-
-        save_neuron_touches(base_output, neuron_touches)
-        save_sessions_metadata(base_output, sessions_metadata)
-
-        summary_data: dict = {}
-
-        for cluster_idx, (cluster_label, cluster_df) in enumerate(clustered_by_label.items(), start=1):
-            n_touches = len(cluster_df)
-            print(f"  Cluster {cluster_idx}/{n_clusters} (label={cluster_label}, {n_touches} touches)...")
-            cluster_out = base_output / _format_cluster_folder(cluster_label)
-            cluster_out.mkdir(parents=True, exist_ok=True)
-
-            neuron_cluster_touches: Dict[str, int] = {
+            neuron_touches: Dict[str, int] = {
                 str(k): int(v)
-                for k, v in (
-                    clustered_df[clustered_df['cluster_label'].astype(str) == cluster_label]
-                    .groupby('session_id')
-                    .size()
-                    .items()
-                )
+                for k, v in clustered_df.groupby('session_id').size().items()
             }
 
-            _group_features = None
-            if cluster_group_defs and combo_name in cluster_group_defs:
-                _group_features = cluster_group_defs[combo_name].get('features')
-            cluster_desc = _build_cluster_description(
-                clustered_df,
-                cluster_label,
-                cluster_metadata_path,
-                neuron_touches=neuron_touches,
-                neuron_cluster_touches=neuron_cluster_touches,
-                cluster_features=_group_features,
-            )
-            with open(cluster_out / 'cluster_description.json', 'w') as _f:
-                json.dump(cluster_desc, _f, indent=2)
+            session_dfs: Dict[str, pd.DataFrame] = {}
+            neuron_contacts_xyz: Dict[str, np.ndarray] = {}
+            sessions_metadata: Dict[str, dict] = {}
 
-            session_touch_map = _build_session_touch_map(cluster_df)
-            session_counters: List[Tuple[Counter, defaultdict]] = []
-
-            for session_id, touch_keys in session_touch_map.items():
-                print(f"    {session_id}: loading {len(touch_keys)} touches...")
-                if session_id not in session_dfs:
-                    print(f"    -> not loaded, skipping.")
+            for sid in list(neuron_touches.keys()):
+                if sid not in session_dir_map:
                     logger.warning(
-                        "Session '%s' in cluster %s: no loaded session df, skipping.",
-                        session_id, cluster_label,
+                        "Session '%s' in clustered_df not found in input_items. Skipping.", sid
                     )
                     continue
-
-                spike_counter, session_unique_counter, cluster_xyz = _parse_contacts_for_keys(
-                    session_dfs[session_id], touch_keys
-                )
-                n_spikes = sum(spike_counter.values())
-                print(f"    -> {n_spikes} spikes at {len(spike_counter)} contact points.")
-                session_counters.append((spike_counter, session_unique_counter))
-
-                if spike_counter:
-                    session_spike_df = _aggregate_spike_counts(
-                        [(spike_counter, session_unique_counter)]
+                _session_dir = session_dir_map[sid]
+                _agg_csvs = list(_session_dir.glob('*_semicontrolled_aggregated_session.csv'))
+                if not _agg_csvs:
+                    logger.warning(
+                        "No aggregated CSV in %s. Skipping session %s.", _session_dir, sid
                     )
-                    save_cluster_session_data(cluster_out, session_id, session_spike_df, cluster_xyz)
+                    continue
+                try:
+                    _session_df = _load_session_aggregated(_agg_csvs[0])
+                except ValueError as _exc:
+                    logger.warning("Skipping session %s: %s", sid, _exc)
+                    continue
+                except Exception:
+                    logger.exception("Error reading %s", _agg_csvs[0].name)
+                    continue
 
-            save_neuron_cluster_touches(cluster_out, neuron_cluster_touches)
+                session_dfs[sid] = _session_df
 
-            pooled_df = _aggregate_spike_counts(session_counters)
-            spike_counts_csv = cluster_out / 'spike_counts.csv'
-            pooled_df.to_csv(spike_counts_csv, index=False)
-            produced.append(spike_counts_csv)
-
-            total_spikes = int(pooled_df['spike_count'].sum()) if not pooled_df.empty else 0
-            if pooled_df.empty:
-                print(f"  -> No spikes found for cluster {cluster_label}. spike_counts.csv is empty.")
-                logger.warning(
-                    "No spikes found for cluster %s (%s/%s). spike_counts.csv is empty.",
-                    cluster_label, combo_name, clusterer_name,
+                _all_session_keys = list(
+                    clustered_df[clustered_df['session_id'].astype(str) == sid][_KEY_COLS]
+                    .drop_duplicates()
+                    .itertuples(index=False, name=None)
                 )
-            else:
-                print(
-                    f"  -> spike_counts.csv: {total_spikes} total spikes,"
-                    f" {len(pooled_df)} unique contact points."
+                _, _, _neuron_xyz = _parse_contacts_for_keys(_session_df, touch_keys=_all_session_keys)
+                if len(_neuron_xyz) == 0:
+                    raise ValueError(
+                        f"Session '{sid}': aggregated CSV yields zero parseable contact_points "
+                        f"across all {len(_all_session_keys)} touches. Data is malformed."
+                    )
+                neuron_contacts_xyz[sid] = _neuron_xyz
+                save_neuron_contacts(base_output, sid, _neuron_xyz)
+
+                _ply_path = resolve_forearm_ply(_session_dir, sid)
+                sessions_metadata[sid] = {'forearm_ply': str(_ply_path) if _ply_path else None}
+                if _ply_path is not None:
+                    try:
+                        _verts = load_forearm_vertices(_ply_path)
+                        if _verts is not None:
+                            save_forearm_vertices(base_output, sid, _verts)
+                    except Exception:
+                        logger.warning("Failed to cache forearm vertices for session %s", sid)
+
+            save_neuron_touches(base_output, neuron_touches)
+            save_sessions_metadata(base_output, sessions_metadata)
+
+            summary_data: dict = {}
+
+            for cluster_idx, (cluster_label, cluster_df) in enumerate(clustered_by_label.items(), start=1):
+                n_touches = len(cluster_df)
+                print(f"  Cluster {cluster_idx}/{n_clusters} (label={cluster_label}, {n_touches} touches)...")
+                cluster_out = base_output / _format_cluster_folder(cluster_label)
+                cluster_out.mkdir(parents=True, exist_ok=True)
+
+                neuron_cluster_touches: Dict[str, int] = {
+                    str(k): int(v)
+                    for k, v in (
+                        clustered_df[clustered_df['cluster_label'].astype(str) == cluster_label]
+                        .groupby('session_id')
+                        .size()
+                        .items()
+                    )
+                }
+
+                _group_features = None
+                if cluster_group_defs and combo_name in cluster_group_defs:
+                    _group_features = cluster_group_defs[combo_name].get('features')
+                cluster_desc = _build_cluster_description(
+                    clustered_df,
+                    cluster_label,
+                    cluster_metadata_path,
+                    neuron_touches=neuron_touches,
+                    neuron_cluster_touches=neuron_cluster_touches,
+                    cluster_features=_group_features,
                 )
+                with open(cluster_out / 'cluster_description.json', 'w') as _f:
+                    json.dump(cluster_desc, _f, indent=2)
 
-            n_unique_touch_points = int((pooled_df['unique_touch_spike_count'] > 0).sum()) if not pooled_df.empty else 0
-            summary_data[cluster_label] = {
-                'n_sessions': len(session_touch_map),
-                'n_touches': n_touches,
-                'total_spike_points': len(pooled_df),
-                'total_spikes': total_spikes,
-                'n_unique_touch_points': n_unique_touch_points,
-            }
+                session_touch_map = _build_session_touch_map(cluster_df)
+                session_counters: List[Tuple[Counter, defaultdict]] = []
 
-        # Sentinel written LAST (checked FIRST on next run)
-        base_output.mkdir(parents=True, exist_ok=True)
-        save_extraction_summary(base_output, combo_name, clusterer_name, summary_data)
+                for session_id, touch_keys in session_touch_map.items():
+                    print(f"    {session_id}: loading {len(touch_keys)} touches...")
+                    if session_id not in session_dfs:
+                        print(f"    -> not loaded, skipping.")
+                        logger.warning(
+                            "Session '%s' in cluster %s: no loaded session df, skipping.",
+                            session_id, cluster_label,
+                        )
+                        continue
 
-        print(f"[RF Extraction] {combo_name}/{clusterer_name}: done ({n_clusters} clusters).")
-        logger.info(
-            "[%s/%s] RF extraction complete: %d clusters.",
-            combo_name, clusterer_name, n_clusters,
-        )
+                    spike_counter, session_unique_counter, cluster_xyz = _parse_contacts_for_keys(
+                        session_dfs[session_id], touch_keys
+                    )
+                    n_spikes = sum(spike_counter.values())
+                    print(f"    -> {n_spikes} spikes at {len(spike_counter)} contact points.")
+                    session_counters.append((spike_counter, session_unique_counter))
+
+                    if spike_counter:
+                        session_spike_df = _aggregate_spike_counts(
+                            [(spike_counter, session_unique_counter)]
+                        )
+                        save_cluster_session_data(cluster_out, session_id, session_spike_df, cluster_xyz)
+
+                save_neuron_cluster_touches(cluster_out, neuron_cluster_touches)
+
+                pooled_df = _aggregate_spike_counts(session_counters)
+                spike_counts_csv = cluster_out / 'spike_counts.csv'
+                pooled_df.to_csv(spike_counts_csv, index=False)
+                produced.append(spike_counts_csv)
+
+                total_spikes = int(pooled_df['spike_count'].sum()) if not pooled_df.empty else 0
+                if pooled_df.empty:
+                    print(f"  -> No spikes found for cluster {cluster_label}. spike_counts.csv is empty.")
+                    logger.warning(
+                        "No spikes found for cluster %s (%s/%s%s). spike_counts.csv is empty.",
+                        cluster_label, combo_name, clusterer_name, _type_label,
+                    )
+                else:
+                    print(
+                        f"  -> spike_counts.csv: {total_spikes} total spikes,"
+                        f" {len(pooled_df)} unique contact points."
+                    )
+
+                n_unique_touch_points = int((pooled_df['unique_touch_spike_count'] > 0).sum()) if not pooled_df.empty else 0
+                summary_data[cluster_label] = {
+                    'n_sessions': len(session_touch_map),
+                    'n_touches': n_touches,
+                    'total_spike_points': len(pooled_df),
+                    'total_spikes': total_spikes,
+                    'n_unique_touch_points': n_unique_touch_points,
+                }
+
+            # Sentinel written LAST (checked FIRST on next run)
+            base_output.mkdir(parents=True, exist_ok=True)
+            save_extraction_summary(base_output, combo_name, clusterer_name, summary_data)
+
+            print(f"[RF Extraction] {combo_name}/{clusterer_name}{_type_label}: done ({n_clusters} clusters).")
+            logger.info(
+                "[%s/%s%s] RF extraction complete: %d clusters.",
+                combo_name, clusterer_name, _type_label, n_clusters,
+            )
 
     return produced
 
 
-def launch_gallery_viewer(output_dir: Path, combo_name: str, clusterer_name: str) -> None:
+def launch_gallery_viewer(
+    output_dir: Path,
+    combo_name: str,
+    clusterer_name: str,
+    gesture_type: str | None = None,
+) -> None:
     """Launch the RF cluster gallery viewer for the given combo/clusterer pair.
 
     Opens a PyQt5 window with a thumbnail sidebar and interactive 3D PyVista
@@ -806,13 +833,17 @@ def launch_gallery_viewer(output_dir: Path, combo_name: str, clusterer_name: str
         Feature combination / cluster group name (e.g. ``"pressure_velocity_mean"``).
     clusterer_name:
         Clusterer profile name (e.g. ``"binning"``).
+    gesture_type:
+        When the cluster group used ``per_type_clustering``, pass the gesture type
+        (``"tap"``, ``"stroke_proximal"``, ``"stroke_distal"``) to load the correct
+        per-type artifact tree.  ``None`` loads the flat artifact tree.
     """
     from .rf_gallery_data import load_gallery_data
     from .gui import RFClusterGalleryViewer
     from PyQt5.QtWidgets import QApplication
     import sys
 
-    gallery_data = load_gallery_data(output_dir, combo_name, clusterer_name)
+    gallery_data = load_gallery_data(output_dir, combo_name, clusterer_name, gesture_type)
     app = QApplication.instance() or QApplication(sys.argv)
     viewer = RFClusterGalleryViewer(gallery_data)
     viewer.show()
@@ -874,228 +905,239 @@ def run_cluster_rf_visualization(
     produced: List[Path] = []
 
     for combo_name, clusterer_name in pairs:
-        print(f"[RF Visualization] {combo_name}/{clusterer_name}...")
-        base_output = output_dir / combo_name / clusterer_name
-        extraction_json = base_output / 'extraction_summary.json'
+        group_spec = (cluster_group_defs or {}).get(combo_name, {})
+        per_type = group_spec.get('per_type_clustering', False)
+        if per_type:
+            runs = [
+                (gt, output_dir / combo_name / clusterer_name / gt)
+                for gt in GESTURE_TYPES
+            ]
+        else:
+            runs = [(None, output_dir / combo_name / clusterer_name)]
 
-        if not extraction_json.exists():
-            raise ValueError(
-                f"run_cluster_rf_visualization: extraction_summary.json missing for "
-                f"{combo_name}/{clusterer_name} — run extraction first: {extraction_json}"
-            )
+        for gesture_type, base_output in runs:
+            _type_label = f"/{gesture_type}" if gesture_type else ""
+            print(f"[RF Visualization] {combo_name}/{clusterer_name}{_type_label}...")
+            extraction_json = base_output / 'extraction_summary.json'
 
-        if visualization_is_up_to_date(
-            base_output, projection_method, disjoint_mask_distance_mm, force=force
-        ):
-            print(f"  Visualization up-to-date, skipping.")
-            for cluster_dir in sorted(base_output.glob('cluster_*')):
-                produced.extend(sorted(cluster_dir.glob('*_rf_heatmap_*.png')))
-            if gallery_viewer:
-                print(f"[RF Gallery] Launching gallery viewer for {combo_name}/{clusterer_name}...")
-                launch_gallery_viewer(output_dir, combo_name, clusterer_name)
-            continue
+            if not extraction_json.exists():
+                raise ValueError(
+                    f"run_cluster_rf_visualization: extraction_summary.json missing for "
+                    f"{combo_name}/{clusterer_name}{_type_label} — run extraction first: {extraction_json}"
+                )
 
-        extraction_mtime = extraction_json.stat().st_mtime
-
-        try:
-            neuron_touches = load_neuron_touches(base_output)
-        except ValueError as exc:
-            raise ValueError(
-                f"run_cluster_rf_visualization: cannot load neuron_touches "
-                f"for {combo_name}/{clusterer_name}: {exc}"
-            ) from exc
-
-        try:
-            sessions_metadata = load_sessions_metadata(base_output)
-        except ValueError as exc:
-            raise ValueError(
-                f"run_cluster_rf_visualization: cannot load sessions_metadata "
-                f"for {combo_name}/{clusterer_name}: {exc}"
-            ) from exc
-
-        metrics_rows: List[dict] = []
-        cluster_dirs = sorted(base_output.glob('cluster_*'))
-
-        for cluster_dir in cluster_dirs:
-            cluster_label_folder = cluster_dir.name
-            spike_counts_csv = cluster_dir / 'spike_counts.csv'
-            cluster_desc_json = cluster_dir / 'cluster_description.json'
-
-            if not spike_counts_csv.exists():
-                logger.warning("spike_counts.csv missing for %s, skipping.", cluster_label_folder)
+            if visualization_is_up_to_date(
+                base_output, projection_method, disjoint_mask_distance_mm, force=force
+            ):
+                print(f"  Visualization up-to-date, skipping.")
+                for cluster_dir in sorted(base_output.glob('cluster_*')):
+                    produced.extend(sorted(cluster_dir.glob('*_rf_heatmap_*.png')))
+                if gallery_viewer:
+                    print(f"[RF Gallery] Launching gallery viewer for {combo_name}/{clusterer_name}{_type_label}...")
+                    launch_gallery_viewer(output_dir, combo_name, clusterer_name, gesture_type)
                 continue
+
+            extraction_mtime = extraction_json.stat().st_mtime
 
             try:
-                pooled_df = pd.read_csv(spike_counts_csv)
-            except Exception:
-                logger.exception("Failed to read spike_counts.csv: %s", spike_counts_csv)
-                continue
+                neuron_touches = load_neuron_touches(base_output)
+            except ValueError as exc:
+                raise ValueError(
+                    f"run_cluster_rf_visualization: cannot load neuron_touches "
+                    f"for {combo_name}/{clusterer_name}{_type_label}: {exc}"
+                ) from exc
 
-            cluster_description_data: dict = {}
-            if cluster_desc_json.exists():
+            try:
+                sessions_metadata = load_sessions_metadata(base_output)
+            except ValueError as exc:
+                raise ValueError(
+                    f"run_cluster_rf_visualization: cannot load sessions_metadata "
+                    f"for {combo_name}/{clusterer_name}{_type_label}: {exc}"
+                ) from exc
+
+            metrics_rows: List[dict] = []
+            cluster_dirs = sorted(base_output.glob('cluster_*'))
+
+            for cluster_dir in cluster_dirs:
+                cluster_label_folder = cluster_dir.name
+                spike_counts_csv = cluster_dir / 'spike_counts.csv'
+                cluster_desc_json = cluster_dir / 'cluster_description.json'
+
+                if not spike_counts_csv.exists():
+                    logger.warning("spike_counts.csv missing for %s, skipping.", cluster_label_folder)
+                    continue
+
                 try:
-                    with open(cluster_desc_json) as _f:
-                        cluster_description_data = json.load(_f)
+                    pooled_df = pd.read_csv(spike_counts_csv)
                 except Exception:
-                    pass
+                    logger.exception("Failed to read spike_counts.csv: %s", spike_counts_csv)
+                    continue
 
-            cluster_label = cluster_description_data.get('cluster_label', cluster_label_folder)
-            description_line = description_summary_line(cluster_description_data)
+                cluster_description_data: dict = {}
+                if cluster_desc_json.exists():
+                    try:
+                        with open(cluster_desc_json) as _f:
+                            cluster_description_data = json.load(_f)
+                    except Exception:
+                        pass
 
-            try:
-                neuron_cluster_touches = load_neuron_cluster_touches(cluster_dir)
-            except ValueError:
-                neuron_cluster_touches = {}
+                cluster_label = cluster_description_data.get('cluster_label', cluster_label_folder)
+                description_line = description_summary_line(cluster_description_data)
 
-            # RF metrics: use forearm vertices from extraction artifact (first available session)
-            metrics_forearm_vertices = None
-            for sid in neuron_touches:
                 try:
-                    metrics_forearm_vertices = load_forearm_vertices_artifact(base_output, sid)
-                    break
+                    neuron_cluster_touches = load_neuron_cluster_touches(cluster_dir)
                 except ValueError:
-                    pass
+                    neuron_cluster_touches = {}
 
-            metrics = compute_rf_metrics(
-                pooled_df,
-                metrics_forearm_vertices,
-                projection_method=projection_method or "tangent_plane",
-            )
-            metrics_json_path = cluster_dir / 'rf_metrics.json'
-            with open(metrics_json_path, 'w') as _f:
-                json.dump(metrics_to_dict(metrics), _f, indent=2)
-            metrics_rows.append(
-                metrics_to_row(metrics, cluster_label, combo_name, clusterer_name)
-            )
+                # RF metrics: use forearm vertices from extraction artifact (first available session)
+                metrics_forearm_vertices = None
+                for sid in neuron_touches:
+                    try:
+                        metrics_forearm_vertices = load_forearm_vertices_artifact(base_output, sid)
+                        break
+                    except ValueError:
+                        pass
 
-            total_spikes = int(pooled_df['spike_count'].sum()) if not pooled_df.empty else 0
-            if pooled_df.empty:
-                print(f"  -> No spikes for {cluster_label_folder}, skipping render.")
-                logger.warning(
-                    "No spikes for cluster %s (%s/%s), skipping render.",
-                    cluster_label, combo_name, clusterer_name,
+                metrics = compute_rf_metrics(
+                    pooled_df,
+                    metrics_forearm_vertices,
+                    projection_method=projection_method or "tangent_plane",
                 )
-            else:
-                print(
-                    f"  -> {cluster_label_folder}: {total_spikes} total spikes,"
-                    f" {len(pooled_df)} unique contact points."
+                metrics_json_path = cluster_dir / 'rf_metrics.json'
+                with open(metrics_json_path, 'w') as _f:
+                    json.dump(metrics_to_dict(metrics), _f, indent=2)
+                metrics_rows.append(
+                    metrics_to_row(metrics, cluster_label, combo_name, clusterer_name)
                 )
 
-            # Per-session rendering
-            sessions_dir = cluster_dir / 'sessions'
-            if not sessions_dir.exists():
-                continue
-            for session_subdir in sorted(sessions_dir.iterdir()):
-                session_id = session_subdir.name
-                try:
-                    session_spike_df, cluster_contacts_xyz = load_cluster_session_data(
-                        cluster_dir, session_id
+                total_spikes = int(pooled_df['spike_count'].sum()) if not pooled_df.empty else 0
+                if pooled_df.empty:
+                    print(f"  -> No spikes for {cluster_label_folder}, skipping render.")
+                    logger.warning(
+                        "No spikes for cluster %s (%s/%s%s), skipping render.",
+                        cluster_label, combo_name, clusterer_name, _type_label,
                     )
-                except ValueError as exc:
-                    logger.warning("Skipping session %s render: %s", session_id, exc)
-                    continue
+                else:
+                    print(
+                        f"  -> {cluster_label_folder}: {total_spikes} total spikes,"
+                        f" {len(pooled_df)} unique contact points."
+                    )
 
-                if session_spike_df.empty:
+                # Per-session rendering
+                sessions_dir = cluster_dir / 'sessions'
+                if not sessions_dir.exists():
                     continue
-
-                try:
-                    neuron_xyz = load_neuron_contacts(base_output, session_id)
-                except ValueError as exc:
-                    logger.warning("Cannot load neuron contacts for %s: %s", session_id, exc)
-                    continue
-
-                # Hull invariant check
-                if len(neuron_xyz) > 0 and len(cluster_contacts_xyz) > 0:
-                    _spike_mm = np.round(session_spike_df[['x', 'y', 'z']].to_numpy())
-                    _spike_set = set(map(tuple, _spike_mm))
-                    _cluster_set = set(map(tuple, np.round(cluster_contacts_xyz)))
-                    _neuron_set = set(map(tuple, np.round(neuron_xyz)))
-                    if not (_spike_set <= _cluster_set <= _neuron_set):
-                        logger.warning(
-                            "RF hull invariant violated for session=%s, cluster=%s",
-                            session_id, cluster_label,
+                for session_subdir in sorted(sessions_dir.iterdir()):
+                    session_id = session_subdir.name
+                    try:
+                        session_spike_df, cluster_contacts_xyz = load_cluster_session_data(
+                            cluster_dir, session_id
                         )
+                    except ValueError as exc:
+                        logger.warning("Skipping session %s render: %s", session_id, exc)
+                        continue
 
-                _ply_str = sessions_metadata.get(session_id, {}).get('forearm_ply')
-                forearm_ply = Path(_ply_str) if _ply_str else None
+                    if session_spike_df.empty:
+                        continue
 
-                render_context = RFRenderContext(
-                    neuron_touches=neuron_touches.get(session_id, 0),
-                    neuron_cluster_touches=neuron_cluster_touches.get(session_id, 0),
-                    neuron_contacts_xyz=neuron_xyz,
-                    neuron_cluster_contacts_xyz=cluster_contacts_xyz,
-                    feature_ranges=cluster_description_data.get('feature_ranges', {}),
-                )
+                    try:
+                        neuron_xyz = load_neuron_contacts(base_output, session_id)
+                    except ValueError as exc:
+                        logger.warning("Cannot load neuron contacts for %s: %s", session_id, exc)
+                        continue
 
-                suffix = f'_{projection_method}' if projection_method else ''
+                    # Hull invariant check
+                    if len(neuron_xyz) > 0 and len(cluster_contacts_xyz) > 0:
+                        _spike_mm = np.round(session_spike_df[['x', 'y', 'z']].to_numpy())
+                        _spike_set = set(map(tuple, _spike_mm))
+                        _cluster_set = set(map(tuple, np.round(cluster_contacts_xyz)))
+                        _neuron_set = set(map(tuple, np.round(neuron_xyz)))
+                        if not (_spike_set <= _cluster_set <= _neuron_set):
+                            logger.warning(
+                                "RF hull invariant violated for session=%s, cluster=%s",
+                                session_id, cluster_label,
+                            )
 
-                print(f"    Rendering count heatmap: {session_id}...")
-                count_png = cluster_dir / f'{session_id}_rf_heatmap_count{suffix}.png'
-                try:
-                    render_forearm_heatmap(
-                        forearm_ply_path=forearm_ply,
-                        spike_counts_df=session_spike_df,
-                        output_path=count_png,
-                        session_id=session_id,
-                        cluster_label=str(cluster_label),
-                        projection_method=projection_method,
-                        cluster_description=description_line,
-                        display_metric="spike_count",
-                        render_context=render_context,
-                        disjoint_mask_distance_mm=disjoint_mask_distance_mm,
+                    _ply_str = sessions_metadata.get(session_id, {}).get('forearm_ply')
+                    forearm_ply = Path(_ply_str) if _ply_str else None
+
+                    render_context = RFRenderContext(
+                        neuron_touches=neuron_touches.get(session_id, 0),
+                        neuron_cluster_touches=neuron_cluster_touches.get(session_id, 0),
+                        neuron_contacts_xyz=neuron_xyz,
+                        neuron_cluster_contacts_xyz=cluster_contacts_xyz,
+                        feature_ranges=cluster_description_data.get('feature_ranges', {}),
                     )
-                    produced.append(count_png)
-                except Exception:
-                    logger.exception(
-                        "Failed to render count heatmap for session %s, cluster %s",
-                        session_id, cluster_label,
-                    )
 
-                if render_context.neuron_cluster_touches > 0:
-                    print(f"    Rendering ratio heatmap: {session_id}...")
-                    ratio_png = cluster_dir / f'{session_id}_rf_heatmap_ratio{suffix}.png'
+                    suffix = f'_{projection_method}' if projection_method else ''
+
+                    print(f"    Rendering count heatmap: {session_id}...")
+                    count_png = cluster_dir / f'{session_id}_rf_heatmap_count{suffix}.png'
                     try:
                         render_forearm_heatmap(
                             forearm_ply_path=forearm_ply,
                             spike_counts_df=session_spike_df,
-                            output_path=ratio_png,
+                            output_path=count_png,
                             session_id=session_id,
                             cluster_label=str(cluster_label),
                             projection_method=projection_method,
                             cluster_description=description_line,
-                            display_metric="spike_ratio",
+                            display_metric="spike_count",
                             render_context=render_context,
                             disjoint_mask_distance_mm=disjoint_mask_distance_mm,
                         )
-                        produced.append(ratio_png)
+                        produced.append(count_png)
                     except Exception:
                         logger.exception(
-                            "Failed to render ratio heatmap for session %s, cluster %s",
+                            "Failed to render count heatmap for session %s, cluster %s",
                             session_id, cluster_label,
                         )
-                else:
-                    logger.info(
-                        "Skipping ratio heatmap for session %s, cluster %s: neuron_cluster_touches=0.",
-                        session_id, cluster_label,
-                    )
 
-        if metrics_rows:
-            metrics_summary_csv = base_output / 'rf_metrics_summary.csv'
-            pd.DataFrame(metrics_rows).to_csv(metrics_summary_csv, index=False)
+                    if render_context.neuron_cluster_touches > 0:
+                        print(f"    Rendering ratio heatmap: {session_id}...")
+                        ratio_png = cluster_dir / f'{session_id}_rf_heatmap_ratio{suffix}.png'
+                        try:
+                            render_forearm_heatmap(
+                                forearm_ply_path=forearm_ply,
+                                spike_counts_df=session_spike_df,
+                                output_path=ratio_png,
+                                session_id=session_id,
+                                cluster_label=str(cluster_label),
+                                projection_method=projection_method,
+                                cluster_description=description_line,
+                                display_metric="spike_ratio",
+                                render_context=render_context,
+                                disjoint_mask_distance_mm=disjoint_mask_distance_mm,
+                            )
+                            produced.append(ratio_png)
+                        except Exception:
+                            logger.exception(
+                                "Failed to render ratio heatmap for session %s, cluster %s",
+                                session_id, cluster_label,
+                            )
+                    else:
+                        logger.info(
+                            "Skipping ratio heatmap for session %s, cluster %s: neuron_cluster_touches=0.",
+                            session_id, cluster_label,
+                        )
 
-        save_visualization_summary(
-            base_output, projection_method, disjoint_mask_distance_mm, extraction_mtime
-        )
+            if metrics_rows:
+                metrics_summary_csv = base_output / 'rf_metrics_summary.csv'
+                pd.DataFrame(metrics_rows).to_csv(metrics_summary_csv, index=False)
 
-        print(f"[RF Visualization] {combo_name}/{clusterer_name}: done.")
-        logger.info(
-            "[%s/%s] RF visualization complete.",
-            combo_name, clusterer_name,
-        )
+            save_visualization_summary(
+                base_output, projection_method, disjoint_mask_distance_mm, extraction_mtime
+            )
 
-        if gallery_viewer:
-            print(f"[RF Gallery] Launching gallery viewer for {combo_name}/{clusterer_name}...")
-            launch_gallery_viewer(output_dir, combo_name, clusterer_name)
+            print(f"[RF Visualization] {combo_name}/{clusterer_name}{_type_label}: done.")
+            logger.info(
+                "[%s/%s%s] RF visualization complete.",
+                combo_name, clusterer_name, _type_label,
+            )
+
+            if gallery_viewer:
+                print(f"[RF Gallery] Launching gallery viewer for {combo_name}/{clusterer_name}{_type_label}...")
+                launch_gallery_viewer(output_dir, combo_name, clusterer_name, gesture_type)
 
     return produced
 

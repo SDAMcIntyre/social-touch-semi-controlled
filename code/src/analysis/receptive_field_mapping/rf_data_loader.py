@@ -63,6 +63,39 @@ def load_forearm_vertices(ply_path: Optional[Path]) -> Optional[np.ndarray]:
     return pts
 
 
+def load_forearm_vertex_colors(ply_path: Optional[Path]) -> Optional[np.ndarray]:
+    """Load forearm PLY vertex colors with a .npy sidecar cache.
+
+    Cache path: ``{ply_path.parent}/{ply_path.stem}_colors.npy``.
+    Returns an (N, 3) uint8 RGB array, or ``None`` when the PLY has no
+    colors or does not exist.
+    """
+    if ply_path is None or not ply_path.exists():
+        return None
+
+    npy_path = ply_path.parent / f"{ply_path.stem}_colors.npy"
+
+    if npy_path.exists() and npy_path.stat().st_mtime >= ply_path.stat().st_mtime:
+        arr = np.load(npy_path)
+        if arr.ndim == 2 and arr.shape[1] == 3:
+            return arr
+        logger.warning("Color cache has unexpected shape %s, reloading PLY.", arr.shape)
+
+    import open3d as o3d  # type: ignore
+    pcd = o3d.io.read_point_cloud(str(ply_path))
+    if not pcd.has_colors():
+        return None
+
+    colors = (np.asarray(pcd.colors) * 255).astype(np.uint8)
+
+    try:
+        np.save(npy_path, colors)
+    except Exception:
+        logger.warning("Could not save forearm colors cache: %s", npy_path)
+
+    return colors
+
+
 def resolve_forearm_ply(session_dir: Path, session_id: str) -> Optional[Path]:
     """Resolve the forearm PLY path for a session in RF-centered coordinate space.
 
