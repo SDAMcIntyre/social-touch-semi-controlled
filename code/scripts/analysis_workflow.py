@@ -394,7 +394,6 @@ def visualize_receptive_fields_clustered_flow(
     projection_method: str = None,
     disjoint_mask_distance_mm: float = 8.0,
     gallery_viewer: bool = False,
-    feature_space_explorer: bool = False,
 ) -> List[Path]:
     """
     Visualization-only step: load extraction artifacts, compute RF metrics,
@@ -422,7 +421,6 @@ def visualize_receptive_fields_clustered_flow(
         force=force_processing,
         gallery_viewer=gallery_viewer,
         input_items=input_items,
-        feature_space_explorer=feature_space_explorer,
     )
 
     from analysis.receptive_field_mapping.rf_camera_angle_task import pick_rf_camera_angle_batch
@@ -439,6 +437,26 @@ def visualize_receptive_fields_clustered_flow(
     )
 
     return result
+
+
+@flow(name="explore_rf_feature_space")
+def explore_rf_feature_space_flow(
+    input_items: List[Tuple[Path, Path]],
+    force_processing: bool = False,
+) -> None:
+    """
+    Launch the RF Feature-Space Explorer GUI for the given sessions.
+    Reads series-augmented CSVs produced by ``touch_series_transforms`` — no
+    dependency on RF clustering or visualization.
+    ``force_processing`` is accepted for interface consistency but is a no-op:
+    the GUI is stateless and always launches fresh.
+    """
+    print(f"[Batch Analysis] Launching RF Feature-Space Explorer for {len(input_items)} item(s)...")
+    if not input_items:
+        return
+
+    from analysis.receptive_field_mapping.rf_feature_space_explorer import launch_feature_space_explorer
+    launch_feature_space_explorer(input_items)
 
 
 def _collect_unified_files(input_items: List[Tuple[Path, Path]]) -> List[Path]:
@@ -516,6 +534,7 @@ def run_batch_analysis(
         ("map_receptive_fields_clustered", map_receptive_fields_clustered_flow),
         ("extract_receptive_fields_clustered", extract_receptive_fields_clustered_flow),
         ("visualize_receptive_fields_clustered", visualize_receptive_fields_clustered_flow),
+        ("explore_rf_feature_space", explore_rf_feature_space_flow),
     ]
     
     task_names = [t[0] for t in available_tasks]
@@ -647,8 +666,6 @@ def run_batch_analysis(
                         kwargs["disjoint_mask_distance_mm"] = float(options["disjoint_mask_distance_mm"])
                     if "gallery_viewer" in options:
                         kwargs["gallery_viewer"] = bool(options["gallery_viewer"])
-                    if "feature_space_explorer" in options:
-                        kwargs["feature_space_explorer"] = bool(options["feature_space_explorer"])
                     flow_func(**kwargs)
                 except Exception as e:
                     executor.error_msg = f"Batch analysis failed: {str(e)}"

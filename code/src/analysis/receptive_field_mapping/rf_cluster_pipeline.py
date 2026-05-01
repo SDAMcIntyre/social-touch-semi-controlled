@@ -912,7 +912,6 @@ def run_cluster_rf_visualization(
     force: bool = False,
     gallery_viewer: bool = False,
     input_items: List[Tuple[Path, Path]] = None,
-    feature_space_explorer: bool = False,
 ) -> List[Path]:
     """Compute RF metrics and render heatmaps from extraction artifacts.
 
@@ -942,12 +941,8 @@ def run_cluster_rf_visualization(
         combo/clusterer pair.  Blocks until the user closes the window.
         Default False (existing behaviour).
     input_items:
-        List of ``(aggregated_csv_path, database_path)`` tuples.  Required when
-        ``feature_space_explorer`` is ``True``; unused otherwise.
-    feature_space_explorer:
-        If True, launch the RF Feature-Space Explorer GUI after rendering.
-        Requires ``input_items`` to be provided.  Blocks until the user closes
-        the window.  Default False.
+        List of ``(aggregated_csv_path, database_path)`` tuples.  Unused by
+        this function; accepted for forward-compatibility.
 
     Returns
     -------
@@ -956,11 +951,6 @@ def run_cluster_rf_visualization(
     if cluster_groups is None and feature_combinations is None:
         raise ValueError(
             "run_cluster_rf_visualization: either 'cluster_groups' or 'feature_combinations' must be provided."
-        )
-
-    if feature_space_explorer and not input_items:
-        raise ValueError(
-            "run_cluster_rf_visualization: 'input_items' must be provided when 'feature_space_explorer' is True."
         )
 
     pairs = _build_pairs(
@@ -1203,10 +1193,6 @@ def run_cluster_rf_visualization(
             if gallery_viewer:
                 print(f"[RF Gallery] Launching gallery viewer for {combo_name}/{clusterer_name}{_type_label}...")
                 launch_gallery_viewer(output_dir, combo_name, clusterer_name, gesture_type)
-
-    if feature_space_explorer:
-        print("[RF Explorer] Launching feature-space explorer...")
-        launch_feature_space_explorer(input_items)
 
     return produced
 
