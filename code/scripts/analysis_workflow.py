@@ -394,6 +394,7 @@ def visualize_receptive_fields_clustered_flow(
     projection_method: str = None,
     disjoint_mask_distance_mm: float = 8.0,
     gallery_viewer: bool = False,
+    feature_space_explorer: bool = False,
 ) -> List[Path]:
     """
     Visualization-only step: load extraction artifacts, compute RF metrics,
@@ -420,6 +421,8 @@ def visualize_receptive_fields_clustered_flow(
         disjoint_mask_distance_mm=disjoint_mask_distance_mm,
         force=force_processing,
         gallery_viewer=gallery_viewer,
+        input_items=input_items,
+        feature_space_explorer=feature_space_explorer,
     )
 
     from analysis.receptive_field_mapping.rf_camera_angle_task import pick_rf_camera_angle_batch
@@ -644,6 +647,8 @@ def run_batch_analysis(
                         kwargs["disjoint_mask_distance_mm"] = float(options["disjoint_mask_distance_mm"])
                     if "gallery_viewer" in options:
                         kwargs["gallery_viewer"] = bool(options["gallery_viewer"])
+                    if "feature_space_explorer" in options:
+                        kwargs["feature_space_explorer"] = bool(options["feature_space_explorer"])
                     flow_func(**kwargs)
                 except Exception as e:
                     executor.error_msg = f"Batch analysis failed: {str(e)}"
