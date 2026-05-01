@@ -91,9 +91,9 @@ def _interpolate_group(
         elif n_valid == 1:
             group[col] = group[col].ffill().bfill()
         elif n_valid < 4:
-            group[col] = group[col].interpolate(method='linear', limit_direction='both')
+            group[col] = group[col].interpolate(method='linear', limit_direction='both', limit_area='inside')
         else:
-            group[col] = group[col].interpolate(method=method, limit_direction='both')
+            group[col] = group[col].interpolate(method=method, limit_direction='both', limit_area='inside')
 
     for col in ffill_cols:
         group[col] = group[col].ffill()
