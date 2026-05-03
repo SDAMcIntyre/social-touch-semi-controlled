@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 from scipy.spatial import cKDTree
 
-from .rf_data_loader import load_forearm_vertices
+from .rf_data_loader import load_forearm_vertices, parse_contact_points
 from .tangent_plane_alignment import compute_tangent_plane_rotation
 
 logger = logging.getLogger(__name__)
@@ -23,11 +23,23 @@ class ExplorerSessionData:
 
 @dataclass
 class ExplorerData:
+    """Per-frame scatter data and per-contact-point vertex mapping.
+
+    Source-frame arrays (``pressure``, ``velocity_signed``, ``gesture_types``,
+    ``spikes``) are indexed 0 … n_frames-1.
+
+    Contact-point arrays (``cp_frame_idx``, ``cp_vertex_idx``) have length
+    n_contact_pts ≥ n_frames.  ``cp_frame_idx[i]`` is the index into the
+    source-frame arrays for contact point ``i``; ``cp_vertex_idx[i]`` is the
+    nearest forearm vertex for that contact point.
+    """
+
     pressure: np.ndarray
     velocity_signed: np.ndarray
     gesture_types: np.ndarray
     spikes: np.ndarray
-    frame_vertex_idx: np.ndarray
+    cp_frame_idx: np.ndarray
+    cp_vertex_idx: np.ndarray
     session_data: ExplorerSessionData
 
     @property
@@ -62,9 +74,10 @@ def _save_explorer_cache(series_csv_path: Path, data: ExplorerData) -> None:
             pressure=data.pressure,
             velocity_signed=data.velocity_signed,
             gesture_type_codes=codes.astype(np.int32),
-            gesture_type_labels=unique_labels,
+            gesture_type_labels=np.array(unique_labels, dtype=str),
             spikes=data.spikes,
-            frame_vertex_idx=data.frame_vertex_idx,
+            cp_frame_idx=data.cp_frame_idx,
+            cp_vertex_idx=data.cp_vertex_idx,
             forearm_vertices=data.session_data.forearm_vertices,
             tangent_rotation=data.session_data.tangent_rotation,
         )
@@ -103,30 +116,51 @@ def _load_explorer_cache(
         )
         return None
 
-    npz = np.load(cache_path, allow_pickle=False)
+    npz = np.load(cache_path, allow_pickle=True)
+
+    if "cp_frame_idx" not in npz:
+        logger.debug(
+            "_load_explorer_cache: old-format cache (no cp_frame_idx) for %s — recomputing",
+            series_csv_path.name,
+        )
+        return None
 
     pressure = npz["pressure"]
     velocity_signed = npz["velocity_signed"]
     gesture_type_codes = npz["gesture_type_codes"]
     gesture_type_labels = npz["gesture_type_labels"]
     spikes = npz["spikes"]
-    frame_vertex_idx = npz["frame_vertex_idx"]
+    cp_frame_idx = npz["cp_frame_idx"]
+    cp_vertex_idx = npz["cp_vertex_idx"]
     forearm_vertices = npz["forearm_vertices"]
     tangent_rotation = npz["tangent_rotation"]
 
-    # Validate shapes before trusting the cache.
+    # Validate frame-level arrays before trusting the cache.
     n = len(pressure)
-    for name, arr, expected_ndim in [
-        ("velocity_signed", velocity_signed, 1),
-        ("gesture_type_codes", gesture_type_codes, 1),
-        ("spikes", spikes, 1),
-        ("frame_vertex_idx", frame_vertex_idx, 1),
+    for name, arr in [
+        ("velocity_signed", velocity_signed),
+        ("gesture_type_codes", gesture_type_codes),
+        ("spikes", spikes),
     ]:
-        if arr.ndim != expected_ndim or len(arr) != n:
+        if arr.ndim != 1 or len(arr) != n:
             raise ValueError(
                 f"_load_explorer_cache: cached array '{name}' has shape {arr.shape}, "
                 f"expected 1-D array of length {n}: {cache_path}"
             )
+
+    # Validate contact-point arrays (lengths must agree with each other but
+    # are ≥ n_frames, so we cannot check against n directly).
+    if cp_frame_idx.ndim != 1:
+        raise ValueError(
+            f"_load_explorer_cache: cached 'cp_frame_idx' has shape {cp_frame_idx.shape}, "
+            f"expected 1-D array: {cache_path}"
+        )
+    if cp_vertex_idx.ndim != 1 or len(cp_vertex_idx) != len(cp_frame_idx):
+        raise ValueError(
+            f"_load_explorer_cache: cached 'cp_vertex_idx' has shape {cp_vertex_idx.shape}, "
+            f"expected 1-D array of length {len(cp_frame_idx)}: {cache_path}"
+        )
+
     if forearm_vertices.ndim != 2 or forearm_vertices.shape[1] != 3:
         raise ValueError(
             f"_load_explorer_cache: cached 'forearm_vertices' has shape "
@@ -149,7 +183,8 @@ def _load_explorer_cache(
         velocity_signed=velocity_signed,
         gesture_types=gesture_types,
         spikes=spikes,
-        frame_vertex_idx=frame_vertex_idx,
+        cp_frame_idx=cp_frame_idx.astype(np.int64),
+        cp_vertex_idx=cp_vertex_idx.astype(np.int64),
         session_data=session_data,
     )
 
@@ -167,16 +202,36 @@ def load_explorer_data(
 
     df = pd.read_csv(series_csv_path)
 
-    mask = df["contact_location_x"].notna()
-    df = df[mask].reset_index(drop=True)
+    if "contact_points" not in df.columns:
+        raise ValueError(
+            f"load_explorer_data: 'contact_points' column missing from {series_csv_path}"
+        )
+
+    # Parse every row's contact_points string into a list of (x, y, z) tuples.
+    # Rows yielding zero points are excluded entirely (equivalent to the old
+    # contact_location_x.notna() filter).
+    parsed_rows: list[list[tuple[float, float, float]]] = [
+        parse_contact_points(v) for v in df["contact_points"]
+    ]
+    valid_mask = [len(pts) > 0 for pts in parsed_rows]
+    df = df[valid_mask].reset_index(drop=True)
+    parsed_rows = [pts for pts, ok in zip(parsed_rows, valid_mask) if ok]
 
     pressure = df["pressure"].to_numpy(dtype=np.float64)
     velocity_signed = df["hand_velocity_signed"].to_numpy(dtype=np.float64)
     gesture_types = df["gesture_type"].to_numpy(dtype=object)
     spikes = df["Nerve_spike"].to_numpy(dtype=bool)
-    contact_pts = df[
-        ["contact_location_x", "contact_location_y", "contact_location_z"]
-    ].to_numpy(dtype=np.float64)
+
+    # Build flat contact-point array and parallel source-row index.
+    all_pts_list: list[tuple[float, float, float]] = []
+    cp_src_row_list: list[int] = []
+    for row_idx, pts in enumerate(parsed_rows):
+        for pt in pts:
+            all_pts_list.append(pt)
+            cp_src_row_list.append(row_idx)
+
+    all_pts = np.array(all_pts_list, dtype=np.float64)       # (N_total, 3)
+    cp_src_row = np.array(cp_src_row_list, dtype=np.int64)   # (N_total,)
 
     vertices = load_forearm_vertices(forearm_ply_path)
     if vertices is None:
@@ -184,7 +239,7 @@ def load_explorer_data(
             f"load_explorer_data: could not load forearm vertices from {forearm_ply_path}"
         )
 
-    contact_centroid = contact_pts.mean(axis=0)
+    contact_centroid = all_pts.mean(axis=0)
     rotation = compute_tangent_plane_rotation(vertices, contact_centroid)
     if rotation is None:
         raise ValueError(
@@ -193,24 +248,50 @@ def load_explorer_data(
         )
 
     rotated_vertices = (rotation @ vertices.T).T
-    rotated_contacts = (rotation @ contact_pts.T).T
+    rotated_contacts = (rotation @ all_pts.T).T
 
     tree = cKDTree(rotated_vertices)
-    distances, frame_vertex_idx = tree.query(rotated_contacts)
+    distances, vertex_idx = tree.query(rotated_contacts)
 
-    bad = distances > 15.0
-    if np.any(bad):
+    bad_pts = distances > 15.0
+    if np.any(bad_pts):
         logger.warning(
-            "load_explorer_data: dropping %d frame(s) with nearest-vertex distance "
-            "> 15mm (max=%.2f mm) — likely mesh sparsity at contact boundary",
-            bad.sum(), distances.max(),
+            "load_explorer_data: dropping %d contact point(s) with nearest-vertex "
+            "distance > 15mm (max=%.2f mm) — likely mesh sparsity at contact boundary",
+            bad_pts.sum(), distances[bad_pts].max(),
         )
-        good = ~bad
-        pressure = pressure[good]
-        velocity_signed = velocity_signed[good]
-        gesture_types = gesture_types[good]
-        spikes = spikes[good]
-        frame_vertex_idx = frame_vertex_idx[good]
+        good_pts = ~bad_pts
+        cp_src_row = cp_src_row[good_pts]
+        vertex_idx = vertex_idx[good_pts]
+
+    # Any source frame that lost all its contact points must be dropped from
+    # the frame-level arrays so that cp_frame_idx references stay valid.
+    surviving_rows = np.unique(cp_src_row)
+    if len(surviving_rows) < len(pressure):
+        dropped = len(pressure) - len(surviving_rows)
+        logger.warning(
+            "load_explorer_data: dropping %d source frame(s) whose contact points "
+            "all exceeded the 15mm distance threshold",
+            dropped,
+        )
+        pressure = pressure[surviving_rows]
+        velocity_signed = velocity_signed[surviving_rows]
+        gesture_types = gesture_types[surviving_rows]
+        spikes = spikes[surviving_rows]
+
+        # Remap cp_src_row to contiguous 0-based frame indices.
+        old_to_new = np.full(cp_src_row.max() + 1, -1, dtype=np.int64)
+        old_to_new[surviving_rows] = np.arange(len(surviving_rows), dtype=np.int64)
+        cp_src_row = old_to_new[cp_src_row]
+
+    if len(pressure) == 0:
+        raise ValueError(
+            f"load_explorer_data: all frames were dropped after distance filtering "
+            f"for {series_csv_path}"
+        )
+
+    cp_frame_idx = cp_src_row.astype(np.int64)
+    cp_vertex_idx = vertex_idx.astype(np.int64)
 
     session_data = ExplorerSessionData(
         forearm_vertices=rotated_vertices,
@@ -222,7 +303,8 @@ def load_explorer_data(
         velocity_signed=velocity_signed,
         gesture_types=gesture_types,
         spikes=spikes,
-        frame_vertex_idx=frame_vertex_idx,
+        cp_frame_idx=cp_frame_idx,
+        cp_vertex_idx=cp_vertex_idx,
         session_data=session_data,
     )
 
