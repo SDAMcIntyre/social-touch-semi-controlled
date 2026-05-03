@@ -19,10 +19,10 @@ from PyQt5.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QMainWindow,
-    QSplitter,
     QToolBar,
     QVBoxLayout,
     QWidget,
@@ -263,7 +263,7 @@ class RFFeatureSpaceExplorer(QMainWindow):
         self._filter_timer.setSingleShot(True)
         self._filter_timer.setInterval(30)
         self._filter_timer.timeout.connect(self._apply_filter_update)
-        self._mesh: Optional[pv.PolyData] = None
+        self._cloud: Optional[pv.PolyData] = None
 
         self._build_ui()
 
@@ -280,26 +280,26 @@ class RFFeatureSpaceExplorer(QMainWindow):
         root.setContentsMargins(4, 4, 4, 4)
         root.setSpacing(4)
 
-        splitter = QSplitter(Qt.Horizontal)
+        # Overlay container: 3D interactor and scatter canvas share cell (0, 0)
+        overlay_container = QWidget()
+        grid = QGridLayout(overlay_container)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setSpacing(0)
 
-        left_panel = QWidget()
-        left_layout = QVBoxLayout(left_panel)
-        left_layout.setContentsMargins(0, 0, 0, 0)
+        self._plotter = QtInteractor(overlay_container)
+        grid.addWidget(self._plotter.interactor, 0, 0)
+
         self._figure = Figure()
+        self._figure.patch.set_alpha(0.0)
         self._canvas = FigureCanvasQTAgg(self._figure)
         self._ax = self._figure.add_subplot(111)
-        left_layout.addWidget(self._canvas)
-        splitter.addWidget(left_panel)
+        self._ax.set_facecolor((0.1, 0.1, 0.1, 0.7))
+        self._canvas.setFixedSize(350, 280)
+        self._canvas.setAttribute(Qt.WA_TranslucentBackground, True)
+        self._canvas.setStyleSheet("background: transparent;")
+        grid.addWidget(self._canvas, 0, 0, Qt.AlignBottom | Qt.AlignLeft)
 
-        self._plotter = QtInteractor(central)
-        splitter.addWidget(self._plotter.interactor)
-
-        total_width = 1000
-        splitter.setSizes([int(total_width * 0.4), int(total_width * 0.6)])
-        splitter.setStretchFactor(0, 2)
-        splitter.setStretchFactor(1, 3)
-
-        root.addWidget(splitter, stretch=1)
+        root.addWidget(overlay_container, stretch=1)
 
         bottom_bar = self._build_bottom_bar()
         root.addLayout(bottom_bar)
@@ -373,6 +373,15 @@ class RFFeatureSpaceExplorer(QMainWindow):
                 label=gtype,
             )
 
+        x_lo, x_hi = float(np.percentile(self._data.pressure, 1)), float(
+            np.percentile(self._data.pressure, 99)
+        )
+        y_lo, y_hi = float(np.percentile(self._data.velocity_signed, 1)), float(
+            np.percentile(self._data.velocity_signed, 99)
+        )
+        self._ax.set_xlim(x_lo, x_hi)
+        self._ax.set_ylim(y_lo, y_hi)
+
         self._ax.set_xlabel("Pressure")
         self._ax.set_ylabel("Hand Velocity (signed)")
         self._ax.legend(loc="best", markerscale=3, fontsize=8)
@@ -392,21 +401,25 @@ class RFFeatureSpaceExplorer(QMainWindow):
     def _render_3d(self) -> None:
         self._plotter.clear()
 
-        self._mesh = self._data.session_data.forearm_mesh
-        n_verts = len(self._data.session_data.vertices)
+        vertices = self._data.session_data.forearm_vertices
+        n_verts = len(vertices)
 
         spike_density = np.bincount(
             self._data.frame_vertex_idx,
             weights=self._data.spikes.astype(float),
             minlength=n_verts,
         )
-        self._mesh["spike_density"] = spike_density
+
+        self._cloud = pv.PolyData(vertices)
+        self._cloud["spike_density"] = spike_density
 
         self._plotter.add_mesh(
-            self._mesh,
+            self._cloud,
             scalars="spike_density",
             cmap="hot",
             show_scalar_bar=True,
+            render_points_as_spheres=True,
+            point_size=5,
             name="forearm",
         )
 
@@ -433,7 +446,7 @@ class RFFeatureSpaceExplorer(QMainWindow):
         self._apply_filter_update()
 
     def _apply_filter_update(self) -> None:
-        if self._rect is None or self._mesh is None:
+        if self._rect is None or self._cloud is None:
             return
 
         x_min, x_max, y_min, y_max = self._rect.get_bounds()
@@ -454,13 +467,25 @@ class RFFeatureSpaceExplorer(QMainWindow):
         type_mask = np.isin(self._data.gesture_types, list(checked_types))
         mask = rect_mask & type_mask
 
-        n_verts = len(self._data.session_data.vertices)
+        n_verts = len(self._data.session_data.forearm_vertices)
         vertex_spikes = np.bincount(
             self._data.frame_vertex_idx[mask],
             weights=self._data.spikes[mask].astype(float),
             minlength=n_verts,
         )
-        self._mesh["spike_density"] = vertex_spikes
+
+        cloud = pv.PolyData(self._data.session_data.forearm_vertices)
+        cloud["spike_density"] = vertex_spikes
+        self._plotter.add_mesh(
+            cloud,
+            scalars="spike_density",
+            cmap="hot",
+            show_scalar_bar=True,
+            render_points_as_spheres=True,
+            point_size=5,
+            name="forearm",
+        )
+        self._cloud = cloud
         self._plotter.render()
         self._frame_label.setText(f"Frames: {mask.sum()} / {self._data.n_frames}")
 
@@ -495,7 +520,7 @@ class RFFeatureSpaceExplorer(QMainWindow):
     def _load_session(self, new_data: ExplorerData) -> None:
         self._data = new_data
         self._rect = None
-        self._mesh = None
+        self._cloud = None
         self._frame_label.setText(
             f"Frames: {self._data.n_frames} / {self._data.n_frames}"
         )
