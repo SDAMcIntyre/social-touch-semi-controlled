@@ -98,6 +98,26 @@ class TestClassifyGestureType:
         group = _stroke_group_with_nans([float('nan'), float('nan')])
         assert classify_gesture_type(group) == 'stroke_unknown'
 
+    def test_stroke_unknown_when_single_valid_point(self):
+        # Only one non-NaN value — linear fit needs ≥2 points → stroke_unknown
+        group = _stroke_group_with_nans([float('nan'), 2.0, float('nan')])
+        assert classify_gesture_type(group) == 'stroke_unknown'
+
+    def test_slope_wins_over_endpoint_delta(self):
+        # Endpoints: start=3.0, end=3.0 → endpoint-delta yields Δx=0 → old rule would
+        # say distal.  But the overall trend [3.0, 1.0, 2.0, 3.0] has a positive OLS
+        # slope (~+0.1) because the series trends upward after the initial dip.
+        # The affine fit correctly classifies this as proximal.
+        group = _stroke_group_with_nans([3.0, 1.0, 2.0, 3.0])
+        assert classify_gesture_type(group) == 'stroke_proximal'
+
+    def test_two_point_stroke_minimal_valid_fit(self):
+        # Exactly two valid points — the minimum required for np.polyfit(deg=1).
+        group = _stroke_group_with_nans([1.0, 3.0])
+        assert classify_gesture_type(group) == 'stroke_proximal'
+        group_distal = _stroke_group_with_nans([3.0, 1.0])
+        assert classify_gesture_type(group_distal) == 'stroke_distal'
+
 
 class TestAssignGestureType:
     def _make_df(self):
@@ -123,9 +143,10 @@ class TestAssignGestureType:
         tap_rows = result[(result['block_order_id'] == 1) & (result['single_touch_id'] == 1)]
         assert (tap_rows['gesture_type'] == 'tap').all()
 
-        # block 1, touch 2: single-row stroke with x=2.0 → only one frame, Δx=0 → distal
-        stroke_distal = result[(result['block_order_id'] == 1) & (result['single_touch_id'] == 2)]
-        assert (stroke_distal['gesture_type'] == 'stroke_distal').all()
+        # block 1, touch 2: single-row stroke with x=2.0 → only one valid frame,
+        # linear fit requires ≥2 points → stroke_unknown
+        stroke_unknown = result[(result['block_order_id'] == 1) & (result['single_touch_id'] == 2)]
+        assert (stroke_unknown['gesture_type'] == 'stroke_unknown').all()
 
         # block 2, touch 1: x goes 1.0 → 3.0, Δx > 0 → proximal
         stroke_proximal = result[(result['block_order_id'] == 2) & (result['single_touch_id'] == 1)]
