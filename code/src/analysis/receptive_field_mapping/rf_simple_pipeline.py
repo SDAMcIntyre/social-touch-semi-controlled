@@ -13,7 +13,10 @@ import logging
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+import numpy as np
+import open3d as o3d  # type: ignore
 import pandas as pd
+from scipy.spatial import cKDTree  # type: ignore
 
 from analysis.receptive_field_mapping.rf_cluster_visualizer import render_forearm_heatmap
 from analysis.receptive_field_mapping.rf_data_loader import (
@@ -47,10 +50,6 @@ def _aggregate_spike_counts(
     """
     if forearm_ply_path is not None and forearm_ply_path.exists():
         try:
-            import numpy as np
-            import open3d as o3d  # type: ignore
-            from scipy.spatial import cKDTree  # type: ignore
-
             pcd = o3d.io.read_point_cloud(str(forearm_ply_path))
             ply_verts = np.asarray(pcd.points)
 
