@@ -160,21 +160,16 @@ def extract_touch_boundaries(touch_ids: np.ndarray) -> List[tuple]:
     if len(touch_ids) == 0:
         return []
 
-    non_zero_mask = touch_ids != 0
-    # Pad with False on both ends so diff catches leading/trailing transitions.
-    padded = np.concatenate(([False], non_zero_mask, [False]))
-    diff = np.diff(padded.astype(np.int8))
-    starts = np.where(diff == 1)[0]   # rising edges
-    ends   = np.where(diff == -1)[0]  # falling edges
+    change_points = np.where(np.diff(touch_ids) != 0)[0] + 1
+    run_starts = np.concatenate(([0], change_points))
+    run_ends   = np.concatenate((change_points, [len(touch_ids)]))
+    run_values = touch_ids[run_starts]
 
-    boundaries: List[tuple] = []
-    for start, end in zip(starts, ends):
-        # Representative touch ID: value at start of block (all rows in a
-        # contiguous block share the same single_touch_id by construction).
-        touch_id = int(touch_ids[start])
-        boundaries.append((int(start), int(end), touch_id))
-
-    return boundaries
+    return [
+        (int(s), int(e), int(v))
+        for s, e, v in zip(run_starts, run_ends, run_values)
+        if v != 0
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -408,7 +403,7 @@ class NeuralDataPanel(QWidget):
         # Extract touch boundaries from single_touch_id column if present
         self._touch_spans: List = []
         if 'single_touch_id' in merged_df.columns:
-            touch_ids = merged_df['single_touch_id'].to_numpy(dtype=np.int64, na_value=0)
+            touch_ids = merged_df['single_touch_id'].ffill().to_numpy(dtype=np.int64, na_value=0)
             self._touch_boundaries: List[tuple] = extract_touch_boundaries(touch_ids)
         else:
             self._touch_boundaries = []
@@ -450,7 +445,9 @@ class NeuralDataPanel(QWidget):
         contiguous non-zero ``single_touch_id`` block on all three axes.
 
         Band colour alternates by touch order (index % 2), not by ID value:
-        even-indexed touches → ``'#ff4444'`` (red), odd-indexed → ``'#44ff44'`` (green).
+        even-indexed touches → ``'#44ff44'`` (green), odd-indexed → ``'#ff4444'`` (red).
+        Each span is extended by 33 samples past the last touch row to match the
+        neural signal tail.
         All span artists are stored in ``self._touch_spans`` so they can be
         toggled via ``_on_touch_bands_toggled()``.
 
@@ -458,9 +455,9 @@ class NeuralDataPanel(QWidget):
         """
         axes = [self.ax_freq, self.ax_depth, self.ax_area]
         for idx, (start, end, _touch_id) in enumerate(self._touch_boundaries):
-            color = '#ff4444' if idx % 2 == 0 else '#44ff44'
+            color = '#44ff44' if idx % 2 == 0 else '#ff4444'
             for ax in axes:
-                span = ax.axvspan(start, end, color=color, alpha=0.12, zorder=0)
+                span = ax.axvspan(start, end + 33, color=color, alpha=0.12, zorder=0)
                 self._touch_spans.append(span)
 
         if self._touch_spans:
