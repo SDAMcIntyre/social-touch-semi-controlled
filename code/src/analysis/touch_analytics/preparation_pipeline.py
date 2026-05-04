@@ -77,7 +77,7 @@ def run_preparation(
     input_items
         List of (aggregated_session_csv, database_root_path) tuples.
     preparation_cfg
-        Preparation config dict, e.g. ``{'interpolation': {'method': 'cubic'}}``.
+        Preparation config dict (currently unused; reserved for future options).
     output_dir
         Directory where prepared CSVs are written.
     force
@@ -88,14 +88,12 @@ def run_preparation(
     List of paths to written prepared CSVs.
     """
     preparation_cfg = preparation_cfg or {}
-    interp_method = preparation_cfg.get('interpolation', {}).get('method', 'cubic')
 
     output_dir.mkdir(parents=True, exist_ok=True)
     cached_counts = _load_cached_counts(output_dir)
 
     print(
-        f"=== preparation pipeline: {len(input_items)} sessions, "
-        f"interpolation.method={interp_method} ===",
+        f"=== preparation pipeline: {len(input_items)} sessions ===",
         flush=True,
     )
 
@@ -109,7 +107,6 @@ def run_preparation(
             result = _prepare_session(
                 input_file=input_file,
                 output_dir=output_dir,
-                interp_method=interp_method,
                 force=force,
                 cached_counts=cached_counts,
             )
@@ -130,7 +127,6 @@ def run_preparation(
 def _prepare_session(
     input_file: Path,
     output_dir: Path,
-    interp_method: str,
     force: bool,
     cached_counts: dict[str, dict[str, int]],
 ) -> tuple[Path, dict[str, int]] | None:
@@ -161,7 +157,7 @@ def _prepare_session(
 
     df = load_session_csv(input_file)
     df = ensure_block_id_column(df)
-    df = interpolate_touch_columns(df, method=interp_method)
+    df = interpolate_touch_columns(df)
     df = assign_gesture_type(df)
     df = df[df['single_touch_id'] != 0]
     df = df.drop(columns=_DROP_COLUMNS, errors='ignore')

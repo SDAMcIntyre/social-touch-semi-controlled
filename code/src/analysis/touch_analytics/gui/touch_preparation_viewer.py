@@ -46,6 +46,8 @@ _DEFAULT_SIGNALS = [
     'contact_location_x',
     'Nerve_freq',
     'Nerve_spike',
+    'trial_id',
+    'single_touch_id',
 ]
 
 _SIGNAL_LABELS = {
@@ -56,6 +58,8 @@ _SIGNAL_LABELS = {
     'contact_location_z': 'Loc Z',
     'Nerve_freq': 'Freq',
     'Nerve_spike': 'Spikes',
+    'trial_id': 'Trial',
+    'single_touch_id': 'Touch',
 }
 
 
