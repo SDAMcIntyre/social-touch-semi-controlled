@@ -2,7 +2,8 @@
 
 **Date:** 2026-05-04
 **Author:** Basil Duvernoy
-**Status:** In Progress
+**Status:** Completed
+**Completed:** 2026-05-04 21:38
 **Base Branch:** `dev`
 **Branch:** `feature/linear-interpolation-and-viewer-signals`
 
