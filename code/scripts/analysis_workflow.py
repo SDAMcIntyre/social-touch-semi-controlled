@@ -45,6 +45,7 @@ from analysis.receptive_field_mapping import (
     precompute_explorer_caches,
     launch_feature_space_explorer,
     launch_touch_playback_explorer,
+    launch_gallery_viewer,
 )
 from analysis.touch_analytics.pipeline_shared import session_id_from_path
 from analysis.touch_analytics.gui import launch_preparation_viewer
@@ -498,6 +499,57 @@ def explore_touch_playback_flow(
     launch_touch_playback_explorer(input_items)
 
 
+@flow(name="explore_rf_gallery")
+def explore_rf_gallery_flow(
+    input_items: List[Tuple[Path, Path]],
+    force_processing: bool = False,
+    cluster_groups: list = None,
+    cluster_group_defs: dict = None,
+) -> None:
+    """
+    Launch the RF Cluster Gallery Viewer for each enabled cluster group / clusterer pair.
+
+    Reads extraction artifacts produced by ``visualize_receptive_fields_clustered`` — one
+    interactive PyQt5 window per combo/clusterer pair, opened sequentially.
+    ``force_processing`` is accepted for interface consistency but is a no-op:
+    the viewer is stateless and always launches fresh.
+    """
+    print(f"[Batch Analysis] Launching RF Gallery Viewer for {len(input_items)} item(s)...")
+    if not input_items:
+        return
+
+    if cluster_groups is None or cluster_group_defs is None:
+        raise ValueError(
+            "explore_rf_gallery_flow: 'cluster_groups' and 'cluster_group_defs' are required."
+        )
+
+    database_path = input_items[0][1]
+    output_dir = database_path / '4_analysed' / 'receptive_field_maps_clustered'
+
+    for combo_name in cluster_groups:
+        if combo_name not in cluster_group_defs:
+            raise ValueError(
+                f"explore_rf_gallery_flow: group '{combo_name}' not found in cluster_group_defs."
+            )
+        group_spec = cluster_group_defs[combo_name]
+        per_type = group_spec.get('per_type_clustering', False)
+        clustering_methods = group_spec.get('clustering_methods', {})
+        for clusterer_name, clusterer_cfg in clustering_methods.items():
+            if not clusterer_cfg.get('enabled', True):
+                continue
+            if per_type:
+                from analysis.touch_analytics.clustering_pipeline import GESTURE_TYPES
+                for gesture_type in GESTURE_TYPES:
+                    print(
+                        f"[RF Gallery] Launching viewer for "
+                        f"{combo_name}/{clusterer_name}/{gesture_type}..."
+                    )
+                    launch_gallery_viewer(output_dir, combo_name, clusterer_name, gesture_type)
+            else:
+                print(f"[RF Gallery] Launching viewer for {combo_name}/{clusterer_name}...")
+                launch_gallery_viewer(output_dir, combo_name, clusterer_name)
+
+
 @flow(name="explore_preparation")
 def explore_preparation_flow(
     input_items: List[Tuple[Path, Path]],
@@ -568,11 +620,34 @@ def collect_unique_session_dirs(
 
     return session_dir_map
 
+_PROCESSING_CATEGORIES: Set[str] = {"processing"}
+_VIEWER_CATEGORIES: Set[str] = {"viewer", "viewer_support"}
+
+
+def _category_allowed(category: Optional[str], mode: str) -> bool:
+    """Return True if a task with the given category should run under ``mode``.
+
+    ``mode`` is one of ``"all"``, ``"processing"``, or ``"viewers"``.
+    When ``mode`` is ``"all"`` every category is allowed.
+    When ``mode`` is ``"processing"`` only tasks in ``_PROCESSING_CATEGORIES`` run.
+    When ``mode`` is ``"viewers"`` only tasks in ``_VIEWER_CATEGORIES`` run.
+    A missing or unknown category is never allowed in filtered modes.
+    """
+    if mode == "all":
+        return True
+    if mode == "processing":
+        return category in _PROCESSING_CATEGORIES
+    if mode == "viewers":
+        return category in _VIEWER_CATEGORIES
+    raise ValueError(f"Unknown mode: {mode!r}. Expected 'all', 'processing', or 'viewers'.")
+
+
 def run_batch_analysis(
     block_files: List[Path],
     project_data_root: Path,
     dag_handler: DagConfigHandler,
-    report_file_path: Path
+    report_file_path: Path,
+    mode: str = "all",
 ):
     session_map = collect_unique_session_dirs(block_files, project_data_root)
 
@@ -581,21 +656,26 @@ def run_batch_analysis(
         return
 
     available_tasks = [
+        # --- Processing Tasks (produce files, run unattended) ---
         ("summarize_session_blocks", summarize_session_blocks_flow),
         ("map_receptive_fields_simple", map_receptive_fields_simple_flow),
         ("touch_preparation", touch_preparation_flow),
-        ("explore_preparation", explore_preparation_flow),
         ("touch_series_transforms", touch_series_transforms_flow),
         ("touch_feature_extraction", touch_feature_extraction_flow),
         ("touch_clustering", touch_clustering_flow),
         ("touch_comparing", touch_comparing_flow),
         ("analyse_ap_efficacy", analyse_ap_efficacy_flow),
-        ("map_receptive_fields_clustered", map_receptive_fields_clustered_flow),
         ("extract_receptive_fields_clustered", extract_receptive_fields_clustered_flow),
         ("visualize_receptive_fields_clustered", visualize_receptive_fields_clustered_flow),
+        # --- Legacy / Deprecated ---
+        ("map_receptive_fields_clustered", map_receptive_fields_clustered_flow),
+        # --- Viewer Support (utility for viewer tasks) ---
         ("precompute_explorer_caches", precompute_explorer_caches_flow),
+        # --- Viewer Tasks (launch interactive PyQt5 GUIs) ---
+        ("explore_preparation", explore_preparation_flow),
         ("explore_rf_feature_space", explore_rf_feature_space_flow),
         ("explore_touch_playback", explore_touch_playback_flow),
+        ("explore_rf_gallery", explore_rf_gallery_flow),
     ]
     
     task_names = [t[0] for t in available_tasks]
@@ -643,6 +723,13 @@ def run_batch_analysis(
             logging.info(f"Task '{task_name}' is disabled in DAG. Skipping.")
             continue
 
+        task_category: Optional[str] = dag_handler.tasks[task_name].get("category")
+        if not _category_allowed(task_category, mode):
+            logging.info(
+                f"Skipping task '{task_name}' (category '{task_category}' not included in --mode {mode})"
+            )
+            continue
+
         options = dag_handler.get_task_options(task_name)
         batch_id = f"batch_run_{task_name}"
         
@@ -679,6 +766,7 @@ def run_batch_analysis(
                         "map_receptive_fields_clustered",
                         "extract_receptive_fields_clustered",
                         "visualize_receptive_fields_clustered",
+                        "explore_rf_gallery",
                     ):
                         if _cluster_group_defs:
                             kwargs["cluster_group_defs"] = _cluster_group_defs
@@ -740,6 +828,17 @@ def main():
     freeze_support()
     parser = argparse.ArgumentParser()
     parser.add_argument("--dag-config", type=Path, required=True)
+    parser.add_argument(
+        "--mode",
+        choices=["all", "processing", "viewers"],
+        default="all",
+        help=(
+            "Task execution mode. "
+            "'all' (default): run all enabled tasks. "
+            "'processing': run only tasks with category 'processing'. "
+            "'viewers': run only tasks with category 'viewer' or 'viewer_support'."
+        ),
+    )
     args = parser.parse_args()
     dag_config_path = args.dag_config
     project_data_root = path_tools.get_project_data_root()
@@ -760,7 +859,8 @@ def main():
         block_files=block_files,
         project_data_root=project_data_root,
         dag_handler=dag_handler,
-        report_file_path=report_file_path
+        report_file_path=report_file_path,
+        mode=args.mode,
     )
 
 if __name__ == "__main__":

@@ -11,6 +11,7 @@ from .rf_cluster_pipeline import (
     precompute_explorer_caches,
     launch_feature_space_explorer,
     launch_touch_playback_explorer,
+    launch_gallery_viewer,
 )
 from .rf_camera_angle_task import pick_rf_camera_angle_batch, SessionSceneData
 from .rf_metrics import RFMetrics, compute_rf_metrics
@@ -25,6 +26,7 @@ __all__ = [
     "precompute_explorer_caches",
     "launch_feature_space_explorer",
     "launch_touch_playback_explorer",
+    "launch_gallery_viewer",
     "pick_rf_camera_angle_batch",
     "RFMetrics",
     "SessionSceneData",
