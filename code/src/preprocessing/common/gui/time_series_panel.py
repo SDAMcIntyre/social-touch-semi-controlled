@@ -1,6 +1,6 @@
 # Standard library imports
 from dataclasses import dataclass, field
-from typing import List
+from typing import List, Tuple
 
 # Third-party imports
 import numpy as np
@@ -88,6 +88,11 @@ class TimeSeriesPanel(QWidget):
         self._max_half_window_s: float = max(0.5, self._total_duration / 2.0)
         self._current_frame: int = 0
 
+        # Touch-band state
+        self._touch_boundaries: List[Tuple[float, float, int]] = []
+        self._touch_bands_visible: bool = True
+        self._touch_spans: List = []
+
         # Panel height fixed from total subplot count — never changes on toggle
         self._canvas_height_px: int = max(180, min(55 * len(subplot_specs) + 40, 400))
         self.fig = Figure(figsize=(12, self._canvas_height_px / 96.0), tight_layout=True)
@@ -111,6 +116,13 @@ class TimeSeriesPanel(QWidget):
             cb.setStyleSheet("color: black; font-size: 8pt;")
             cb.toggled.connect(lambda checked, idx=i: self._on_toggle(idx, checked))
             btn_layout.addWidget(cb)
+
+        self._touch_bands_cb = QCheckBox("Touch bands")
+        self._touch_bands_cb.setChecked(True)
+        self._touch_bands_cb.setStyleSheet("color: black; font-size: 8pt;")
+        self._touch_bands_cb.setVisible(False)
+        self._touch_bands_cb.toggled.connect(self._on_touch_bands_toggled)
+        btn_layout.addWidget(self._touch_bands_cb)
 
         btn_layout.addStretch()
 
@@ -147,6 +159,7 @@ class TimeSeriesPanel(QWidget):
         self.fig.clear()
         self._axes = None
         self._cursor_lines = []
+        self._touch_spans = []
 
         visible_specs = [s for s, v in zip(self._subplot_specs, self._visible) if v]
         n = len(visible_specs)
@@ -180,6 +193,14 @@ class TimeSeriesPanel(QWidget):
                                 color='red', lw=1.5, alpha=0.9)
             self._cursor_lines.append(cursor)
 
+        if self._touch_boundaries and self._touch_bands_visible:
+            _band_colors = ('#ff4444', '#44ff44')
+            for touch_order, (start, end, _touch_id) in enumerate(self._touch_boundaries):
+                color = _band_colors[touch_order % 2]
+                for ax in axes:
+                    span = ax.axvspan(start, end, color=color, alpha=0.12, zorder=0)
+                    self._touch_spans.append(span)
+
         self._apply_xlim()
         self.canvas.draw()
 
@@ -187,9 +208,31 @@ class TimeSeriesPanel(QWidget):
         self._visible[idx] = checked
         self._rebuild_axes()
 
+    def _on_touch_bands_toggled(self, checked: bool) -> None:
+        self._touch_bands_visible = checked
+        self._rebuild_axes()
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+
+    def set_touch_boundaries(
+        self, boundaries: List[Tuple[float, float, int]]
+    ) -> None:
+        """
+        Set touch-boundary intervals for background shading.
+
+        Parameters
+        ----------
+        boundaries:
+            List of ``(start_s, end_s, touch_id)`` tuples, where *start_s*
+            and *end_s* are in seconds (matching the panel x-axis).  Bands
+            are drawn in alternating red/green order determined by list
+            position, not by the ``touch_id`` value.
+        """
+        self._touch_boundaries = boundaries
+        self._touch_bands_cb.setVisible(True)
+        self._rebuild_axes()
 
     def update_cursor(self, frame_idx: int) -> None:
         """

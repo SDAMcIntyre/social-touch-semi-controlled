@@ -44,6 +44,7 @@ from analysis.receptive_field_mapping import (
     pick_rf_camera_angle_batch,
     precompute_explorer_caches,
     launch_feature_space_explorer,
+    launch_touch_playback_explorer,
 )
 from analysis.touch_analytics.pipeline_shared import session_id_from_path
 
@@ -477,6 +478,25 @@ def explore_rf_feature_space_flow(
     launch_feature_space_explorer(input_items)
 
 
+@flow(name="explore_touch_playback")
+def explore_touch_playback_flow(
+    input_items: List[Tuple[Path, Path]],
+    force_processing: bool = False,
+) -> None:
+    """
+    Launch the Touch Playback Explorer GUI for the given sessions.
+    Reads series-augmented CSVs produced by ``touch_series_transforms`` — no
+    dependency on RF clustering or visualization.
+    ``force_processing`` is accepted for interface consistency but is a no-op:
+    the GUI is stateless and always launches fresh.
+    """
+    print(f"[Batch Analysis] Launching Touch Playback Explorer for {len(input_items)} item(s)...")
+    if not input_items:
+        return
+
+    launch_touch_playback_explorer(input_items)
+
+
 def _collect_unified_files(input_items: List[Tuple[Path, Path]]) -> List[Path]:
     """
     Reconstruct expected paths of touch-summary CSVs written by touch_feature_extraction.
@@ -554,6 +574,7 @@ def run_batch_analysis(
         ("visualize_receptive_fields_clustered", visualize_receptive_fields_clustered_flow),
         ("precompute_explorer_caches", precompute_explorer_caches_flow),
         ("explore_rf_feature_space", explore_rf_feature_space_flow),
+        ("explore_touch_playback", explore_touch_playback_flow),
     ]
     
     task_names = [t[0] for t in available_tasks]
