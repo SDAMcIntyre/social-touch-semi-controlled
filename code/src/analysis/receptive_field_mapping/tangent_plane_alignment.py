@@ -1,6 +1,7 @@
 import logging
 
 import numpy as np
+from scipy.spatial import KDTree
 
 logger = logging.getLogger(__name__)
 
@@ -11,8 +12,6 @@ def _compute_surface_normal(
     k: int = 50,
 ) -> np.ndarray:
     try:
-        from scipy.spatial import KDTree
-
         tree = KDTree(forearm_vertices)
         _, idx = tree.query(contact_centroid, k=min(k, len(forearm_vertices)))
         neighbors = forearm_vertices[idx]

@@ -11,6 +11,7 @@ bottom of this module via PROJECTION_METHODS[key] = function.
 import logging
 
 import numpy as np
+from scipy.spatial import KDTree
 
 from .tangent_plane_alignment import align_points, compute_tangent_plane_rotation
 
@@ -51,8 +52,6 @@ def fit_cylinder_axis(
         center: centroid projected onto the axis (scalar position)
         mean_radius: mean radial distance from the axis (in mm)
     """
-    from scipy.spatial import KDTree
-
     # Use local neighborhood around contact centroid for more robust axis fit
     k = min(500, len(forearm_vertices))
     tree = KDTree(forearm_vertices)

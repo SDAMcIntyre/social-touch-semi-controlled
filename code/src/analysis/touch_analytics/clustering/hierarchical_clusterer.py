@@ -32,6 +32,7 @@ from typing import ClassVar, Literal, Tuple
 
 import numpy as np
 import pandas as pd
+from scipy.cluster.hierarchy import linkage
 
 from .base import ClusteringContext, TouchClusterer
 
@@ -55,8 +56,6 @@ class HierarchicalClusterer(TouchClusterer):
         config: dict,
         context: ClusteringContext,
     ) -> Tuple[np.ndarray, dict]:
-        from scipy.cluster.hierarchy import linkage
-
         min_instances = config.get('min_instances_per_sensor', _DEFAULT_MIN_INSTANCES)
         min_sensors = config.get('min_sensor_types', _DEFAULT_MIN_SENSOR_TYPES)
         sensor_labels = context.sensor_labels  # may be None

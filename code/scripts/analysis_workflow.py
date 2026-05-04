@@ -41,7 +41,11 @@ from analysis.receptive_field_mapping import (
     run_cluster_rf_mapping,
     run_cluster_rf_visualization,
     run_simple_rf_mapping,
+    pick_rf_camera_angle_batch,
+    precompute_explorer_caches,
+    launch_feature_space_explorer,
 )
+from analysis.touch_analytics.pipeline_shared import session_id_from_path
 
 # --- Analysis Flows ---
 
@@ -332,9 +336,6 @@ def map_receptive_fields_clustered_flow(
         disjoint_mask_distance_mm=disjoint_mask_distance_mm,
     )
 
-    from analysis.receptive_field_mapping.rf_camera_angle_task import pick_rf_camera_angle_batch
-    from analysis.touch_analytics.pipeline_shared import session_id_from_path
-
     session_output_dirs = {
         session_id_from_path(csv_path): csv_path.parent
         for csv_path, _ in input_items
@@ -420,10 +421,8 @@ def visualize_receptive_fields_clustered_flow(
         disjoint_mask_distance_mm=disjoint_mask_distance_mm,
         force=force_processing,
         gallery_viewer=gallery_viewer,
+        input_items=input_items,
     )
-
-    from analysis.receptive_field_mapping.rf_camera_angle_task import pick_rf_camera_angle_batch
-    from analysis.touch_analytics.pipeline_shared import session_id_from_path
 
     session_output_dirs = {
         session_id_from_path(csv_path): csv_path.parent
@@ -436,6 +435,46 @@ def visualize_receptive_fields_clustered_flow(
     )
 
     return result
+
+
+@flow(name="precompute_explorer_caches")
+def precompute_explorer_caches_flow(
+    input_items: List[Tuple[Path, Path]],
+    force_processing: bool = False,
+    max_workers: int = 4,
+) -> None:
+    """Pre-compute .npz sidecar caches for the RF Feature-Space Explorer.
+
+    Runs ``load_explorer_data()`` for each session in a thread pool so that
+    the subsequent ``explore_rf_feature_space`` GUI task opens instantly on a
+    cache hit.  Cache invalidation is handled internally by
+    ``load_explorer_data``; ``force_processing`` is accepted for interface
+    consistency but is a no-op here.
+    """
+    print(f"[Batch Analysis] Pre-computing RF explorer caches for {len(input_items)} item(s)...")
+    if not input_items:
+        return
+
+    precompute_explorer_caches(input_items, max_workers=max_workers)
+
+
+@flow(name="explore_rf_feature_space")
+def explore_rf_feature_space_flow(
+    input_items: List[Tuple[Path, Path]],
+    force_processing: bool = False,
+) -> None:
+    """
+    Launch the RF Feature-Space Explorer GUI for the given sessions.
+    Reads series-augmented CSVs produced by ``touch_series_transforms`` — no
+    dependency on RF clustering or visualization.
+    ``force_processing`` is accepted for interface consistency but is a no-op:
+    the GUI is stateless and always launches fresh.
+    """
+    print(f"[Batch Analysis] Launching RF Feature-Space Explorer for {len(input_items)} item(s)...")
+    if not input_items:
+        return
+
+    launch_feature_space_explorer(input_items)
 
 
 def _collect_unified_files(input_items: List[Tuple[Path, Path]]) -> List[Path]:
@@ -513,6 +552,8 @@ def run_batch_analysis(
         ("map_receptive_fields_clustered", map_receptive_fields_clustered_flow),
         ("extract_receptive_fields_clustered", extract_receptive_fields_clustered_flow),
         ("visualize_receptive_fields_clustered", visualize_receptive_fields_clustered_flow),
+        ("precompute_explorer_caches", precompute_explorer_caches_flow),
+        ("explore_rf_feature_space", explore_rf_feature_space_flow),
     ]
     
     task_names = [t[0] for t in available_tasks]
@@ -636,6 +677,8 @@ def run_batch_analysis(
                                 f"key, got keys: {list(mode_cfg.keys())!r}"
                             )
                         kwargs["camera_angle_mode"] = bool(mode_cfg["enabled"])
+                    if "max_workers" in options:
+                        kwargs["max_workers"] = int(options["max_workers"])
                     if "show_interactive" in options:
                         kwargs["show_interactive"] = options["show_interactive"]
                     if options.get("projection_method"):
