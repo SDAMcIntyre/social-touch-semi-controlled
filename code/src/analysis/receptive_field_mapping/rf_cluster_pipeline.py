@@ -8,7 +8,9 @@ per-cluster spike_counts.csv files. Renders per-session 3D forearm heatmap PNGs.
 
 import json
 import logging
+import sys
 from collections import Counter, defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -22,6 +24,7 @@ from analysis.receptive_field_mapping.rf_data_loader import (
     resolve_forearm_ply,
 )
 from analysis.receptive_field_mapping.rf_extraction_io import (
+    description_summary_line,
     load_cluster_session_data,
     load_extraction_summary,
     load_forearm_vertices_artifact,
@@ -51,6 +54,11 @@ from analysis.touch_analytics.pipeline_shared import (
     session_id_from_path,
 )
 from utils.should_process_task import should_process_task
+
+from .gui import RFFeatureSpaceExplorer
+from .rf_explorer_data import load_explorer_data
+from .rf_gallery_data import load_gallery_data
+from PyQt5.QtWidgets import QApplication
 
 logger = logging.getLogger(__name__)
 
@@ -410,100 +418,6 @@ def _build_cluster_description(
     return desc
 
 
-def description_summary_line(desc: dict, separator: str = ' — ') -> str:
-    gen = desc.get('generation_params')
-    if gen:
-        return _format_generation_params(gen, desc, separator)
-    return _format_legacy_ranges(desc, separator)
-
-
-def _format_generation_params(gen: dict, desc: dict, separator: str) -> str:
-    parts: list[str] = []
-    algo = gen.get('algorithm', 'unknown')
-
-    if algo == 'type_stratified':
-        base = gen.get('base_algorithm', '?')
-        header = f"type_stratified ({base})"
-        type_key = gen.get('type')
-        if type_key:
-            parts.append(f"type: {type_key}")
-        if base == 'binning':
-            if gen.get('n_bins') is not None:
-                parts.append(f"n_bins: {gen['n_bins']}")
-            if gen.get('primary_feature'):
-                parts.append(f"feature: {gen['primary_feature']}")
-        elif base == 'kmeans' and gen.get('k') is not None:
-            parts.append(f"k: {gen['k']}")
-    elif algo == 'binning':
-        header = 'binning'
-        if gen.get('n_bins') is not None:
-            parts.append(f"n_bins: {gen['n_bins']}")
-        if gen.get('bin_method'):
-            parts.append(f"method: {gen['bin_method']}")
-        if gen.get('primary_feature'):
-            parts.append(f"feature: {gen['primary_feature']}")
-    elif algo == 'kmeans':
-        header = 'kmeans'
-        if gen.get('k') is not None:
-            parts.append(f"k: {gen['k']}")
-    elif algo == 'dbscan':
-        header = 'dbscan'
-        if gen.get('eps') is not None:
-            parts.append(f"eps: {gen['eps']:.3f}")
-        if gen.get('min_samples') is not None:
-            parts.append(f"min_samples: {gen['min_samples']}")
-    elif algo == 'hierarchical':
-        header = 'hierarchical'
-        if gen.get('k') is not None:
-            parts.append(f"k: {gen['k']}")
-    elif algo == 'gmm':
-        header = 'gmm'
-        if gen.get('k') is not None:
-            parts.append(f"k: {gen['k']}")
-        if gen.get('covariance_type'):
-            parts.append(f"cov: {gen['covariance_type']}")
-        if gen.get('features'):
-            parts.append(f"features: {', '.join(gen['features'])}")
-    else:
-        header = algo
-
-    br = desc.get('bin_range')
-    if br:
-        parts.append(f"{br['feature']}: [{br['low']}, {br['high']}]")
-
-    dr = desc.get('display_ranges') or {}
-    if dr:
-        for label, r in dr.items():
-            parts.append(f"{label}: [{r['min']}, {r['max']}]")
-    else:
-        fr = desc.get('feature_ranges') or {}
-        for col, r in fr.items():
-            parts.append(f"{col}: [{r['min']}, {r['max']}]")
-
-    if parts:
-        return header + separator + separator.join(parts)
-    return header
-
-
-def _format_legacy_ranges(desc: dict, separator: str) -> str:
-    parts: list[str] = []
-    if 'feature_ranges' in desc:
-        for col_name, r in desc['feature_ranges'].items():
-            parts.append(f"{col_name}: [{r['min']}, {r['max']}]")
-    elif 'display_ranges' in desc:
-        for label, r in desc['display_ranges'].items():
-            parts.append(f"{label}: [{r['min']}, {r['max']}]")
-    elif 'bin_range' in desc:
-        br = desc['bin_range']
-        parts.append(f"{br['feature']}: [{br['low']}, {br['high']}]")
-    elif desc.get('primary_feature') and 'feature_ranges' in desc:
-        pf = desc['primary_feature']
-        if pf in desc['feature_ranges']:
-            r = desc['feature_ranges'][pf]
-            parts.append(f"{pf}: [{r['min']}, {r['max']}]")
-    return separator.join(parts)
-
-
 def _build_pairs(
     cluster_groups,
     cluster_group_defs,
@@ -814,27 +728,11 @@ def run_cluster_rf_extraction(
     return produced
 
 
-def launch_feature_space_explorer(
+def _resolve_explorer_session_paths(
     input_items: List[Tuple[Path, Path]],
-) -> None:
-    """Launch the RF Feature-Space Explorer GUI for all sessions in input_items.
-
-    Resolves the series-augmented CSV and forearm PLY for each session, loads
-    an ``ExplorerData`` via ``load_explorer_data()``, then opens the
-    ``RFFeatureSpaceExplorer`` window.  Blocks until the user closes the window.
-
-    Parameters
-    ----------
-    input_items:
-        List of ``(aggregated_csv_path, database_path)`` tuples, one per
-        session — the same format used throughout the analysis pipeline.
-    """
-    from .rf_explorer_data import load_explorer_data
-    from .gui import RFFeatureSpaceExplorer
-    from PyQt5.QtWidgets import QApplication
-    import sys
-
-    sessions: List[Tuple[str, object]] = []
+) -> List[Tuple[str, Path, Path]]:
+    """Return ``(session_id, series_csv_path, forearm_ply_path)`` for each item."""
+    result = []
     for csv_path, database_path in input_items:
         session_id = session_id_from_path(csv_path)
         series_csv_path = (
@@ -843,24 +741,104 @@ def launch_feature_space_explorer(
         )
         if not series_csv_path.exists():
             raise ValueError(
-                f"launch_feature_space_explorer: series-augmented CSV not found "
+                f"_resolve_explorer_session_paths: series-augmented CSV not found "
                 f"for session '{session_id}': {series_csv_path}"
             )
         forearm_ply_path = resolve_forearm_ply(csv_path.parent, session_id)
         if forearm_ply_path is None:
             raise ValueError(
-                f"launch_feature_space_explorer: forearm PLY not found "
+                f"_resolve_explorer_session_paths: forearm PLY not found "
                 f"for session '{session_id}' in {csv_path.parent}"
             )
-        explorer_data = load_explorer_data(series_csv_path, forearm_ply_path)
-        sessions.append((session_id, explorer_data))
+        result.append((session_id, series_csv_path, forearm_ply_path))
+    return result
 
-    if not sessions:
+
+def precompute_explorer_caches(
+    input_items: List[Tuple[Path, Path]],
+    max_workers: int = 4,
+) -> None:
+    """Pre-compute .npz sidecar caches for the RF Feature-Space Explorer.
+
+    Resolves the series-augmented CSV and forearm PLY for each session, then
+    calls ``load_explorer_data()`` in a thread pool so the KDTree computation
+    and CSV reads run concurrently.  ``load_explorer_data`` is internally
+    idempotent: sessions with a fresh ``.npz`` sidecar are skipped
+    automatically (cache hit, ~200 ms each).
+
+    Parameters
+    ----------
+    input_items:
+        List of ``(aggregated_csv_path, database_path)`` tuples, one per session.
+    max_workers:
+        Number of parallel worker threads.  Defaults to 4; keep ≤ 4 to avoid
+        excessive peak memory (each session may allocate ~1–2 GB during CSV
+        read and contact-point array construction).
+    """
+    session_specs = _resolve_explorer_session_paths(input_items)
+    n = len(session_specs)
+    if n == 0:
+        return
+
+    print(
+        f"[RF Explorer] Pre-computing caches for {n} session(s)"
+        f" (max_workers={min(max_workers, n)})..."
+    )
+
+    def _compute_one(spec: Tuple[str, Path, Path]) -> None:
+        session_id, series_csv, forearm_ply = spec
+        print(f"[RF Explorer] → {session_id} ...", flush=True)
+        load_explorer_data(series_csv, forearm_ply)
+        print(f"[RF Explorer] ✓ {session_id}", flush=True)
+
+    with ThreadPoolExecutor(max_workers=min(max_workers, n)) as executor:
+        list(executor.map(_compute_one, session_specs))
+
+    print(f"[RF Explorer] Cache pre-computation complete ({n} session(s)).")
+
+
+def launch_feature_space_explorer(
+    input_items: List[Tuple[Path, Path]],
+) -> None:
+    """Launch the RF Feature-Space Explorer GUI for all sessions in input_items.
+
+    Resolves the series-augmented CSV and forearm PLY for each session, loads
+    ``ExplorerData`` via ``load_explorer_data()`` in a thread pool, then opens
+    the ``RFFeatureSpaceExplorer`` window.  When caches are warm the load is
+    near-instant; on a cache miss the KDTree computation runs in parallel
+    across sessions.  Blocks until the user closes the window.
+
+    Parameters
+    ----------
+    input_items:
+        List of ``(aggregated_csv_path, database_path)`` tuples, one per
+        session — the same format used throughout the analysis pipeline.
+    """
+
+    session_specs = _resolve_explorer_session_paths(input_items)
+    n = len(session_specs)
+    if n == 0:
         raise ValueError("launch_feature_space_explorer: no sessions to display.")
 
+    print(f"[RF Explorer] Loading {n} session(s)...")
+
+    def _load_one(spec: Tuple[str, Path, Path]) -> Tuple[str, object]:
+        session_id, series_csv, forearm_ply = spec
+        return session_id, load_explorer_data(series_csv, forearm_ply)
+
+    with ThreadPoolExecutor(max_workers=min(4, n)) as executor:
+        sessions: List[Tuple[str, object]] = list(executor.map(_load_one, session_specs))
+
     first_label, first_data = sessions[0]
+    first_database_path = input_items[0][1]
+    settings_path = first_database_path / "4_analysed" / "rf_explorer_settings.json"
+
     app = QApplication.instance() or QApplication(sys.argv)
-    viewer = RFFeatureSpaceExplorer(explorer_data=first_data, sessions=sessions)
+    viewer = RFFeatureSpaceExplorer(
+        explorer_data=first_data,
+        sessions=sessions,
+        settings_path=settings_path,
+    )
     viewer.show()
     app.exec_()
 
@@ -889,10 +867,7 @@ def launch_gallery_viewer(
         (``"tap"``, ``"stroke_proximal"``, ``"stroke_distal"``) to load the correct
         per-type artifact tree.  ``None`` loads the flat artifact tree.
     """
-    from .rf_gallery_data import load_gallery_data
     from .gui import RFClusterGalleryViewer
-    from PyQt5.QtWidgets import QApplication
-    import sys
 
     gallery_data = load_gallery_data(output_dir, combo_name, clusterer_name, gesture_type)
     app = QApplication.instance() or QApplication(sys.argv)
@@ -912,7 +887,6 @@ def run_cluster_rf_visualization(
     force: bool = False,
     gallery_viewer: bool = False,
     input_items: List[Tuple[Path, Path]] = None,
-    feature_space_explorer: bool = False,
 ) -> List[Path]:
     """Compute RF metrics and render heatmaps from extraction artifacts.
 
@@ -942,12 +916,8 @@ def run_cluster_rf_visualization(
         combo/clusterer pair.  Blocks until the user closes the window.
         Default False (existing behaviour).
     input_items:
-        List of ``(aggregated_csv_path, database_path)`` tuples.  Required when
-        ``feature_space_explorer`` is ``True``; unused otherwise.
-    feature_space_explorer:
-        If True, launch the RF Feature-Space Explorer GUI after rendering.
-        Requires ``input_items`` to be provided.  Blocks until the user closes
-        the window.  Default False.
+        List of ``(aggregated_csv_path, database_path)`` tuples.  Unused by
+        this function; accepted for forward-compatibility.
 
     Returns
     -------
@@ -956,11 +926,6 @@ def run_cluster_rf_visualization(
     if cluster_groups is None and feature_combinations is None:
         raise ValueError(
             "run_cluster_rf_visualization: either 'cluster_groups' or 'feature_combinations' must be provided."
-        )
-
-    if feature_space_explorer and not input_items:
-        raise ValueError(
-            "run_cluster_rf_visualization: 'input_items' must be provided when 'feature_space_explorer' is True."
         )
 
     pairs = _build_pairs(
@@ -1203,10 +1168,6 @@ def run_cluster_rf_visualization(
             if gallery_viewer:
                 print(f"[RF Gallery] Launching gallery viewer for {combo_name}/{clusterer_name}{_type_label}...")
                 launch_gallery_viewer(output_dir, combo_name, clusterer_name, gesture_type)
-
-    if feature_space_explorer:
-        print("[RF Explorer] Launching feature-space explorer...")
-        launch_feature_space_explorer(input_items)
 
     return produced
 

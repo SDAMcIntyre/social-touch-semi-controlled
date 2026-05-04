@@ -17,6 +17,7 @@ Output layout
 
 import json
 import logging
+import math
 from dataclasses import asdict
 from pathlib import Path
 from typing import List
@@ -350,7 +351,6 @@ def _result_to_dict(result) -> dict:
         val = d.get(key)
         if val is not None:
             try:
-                import math
                 if math.isnan(val):
                     d[key] = None
             except (TypeError, ValueError):

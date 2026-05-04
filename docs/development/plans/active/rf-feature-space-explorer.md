@@ -55,8 +55,10 @@ and validation.
 4. Gesture-type checkboxes: tap, stroke_proximal, stroke_distal, stroke_unknown
 5. Session selector combo box for switching between sessions (single-session
    forearm rendering)
-6. Pipeline integration via `launch_feature_space_explorer()` in
-   `rf_cluster_pipeline.py`
+6. Pipeline integration as an independent DAG task (`explore_rf_feature_space`)
+   via `explore_rf_feature_space_flow` in `analysis_workflow.py`, with
+   `launch_feature_space_explorer()` in `rf_cluster_pipeline.py` as the
+   underlying call target
 
 ### Out of Scope
 
@@ -73,7 +75,7 @@ and validation.
 - [ ] Rectangle drag updates 3D view within 30ms (no perceptible delay)
 - [ ] Checkbox toggle updates 3D view within 30ms
 - [ ] Session switching loads new data and resets the view correctly
-- [ ] GUI launches from `launch_feature_space_explorer()` in the pipeline
+- [ ] GUI launches from the `explore_rf_feature_space` DAG task (via `explore_rf_feature_space_flow` → `launch_feature_space_explorer()`)
 
 ---
 
@@ -261,18 +263,30 @@ interaction yet.
 **Dependencies:** Phase 2
 
 ### Phase 4: Pipeline Integration
-**Goal:** Launch the explorer from the existing pipeline.
+**Goal:** Launch the explorer as a first-class DAG task from the analysis pipeline.
 **Started:** 2026-05-01
 **Completed:** 2026-05-01
 
+**Revised architecture (rf-explorer-independent-dag-flow):** The explorer is
+no longer launched via a flag on `visualize_receptive_fields_clustered`. It is
+now an independent DAG task (`explore_rf_feature_space`) with its own Prefect
+`@flow` (`explore_rf_feature_space_flow`) and a direct dependency on
+`touch_series_transforms` — the stage that actually produces the data it
+consumes. This removes the false dependency on RF clustering and makes the
+explorer independently enable/disable-able in the DAG config.
+
 - [x] Task 4.1 -- Add `launch_feature_space_explorer()` to
   `rf_cluster_pipeline.py`, following `launch_gallery_viewer()` pattern
-- [x] Task 4.2 -- Wire it to be callable from
-  `run_cluster_rf_visualization()` via an `feature_space_explorer: true`
-  option flag
+- [x] Task 4.2 -- ~~Wire it to be callable from `run_cluster_rf_visualization()`
+  via a `feature_space_explorer: true` option flag~~ — **superseded**: add
+  `explore_rf_feature_space_flow` `@flow` to `analysis_workflow.py` and
+  register it in `available_tasks`; add `explore_rf_feature_space` task block
+  to `analyse_workflow_dag.yaml` with `depends_on: [touch_series_transforms]`
 
 **Files Modified:**
-- `code/src/analysis/receptive_field_mapping/rf_cluster_pipeline.py` -- add launch function and option handling
+- `code/src/analysis/receptive_field_mapping/rf_cluster_pipeline.py` -- add launch function
+- `code/scripts/analysis_workflow.py` -- add `explore_rf_feature_space_flow` and register in `available_tasks`; remove `feature_space_explorer` param from `visualize_receptive_fields_clustered_flow`
+- `configs/analyse_workflow_dag.yaml` -- add `explore_rf_feature_space` task block
 
 **Dependencies:** Phase 3
 

@@ -11,6 +11,7 @@ from typing import Optional
 
 import numpy as np
 import pandas as pd
+from sklearn.metrics import adjusted_rand_score
 
 from ..clustering.base import ClusteringContext
 
@@ -58,8 +59,6 @@ def bootstrap_stability(
             when every round produced a single cluster (perfectly stable),
             or ``None`` when ARI could not be computed.
     """
-    from sklearn.metrics import adjusted_rand_score
-
     _context = context if context is not None else ClusteringContext()
 
     n_samples = len(X)

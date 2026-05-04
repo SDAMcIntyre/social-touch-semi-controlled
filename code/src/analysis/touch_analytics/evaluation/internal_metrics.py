@@ -12,6 +12,11 @@ import logging
 from typing import Optional
 
 import numpy as np
+from sklearn.metrics import (
+    calinski_harabasz_score,
+    davies_bouldin_score,
+    silhouette_score,
+)
 
 
 def compute_internal_metrics(
@@ -64,12 +69,6 @@ def compute_internal_metrics(
         return result
 
     try:
-        from sklearn.metrics import (
-            calinski_harabasz_score,
-            davies_bouldin_score,
-            silhouette_score,
-        )
-
         result["silhouette_score"] = float(
             silhouette_score(X_valid, labels_valid)
         )

@@ -78,6 +78,15 @@ tasks:
           drop_used_inputs: false
     depends_on: [touch_preparation]
 
+  # RF Feature-Space Explorer: interactive GUI for sweeping the feature space and
+  # visualising the corresponding RF heatmap in real time. Consumes series-augmented
+  # CSVs — no dependency on clustering or RF extraction.
+  explore_rf_feature_space:
+    enabled: true
+    options:
+      force_processing: false
+    depends_on: [touch_series_transforms]
+
   # Stage 2b (Feature Extraction): Per-session feature extraction. Each enabled feature extracts to its own folder.
   # Output: 4_analysed/touch_features/<feature>/<session>_touch_summary.csv
   touch_feature_extraction:
