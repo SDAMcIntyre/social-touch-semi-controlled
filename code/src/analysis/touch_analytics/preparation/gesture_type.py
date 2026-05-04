@@ -1,5 +1,6 @@
 # preparation/gesture_type.py
 import logging
+import numpy as np
 import pandas as pd
 
 _log = logging.getLogger(__name__)
@@ -13,9 +14,17 @@ def classify_gesture_type(group: pd.DataFrame) -> str:
     """
     Classify a single touch group as 'tap', 'stroke_proximal', or 'stroke_distal'.
 
-    Stroke direction is determined from the 3D contact location: a stroke is
-    proximal when ``contact_location_x`` increases from first to last frame
-    (Δx > 0), distal otherwise.
+    Stroke direction is determined by fitting a degree-1 polynomial (affine fit /
+    linear regression) to the non-NaN ``contact_location_x`` values over frame
+    index using ``numpy.polyfit``.  The sign of the slope decides direction: a
+    positive slope (x increasing over time) → ``'stroke_proximal'``; a negative
+    or zero slope → ``'stroke_distal'``.  Using the overall trend rather than
+    only the endpoint delta makes the classification robust to noisy leading/
+    trailing frames.
+
+    Returns ``'stroke_unknown'`` when fewer than two valid (non-NaN)
+    ``contact_location_x`` values are available, as a linear fit requires at
+    least two points.
 
     Parameters
     ----------
@@ -26,7 +35,8 @@ def classify_gesture_type(group: pd.DataFrame) -> str:
     -------
     str
         ``'tap'``, ``'stroke_proximal'``, ``'stroke_distal'``, or
-        ``'stroke_unknown'`` (when all ``contact_location_x`` values are NaN).
+        ``'stroke_unknown'`` (when fewer than two valid ``contact_location_x``
+        values exist).
 
     Raises
     ------
@@ -67,9 +77,19 @@ def classify_gesture_type(group: pd.DataFrame) -> str:
             group['single_touch_id'].iloc[0],
         )
         return 'stroke_unknown'
-    start_x = valid_x.iloc[0]
-    end_x = valid_x.iloc[-1]
-    return 'stroke_proximal' if end_x > start_x else 'stroke_distal'
+    if len(valid_x) < 2:
+        # A linear fit requires at least two points.
+        # Explicitly requested exception to fail-fast: return sentinel rather than raise.
+        _log.warning(
+            "classify_gesture_type: only one valid contact_location_x value for a stroke "
+            "group (block=%s, trial=%s, touch=%s) — labelled 'stroke_unknown'",
+            group['block_order_id'].iloc[0],
+            group['trial_id'].iloc[0],
+            group['single_touch_id'].iloc[0],
+        )
+        return 'stroke_unknown'
+    slope, _ = np.polyfit(np.arange(len(valid_x)), valid_x.values, 1)
+    return 'stroke_proximal' if slope > 0 else 'stroke_distal'
 
 
 def assign_gesture_type(df: pd.DataFrame) -> pd.DataFrame:

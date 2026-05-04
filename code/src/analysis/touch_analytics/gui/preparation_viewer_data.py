@@ -28,6 +28,8 @@ SIGNAL_COLUMNS = [
     'contact_location_z',
     'Nerve_freq',
     'Nerve_spike',
+    'trial_id',
+    'single_touch_id',
 ]
 
 _REQUIRED_COLUMNS = [

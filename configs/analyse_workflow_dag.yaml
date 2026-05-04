@@ -33,9 +33,7 @@ tasks:
     enabled: true
     options:
       force_processing: false
-      preparation:
-        interpolation:
-          method: cubic
+      preparation: {}
     depends_on: []
 
   # Touch Preparation Viewer: visual inspection of preparation pipeline output.
