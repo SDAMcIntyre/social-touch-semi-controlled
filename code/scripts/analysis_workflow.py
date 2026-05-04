@@ -36,15 +36,28 @@ from analysis.touch_analytics.series_pipeline import run_series_transforms
 from analysis.touch_analytics.extraction_pipeline import run_feature_extraction
 from analysis.touch_analytics.clustering_pipeline import run_clustering
 from analysis.touch_analytics.comparing_pipeline import run_comparing
-from analysis.receptive_field_mapping import (
-    run_cluster_rf_extraction,
-    run_cluster_rf_mapping,
-    run_cluster_rf_visualization,
-    run_simple_rf_mapping,
-    pick_rf_camera_angle_batch,
-    precompute_explorer_caches,
-    launch_feature_space_explorer,
-)
+def _rf_mapping():
+    # Deferred import: analysis.receptive_field_mapping chains through
+    # preprocessing.forearm_extraction → pyk4a (Windows-only hardware lib).
+    # Importing at module level breaks macOS runs of non-RF tasks.
+    from analysis.receptive_field_mapping import (
+        run_cluster_rf_extraction,
+        run_cluster_rf_mapping,
+        run_cluster_rf_visualization,
+        run_simple_rf_mapping,
+        pick_rf_camera_angle_batch,
+        precompute_explorer_caches,
+        launch_feature_space_explorer,
+    )
+    return (
+        run_cluster_rf_extraction,
+        run_cluster_rf_mapping,
+        run_cluster_rf_visualization,
+        run_simple_rf_mapping,
+        pick_rf_camera_angle_batch,
+        precompute_explorer_caches,
+        launch_feature_space_explorer,
+    )
 from analysis.touch_analytics.pipeline_shared import session_id_from_path
 
 # --- Analysis Flows ---
@@ -100,6 +113,7 @@ def map_receptive_fields_simple_flow(
     print(f"[Batch Analysis] Running simple RF mapping for {len(input_items)} item(s)...")
     if not input_items:
         return []
+    _, _, _, run_simple_rf_mapping, _, _, _ = _rf_mapping()
     output_dir = input_items[0][1] / '4_analysed' / 'receptive_field_maps_simple'
     return run_simple_rf_mapping(
         input_items=input_items,
@@ -318,6 +332,7 @@ def map_receptive_fields_clustered_flow(
     print(f"[Batch Analysis] Running cluster-based RF mapping for {len(input_items)} item(s)...")
     if not input_items:
         return []
+    _, run_cluster_rf_mapping, _, _, pick_rf_camera_angle_batch, _, _ = _rf_mapping()
 
     database_path = input_items[0][1]
     clustering_dir = database_path / '4_analysed' / 'touch_clusters'
@@ -366,6 +381,7 @@ def extract_receptive_fields_clustered_flow(
     print(f"[Batch Analysis] Running RF extraction for {len(input_items)} item(s)...")
     if not input_items:
         return []
+    run_cluster_rf_extraction, _, _, _, _, _, _ = _rf_mapping()
 
     database_path = input_items[0][1]
     clustering_dir = database_path / '4_analysed' / 'touch_clusters'
@@ -407,6 +423,7 @@ def visualize_receptive_fields_clustered_flow(
     print(f"[Batch Analysis] Running RF visualization for {len(input_items)} item(s)...")
     if not input_items:
         return []
+    _, _, run_cluster_rf_visualization, _, pick_rf_camera_angle_batch, _, _ = _rf_mapping()
 
     database_path = input_items[0][1]
     output_dir = database_path / '4_analysed' / 'receptive_field_maps_clustered'
@@ -454,6 +471,7 @@ def precompute_explorer_caches_flow(
     print(f"[Batch Analysis] Pre-computing RF explorer caches for {len(input_items)} item(s)...")
     if not input_items:
         return
+    _, _, _, _, _, precompute_explorer_caches, _ = _rf_mapping()
 
     precompute_explorer_caches(input_items, max_workers=max_workers)
 
@@ -473,6 +491,7 @@ def explore_rf_feature_space_flow(
     print(f"[Batch Analysis] Launching RF Feature-Space Explorer for {len(input_items)} item(s)...")
     if not input_items:
         return
+    _, _, _, _, _, _, launch_feature_space_explorer = _rf_mapping()
 
     launch_feature_space_explorer(input_items)
 
