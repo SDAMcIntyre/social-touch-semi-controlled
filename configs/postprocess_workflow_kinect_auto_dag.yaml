@@ -16,11 +16,21 @@ parameters:
 tasks:
 
   # --- Spatial Transform Pipeline ---
-  apply_icp_registration:
+  # Step 1: Project contact points onto per-block forearm surface (before ICP).
+  # Contact points from blocks_merged/ are snapped to the per-block forearm
+  # so every subsequent rigid transform (ICP, PCA) preserves on-surface membership.
+  project_contacts_onto_forearm:
     enabled: true
     options:
       force_processing: false
     depends_on: []
+
+  # Step 2: ICP Registration — consumes projected (on-surface) merged CSVs.
+  apply_icp_registration:
+    enabled: true
+    options:
+      force_processing: false
+    depends_on: [project_contacts_onto_forearm]
 
   set_xyz_reference_from_gestures:
     enabled: true
@@ -34,17 +44,12 @@ tasks:
       force_processing: false
     depends_on: [set_xyz_reference_from_gestures]
 
-  project_contacts_onto_forearm:
-    enabled: true
-    options:
-      force_processing: false
-    depends_on: [set_xyz_reference_from_gestures, export_forearm_pca_calibrated]
-
+  # Contact points are already on-surface after step 1; no late-stage projection needed.
   center_on_receptive_field:
     enabled: true
     options:
       force_processing: true
-    depends_on: [project_contacts_onto_forearm]
+    depends_on: [export_forearm_pca_calibrated]
 
   aggregate_session:
     enabled: true
