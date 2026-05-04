@@ -786,8 +786,10 @@ def precompute_explorer_caches(
     )
 
     def _compute_one(spec: Tuple[str, Path, Path]) -> None:
-        _, series_csv, forearm_ply = spec
+        session_id, series_csv, forearm_ply = spec
+        print(f"[RF Explorer] → {session_id} ...", flush=True)
         load_explorer_data(series_csv, forearm_ply)
+        print(f"[RF Explorer] ✓ {session_id}", flush=True)
 
     with ThreadPoolExecutor(max_workers=min(max_workers, n)) as executor:
         list(executor.map(_compute_one, session_specs))

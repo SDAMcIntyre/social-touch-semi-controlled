@@ -288,7 +288,6 @@ class RFFeatureSpaceExplorer(QMainWindow):
         self._filter_timer.timeout.connect(self._apply_filter_update)
         self._cloud: Optional[pv.PolyData] = None
         self._actor = None
-        self._session_max_vertex_spikes: float = 1.0
         self._scatter_xlim: Tuple[float, float] = (0.0, 1.0)
         self._scatter_ylim: Tuple[float, float] = (0.0, 1.0)
         self._controls_updating: bool = False
@@ -478,8 +477,8 @@ class RFFeatureSpaceExplorer(QMainWindow):
         if np.isfinite(y_lo) and np.isfinite(y_hi) and y_lo < y_hi:
             self._ax.set_ylim(y_lo, y_hi)
 
-        self._ax.set_xlabel("Hand Velocity (signed)")
-        self._ax.set_ylabel("Pressure")
+        self._ax.set_xlabel("Hand Velocity signed (mm/s)")
+        self._ax.set_ylabel("Pressure (depth/area, mm⁻¹)")
         self._ax.legend(loc="best", markerscale=3, fontsize=8)
         self._figure.tight_layout()
 
@@ -503,13 +502,19 @@ class RFFeatureSpaceExplorer(QMainWindow):
         n_verts = len(vertices)
 
         cp_spikes = self._data.spikes[self._data.cp_frame_idx]
-        spike_density = np.bincount(
+        vertex_spike_sum = np.bincount(
             self._data.cp_vertex_idx,
             weights=cp_spikes.astype(float),
             minlength=n_verts,
         )
-
-        self._session_max_vertex_spikes = max(1.0, float(spike_density.max()))
+        vertex_n_contacts = np.bincount(
+            self._data.cp_vertex_idx,
+            minlength=n_verts,
+        ).astype(float)
+        spike_density = np.divide(
+            vertex_spike_sum, vertex_n_contacts,
+            out=np.zeros(n_verts), where=vertex_n_contacts > 0,
+        )
 
         spike_density_display = spike_density.astype(float)
         spike_density_display[spike_density == 0] = np.nan
@@ -521,7 +526,7 @@ class RFFeatureSpaceExplorer(QMainWindow):
             self._cloud,
             scalars="spike_density",
             cmap="jet",
-            clim=(0, self._session_max_vertex_spikes),
+            clim=(0, 1),
             nan_color=[0.3, 0.3, 0.3],
             show_scalar_bar=True,
             render_points_as_spheres=False,
@@ -576,18 +581,27 @@ class RFFeatureSpaceExplorer(QMainWindow):
         n_verts = len(self._data.session_data.forearm_vertices)
         cp_mask = frame_mask[self._data.cp_frame_idx]
         cp_spikes = self._data.spikes[self._data.cp_frame_idx]
-        vertex_spikes = np.bincount(
-            self._data.cp_vertex_idx[cp_mask],
+        active_cp_vertices = self._data.cp_vertex_idx[cp_mask]
+        vertex_spike_sum = np.bincount(
+            active_cp_vertices,
             weights=cp_spikes[cp_mask].astype(float),
             minlength=n_verts,
         )
+        vertex_n_contacts = np.bincount(
+            active_cp_vertices,
+            minlength=n_verts,
+        ).astype(float)
+        vertex_ratio = np.divide(
+            vertex_spike_sum, vertex_n_contacts,
+            out=np.zeros(n_verts), where=vertex_n_contacts > 0,
+        )
 
-        vertex_spikes_display = vertex_spikes.astype(float)
-        vertex_spikes_display[vertex_spikes == 0] = np.nan
+        vertex_ratio_display = vertex_ratio.copy()
+        vertex_ratio_display[vertex_n_contacts == 0] = np.nan
 
-        self._cloud["spike_density"] = vertex_spikes_display
+        self._cloud["spike_density"] = vertex_ratio_display
         self._cloud.Modified()
-        self._actor.mapper.scalar_range = (0, self._session_max_vertex_spikes)
+        self._actor.mapper.scalar_range = (0, 1)
         self._plotter.render()
         self._frame_label.setText(f"Frames: {frame_mask.sum()} / {self._data.n_frames}")
 
