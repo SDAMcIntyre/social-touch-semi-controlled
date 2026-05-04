@@ -334,6 +334,13 @@ from analysis.receptive_field_mapping.gui.rf_feature_space_explorer import launc
 - **vtk version**: conda has vtk 9.6.1; requirements.txt pins 9.4.2. The conda version is
   correct to keep. Never `pip install vtk` in this environment.
 
+- **NaNs survive cubic interpolation at touch group boundaries**: cubic interpolation only fills
+  interior NaNs (requires valid samples on both sides). The Kinect often drops out before the
+  touch group boundary ends, so the last rows of a touch group commonly remain NaN in the prepared
+  CSV. Confirmed: 100% of stroke groups had a NaN at their final row (pre-interpolation), and these
+  survive into `_prepared.csv`. `classify_gesture_type` handles this correctly via `dropna()`, but
+  any downstream code reading `contact_location_x.iloc[-1]` will get NaN for most touches.
+
 - **Contact point parsing**: `contact_points` column in raw CSVs is a string
   `"[[x y z] [x y z] ...]"` (space-separated, not comma). Parsed by regex `r'\[([^\]]+)\]'`.
   Forward-filled from 30Hz to 1kHz at load time — raw CSV has NaN between frames.
