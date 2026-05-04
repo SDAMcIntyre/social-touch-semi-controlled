@@ -150,6 +150,8 @@ GEMINI.md
 
 # Claude Code local settings (commands are tracked; only local overrides are ignored)
 .claude/settings*.json
+# Temporary session reference note (written by /open-session, deleted by /close-session)
+.claude/SESSION_NOTE.md
 
 # project skeleton / guidelines reference (local only)
 /docs/skeleton/

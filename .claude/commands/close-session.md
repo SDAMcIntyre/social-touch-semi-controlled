@@ -28,6 +28,11 @@ Run this routine at the end of every work session to keep project knowledge curr
 - If there are meaningful changes, offer to commit them with a descriptive message.
 - Do not commit unless the user confirms.
 
-### 7. Flag anything incomplete
+### 7. Delete the session reference note
+
+- Delete `.claude/SESSION_NOTE.md` if it exists (`rm -f .claude/SESSION_NOTE.md`).
+- This file is gitignored and is intended to be ephemeral.
+
+### 8. Flag anything incomplete
 - List any tasks started but not finished, open questions, or known broken things.
 - Note the natural next step (e.g. which pipeline stage to run next).
