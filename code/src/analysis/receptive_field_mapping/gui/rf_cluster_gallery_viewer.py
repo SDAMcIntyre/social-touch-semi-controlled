@@ -38,8 +38,8 @@ from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components
 from scipy.spatial import Delaunay, KDTree, QhullError
 
-from analysis.receptive_field_mapping.rf_cluster_pipeline import description_summary_line
 from analysis.receptive_field_mapping.rf_extraction_io import (
+    description_summary_line,
     load_delaunay_thresholds,
     load_session_cameras,
     save_delaunay_thresholds,
