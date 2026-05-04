@@ -199,9 +199,9 @@ class TouchPreparationViewer(QMainWindow):
 
         layout.addWidget(QLabel("Speed:"))
         self._speed_spin = QDoubleSpinBox()
-        self._speed_spin.setRange(0.1, 10.0)
-        self._speed_spin.setValue(1.0)
-        self._speed_spin.setSingleStep(0.25)
+        self._speed_spin.setRange(0.1, 100.0)
+        self._speed_spin.setValue(33.0)
+        self._speed_spin.setSingleStep(1.0)
         self._speed_spin.setSuffix("x")
         layout.addWidget(self._speed_spin)
 
