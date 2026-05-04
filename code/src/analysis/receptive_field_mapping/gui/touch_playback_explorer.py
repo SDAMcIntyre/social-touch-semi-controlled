@@ -24,8 +24,10 @@ from PyQt5.QtWidgets import (
     QLabel,
     QMainWindow,
     QPushButton,
+    QSlider,
     QSplitter,
     QToolBar,
+    QVBoxLayout,
     QWidget,
 )
 from pyvistaqt import QtInteractor
@@ -91,9 +93,23 @@ class TouchPlaybackExplorer(QMainWindow):
 
         central = QWidget()
         self.setCentralWidget(central)
-        root = QHBoxLayout(central)
+        root = QVBoxLayout(central)
         root.setContentsMargins(4, 4, 4, 4)
         root.setSpacing(0)
+
+        slider_row = QHBoxLayout()
+        slider_row.setContentsMargins(4, 0, 4, 0)
+        slider_row.addWidget(QLabel("Frame:"))
+        self._frame_slider = QSlider(Qt.Horizontal)
+        self._frame_slider.setRange(0, 0)
+        self._frame_slider.setValue(0)
+        self._frame_slider.setEnabled(False)
+        slider_row.addWidget(self._frame_slider)
+        self._slider_value_label = QLabel("0 / 0")
+        self._slider_value_label.setFixedWidth(80)
+        slider_row.addWidget(self._slider_value_label)
+        root.addLayout(slider_row)
+        self._frame_slider.valueChanged.connect(self._on_slider_changed)
 
         splitter = QSplitter(Qt.Horizontal)
 
@@ -116,6 +132,7 @@ class TouchPlaybackExplorer(QMainWindow):
         # Session combo
         toolbar.addWidget(QLabel("Session:"))
         self._session_combo = QComboBox()
+        self._session_combo.setMinimumWidth(160)
         for label, _ in self._sessions:
             self._session_combo.addItem(label)
         self._session_combo.currentIndexChanged.connect(self._on_session_changed)
@@ -126,6 +143,7 @@ class TouchPlaybackExplorer(QMainWindow):
         # Trial combo
         toolbar.addWidget(QLabel("Trial:"))
         self._trial_combo = QComboBox()
+        self._trial_combo.setMinimumWidth(100)
         self._trial_combo.currentIndexChanged.connect(self._on_trial_changed)
         toolbar.addWidget(self._trial_combo)
 
@@ -134,6 +152,7 @@ class TouchPlaybackExplorer(QMainWindow):
         # Touch combo
         toolbar.addWidget(QLabel("Touch:"))
         self._touch_combo = QComboBox()
+        self._touch_combo.setMinimumWidth(320)
         self._touch_combo.currentIndexChanged.connect(self._on_touch_changed)
         toolbar.addWidget(self._touch_combo)
 
@@ -203,6 +222,16 @@ class TouchPlaybackExplorer(QMainWindow):
     # Signal handlers
     # ------------------------------------------------------------------
 
+    def _on_slider_changed(self, value: int) -> None:
+        if not self._initialized or self._current_touch is None:
+            return
+        self._stop()
+        n_verts = len(self._data.session_data.forearm_vertices)
+        self._spike_sum = np.zeros(n_verts, dtype=np.float64)
+        self._contact_count = np.zeros(n_verts, dtype=np.float64)
+        self._reset_heatmap()
+        self._render_frame(value)
+
     def _on_session_changed(self, index: int) -> None:
         if index < 0 or index >= len(self._sessions):
             raise ValueError(
@@ -259,6 +288,13 @@ class TouchPlaybackExplorer(QMainWindow):
         n_frames = len(touch.frame_spikes)
         self._frame_label.setText(f"Frame: 0 / {n_frames}")
 
+        self._frame_slider.blockSignals(True)
+        self._frame_slider.setMaximum(max(0, n_frames - 1))
+        self._frame_slider.setValue(0)
+        self._frame_slider.setEnabled(n_frames > 0)
+        self._slider_value_label.setText(f"0 / {n_frames}")
+        self._frame_slider.blockSignals(False)
+
         # Reset running spike accumulators.
         n_verts = len(self._data.session_data.forearm_vertices)
         self._spike_sum = np.zeros(n_verts, dtype=np.float64)
@@ -311,6 +347,15 @@ class TouchPlaybackExplorer(QMainWindow):
         self._plotter_left.render()
         self._plotter_right.render()
 
+    def _reset_heatmap(self) -> None:
+        """Reset the right plotter's spike heatmap to all-NaN without touching cameras."""
+        if self._forearm_cloud_right is None:
+            return
+        n_verts = len(self._data.session_data.forearm_vertices)
+        self._forearm_cloud_right["spike_density"] = np.full(n_verts, np.nan, dtype=np.float64)
+        self._forearm_cloud_right.Modified()
+        self._plotter_right.render()
+
     def _render_frame(self, frame_idx: int) -> None:
         """Update both 3D views to display *frame_idx* of the current touch.
 
@@ -325,6 +370,11 @@ class TouchPlaybackExplorer(QMainWindow):
         frame_idx = max(0, min(frame_idx, n_frames - 1))
         self._current_frame = frame_idx
         self._frame_label.setText(f"Frame: {frame_idx + 1} / {n_frames}")
+
+        self._frame_slider.blockSignals(True)
+        self._frame_slider.setValue(frame_idx)
+        self._slider_value_label.setText(f"{frame_idx + 1} / {n_frames}")
+        self._frame_slider.blockSignals(False)
 
         # ---- Left view: contact points ----
         pts = self._current_touch.frame_contact_pts[frame_idx]
@@ -471,9 +521,9 @@ class TouchPlaybackExplorer(QMainWindow):
         self._play_queue.clear()
         if self._current_touch is None:
             return
-        # Restart from frame 0: reset accumulators and re-render forearm
+        # Restart from frame 0: reset accumulators and heatmap (no camera reset)
         self._load_touch(self._current_touch)
-        self._render_forearm()
+        self._reset_heatmap()
         interval_ms = max(1, int(33 / self._speed_spin.value()))
         self._timer.start(interval_ms)
 
@@ -490,7 +540,7 @@ class TouchPlaybackExplorer(QMainWindow):
             return
         # Load first touch; queue the rest
         self._load_touch(touches[0])
-        self._render_forearm()
+        self._reset_heatmap()
         self._play_queue = list(touches[1:])
         interval_ms = max(1, int(33 / self._speed_spin.value()))
         self._timer.start(interval_ms)
@@ -511,7 +561,7 @@ class TouchPlaybackExplorer(QMainWindow):
             if self._play_queue:
                 next_touch = self._play_queue.pop(0)
                 self._load_touch(next_touch)
-                self._render_forearm()
+                self._reset_heatmap()
                 # Update combos to reflect the new touch (for Play All)
                 self._sync_combos_to_touch(next_touch)
             else:
