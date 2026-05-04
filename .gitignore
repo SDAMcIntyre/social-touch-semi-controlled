@@ -148,8 +148,8 @@ GEMINI.md
 # VS Code workspace files
 *.code-workspace
 
-# Claude Code local settings
-.claude/
+# Claude Code local settings (commands are tracked; only local overrides are ignored)
+.claude/settings*.json
 
 # project skeleton / guidelines reference (local only)
 /docs/skeleton/
