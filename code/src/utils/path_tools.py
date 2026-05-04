@@ -70,8 +70,11 @@ def get_project_data_root():
         Path: The path to the project_data_root directory.
         None: If the user cancels the directory selection.
     """
-    config_file = "semi_controlled_project_data_config.json"
-   
+    # Anchored to repo root (code/src/utils/path_tools.py → 3 parents up), not CWD.
+    # This ensures the config is always found in the same place regardless of where
+    # the script is invoked from.
+    config_file = Path(__file__).parents[3] / "semi_controlled_project_data_config.json"
+
     # Load the saved path from the configuration file if it exists
     default_path = None
     if os.path.exists(config_file):
@@ -81,7 +84,16 @@ def get_project_data_root():
                 default_path = config.get("project_data_root")
             except json.JSONDecodeError:
                 pass
- 
+
+    # Use the saved path if it points to an existing directory
+    if default_path:
+        saved = Path(default_path)
+        if saved.is_dir():
+            print(f"✅ Project DATA root loaded from config: {saved.resolve()}")
+            return saved
+        else:
+            print(f"⚠️ Saved project DATA root no longer exists: {saved}")
+
     try:
         # Attempt to find the path automatically as before
         base_path = Path(get_database_path())
