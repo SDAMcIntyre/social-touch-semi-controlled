@@ -551,7 +551,8 @@ def run_batch_analysis(
     block_files: List[Path],
     project_data_root: Path,
     dag_handler: DagConfigHandler,
-    report_file_path: Path
+    report_file_path: Path,
+    task_filter: Optional[List[str]] = None,
 ):
     session_map = collect_unique_session_dirs(block_files, project_data_root)
 
@@ -616,6 +617,9 @@ def run_batch_analysis(
     _cluster_group_defs = _clustering_options.get("cluster_groups") or {}
 
     for task_name, flow_func in available_tasks:
+        if task_filter is not None and task_name not in task_filter:
+            logging.info(f"Task '{task_name}' not in --tasks filter. Skipping.")
+            continue
         if task_name not in dag_handler.tasks or not dag_handler.tasks[task_name].get("enabled", True):
             logging.info(f"Task '{task_name}' is disabled in DAG. Skipping.")
             continue
@@ -717,6 +721,10 @@ def main():
     freeze_support()
     parser = argparse.ArgumentParser()
     parser.add_argument("--dag-config", type=Path, required=True)
+    parser.add_argument(
+        "--tasks", nargs="+", default=None,
+        help="Run only these task keys (space-separated). Skips all others regardless of DAG enabled flag.",
+    )
     args = parser.parse_args()
     dag_config_path = args.dag_config
     project_data_root = path_tools.get_project_data_root()
@@ -737,7 +745,8 @@ def main():
         block_files=block_files,
         project_data_root=project_data_root,
         dag_handler=dag_handler,
-        report_file_path=report_file_path
+        report_file_path=report_file_path,
+        task_filter=args.tasks,
     )
 
 if __name__ == "__main__":
