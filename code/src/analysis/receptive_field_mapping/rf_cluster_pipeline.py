@@ -843,6 +843,51 @@ def launch_feature_space_explorer(
     app.exec_()
 
 
+def launch_touch_playback_explorer(
+    input_items: List[Tuple[Path, Path]],
+) -> None:
+    """Launch the Touch Playback Explorer GUI for all sessions in input_items.
+
+    Resolves the series-augmented CSV and forearm PLY for each session, loads
+    ``PlaybackData`` via ``load_playback_data()`` in a thread pool, then opens
+    the ``TouchPlaybackExplorer`` window.  When caches are warm the load is
+    near-instant; on a cache miss the computation runs in parallel across
+    sessions.  Blocks until the user closes the window.
+
+    Parameters
+    ----------
+    input_items:
+        List of ``(aggregated_csv_path, database_path)`` tuples, one per
+        session — the same format used throughout the analysis pipeline.
+    """
+    from .touch_playback_data import load_playback_data
+    from .gui import TouchPlaybackExplorer
+
+    session_specs = _resolve_explorer_session_paths(input_items)
+    n = len(session_specs)
+    if n == 0:
+        raise ValueError("launch_touch_playback_explorer: no sessions to display.")
+
+    print(f"[Touch Playback] Loading {n} session(s)...")
+
+    def _load_one(spec: Tuple[str, Path, Path]) -> Tuple[str, object]:
+        session_id, series_csv, forearm_ply = spec
+        return session_id, load_playback_data(series_csv, forearm_ply)
+
+    with ThreadPoolExecutor(max_workers=min(4, n)) as executor:
+        sessions: List[Tuple[str, object]] = list(executor.map(_load_one, session_specs))
+
+    first_label, first_data = sessions[0]
+
+    app = QApplication.instance() or QApplication(sys.argv)
+    viewer = TouchPlaybackExplorer(
+        playback_data=first_data,
+        sessions=sessions,
+    )
+    viewer.show()
+    app.exec_()
+
+
 def launch_gallery_viewer(
     output_dir: Path,
     combo_name: str,
