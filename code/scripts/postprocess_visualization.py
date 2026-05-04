@@ -54,7 +54,14 @@ from preprocessing.forearm_extraction import (
     get_forearms_with_fallback,
 )
 
-from postprocessing.gui import PostprocessedSceneViewer, BeforeAfterStepViewer, ForearmStageInspector
+from postprocessing.gui import (
+    PostprocessedSceneViewer,
+    BeforeAfterStepViewer,
+    ForearmStageInspector,
+    PostprocessingStageViewer,
+    StagePaths,
+    STAGE_LABELS,
+)
 from postprocessing.gui.forearm_stage_inspector import resolve_all_session_stage_paths
 from postprocessing.xyz_reference_from_gestures.calibration_pca_engine import CalibrationResult
 
@@ -211,6 +218,65 @@ def resolve_before_after_paths(config: KinectConfig) -> List[Dict]:
             "before_forearm": forearm_pca_dir / forearm_ply_name,
             "after_forearm": forearm_rf_dir / forearm_ply_name,
         },
+    ]
+
+
+def resolve_stage_paths(config: KinectConfig) -> List[StagePaths]:
+    """Return one StagePaths instance per postprocessing stage.
+
+    Always returns a list of exactly 5 entries (one per label in STAGE_LABELS).
+    CSV paths are set to None when config.session_merged_output_dir is None;
+    otherwise the path is set regardless of whether the file exists yet —
+    the viewer handles missing files gracefully.
+    """
+    base = config.session_merged_output_dir
+    session_id = config.session_id
+    block_id = config.block_id
+
+    raw_name = f"{session_id}_semicontrolled_{block_id}_merged_data.csv"
+    pca_name = f"{session_id}_semicontrolled_{block_id}_merged_data_pca-xyz.csv"
+
+    per_video_forearm = _load_per_video_forearm(config)
+    unified_forearm_ply = _load_unified_forearm(config)
+
+    if base is not None:
+        forearm_pca_ply = base / "forearm_pca_calibrated" / f"{session_id}_forearm.ply"
+        forearm_rf_ply = base / "forearm_rf_centered" / f"{session_id}_forearm.ply"
+    else:
+        forearm_pca_ply = None
+        forearm_rf_ply = None
+
+    return [
+        StagePaths(
+            stage_label=STAGE_LABELS[0],
+            csv_path=base / "blocks_merged" / raw_name if base is not None else None,
+            forearm=per_video_forearm,
+            coordinate_frame="camera",
+        ),
+        StagePaths(
+            stage_label=STAGE_LABELS[1],
+            csv_path=base / "blocks_registered" / raw_name if base is not None else None,
+            forearm=unified_forearm_ply,
+            coordinate_frame="camera",
+        ),
+        StagePaths(
+            stage_label=STAGE_LABELS[2],
+            csv_path=base / "blocks_pca_calibrated" / pca_name if base is not None else None,
+            forearm=forearm_pca_ply,
+            coordinate_frame="pca",
+        ),
+        StagePaths(
+            stage_label=STAGE_LABELS[3],
+            csv_path=base / "blocks_contact_projected" / pca_name if base is not None else None,
+            forearm=forearm_pca_ply,
+            coordinate_frame="pca",
+        ),
+        StagePaths(
+            stage_label=STAGE_LABELS[4],
+            csv_path=base / "blocks_rf_centered" / pca_name if base is not None else None,
+            forearm=forearm_rf_ply,
+            coordinate_frame="pca",
+        ),
     ]
 
 
@@ -424,6 +490,32 @@ def run_single_session_pipeline_before_after(
     dag_handler.mark_completed(task_name)
 
 
+def run_single_session_pipeline_stage_viewer(
+    config: KinectConfig,
+    dag_handler: DagConfigHandler,
+) -> None:
+    """Launch PostprocessingStageViewer for one block."""
+    task_name = "view_postprocessing_stages"
+    block_name = config.source_video.name
+    print(f"[{block_name}] ==> Checking task: {task_name}")
+    if not dag_handler.can_run(task_name):
+        print(f"[{block_name}] Task disabled — skipping.")
+        return
+    stage_paths = resolve_stage_paths(config)
+    available = [sp for sp in stage_paths if sp.csv_path is not None and sp.csv_path.exists()]
+    if not available:
+        print(f"[{block_name}] No stage CSV files found — skipping.")
+        return
+    recording_name = config.source_video.stem
+    print(f"[{block_name}] Launching PostprocessingStageViewer ({len(available)}/5 stages with data)...")
+    app = QApplication.instance() or QApplication(sys.argv)
+    viewer = PostprocessingStageViewer(stage_paths, recording_name=recording_name)
+    viewer.show()
+    app.exec_()
+    QCoreApplication.processEvents()
+    dag_handler.mark_completed(task_name)
+
+
 # ---------------------------------------------------------------------------
 # Session-level viewers
 # ---------------------------------------------------------------------------
@@ -493,6 +585,7 @@ def run_batch_sequentially(
         run_single_session_pipeline(config, dag_handler_instance)
         run_single_session_pipeline_advanced(config, dag_handler_instance)
         run_single_session_pipeline_before_after(config, dag_handler_instance)
+        run_single_session_pipeline_stage_viewer(config, dag_handler_instance)
 
     print("All postprocessed viewer sessions completed.")
 
