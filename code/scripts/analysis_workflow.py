@@ -47,6 +47,7 @@ from analysis.receptive_field_mapping import (
     launch_touch_playback_explorer,
 )
 from analysis.touch_analytics.pipeline_shared import session_id_from_path
+from analysis.touch_analytics.gui import launch_preparation_viewer
 
 # --- Analysis Flows ---
 
@@ -497,6 +498,25 @@ def explore_touch_playback_flow(
     launch_touch_playback_explorer(input_items)
 
 
+@flow(name="explore_preparation")
+def explore_preparation_flow(
+    input_items: List[Tuple[Path, Path]],
+    force_processing: bool = False,
+) -> None:
+    """
+    Launch the Touch Preparation Viewer GUI for the given sessions.
+    Reads prepared CSVs produced by ``touch_preparation`` — no dependency on
+    series transforms or feature extraction.
+    ``force_processing`` is accepted for interface consistency but is a no-op:
+    the GUI is stateless and always launches fresh.
+    """
+    print(f"[Batch Analysis] Launching Touch Preparation Viewer for {len(input_items)} item(s)...")
+    if not input_items:
+        return
+
+    launch_preparation_viewer(input_items)
+
+
 def _collect_unified_files(input_items: List[Tuple[Path, Path]]) -> List[Path]:
     """
     Reconstruct expected paths of touch-summary CSVs written by touch_feature_extraction.
@@ -564,6 +584,7 @@ def run_batch_analysis(
         ("summarize_session_blocks", summarize_session_blocks_flow),
         ("map_receptive_fields_simple", map_receptive_fields_simple_flow),
         ("touch_preparation", touch_preparation_flow),
+        ("explore_preparation", explore_preparation_flow),
         ("touch_series_transforms", touch_series_transforms_flow),
         ("touch_feature_extraction", touch_feature_extraction_flow),
         ("touch_clustering", touch_clustering_flow),

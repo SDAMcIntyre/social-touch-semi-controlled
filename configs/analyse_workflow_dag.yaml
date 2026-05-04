@@ -4,12 +4,7 @@
 parameters:
   # List of directories containing Kinect session config files to scan.
   # Paths are relative to configs/kinect_configs/.
-  kinect_configs: [valid_configs_ST13-01, valid_configs_ST13-02, 
-      valid_configs_ST13-03, valid_configs_ST14-01, valid_configs_ST14-02, 
-      valid_configs_ST14-03, valid_configs_ST14-04, valid_configs_ST15-01, 
-      valid_configs_ST15-02, valid_configs_ST16-02, valid_configs_ST16-03, 
-      valid_configs_ST16-04, valid_configs_ST16-05, valid_configs_ST18-01, 
-      valid_configs_ST18-04]
+  kinect_configs: valid_configs_ST13-02
 
 tasks:
   # --- Analysis Tasks ---
@@ -42,6 +37,16 @@ tasks:
         interpolation:
           method: cubic
     depends_on: []
+
+  # Touch Preparation Viewer: visual inspection of preparation pipeline output.
+  # Displays per-touch time-series (contact_depth, area, location, neural data)
+  # and a 3D forearm view with contact centroid per frame.
+  # Output: interactive GUI (no files written)
+  explore_preparation:
+    enabled: true
+    options:
+      force_processing: false
+    depends_on: [touch_preparation]
 
   # Stage 2a (Series Transforms): Per-session kinematics, pressure, and MoS computation.
   # Adds hand_velocity_x/y/z, hand_acceleration_x/y/z, pressure, and (when enabled) MoS
@@ -93,17 +98,17 @@ tasks:
   # visualising the corresponding RF heatmap in real time. Opens instantly when
   # precompute_explorer_caches has already warmed the .npz sidecars.
   explore_rf_feature_space:
-    enabled: true
+    enabled: false
     options:
-      force_processing: true
+      force_processing: false
     depends_on: [precompute_explorer_caches]
 
   # Touch Playback Explorer: frame-by-frame animation of individual touch events on the 3D
   # forearm model with accumulating spike heatmap. Opens instantly when series CSVs are cached.
   explore_touch_playback:
-    enabled: false
+    enabled: true
     options:
-      force_processing: true
+      force_processing: false
     depends_on: [touch_series_transforms]
 
   # Stage 2b (Feature Extraction): Per-session feature extraction. Each enabled feature extracts to its own folder.
