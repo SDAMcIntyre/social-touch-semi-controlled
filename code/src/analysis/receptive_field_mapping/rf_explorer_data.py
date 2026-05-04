@@ -5,14 +5,22 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+import re
+import time
+from datetime import datetime
+
 import numpy as np
 import pandas as pd
 from scipy.spatial import cKDTree
 
-from .rf_data_loader import load_forearm_vertices, parse_contact_points
+from .rf_data_loader import load_forearm_vertices
 from .tangent_plane_alignment import compute_tangent_plane_rotation
 
 logger = logging.getLogger(__name__)
+
+
+def _ts() -> str:
+    return datetime.now().strftime("%H:%M:%S.%f")[:-3]
 
 
 @dataclass
@@ -193,52 +201,119 @@ def load_explorer_data(
     series_csv_path: Path,
     forearm_ply_path: Path,
 ) -> ExplorerData:
+    t_session = time.perf_counter()
     cached = _load_explorer_cache(series_csv_path, forearm_ply_path)
     if cached is not None:
-        logger.debug(
-            "load_explorer_data: cache hit for %s", series_csv_path.name
-        )
+        print(f"{_ts()} | [RF Explorer] [{series_csv_path.stem}]: cache hit ({time.perf_counter() - t_session:.2f}s)", flush=True)
         return cached
 
+    tag = series_csv_path.stem
+    print(f"{_ts()} | [RF Explorer] [{tag}]: computing (cache miss)...", flush=True)
+    t = time.perf_counter()
     df = pd.read_csv(series_csv_path)
+    print(f"{_ts()} | [RF Explorer] [{tag}]   CSV read: {time.perf_counter() - t:.1f}s  rows={len(df)}", flush=True)
 
     if "contact_points" not in df.columns:
         raise ValueError(
             f"load_explorer_data: 'contact_points' column missing from {series_csv_path}"
         )
 
-    # Parse every row's contact_points string into a list of (x, y, z) tuples.
-    # Rows yielding zero points are excluded entirely (equivalent to the old
-    # contact_location_x.notna() filter).
-    parsed_rows: list[list[tuple[float, float, float]]] = [
-        parse_contact_points(v) for v in df["contact_points"]
-    ]
-    valid_mask = [len(pts) > 0 for pts in parsed_rows]
+    cp_raw = df["contact_points"].fillna("[]").values
+
+    # "[[x y z] [x y z] ...]" → count('[') = n_pts + 1 (outer bracket).
+    t = time.perf_counter()
+    n_rows = len(cp_raw)
+    progress_step = max(n_rows // 5, 1)
+    pts_per_row = np.empty(n_rows, dtype=np.int64)
+    for i, s in enumerate(cp_raw):
+        pts_per_row[i] = s.count('[') - 1
+        if (i + 1) % progress_step == 0:
+            print(f"{_ts()} | [RF Explorer] [{tag}]   bracket count: {i + 1}/{n_rows} rows", flush=True)
+    print(f"{_ts()} | [RF Explorer] [{tag}]   bracket count: {time.perf_counter() - t:.1f}s", flush=True)
+
+    valid_mask = pts_per_row > 0
+    if not valid_mask.any():
+        raise ValueError(
+            f"load_explorer_data: no valid contact points found in {series_csv_path}"
+        )
     df = df[valid_mask].reset_index(drop=True)
-    parsed_rows = [pts for pts, ok in zip(parsed_rows, valid_mask) if ok]
+    pts_per_row = pts_per_row[valid_mask]
+    cp_raw = cp_raw[valid_mask]
 
     pressure = df["pressure"].to_numpy(dtype=np.float64)
     velocity_signed = df["hand_velocity_signed"].to_numpy(dtype=np.float64)
     gesture_types = df["gesture_type"].to_numpy(dtype=object)
     spikes = df["Nerve_spike"].to_numpy(dtype=bool)
 
-    # Build flat contact-point array and parallel source-row index.
-    all_pts_list: list[tuple[float, float, float]] = []
-    cp_src_row_list: list[int] = []
-    for row_idx, pts in enumerate(parsed_rows):
-        for pt in pts:
-            all_pts_list.append(pt)
-            cp_src_row_list.append(row_idx)
+    # Deduplicate forward-filled contact_points to unique 30Hz frames.
+    n_valid = len(cp_raw)
+    change_mask = np.empty(n_valid, dtype=bool)
+    change_mask[0] = True
+    change_mask[1:] = cp_raw[1:] != cp_raw[:-1]
+    unique_indices = np.where(change_mask)[0]
+    n_unique = len(unique_indices)
+    run_lengths = np.empty(n_unique, dtype=np.int64)
+    run_lengths[:-1] = np.diff(unique_indices)
+    run_lengths[-1] = n_valid - unique_indices[-1]
+    unique_pts_per_row = pts_per_row[unique_indices]
+    unique_cp_raw = cp_raw[unique_indices]
+    print(
+        f"{_ts()} | [RF Explorer] [{tag}]   dedup: {n_valid} -> {n_unique} unique frames "
+        f"(avg run {run_lengths.mean():.1f})",
+        flush=True,
+    )
 
-    all_pts = np.array(all_pts_list, dtype=np.float64)       # (N_total, 3)
-    cp_src_row = np.array(cp_src_row_list, dtype=np.int64)   # (N_total,)
+    # Parse only unique 30Hz frames into pre-allocated array (no intermediate list).
+    t = time.perf_counter()
+    _bracket_re = re.compile(r'\[([^\[\]]+)\]')
+    total_unique_pts = int(unique_pts_per_row.sum())
+    if total_unique_pts == 0:
+        raise ValueError(
+            f"load_explorer_data: no contact point coordinates parsed from {series_csv_path}"
+        )
+    all_pts = np.empty((total_unique_pts, 3), dtype=np.float64)
+    offset = 0
+    progress_step = max(n_unique // 5, 1)
+    for i, s in enumerate(unique_cp_raw):
+        for m in _bracket_re.findall(s):
+            coords = m.split()
+            all_pts[offset, 0] = float(coords[0])
+            all_pts[offset, 1] = float(coords[1])
+            all_pts[offset, 2] = float(coords[2])
+            offset += 1
+        if (i + 1) % progress_step == 0:
+            print(f"{_ts()} | [RF Explorer] [{tag}]   contact parse: {i + 1}/{n_unique} unique frames", flush=True)
+    all_pts = all_pts[:offset]
+    print(f"{_ts()} | [RF Explorer] [{tag}]   contact points: {time.perf_counter() - t:.1f}s  pts={len(all_pts)}", flush=True)
 
+    nan_mask = np.any(np.isnan(all_pts), axis=1)
+    if nan_mask.any():
+        logger.warning(
+            "load_explorer_data: dropping %d contact point(s) with NaN coordinates in %s",
+            nan_mask.sum(), series_csv_path.name,
+        )
+        # Recount per unique group after NaN removal.
+        unique_group_per_pt = np.repeat(np.arange(n_unique, dtype=np.int64), unique_pts_per_row)
+        keep = ~nan_mask
+        all_pts = all_pts[keep]
+        unique_pts_per_row = np.bincount(
+            unique_group_per_pt[keep], minlength=n_unique
+        ).astype(np.int64)
+        if len(all_pts) == 0:
+            raise ValueError(
+                f"load_explorer_data: all contact points have NaN coordinates in {series_csv_path}"
+            )
+
+    t = time.perf_counter()
+    print(f"{_ts()} | [RF Explorer] [{tag}]   loading forearm mesh...", flush=True)
     vertices = load_forearm_vertices(forearm_ply_path)
     if vertices is None:
         raise ValueError(
             f"load_explorer_data: could not load forearm vertices from {forearm_ply_path}"
         )
+    print(f"{_ts()} | [RF Explorer] [{tag}]   forearm mesh: {time.perf_counter() - t:.1f}s  verts={len(vertices)}", flush=True)
 
+    t = time.perf_counter()
     contact_centroid = all_pts.mean(axis=0)
     rotation = compute_tangent_plane_rotation(vertices, contact_centroid)
     if rotation is None:
@@ -246,13 +321,16 @@ def load_explorer_data(
             f"load_explorer_data: compute_tangent_plane_rotation returned None "
             f"for {forearm_ply_path}"
         )
-
     rotated_vertices = (rotation @ vertices.T).T
     rotated_contacts = (rotation @ all_pts.T).T
+    print(f"{_ts()} | [RF Explorer] [{tag}]   rotation: {time.perf_counter() - t:.1f}s", flush=True)
 
+    t_kdtree = time.perf_counter()
     tree = cKDTree(rotated_vertices)
-    distances, vertex_idx = tree.query(rotated_contacts)
+    distances, unique_vertex_idx = tree.query(rotated_contacts)
+    print(f"{_ts()} | [RF Explorer] [{tag}]   KDTree: {time.perf_counter() - t_kdtree:.1f}s  queries={len(rotated_contacts)}", flush=True)
 
+    # Filter contact points whose nearest vertex is > 15mm away.
     bad_pts = distances > 15.0
     if np.any(bad_pts):
         logger.warning(
@@ -261,37 +339,52 @@ def load_explorer_data(
             bad_pts.sum(), distances[bad_pts].max(),
         )
         good_pts = ~bad_pts
-        cp_src_row = cp_src_row[good_pts]
-        vertex_idx = vertex_idx[good_pts]
+        unique_vertex_idx = unique_vertex_idx[good_pts]
+        unique_group_per_pt = np.repeat(np.arange(n_unique, dtype=np.int64), unique_pts_per_row)
+        unique_pts_per_row = np.bincount(
+            unique_group_per_pt[good_pts], minlength=n_unique
+        ).astype(np.int64)
 
-    # Any source frame that lost all its contact points must be dropped from
-    # the frame-level arrays so that cp_frame_idx references stay valid.
-    surviving_rows = np.unique(cp_src_row)
-    if len(surviving_rows) < len(pressure):
-        dropped = len(pressure) - len(surviving_rows)
-        logger.warning(
-            "load_explorer_data: dropping %d source frame(s) whose contact points "
-            "all exceeded the 15mm distance threshold",
-            dropped,
-        )
-        pressure = pressure[surviving_rows]
-        velocity_signed = velocity_signed[surviving_rows]
-        gesture_types = gesture_types[surviving_rows]
-        spikes = spikes[surviving_rows]
+    # Expand unique-level vertex indices to full 1kHz resolution.
+    # Each unique group's vertex block is tiled by its run_length.
+    full_pts_per_row = np.repeat(unique_pts_per_row, run_lengths)
+    surviving_row_mask = full_pts_per_row > 0
 
-        # Remap cp_src_row to contiguous 0-based frame indices.
-        old_to_new = np.full(cp_src_row.max() + 1, -1, dtype=np.int64)
-        old_to_new[surviving_rows] = np.arange(len(surviving_rows), dtype=np.int64)
-        cp_src_row = old_to_new[cp_src_row]
-
-    if len(pressure) == 0:
+    if not surviving_row_mask.any():
         raise ValueError(
             f"load_explorer_data: all frames were dropped after distance filtering "
             f"for {series_csv_path}"
         )
 
-    cp_frame_idx = cp_src_row.astype(np.int64)
-    cp_vertex_idx = vertex_idx.astype(np.int64)
+    # Drop frames that lost all contact points.
+    if not surviving_row_mask.all():
+        n_dropped = int(n_valid - surviving_row_mask.sum())
+        logger.warning(
+            "load_explorer_data: dropping %d source frame(s) whose contact points "
+            "all exceeded the 15mm distance threshold",
+            n_dropped,
+        )
+        pressure = pressure[surviving_row_mask]
+        velocity_signed = velocity_signed[surviving_row_mask]
+        gesture_types = gesture_types[surviving_row_mask]
+        spikes = spikes[surviving_row_mask]
+        full_pts_per_row = full_pts_per_row[surviving_row_mask]
+
+    # Build cp_frame_idx: maps each contact point to its 1kHz frame index.
+    n_surviving = int(surviving_row_mask.sum())
+    cp_frame_idx = np.repeat(np.arange(n_surviving, dtype=np.int64), full_pts_per_row)
+
+    # Build cp_vertex_idx by tiling each unique group's vertex block.
+    offsets = np.zeros(n_unique + 1, dtype=np.int64)
+    np.cumsum(unique_pts_per_row, out=offsets[1:])
+    parts = []
+    for u in range(n_unique):
+        k = unique_pts_per_row[u]
+        if k == 0:
+            continue
+        block = unique_vertex_idx[offsets[u]:offsets[u] + k]
+        parts.append(np.tile(block, run_lengths[u]))
+    cp_vertex_idx = np.concatenate(parts).astype(np.int64)
 
     session_data = ExplorerSessionData(
         forearm_vertices=rotated_vertices,
@@ -308,6 +401,14 @@ def load_explorer_data(
         session_data=session_data,
     )
 
+    t = time.perf_counter()
     _save_explorer_cache(series_csv_path, result)
+    print(f"{_ts()} | [RF Explorer] [{tag}]   cache saved: {time.perf_counter() - t:.1f}s", flush=True)
 
+    print(
+        f"{_ts()} | [RF Explorer] [{tag}]: done in "
+        f"{time.perf_counter() - t_session:.1f}s  frames={len(result.pressure)}  "
+        f"contact_pts={len(result.cp_frame_idx)}",
+        flush=True,
+    )
     return result
