@@ -545,6 +545,20 @@ def collect_unique_session_dirs(
     logging.info(f"Scanned {len(block_files)} config files.")
     logging.info(f"Identified {len(session_dir_map)} unique session contexts.")
 
+    if not session_dir_map:
+        # Kinect config files not available — scan 3_merged/ directly.
+        # The analysis pipeline only needs the merged session CSVs; it does not
+        # depend on any preprocessing config fields.
+        merged_root = project_data_root / "3_merged"
+        if merged_root.is_dir():
+            for session_dir in sorted(merged_root.iterdir()):
+                if session_dir.is_dir() and list(session_dir.glob("*_semicontrolled_aggregated_session.csv")):
+                    session_dir_map[session_dir] = project_data_root
+            logging.info(
+                f"Kinect configs unavailable — discovered {len(session_dir_map)} "
+                f"session(s) by scanning {merged_root}."
+            )
+
     return session_dir_map
 
 def run_batch_analysis(
@@ -739,7 +753,14 @@ def main():
         
     dag_handler = DagConfigHandler(dag_config_path)
     entries = dag_handler.get_parameter('kinect_configs')
-    block_files = resolve_session_configs(entries, configs_dir / "kinect_configs")
+    try:
+        block_files = resolve_session_configs(entries, configs_dir / "kinect_configs")
+    except FileNotFoundError as e:
+        logging.warning(
+            f"Kinect config files not found ({e}). "
+            "Session discovery will fall back to scanning 3_merged/ directly."
+        )
+        block_files = []
 
     run_batch_analysis(
         block_files=block_files,
