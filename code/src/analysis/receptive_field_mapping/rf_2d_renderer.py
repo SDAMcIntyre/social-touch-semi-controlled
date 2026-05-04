@@ -12,8 +12,13 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
+import matplotlib
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from matplotlib.colors import LogNorm
+from scipy.interpolate import griddata
+from scipy.spatial import ConvexHull, QhullError, cKDTree
 
 if TYPE_CHECKING:
     from .rf_cluster_visualizer import RFRenderContext
@@ -44,8 +49,6 @@ def _draw_hull_2d(ax, points_2d: np.ndarray, color: str, label: str) -> None:
     label:
         Legend label for this hull.
     """
-    from scipy.spatial import ConvexHull, QhullError
-
     if points_2d is None or len(points_2d) < 3:
         logger.info(
             "_draw_hull_2d: too few points (%d) for hull '%s' — skipping.",
@@ -147,11 +150,8 @@ def render_2d_heatmap(
                 "but got None."
             )
 
-    import matplotlib
     if not interactive:
         matplotlib.use('Agg')
-    import matplotlib.pyplot as plt
-    from matplotlib.colors import LogNorm
 
     if len(uv_points) == 0:
         logger.warning(
@@ -221,9 +221,6 @@ def render_2d_heatmap(
     ax_hm = axes[1]
 
     if len(uv_points) >= 4:
-        from scipy.interpolate import griddata
-        from scipy.spatial import cKDTree
-
         margin_u = (u.max() - u.min()) * 0.05 or 1.0
         margin_v = (v.max() - v.min()) * 0.05 or 1.0
         grid_u, grid_v = np.mgrid[
