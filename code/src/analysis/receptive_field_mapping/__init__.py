@@ -8,6 +8,8 @@ from .rf_cluster_pipeline import (
     run_cluster_rf_extraction,
     run_cluster_rf_mapping,
     run_cluster_rf_visualization,
+    precompute_explorer_caches,
+    launch_feature_space_explorer,
 )
 from .rf_camera_angle_task import pick_rf_camera_angle_batch, SessionSceneData
 from .rf_metrics import RFMetrics, compute_rf_metrics
@@ -19,6 +21,8 @@ __all__ = [
     "run_cluster_rf_extraction",
     "run_cluster_rf_mapping",
     "run_cluster_rf_visualization",
+    "precompute_explorer_caches",
+    "launch_feature_space_explorer",
     "pick_rf_camera_angle_batch",
     "RFMetrics",
     "SessionSceneData",

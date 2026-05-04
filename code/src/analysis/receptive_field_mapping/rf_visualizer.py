@@ -1,8 +1,11 @@
 """Open3D visualization of per-group receptive field clusters."""
 
 import logging
+from pathlib import Path
 from typing import Optional
 
+import matplotlib
+import matplotlib.pyplot as plt
 import numpy as np
 import open3d as o3d
 from matplotlib.colors import hsv_to_rgb
@@ -99,10 +102,7 @@ class RFVisualizer:
         Returns:
             Path to the saved PNG, or ``None`` if there are no clusters to render.
         """
-        import matplotlib
         matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-        from pathlib import Path
 
         if not rf_result.clusters:
             logger.info(

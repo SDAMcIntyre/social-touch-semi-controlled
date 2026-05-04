@@ -6,7 +6,9 @@ A draggable/resizable rectangle on the scatter filters which frames contribute
 to the 3D heatmap; gesture-type checkboxes provide additional filtering.
 """
 
+import json
 import logging
+from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 
 import numpy as np
@@ -19,10 +21,13 @@ from PyQt5.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
-    QGridLayout,
+    QDoubleSpinBox,
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QPushButton,
+    QSlider,
+    QSplitter,
     QToolBar,
     QVBoxLayout,
     QWidget,
@@ -91,6 +96,7 @@ class DraggableFilterRect:
         ax.add_patch(self._patch)
 
         canvas = ax.figure.canvas
+        canvas.setMouseTracking(True)
         canvas.mpl_connect("button_press_event", self._on_press)
         canvas.mpl_connect("motion_notify_event", self._on_motion)
         canvas.mpl_connect("button_release_event", self._on_release)
@@ -108,6 +114,13 @@ class DraggableFilterRect:
         x_min, x_max = (x0, x0 + w) if w >= 0 else (x0 + w, x0)
         y_min, y_max = (y0, y0 + h) if h >= 0 else (y0 + h, y0)
         return x_min, x_max, y_min, y_max
+
+    def set_bounds(self, x_min: float, x_max: float, y_min: float, y_max: float) -> None:
+        """Set rectangle geometry from bounds and fire on_changed."""
+        self._patch.set_xy((x_min, y_min))
+        self._patch.set_width(x_max - x_min)
+        self._patch.set_height(y_max - y_min)
+        self._on_changed(x_min, x_max, y_min, y_max)
 
     # ------------------------------------------------------------------
     # Hit testing
@@ -168,8 +181,17 @@ class DraggableFilterRect:
     def _on_press(self, event) -> None:
         if event.inaxes is not self._ax or event.button != 1:
             return
+        if event.xdata is None or event.ydata is None:
+            return
         mode = self._hit_test(event.xdata, event.ydata)
         if mode is None:
+            x_min, x_max, y_min, y_max = self.get_bounds()
+            hw = (x_max - x_min) / 2
+            hh = (y_max - y_min) / 2
+            new_x0 = event.xdata - hw
+            new_y0 = event.ydata - hh
+            self._patch.set_xy((new_x0, new_y0))
+            self._on_changed(new_x0, new_x0 + 2 * hw, new_y0, new_y0 + 2 * hh)
             return
         self._drag_mode = mode
         self._press_xy = (event.xdata, event.ydata)
@@ -178,7 +200,7 @@ class DraggableFilterRect:
         self._rect_at_press = (x0, y0, self._patch.get_width(), self._patch.get_height())
 
     def _on_motion(self, event) -> None:
-        if self._drag_mode is None or event.inaxes is not self._ax:
+        if self._drag_mode is None:
             return
         if event.xdata is None or event.ydata is None:
             return
@@ -247,6 +269,7 @@ class RFFeatureSpaceExplorer(QMainWindow):
         explorer_data: ExplorerData,
         sessions: Optional[List[Tuple[str, ExplorerData]]] = None,
         title: str = "RF Feature-Space Explorer",
+        settings_path: Optional[Path] = None,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
@@ -256,14 +279,18 @@ class RFFeatureSpaceExplorer(QMainWindow):
         self._sessions: List[Tuple[str, ExplorerData]] = (
             sessions if sessions is not None else [("Session 1", explorer_data)]
         )
+        self._settings_path = settings_path
         self._initialized = False
         self._rect: Optional[DraggableFilterRect] = None
-        self._bg = None
         self._filter_timer = QTimer(self)
         self._filter_timer.setSingleShot(True)
         self._filter_timer.setInterval(30)
         self._filter_timer.timeout.connect(self._apply_filter_update)
         self._cloud: Optional[pv.PolyData] = None
+        self._actor = None
+        self._scatter_xlim: Tuple[float, float] = (0.0, 1.0)
+        self._scatter_ylim: Tuple[float, float] = (0.0, 1.0)
+        self._controls_updating: bool = False
 
         self._build_ui()
 
@@ -280,29 +307,32 @@ class RFFeatureSpaceExplorer(QMainWindow):
         root.setContentsMargins(4, 4, 4, 4)
         root.setSpacing(4)
 
-        # Overlay container: 3D interactor and scatter canvas share cell (0, 0)
-        overlay_container = QWidget()
-        grid = QGridLayout(overlay_container)
-        grid.setContentsMargins(0, 0, 0, 0)
-        grid.setSpacing(0)
+        splitter = QSplitter(Qt.Vertical)
 
-        self._plotter = QtInteractor(overlay_container)
-        grid.addWidget(self._plotter.interactor, 0, 0)
+        self._plotter = QtInteractor(self)
+        splitter.addWidget(self._plotter.interactor)
+
+        scatter_container = QWidget()
+        scatter_layout = QVBoxLayout(scatter_container)
+        scatter_layout.setContentsMargins(0, 0, 0, 0)
+        scatter_layout.setSpacing(2)
 
         self._figure = Figure()
-        self._figure.patch.set_alpha(0.0)
+        self._figure.patch.set_facecolor("white")
         self._canvas = FigureCanvasQTAgg(self._figure)
         self._ax = self._figure.add_subplot(111)
-        self._ax.set_facecolor((0.1, 0.1, 0.1, 0.7))
-        self._canvas.setFixedSize(350, 280)
-        self._canvas.setAttribute(Qt.WA_TranslucentBackground, True)
-        self._canvas.setStyleSheet("background: transparent;")
-        grid.addWidget(self._canvas, 0, 0, Qt.AlignBottom | Qt.AlignLeft)
+        self._ax.set_facecolor("white")
+        self._canvas.setMinimumSize(350, 180)
+        scatter_layout.addWidget(self._canvas, stretch=1)
 
-        root.addWidget(overlay_container, stretch=1)
+        scatter_layout.addLayout(self._build_rect_controls())
+        scatter_layout.addLayout(self._build_bottom_bar())
 
-        bottom_bar = self._build_bottom_bar()
-        root.addLayout(bottom_bar)
+        splitter.addWidget(scatter_container)
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 1)
+
+        root.addWidget(splitter, stretch=1)
 
     def _build_toolbar(self) -> None:
         toolbar = QToolBar("Session")
@@ -315,6 +345,61 @@ class RFFeatureSpaceExplorer(QMainWindow):
             self._session_combo.addItem(label)
         self._session_combo.currentIndexChanged.connect(self._on_session_changed)
         toolbar.addWidget(self._session_combo)
+
+        toolbar.addSeparator()
+        save_btn = QPushButton("Save filter dims")
+        save_btn.setToolTip(
+            "Save current velocity width and pressure height as startup defaults"
+        )
+        save_btn.clicked.connect(self._save_settings)
+        toolbar.addWidget(save_btn)
+
+    def _build_rect_controls(self) -> QHBoxLayout:
+        bar = QHBoxLayout()
+        bar.setContentsMargins(4, 2, 4, 2)
+        bar.setSpacing(6)
+
+        bar.addWidget(QLabel("Velocity:"))
+        self._cx_slider = QSlider(Qt.Horizontal)
+        self._cx_slider.setRange(0, 1000)
+        self._cx_slider.setFixedWidth(120)
+        self._cx_slider.valueChanged.connect(self._update_rect_from_controls)
+        bar.addWidget(self._cx_slider)
+        self._cx_val_label = QLabel("—")
+        self._cx_val_label.setFixedWidth(52)
+        bar.addWidget(self._cx_val_label)
+
+        bar.addWidget(QLabel("Pressure:"))
+        self._cy_slider = QSlider(Qt.Horizontal)
+        self._cy_slider.setRange(0, 1000)
+        self._cy_slider.setFixedWidth(120)
+        self._cy_slider.valueChanged.connect(self._update_rect_from_controls)
+        bar.addWidget(self._cy_slider)
+        self._cy_val_label = QLabel("—")
+        self._cy_val_label.setFixedWidth(52)
+        bar.addWidget(self._cy_val_label)
+
+        bar.addStretch()
+
+        bar.addWidget(QLabel("V. width:"))
+        self._w_spinbox = QDoubleSpinBox()
+        self._w_spinbox.setDecimals(3)
+        self._w_spinbox.setRange(0.001, 1e6)
+        self._w_spinbox.setSingleStep(0.1)
+        self._w_spinbox.setFixedWidth(80)
+        self._w_spinbox.valueChanged.connect(self._update_rect_from_controls)
+        bar.addWidget(self._w_spinbox)
+
+        bar.addWidget(QLabel("P. height:"))
+        self._h_spinbox = QDoubleSpinBox()
+        self._h_spinbox.setDecimals(3)
+        self._h_spinbox.setRange(0.001, 1e6)
+        self._h_spinbox.setSingleStep(0.1)
+        self._h_spinbox.setFixedWidth(80)
+        self._h_spinbox.valueChanged.connect(self._update_rect_from_controls)
+        bar.addWidget(self._h_spinbox)
+
+        return bar
 
     def _build_bottom_bar(self) -> QHBoxLayout:
         bar = QHBoxLayout()
@@ -344,16 +429,24 @@ class RFFeatureSpaceExplorer(QMainWindow):
     def _draw_scatter(self) -> None:
         self._ax.cla()
 
+        checked_types: set[str] = set()
+        if hasattr(self, "_checkboxes"):
+            for gtype, cb in self._checkboxes.items():
+                if cb.isChecked():
+                    checked_types.add(gtype)
+        else:
+            checked_types = set(_GESTURE_TYPES)
+
         unique_types = np.unique(self._data.gesture_types)
 
         for gtype in _GESTURE_TYPES:
-            if gtype not in unique_types:
+            if gtype not in unique_types or gtype not in checked_types:
                 continue
             mask = self._data.gesture_types == gtype
             color = _GESTURE_COLORS.get(gtype, "grey")
             self._ax.scatter(
-                self._data.pressure[mask],
                 self._data.velocity_signed[mask],
+                self._data.pressure[mask],
                 c=color,
                 alpha=0.3,
                 s=3,
@@ -365,34 +458,37 @@ class RFFeatureSpaceExplorer(QMainWindow):
         for gtype in other_types:
             mask = self._data.gesture_types == gtype
             self._ax.scatter(
-                self._data.pressure[mask],
                 self._data.velocity_signed[mask],
+                self._data.pressure[mask],
                 alpha=0.3,
                 s=3,
                 rasterized=True,
                 label=gtype,
             )
 
-        x_lo, x_hi = float(np.percentile(self._data.pressure, 1)), float(
-            np.percentile(self._data.pressure, 99)
+        x_lo, x_hi = float(np.nanpercentile(self._data.velocity_signed, 1)), float(
+            np.nanpercentile(self._data.velocity_signed, 99)
         )
-        y_lo, y_hi = float(np.percentile(self._data.velocity_signed, 1)), float(
-            np.percentile(self._data.velocity_signed, 99)
+        y_lo, y_hi = float(np.nanpercentile(self._data.pressure, 1)), float(
+            np.nanpercentile(self._data.pressure, 99)
         )
-        self._ax.set_xlim(x_lo, x_hi)
-        self._ax.set_ylim(y_lo, y_hi)
+        if np.isfinite(x_lo) and np.isfinite(x_hi) and x_lo < x_hi:
+            self._ax.set_xlim(x_lo, x_hi)
+        if np.isfinite(y_lo) and np.isfinite(y_hi) and y_lo < y_hi:
+            self._ax.set_ylim(y_lo, y_hi)
 
-        self._ax.set_xlabel("Pressure")
-        self._ax.set_ylabel("Hand Velocity (signed)")
+        self._ax.set_xlabel("Hand Velocity signed (mm/s)")
+        self._ax.set_ylabel("Pressure (depth/area, mm⁻¹)")
         self._ax.legend(loc="best", markerscale=3, fontsize=8)
         self._figure.tight_layout()
+
+        if self._rect is not None:
+            self._ax.add_patch(self._rect._patch)
+
         self._canvas.draw()
 
-        self._bg = self._canvas.copy_from_bbox(self._ax.bbox)
-        self._canvas.mpl_connect("draw_event", self._on_draw_event)
-
-    def _on_draw_event(self, event) -> None:
-        self._bg = self._canvas.copy_from_bbox(self._ax.bbox)
+        self._scatter_xlim = self._ax.get_xlim()
+        self._scatter_ylim = self._ax.get_ylim()
 
     # ------------------------------------------------------------------
     # 3D render
@@ -400,27 +496,44 @@ class RFFeatureSpaceExplorer(QMainWindow):
 
     def _render_3d(self) -> None:
         self._plotter.clear()
+        self._plotter.set_background("black")
 
         vertices = self._data.session_data.forearm_vertices
         n_verts = len(vertices)
 
-        spike_density = np.bincount(
-            self._data.frame_vertex_idx,
-            weights=self._data.spikes.astype(float),
+        cp_spikes = self._data.spikes[self._data.cp_frame_idx]
+        vertex_spike_sum = np.bincount(
+            self._data.cp_vertex_idx,
+            weights=cp_spikes.astype(float),
             minlength=n_verts,
         )
+        vertex_n_contacts = np.bincount(
+            self._data.cp_vertex_idx,
+            minlength=n_verts,
+        ).astype(float)
+        spike_density = np.divide(
+            vertex_spike_sum, vertex_n_contacts,
+            out=np.zeros(n_verts), where=vertex_n_contacts > 0,
+        )
+
+        spike_density_display = spike_density.astype(float)
+        spike_density_display[spike_density == 0] = np.nan
 
         self._cloud = pv.PolyData(vertices)
-        self._cloud["spike_density"] = spike_density
+        self._cloud["spike_density"] = spike_density_display
 
-        self._plotter.add_mesh(
+        self._actor = self._plotter.add_mesh(
             self._cloud,
             scalars="spike_density",
-            cmap="hot",
+            cmap="jet",
+            clim=(0, 1),
+            nan_color=[0.3, 0.3, 0.3],
             show_scalar_bar=True,
-            render_points_as_spheres=True,
-            point_size=5,
+            render_points_as_spheres=False,
+            point_size=3,
+            smooth_shading=True,
             name="forearm",
+            copy_mesh=False,
         )
 
         self._plotter.view_xy()
@@ -435,26 +548,24 @@ class RFFeatureSpaceExplorer(QMainWindow):
     ) -> None:
         if self._rect is None:
             return
-        canvas = self._canvas
-        if self._bg is not None:
-            canvas.restore_region(self._bg)
-        self._ax.draw_artist(self._rect._patch)
-        canvas.blit(self._ax.bbox)
+        self._update_controls_from_rect(x_min, x_max, y_min, y_max)
+        self._canvas.draw_idle()
         self._filter_timer.start()
 
     def _on_checkbox_changed(self, _state: int) -> None:
+        self._draw_scatter()
         self._apply_filter_update()
 
     def _apply_filter_update(self) -> None:
-        if self._rect is None or self._cloud is None:
+        if self._rect is None or self._cloud is None or self._actor is None:
             return
 
         x_min, x_max, y_min, y_max = self._rect.get_bounds()
         rect_mask = (
-            (self._data.pressure >= x_min)
-            & (self._data.pressure <= x_max)
-            & (self._data.velocity_signed >= y_min)
-            & (self._data.velocity_signed <= y_max)
+            (self._data.velocity_signed >= x_min)
+            & (self._data.velocity_signed <= x_max)
+            & (self._data.pressure >= y_min)
+            & (self._data.pressure <= y_max)
         )
 
         checked_types: set[str] = set()
@@ -465,39 +576,44 @@ class RFFeatureSpaceExplorer(QMainWindow):
             cb.blockSignals(False)
 
         type_mask = np.isin(self._data.gesture_types, list(checked_types))
-        mask = rect_mask & type_mask
+        frame_mask = rect_mask & type_mask
 
         n_verts = len(self._data.session_data.forearm_vertices)
-        vertex_spikes = np.bincount(
-            self._data.frame_vertex_idx[mask],
-            weights=self._data.spikes[mask].astype(float),
+        cp_mask = frame_mask[self._data.cp_frame_idx]
+        cp_spikes = self._data.spikes[self._data.cp_frame_idx]
+        active_cp_vertices = self._data.cp_vertex_idx[cp_mask]
+        vertex_spike_sum = np.bincount(
+            active_cp_vertices,
+            weights=cp_spikes[cp_mask].astype(float),
             minlength=n_verts,
         )
-
-        cloud = pv.PolyData(self._data.session_data.forearm_vertices)
-        cloud["spike_density"] = vertex_spikes
-        self._plotter.add_mesh(
-            cloud,
-            scalars="spike_density",
-            cmap="hot",
-            show_scalar_bar=True,
-            render_points_as_spheres=True,
-            point_size=5,
-            name="forearm",
+        vertex_n_contacts = np.bincount(
+            active_cp_vertices,
+            minlength=n_verts,
+        ).astype(float)
+        vertex_ratio = np.divide(
+            vertex_spike_sum, vertex_n_contacts,
+            out=np.zeros(n_verts), where=vertex_n_contacts > 0,
         )
-        self._cloud = cloud
+
+        vertex_ratio_display = vertex_ratio.copy()
+        vertex_ratio_display[vertex_n_contacts == 0] = np.nan
+
+        self._cloud["spike_density"] = vertex_ratio_display
+        self._cloud.Modified()
+        self._actor.mapper.scalar_range = (0, 1)
         self._plotter.render()
-        self._frame_label.setText(f"Frames: {mask.sum()} / {self._data.n_frames}")
+        self._frame_label.setText(f"Frames: {frame_mask.sum()} / {self._data.n_frames}")
 
     # ------------------------------------------------------------------
     # Draggable rectangle initialization
     # ------------------------------------------------------------------
 
     def _init_filter_rect(self) -> None:
-        p25_x = float(np.percentile(self._data.pressure, 25))
-        p75_x = float(np.percentile(self._data.pressure, 75))
-        p25_y = float(np.percentile(self._data.velocity_signed, 25))
-        p75_y = float(np.percentile(self._data.velocity_signed, 75))
+        p25_x = float(np.nanpercentile(self._data.velocity_signed, 25))
+        p75_x = float(np.nanpercentile(self._data.velocity_signed, 75))
+        p25_y = float(np.nanpercentile(self._data.pressure, 25))
+        p75_y = float(np.nanpercentile(self._data.pressure, 75))
 
         self._rect = DraggableFilterRect(
             self._ax,
@@ -508,10 +624,95 @@ class RFFeatureSpaceExplorer(QMainWindow):
             on_changed=self._on_rect_changed,
         )
 
-        if self._bg is not None:
-            self._canvas.restore_region(self._bg)
-        self._ax.draw_artist(self._rect._patch)
-        self._canvas.blit(self._ax.bbox)
+        self._update_controls_from_rect(p25_x, p75_x, p25_y, p75_y)
+        self._canvas.draw_idle()
+        self._apply_filter_update()
+
+    # ------------------------------------------------------------------
+    # Controls ↔ rect synchronisation
+    # ------------------------------------------------------------------
+
+    def _slider_to_x(self, val: int) -> float:
+        lo, hi = self._scatter_xlim
+        return lo + val / 1000.0 * (hi - lo)
+
+    def _x_to_slider(self, x: float) -> int:
+        lo, hi = self._scatter_xlim
+        if hi == lo:
+            return 500
+        return int(round(float(np.clip((x - lo) / (hi - lo) * 1000, 0, 1000))))
+
+    def _slider_to_y(self, val: int) -> float:
+        lo, hi = self._scatter_ylim
+        return lo + val / 1000.0 * (hi - lo)
+
+    def _y_to_slider(self, y: float) -> int:
+        lo, hi = self._scatter_ylim
+        if hi == lo:
+            return 500
+        return int(round(float(np.clip((y - lo) / (hi - lo) * 1000, 0, 1000))))
+
+    def _update_controls_from_rect(
+        self, x_min: float, x_max: float, y_min: float, y_max: float
+    ) -> None:
+        cx = (x_min + x_max) / 2
+        cy = (y_min + y_max) / 2
+        w = x_max - x_min
+        h = y_max - y_min
+        self._controls_updating = True
+        self._cx_slider.setValue(self._x_to_slider(cx))
+        self._cy_slider.setValue(self._y_to_slider(cy))
+        self._cx_val_label.setText(f"{cx:.2f}")
+        self._cy_val_label.setText(f"{cy:.2f}")
+        self._w_spinbox.setValue(max(0.001, w))
+        self._h_spinbox.setValue(max(0.001, h))
+        self._controls_updating = False
+
+    def _update_rect_from_controls(self, *_) -> None:
+        if self._controls_updating or self._rect is None:
+            return
+        cx = self._slider_to_x(self._cx_slider.value())
+        cy = self._slider_to_y(self._cy_slider.value())
+        w = self._w_spinbox.value()
+        h = self._h_spinbox.value()
+        self._rect.set_bounds(cx - w / 2, cx + w / 2, cy - h / 2, cy + h / 2)
+
+    # ------------------------------------------------------------------
+    # Settings persistence
+    # ------------------------------------------------------------------
+
+    def _load_settings(self) -> None:
+        if self._settings_path is None or not self._settings_path.exists():
+            return
+        try:
+            with open(self._settings_path) as f:
+                settings = json.load(f)
+            w = settings.get("velocity_width")
+            h = settings.get("pressure_height")
+            if w is not None:
+                self._w_spinbox.setValue(float(w))
+            if h is not None:
+                self._h_spinbox.setValue(float(h))
+        except Exception as exc:
+            logger.warning(
+                "_load_settings: could not load %s — %s", self._settings_path, exc
+            )
+
+    def _save_settings(self) -> None:
+        if self._settings_path is None:
+            return
+        try:
+            settings = {
+                "velocity_width": self._w_spinbox.value(),
+                "pressure_height": self._h_spinbox.value(),
+            }
+            self._settings_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(self._settings_path, "w") as f:
+                json.dump(settings, f, indent=2)
+        except Exception as exc:
+            logger.warning(
+                "_save_settings: could not save %s — %s", self._settings_path, exc
+            )
 
     # ------------------------------------------------------------------
     # Session management
@@ -521,12 +722,14 @@ class RFFeatureSpaceExplorer(QMainWindow):
         self._data = new_data
         self._rect = None
         self._cloud = None
+        self._actor = None
         self._frame_label.setText(
             f"Frames: {self._data.n_frames} / {self._data.n_frames}"
         )
         self._draw_scatter()
         self._render_3d()
         self._init_filter_rect()
+        self._load_settings()
 
     def _on_session_changed(self, index: int) -> None:
         if index < 0 or index >= len(self._sessions):
@@ -559,11 +762,12 @@ class RFFeatureSpaceExplorer(QMainWindow):
         sz = self._plotter.interactor.size()
         if sz.width() > 0 and sz.height() > 0:
             self._plotter.render_window.SetSize(sz.width(), sz.height())
-
         self._draw_scatter()
         self._render_3d()
         self._init_filter_rect()
+        self._load_settings()
 
     def closeEvent(self, event) -> None:  # noqa: N802
+        self._save_settings()
         self._plotter.close()
         super().closeEvent(event)

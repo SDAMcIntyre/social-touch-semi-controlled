@@ -351,3 +351,101 @@ def save_session_cameras(output_dir: Path, cameras: Dict[str, dict]) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     with open(output_dir / 'session_cameras.json', 'w') as f:
         json.dump(cameras, f, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# Cluster description formatting
+# ---------------------------------------------------------------------------
+
+def description_summary_line(desc: dict, separator: str = ' — ') -> str:
+    gen = desc.get('generation_params')
+    if gen:
+        return _format_generation_params(gen, desc, separator)
+    return _format_legacy_ranges(desc, separator)
+
+
+def _format_generation_params(gen: dict, desc: dict, separator: str) -> str:
+    parts: list[str] = []
+    algo = gen.get('algorithm', 'unknown')
+
+    if algo == 'type_stratified':
+        base = gen.get('base_algorithm', '?')
+        header = f"type_stratified ({base})"
+        type_key = gen.get('type')
+        if type_key:
+            parts.append(f"type: {type_key}")
+        if base == 'binning':
+            if gen.get('n_bins') is not None:
+                parts.append(f"n_bins: {gen['n_bins']}")
+            if gen.get('primary_feature'):
+                parts.append(f"feature: {gen['primary_feature']}")
+        elif base == 'kmeans' and gen.get('k') is not None:
+            parts.append(f"k: {gen['k']}")
+    elif algo == 'binning':
+        header = 'binning'
+        if gen.get('n_bins') is not None:
+            parts.append(f"n_bins: {gen['n_bins']}")
+        if gen.get('bin_method'):
+            parts.append(f"method: {gen['bin_method']}")
+        if gen.get('primary_feature'):
+            parts.append(f"feature: {gen['primary_feature']}")
+    elif algo == 'kmeans':
+        header = 'kmeans'
+        if gen.get('k') is not None:
+            parts.append(f"k: {gen['k']}")
+    elif algo == 'dbscan':
+        header = 'dbscan'
+        if gen.get('eps') is not None:
+            parts.append(f"eps: {gen['eps']:.3f}")
+        if gen.get('min_samples') is not None:
+            parts.append(f"min_samples: {gen['min_samples']}")
+    elif algo == 'hierarchical':
+        header = 'hierarchical'
+        if gen.get('k') is not None:
+            parts.append(f"k: {gen['k']}")
+    elif algo == 'gmm':
+        header = 'gmm'
+        if gen.get('k') is not None:
+            parts.append(f"k: {gen['k']}")
+        if gen.get('covariance_type'):
+            parts.append(f"cov: {gen['covariance_type']}")
+        if gen.get('features'):
+            parts.append(f"features: {', '.join(gen['features'])}")
+    else:
+        header = algo
+
+    br = desc.get('bin_range')
+    if br:
+        parts.append(f"{br['feature']}: [{br['low']}, {br['high']}]")
+
+    dr = desc.get('display_ranges') or {}
+    if dr:
+        for label, r in dr.items():
+            parts.append(f"{label}: [{r['min']}, {r['max']}]")
+    else:
+        fr = desc.get('feature_ranges') or {}
+        for col, r in fr.items():
+            parts.append(f"{col}: [{r['min']}, {r['max']}]")
+
+    if parts:
+        return header + separator + separator.join(parts)
+    return header
+
+
+def _format_legacy_ranges(desc: dict, separator: str) -> str:
+    parts: list[str] = []
+    if 'feature_ranges' in desc:
+        for col_name, r in desc['feature_ranges'].items():
+            parts.append(f"{col_name}: [{r['min']}, {r['max']}]")
+    elif 'display_ranges' in desc:
+        for label, r in desc['display_ranges'].items():
+            parts.append(f"{label}: [{r['min']}, {r['max']}]")
+    elif 'bin_range' in desc:
+        br = desc['bin_range']
+        parts.append(f"{br['feature']}: [{br['low']}, {br['high']}]")
+    elif desc.get('primary_feature') and 'feature_ranges' in desc:
+        pf = desc['primary_feature']
+        if pf in desc['feature_ranges']:
+            r = desc['feature_ranges'][pf]
+            parts.append(f"{pf}: [{r['min']}, {r['max']}]")
+    return separator.join(parts)

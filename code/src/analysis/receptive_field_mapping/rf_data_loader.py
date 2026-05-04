@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
+import open3d as o3d  # type: ignore
 import pandas as pd
 
 from analysis.touch_analytics.touch_config import DISCRETIZATION_CONFIG
@@ -49,7 +50,6 @@ def load_forearm_vertices(ply_path: Optional[Path]) -> Optional[np.ndarray]:
             )
         return arr
 
-    import open3d as o3d  # type: ignore
     pcd = o3d.io.read_point_cloud(str(ply_path))
     pts = np.asarray(pcd.points)
     if pts.size == 0:
@@ -81,7 +81,6 @@ def load_forearm_vertex_colors(ply_path: Optional[Path]) -> Optional[np.ndarray]
             return arr
         logger.warning("Color cache has unexpected shape %s, reloading PLY.", arr.shape)
 
-    import open3d as o3d  # type: ignore
     pcd = o3d.io.read_point_cloud(str(ply_path))
     if not pcd.has_colors():
         return None
@@ -104,7 +103,7 @@ def resolve_forearm_ply(session_dir: Path, session_id: str) -> Optional[Path]:
     the same space to avoid misalignment.  Returns ``None`` if the
     RF-centered PLY does not exist.
     """
-    rf_centered = session_dir / 'forearm_rf_centered' / f'{session_id}_forearm.ply'
+    rf_centered = session_dir / f'{session_id}_forearm.ply'
     if rf_centered.exists():
         return rf_centered
 
