@@ -33,9 +33,10 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 from pyvistaqt import QtInteractor
+from matplotlib import colormaps
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components
-from scipy.spatial import Delaunay, QhullError
+from scipy.spatial import Delaunay, KDTree, QhullError
 
 from analysis.receptive_field_mapping.rf_cluster_pipeline import description_summary_line
 from analysis.receptive_field_mapping.rf_extraction_io import (
@@ -88,7 +89,6 @@ class _GallerySettings:
 
 
 def _separate_blobs(pts_2d: np.ndarray, max_dist_mm: float) -> np.ndarray:
-    from scipy.spatial import KDTree
     n = len(pts_2d)
     tree = KDTree(pts_2d)
     pairs = list(tree.query_pairs(max_dist_mm))
@@ -902,8 +902,6 @@ class RFClusterGalleryViewer(QMainWindow):
         cmap_name: str,
         vertex_colors: np.ndarray,
     ) -> np.ndarray:
-        from matplotlib import colormaps
-
         nan_mask = np.isnan(spike_values)
         rgb = vertex_colors.copy()
 

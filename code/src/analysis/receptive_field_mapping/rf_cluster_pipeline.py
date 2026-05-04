@@ -8,7 +8,9 @@ per-cluster spike_counts.csv files. Renders per-session 3D forearm heatmap PNGs.
 
 import json
 import logging
+import sys
 from collections import Counter, defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -51,6 +53,11 @@ from analysis.touch_analytics.pipeline_shared import (
     session_id_from_path,
 )
 from utils.should_process_task import should_process_task
+
+from .gui import RFFeatureSpaceExplorer
+from .rf_explorer_data import load_explorer_data
+from .rf_gallery_data import load_gallery_data
+from PyQt5.QtWidgets import QApplication
 
 logger = logging.getLogger(__name__)
 
@@ -814,27 +821,11 @@ def run_cluster_rf_extraction(
     return produced
 
 
-def launch_feature_space_explorer(
+def _resolve_explorer_session_paths(
     input_items: List[Tuple[Path, Path]],
-) -> None:
-    """Launch the RF Feature-Space Explorer GUI for all sessions in input_items.
-
-    Resolves the series-augmented CSV and forearm PLY for each session, loads
-    an ``ExplorerData`` via ``load_explorer_data()``, then opens the
-    ``RFFeatureSpaceExplorer`` window.  Blocks until the user closes the window.
-
-    Parameters
-    ----------
-    input_items:
-        List of ``(aggregated_csv_path, database_path)`` tuples, one per
-        session — the same format used throughout the analysis pipeline.
-    """
-    from .rf_explorer_data import load_explorer_data
-    from .gui import RFFeatureSpaceExplorer
-    from PyQt5.QtWidgets import QApplication
-    import sys
-
-    sessions: List[Tuple[str, object]] = []
+) -> List[Tuple[str, Path, Path]]:
+    """Return ``(session_id, series_csv_path, forearm_ply_path)`` for each item."""
+    result = []
     for csv_path, database_path in input_items:
         session_id = session_id_from_path(csv_path)
         series_csv_path = (
@@ -843,24 +834,102 @@ def launch_feature_space_explorer(
         )
         if not series_csv_path.exists():
             raise ValueError(
-                f"launch_feature_space_explorer: series-augmented CSV not found "
+                f"_resolve_explorer_session_paths: series-augmented CSV not found "
                 f"for session '{session_id}': {series_csv_path}"
             )
         forearm_ply_path = resolve_forearm_ply(csv_path.parent, session_id)
         if forearm_ply_path is None:
             raise ValueError(
-                f"launch_feature_space_explorer: forearm PLY not found "
+                f"_resolve_explorer_session_paths: forearm PLY not found "
                 f"for session '{session_id}' in {csv_path.parent}"
             )
-        explorer_data = load_explorer_data(series_csv_path, forearm_ply_path)
-        sessions.append((session_id, explorer_data))
+        result.append((session_id, series_csv_path, forearm_ply_path))
+    return result
 
-    if not sessions:
+
+def precompute_explorer_caches(
+    input_items: List[Tuple[Path, Path]],
+    max_workers: int = 4,
+) -> None:
+    """Pre-compute .npz sidecar caches for the RF Feature-Space Explorer.
+
+    Resolves the series-augmented CSV and forearm PLY for each session, then
+    calls ``load_explorer_data()`` in a thread pool so the KDTree computation
+    and CSV reads run concurrently.  ``load_explorer_data`` is internally
+    idempotent: sessions with a fresh ``.npz`` sidecar are skipped
+    automatically (cache hit, ~200 ms each).
+
+    Parameters
+    ----------
+    input_items:
+        List of ``(aggregated_csv_path, database_path)`` tuples, one per session.
+    max_workers:
+        Number of parallel worker threads.  Defaults to 4; keep ≤ 4 to avoid
+        excessive peak memory (each session may allocate ~1–2 GB during CSV
+        read and contact-point array construction).
+    """
+    session_specs = _resolve_explorer_session_paths(input_items)
+    n = len(session_specs)
+    if n == 0:
+        return
+
+    print(
+        f"[RF Explorer] Pre-computing caches for {n} session(s)"
+        f" (max_workers={min(max_workers, n)})..."
+    )
+
+    def _compute_one(spec: Tuple[str, Path, Path]) -> None:
+        _, series_csv, forearm_ply = spec
+        load_explorer_data(series_csv, forearm_ply)
+
+    with ThreadPoolExecutor(max_workers=min(max_workers, n)) as executor:
+        list(executor.map(_compute_one, session_specs))
+
+    print(f"[RF Explorer] Cache pre-computation complete ({n} session(s)).")
+
+
+def launch_feature_space_explorer(
+    input_items: List[Tuple[Path, Path]],
+) -> None:
+    """Launch the RF Feature-Space Explorer GUI for all sessions in input_items.
+
+    Resolves the series-augmented CSV and forearm PLY for each session, loads
+    ``ExplorerData`` via ``load_explorer_data()`` in a thread pool, then opens
+    the ``RFFeatureSpaceExplorer`` window.  When caches are warm the load is
+    near-instant; on a cache miss the KDTree computation runs in parallel
+    across sessions.  Blocks until the user closes the window.
+
+    Parameters
+    ----------
+    input_items:
+        List of ``(aggregated_csv_path, database_path)`` tuples, one per
+        session — the same format used throughout the analysis pipeline.
+    """
+
+    session_specs = _resolve_explorer_session_paths(input_items)
+    n = len(session_specs)
+    if n == 0:
         raise ValueError("launch_feature_space_explorer: no sessions to display.")
 
+    print(f"[RF Explorer] Loading {n} session(s)...")
+
+    def _load_one(spec: Tuple[str, Path, Path]) -> Tuple[str, object]:
+        session_id, series_csv, forearm_ply = spec
+        return session_id, load_explorer_data(series_csv, forearm_ply)
+
+    with ThreadPoolExecutor(max_workers=min(4, n)) as executor:
+        sessions: List[Tuple[str, object]] = list(executor.map(_load_one, session_specs))
+
     first_label, first_data = sessions[0]
+    first_database_path = input_items[0][1]
+    settings_path = first_database_path / "4_analysed" / "rf_explorer_settings.json"
+
     app = QApplication.instance() or QApplication(sys.argv)
-    viewer = RFFeatureSpaceExplorer(explorer_data=first_data, sessions=sessions)
+    viewer = RFFeatureSpaceExplorer(
+        explorer_data=first_data,
+        sessions=sessions,
+        settings_path=settings_path,
+    )
     viewer.show()
     app.exec_()
 
@@ -889,10 +958,7 @@ def launch_gallery_viewer(
         (``"tap"``, ``"stroke_proximal"``, ``"stroke_distal"``) to load the correct
         per-type artifact tree.  ``None`` loads the flat artifact tree.
     """
-    from .rf_gallery_data import load_gallery_data
     from .gui import RFClusterGalleryViewer
-    from PyQt5.QtWidgets import QApplication
-    import sys
 
     gallery_data = load_gallery_data(output_dir, combo_name, clusterer_name, gesture_type)
     app = QApplication.instance() or QApplication(sys.argv)

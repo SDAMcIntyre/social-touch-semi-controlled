@@ -9,13 +9,21 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
+import matplotlib
+import matplotlib.cm as cm
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from matplotlib.cm import ScalarMappable
+from matplotlib.colors import LogNorm, Normalize
+from matplotlib.widgets import Slider
+from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 — registers 3d projection
+from scipy.spatial import ConvexHull, KDTree, QhullError
 
 from .rf_2d_renderer import render_2d_heatmap
 from .rf_data_loader import load_forearm_vertices
 from .rf_projection import project_to_2d
-from .rf_surface_utils import load_or_build_forearm_mesh, map_scalars_to_mesh
+from .rf_surface_utils import apply_rotation_to_mesh, load_or_build_forearm_mesh, map_scalars_to_mesh
 from .tangent_plane_alignment import (  # noqa: F401
     _compute_surface_normal,
     align_points,
@@ -87,8 +95,6 @@ def _draw_hull_3d(ax, points_3d: np.ndarray, color: str, label: str) -> None:
         Legend label — applied to the first plotted simplex only to avoid
         duplicate legend entries.
     """
-    from scipy.spatial import ConvexHull, QhullError
-
     if points_3d is None or len(points_3d) < 3:
         logger.info(
             "_draw_hull_3d: too few points (%d) for hull '%s' — skipping.",
@@ -300,12 +306,8 @@ def render_forearm_heatmap(
         )
         return
 
-    import matplotlib
     if not interactive:
         matplotlib.use('Agg')  # Non-interactive backend for offscreen rendering
-    import matplotlib.pyplot as plt
-    from matplotlib.colors import LogNorm
-    from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 — registers 3d projection
 
     fig = plt.figure(figsize=(10, 8), facecolor='black')
     ax = fig.add_subplot(111, projection='3d')
@@ -335,8 +337,6 @@ def render_forearm_heatmap(
         logger.warning("Forearm PLY not found: %s", forearm_ply_path)
     else:
         try:
-            from scipy.spatial import KDTree
-
             pts = load_forearm_vertices(forearm_ply_path)
             if pts is not None and pts.size > 0:
                 forearm_vertices = pts
@@ -346,7 +346,6 @@ def render_forearm_heatmap(
                 forearm_mesh = load_or_build_forearm_mesh(forearm_ply_path)
 
                 if forearm_mesh is not None:
-                    from .rf_surface_utils import apply_rotation_to_mesh
                     if R is not None:
                         forearm_mesh = apply_rotation_to_mesh(forearm_mesh, R)
 
@@ -391,7 +390,6 @@ def render_forearm_heatmap(
                             norm = LogNorm(vmin=vmin_c, vmax=vmax_c) if vmin_c < vmax_c else None
                             cbar_label = "Spike count"
 
-                        import matplotlib.cm as cm
                         cmap_obj = cm.get_cmap('RdYlBu_r')
                         if norm is not None:
                             normed = norm(np.nan_to_num(per_vertex_color, nan=vmin_c))
@@ -418,8 +416,6 @@ def render_forearm_heatmap(
                         )
                         surf.set_facecolor(face_rgba)
 
-                        from matplotlib.cm import ScalarMappable
-                        from matplotlib.colors import Normalize
                         sm_norm = norm if norm is not None else Normalize(vmin=vmin_c, vmax=vmax_c)
                         sm = ScalarMappable(cmap='RdYlBu_r', norm=sm_norm)
                         sm.set_array([])
@@ -551,8 +547,6 @@ def render_forearm_heatmap(
 
     # --- Point-size slider (interactive mode only) ---
     if interactive:
-        from matplotlib.widgets import Slider
-
         fig.subplots_adjust(bottom=0.15)
         ax_slider = fig.add_axes([0.2, 0.04, 0.6, 0.03], facecolor='#222222')
         slider = Slider(
