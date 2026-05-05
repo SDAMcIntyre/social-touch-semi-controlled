@@ -2,9 +2,9 @@
 
 **Created:** 2026-05-05 09:30
 **Approved:** —
-**Completed:** —
+**Completed:** 2026-05-05 10:13
 **Author:** Basil Duvernoy
-**Status:** In Progress
+**Status:** Completed
 **Branch:** `feature/stage-viewer-dedup-and-click-navigate`
 
 ---
