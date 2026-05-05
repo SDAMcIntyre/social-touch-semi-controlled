@@ -1,5 +1,6 @@
-# Dependency-aware configuration for the Analysis Workflow.
-# Specifies input directories and task toggle states.
+# Dependency-aware configuration for the Analysis Workflow — Processing tasks only.
+# Specifies input directories and task toggle states for processing (unattended) tasks.
+# See analyse_workflow_dag.yaml for the combined reference config.
 
 parameters:
   # List of directories containing Kinect session config files to scan.
@@ -371,65 +372,3 @@ tasks:
       projection_method: cylindrical_unwrap
       disjoint_mask_distance_mm: 8.0
     depends_on: [touch_clustering]
-
-  # ============================================================
-  # Viewer Support — utility tasks required by viewer tasks
-  # ============================================================
-
-  # Pre-computes .npz sidecar caches for the RF Feature-Space Explorer.
-  # Runs load_explorer_data() for all sessions in parallel (ThreadPoolExecutor)
-  # so the GUI task below opens instantly on a cache hit. Internally idempotent:
-  # sessions with a fresh cache are skipped automatically.
-  precompute_explorer_caches:
-    category: viewer_support
-    enabled: true
-    options:
-      force_processing: false
-      max_workers: 1
-    depends_on: [touch_series_transforms]
-
-  # ============================================================
-  # Viewer Tasks — launch interactive PyQt5 GUIs
-  # ============================================================
-
-  # Touch Preparation Viewer: visual inspection of preparation pipeline output.
-  # Displays per-touch time-series (contact_depth, area, location, neural data)
-  # and a 3D forearm view with contact centroid per frame.
-  # Output: interactive GUI (no files written)
-  explore_preparation:
-    category: viewer
-    enabled: true
-    options:
-      force_processing: false
-    depends_on: [touch_preparation]
-
-  # RF Feature-Space Explorer: interactive GUI for sweeping the feature space and
-  # visualising the corresponding RF heatmap in real time. Opens instantly when
-  # precompute_explorer_caches has already warmed the .npz sidecars.
-  explore_rf_feature_space:
-    category: viewer
-    enabled: false
-    options:
-      force_processing: false
-    depends_on: [precompute_explorer_caches]
-
-  # Touch Playback Explorer: frame-by-frame animation of individual touch events on the 3D
-  # forearm model with accumulating spike heatmap. Opens instantly when series CSVs are cached.
-  explore_touch_playback:
-    category: viewer
-    enabled: true
-    options:
-      force_processing: false
-    depends_on: [touch_series_transforms]
-
-  # RF Cluster Gallery Viewer: interactive gallery of RF heatmaps with thumbnail sidebar and
-  # 3D PyVista view. Iterates all enabled cluster_groups and clusterers from touch_clustering.
-  # Replaces the gallery_viewer option on visualize_receptive_fields_clustered (now deprecated).
-  # Output: interactive GUI (no files written)
-  explore_rf_gallery:
-    category: viewer
-    enabled: false
-    options:
-      force_processing: false
-      cluster_groups: [pressure_velocity_mean_cartesian_binning]
-    depends_on: [visualize_receptive_fields_clustered]

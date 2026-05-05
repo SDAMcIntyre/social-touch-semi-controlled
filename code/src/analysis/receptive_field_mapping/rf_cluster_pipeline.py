@@ -973,6 +973,19 @@ def run_cluster_rf_visualization(
             "run_cluster_rf_visualization: either 'cluster_groups' or 'feature_combinations' must be provided."
         )
 
+    if gallery_viewer:
+        import warnings
+        warnings.warn(
+            "run_cluster_rf_visualization: 'gallery_viewer=True' is deprecated. "
+            "Use the standalone 'explore_rf_gallery' DAG task instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        logger.warning(
+            "run_cluster_rf_visualization: 'gallery_viewer=True' is deprecated — "
+            "use the standalone 'explore_rf_gallery' DAG task instead."
+        )
+
     pairs = _build_pairs(
         cluster_groups, cluster_group_defs, feature_combinations, clustering_profiles,
         caller="run_cluster_rf_visualization",
