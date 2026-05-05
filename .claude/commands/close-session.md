@@ -23,16 +23,26 @@ Run this routine at the end of every work session to keep project knowledge curr
 - Update `project_context.md` with current stage focus and any new findings.
 - Add a `feedback_*.md` entry for any new working patterns or corrections from this session.
 
-### 6. Check for uncommitted changes
+### 6. Save researcher-relevant understanding
+- Review SESSION_NOTE.md for any explanations given this session about how the data
+  or pipeline works that a researcher would need to relearn from scratch next time.
+- If any exist, save them permanently to `code/src/analysis/CLAUDE.md` under the
+  "Data interpretation — researcher reference" section, or to a knowledge-base doc
+  if they are bug-specific.
+- These are distinct from gotchas (which are for Claude) — they are conceptual
+  explanations of what the data means scientifically and how to interpret pipeline
+  outputs.
+
+### 7. Check for uncommitted changes
 - Run `git status` and `git diff`.
 - If there are meaningful changes, offer to commit them with a descriptive message.
 - Do not commit unless the user confirms.
 
-### 7. Delete the session reference note
+### 8. Delete the session reference note
 
 - Delete `.claude/SESSION_NOTE.md` if it exists (`rm -f .claude/SESSION_NOTE.md`).
 - This file is gitignored and is intended to be ephemeral.
 
-### 8. Flag anything incomplete
+### 9. Flag anything incomplete
 - List any tasks started but not finished, open questions, or known broken things.
 - Note the natural next step (e.g. which pipeline stage to run next).

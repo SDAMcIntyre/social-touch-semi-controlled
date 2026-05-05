@@ -215,13 +215,12 @@ def render_forearm_heatmap(
                 f"render_context={render_context!r}."
             )
 
-    if render_context is None or len(render_context.neuron_contacts_xyz) == 0:
-        raise ValueError(
-            "render_forearm_heatmap: render_context with non-empty neuron_contacts_xyz "
-            f"is required (session={session_id}, cluster={cluster_label}). "
-            "Pipeline contract violation — see rf_cluster_pipeline.py."
-        )
-    projection_centroid = render_context.neuron_contacts_xyz.mean(axis=0)
+    if render_context is not None and len(render_context.neuron_contacts_xyz) > 0:
+        projection_centroid = render_context.neuron_contacts_xyz.mean(axis=0)
+    else:
+        # Fall back to spike contact centroid when no render_context is supplied
+        # (e.g. map_receptive_fields_simple, which has no clustering context).
+        projection_centroid = spike_counts_df[['x', 'y', 'z']].to_numpy().mean(axis=0)
 
     if spike_counts_df.empty:
         logger.warning(
@@ -262,7 +261,7 @@ def render_forearm_heatmap(
         # --- Project neuron hull contact points if context provided ---
         neuron_contacts_uv = None
         neuron_cluster_contacts_uv = None
-        if len(render_context.neuron_contacts_xyz) > 0:
+        if render_context is not None and len(render_context.neuron_contacts_xyz) > 0:
             try:
                 neuron_contacts_uv = project_to_2d(
                     render_context.neuron_contacts_xyz,
@@ -274,7 +273,7 @@ def render_forearm_heatmap(
                 logger.debug(
                     "Could not project neuron_contacts_xyz to 2D for hull.", exc_info=True
                 )
-        if len(render_context.neuron_cluster_contacts_xyz) > 0:
+        if render_context is not None and len(render_context.neuron_cluster_contacts_xyz) > 0:
             try:
                 neuron_cluster_contacts_uv = project_to_2d(
                     render_context.neuron_cluster_contacts_xyz,

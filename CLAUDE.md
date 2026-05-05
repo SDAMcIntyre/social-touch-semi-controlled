@@ -60,12 +60,16 @@ python code/scripts/launch_pipeline_gui.py
 
 Last checked: 2026-05-05. Status applies to session `2022-06-17_ST16-05`.
 
+**Next session priority:** Before running Stage 2a, spend time understanding the Stage 1
+output (`_series_augmented.csv`) and the Stage 2b heatmap. Review what each derived column
+means scientifically and what the RF map tells us about this SAI unit before proceeding.
+
 | Stage | Task key | Output path | Status |
 |---|---|---|---|
 | 0 | `touch_preparation` | `4_analysed/preparation/<session>_prepared.csv` | ✅ complete |
 | 1 | `touch_series_transforms` | `4_analysed/series_transforms/<session>_series_augmented.csv` | ✅ complete |
 | 2a | `touch_feature_extraction` | `4_analysed/touch_features/<agg>/<session>_touch_summary.csv` | not started |
-| 2b | `map_receptive_fields_simple` | `4_analysed/receptive_field_maps_simple/<session>/` | blocked (pyk4a/macOS) |
+| 2b | `map_receptive_fields_simple` | `4_analysed/receptive_field_maps_simple/<session>/` | ✅ complete |
 | 3 | `touch_clustering` | `4_analysed/touch_clusters/<group>/<clusterer>/` | not started |
 | 4 | `extract_receptive_fields_clustered` | `4_analysed/receptive_field_extraction/<combo>/<clusterer>/` | not started |
 | 5 | `visualize_receptive_fields_clustered` | same dir, adds heatmaps + rf_metrics.json | not started |
@@ -113,6 +117,12 @@ When asked to post or update a GitHub issue:
   `__init__.py` into a separate deferred import used only by clustered RF flows. The batch runner
   also masks this failure — it reports SUCCESS even when the Prefect flow raises an exception.
   See `docs/development/knowledge-base/bug-pyk4a-blocks-rf-simple-pipeline-macos.md`.
+
+- **`render_forearm_heatmap` requires `render_context` — fixed on this branch, not in dev**:
+  The function had an unconditional guard requiring `RFRenderContext`. `rf_simple_pipeline.py`
+  does not supply one. Fixed in `rf_cluster_visualizer.py`: centroid now falls back to
+  `spike_counts_df` mean; 2D projection hull accesses guarded with `render_context is not None`.
+  These changes are on `sarah_sandbox` only — need implementing in `dev`. See GitHub issue #70.
 
 - **`clustering` import error**: `CLUSTERER_REGISTRY` and `get_clusterer` fail to import in
   the current branch. This breaks `test_gmm_clusterer.py`, `test_parallax_correction.py`, and

@@ -89,6 +89,52 @@ Scaling (StandardScaler by default) is applied globally across all sessions toge
 
 ---
 
+## Data interpretation — researcher reference
+
+### contact_points column (raw aggregated CSV)
+Each cell is a list of 3D Kinect contact coordinates (mm) representing the skin patch
+in contact at that frame. Format: `[[x y z] [x y z] ...]` — space-separated, not
+comma. Parsed by regex, not `json.loads`.
+
+Most rows (~97%) are NaN — the Kinect captures at 30 Hz, nerve data at 1 kHz. The
+pipeline forward-fills `contact_points` within each touch group so every 1 kHz row
+carries the most recent Kinect frame's contact patch. Rows with `[]` are Kinect frames
+where no contact was detected (between touches).
+
+### Nerve_spike column
+Always 0.0 or 1.0 (float64). NaN rows are inter-block recording gaps. Filter with
+`df[df['Nerve_spike'] == 1]` to get spike frames; NaNs will not match.
+
+### spike_count vs unique_touch_spike_count
+**`spike_count`** at a forearm location = total 1 kHz frames across the whole session
+where that location appeared in a contact patch during a spike. Accumulates with touch
+duration — a long slow stroke over the RF contributes many more frames than a brief tap
+at the same location, even if both reliably elicit spikes.
+
+**`unique_touch_spike_count`** = number of distinct touches (by `single_touch_id`) that
+elicited a spike at that location. Independent of duration. Better for estimating RF
+extent and comparing locations with different typical touch durations (e.g. taps vs
+strokes). Prefer this metric for RF size estimation.
+
+For SAI units (sustained firing throughout contact): `spike_count` is especially
+inflated at RF locations because the unit fires throughout the entire touch, not just
+at onset/offset. This makes `unique_touch_spike_count` particularly important for SAI
+RF mapping.
+
+### Reading the cylindrical unwrap heatmap (Stage 2b output)
+- X-axis: circumferential position around the forearm (mm), derived from PCA cylinder
+- Y-axis: longitudinal position along the forearm (mm)
+- Colour scale: spike count, log scale (blue=low, red/white=high)
+- Left panel: scatter — one dot per unique PLY vertex; grey = forearm surface
+- Right panel: same data gridded to a continuous heatmap
+
+The hot zone (white/orange) is the receptive field. The broad blue spread is the
+contacted-but-rarely-responsive area — locations the experimenter touched during the
+session that are outside or at the edge of the RF. A narrow circumferential band with
+high longitudinal extent is typical of a focal SAI RF on the volar/dorsal forearm.
+
+---
+
 ## RF Mapping
 
 ### Key source files
