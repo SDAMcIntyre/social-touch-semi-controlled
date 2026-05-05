@@ -533,6 +533,7 @@ def explore_touch_playback_flow(
 def explore_touch_population_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
+    neuron_mode: str = "iff",
 ) -> None:
     """
     Launch the Touch Population Explorer GUI for the given sessions.
@@ -540,12 +541,15 @@ def explore_touch_population_flow(
     dependency on RF clustering or visualization.
     ``force_processing`` is accepted for interface consistency but is a no-op:
     the GUI is stateless and always launches fresh.
+
+    ``neuron_mode`` is forwarded to ``launch_touch_population_explorer`` to
+    determine which pre-computed RF maps to load (``"iff"`` or ``"spike"``).
     """
     print(f"[Batch Analysis] Launching Touch Population Explorer for {len(input_items)} item(s)...")
     if not input_items:
         return
 
-    launch_touch_population_explorer(input_items)
+    launch_touch_population_explorer(input_items, neuron_mode=neuron_mode)
 
 
 @flow(name="explore_single_touch_rf")
@@ -839,6 +843,8 @@ def run_batch_analysis(
                     if task_name == "explore_single_touch_rf":
                         if "neuron_mode" in options:
                             kwargs["neuron_mode"] = options["neuron_mode"]
+                    if task_name == "explore_touch_population":
+                        kwargs["neuron_mode"] = options.get("neuron_mode", "iff")
                     if "cluster_groups" in options:
                         kwargs["cluster_groups"] = options["cluster_groups"]
                     if task_name in (

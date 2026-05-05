@@ -955,6 +955,7 @@ def launch_single_touch_rf_explorer(
 
 def launch_touch_population_explorer(
     input_items: List[Tuple[Path, Path]],
+    neuron_mode: str = "iff",
 ) -> None:
     """Launch the Touch Population Explorer GUI for all sessions in input_items.
 
@@ -964,13 +965,25 @@ def launch_touch_population_explorer(
     near-instant; on a cache miss the computation runs in parallel across
     sessions.  Blocks until the user closes the window.
 
+    For each session, also attempts to load a ``PopulationRFData`` from the
+    pre-computed ``single_touch_rf_maps.npz`` (produced by
+    ``run_single_touch_rf_mapping``).  If the ``.npz`` is absent for a session,
+    ``None`` is stored in ``rf_sessions`` for that position — the viewer
+    gracefully disables RF heatmap mode for that session.  If the file exists
+    but is corrupt or misaligned, the ``ValueError`` from
+    ``load_population_rf_data`` propagates immediately (fail-fast).
+
     Parameters
     ----------
     input_items:
         List of ``(aggregated_csv_path, database_path)`` tuples, one per
         session — the same format used throughout the analysis pipeline.
+    neuron_mode:
+        ``"iff"`` or ``"spike"`` — must match the mode used when
+        ``run_single_touch_rf_mapping`` was run.  Passed to the viewer so it
+        can label the RF heatmap axis correctly.
     """
-    from .touch_population_data import load_population_data
+    from .touch_population_data import load_population_data, load_population_rf_data, PopulationRFData
     from .gui import TouchPopulationExplorer
 
     session_specs = _resolve_explorer_session_paths(input_items)
@@ -988,12 +1001,32 @@ def launch_touch_population_explorer(
     with ThreadPoolExecutor(max_workers=min(4, n)) as executor:
         sessions: List[Tuple[str, object]] = list(executor.map(_load_one, session_specs))
 
+    # Resolve RF data per session — None if .npz absent, ValueError propagates if corrupt.
+    rf_sessions: List[Optional[PopulationRFData]] = []
+    for (csv_path, database_path), (session_id, pop_data) in zip(input_items, sessions):
+        npz_path = (
+            database_path / "4_analysed" / "single_touch_rf_maps"
+            / session_id / "single_touch_rf_maps.npz"
+        )
+        if not npz_path.exists():
+            print(
+                f"[Touch Population] {session_id}: RF .npz not found — "
+                f"RF heatmap mode disabled for this session."
+            )
+            rf_sessions.append(None)
+        else:
+            n_vertices = len(pop_data.forearm_vertices)
+            rf_sessions.append(
+                load_population_rf_data(npz_path, pop_data.touch_triple_keys, n_vertices)
+            )
+
     first_label, first_data = sessions[0]
 
     app = QApplication.instance() or QApplication(sys.argv)
     viewer = TouchPopulationExplorer(
         population_data=first_data,
         sessions=sessions,
+        rf_sessions=rf_sessions,
     )
     viewer.show()
     app.exec_()

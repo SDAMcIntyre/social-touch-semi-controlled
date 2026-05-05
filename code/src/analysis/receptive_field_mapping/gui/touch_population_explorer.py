@@ -30,7 +30,7 @@ from PyQt5.QtWidgets import (
 from pyvistaqt import QtInteractor
 
 from analysis.receptive_field_mapping.gui.rf_feature_space_explorer import DraggableFilterRect
-from analysis.receptive_field_mapping.touch_population_data import PopulationData
+from analysis.receptive_field_mapping.touch_population_data import PopulationData, PopulationRFData
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +49,8 @@ _GESTURE_COLORS = [
 
 _HEATMAP_MODES = ["Spike density", "Mean IFF (Hz)", "Cumulative IFF (Hz)"]
 _MODE_KEYS = ["spike_density", "mean_iff", "cumulative_iff"]
+
+# RF mode labels/keys are built dynamically from neuron_mode; these are the static ones above.
 
 _DEFAULT_X_FEATURE = "hand_velocity_amplitude_mean_during_iff"
 _DEFAULT_Y_FEATURE = "pressure_mean_during_iff"
@@ -74,6 +76,7 @@ class TouchPopulationExplorer(QMainWindow):
         self,
         population_data: PopulationData,
         sessions: Optional[List[Tuple[str, PopulationData]]] = None,
+        rf_sessions: Optional[List[Optional[PopulationRFData]]] = None,
         title: str = "Touch Population Explorer",
         parent: Optional[QWidget] = None,
     ) -> None:
@@ -83,6 +86,13 @@ class TouchPopulationExplorer(QMainWindow):
         self._data = population_data
         self._sessions: List[Tuple[str, PopulationData]] = (
             sessions if sessions is not None else [("Session 1", population_data)]
+        )
+        self._rf_sessions: List[Optional[PopulationRFData]] = (
+            rf_sessions if rf_sessions is not None else []
+        )
+        # Initialise RF data for the first session (index 0).
+        self._rf_data: Optional[PopulationRFData] = (
+            self._rf_sessions[0] if self._rf_sessions else None
         )
         self._initialized = False
         self._heatmap_mode: str = "spike_density"
@@ -173,6 +183,9 @@ class TouchPopulationExplorer(QMainWindow):
 
         root.addWidget(splitter, stretch=1)
 
+        # Sync the heatmap mode dropdown for the initial session's RF data.
+        self._sync_heatmap_modes()
+
     def _build_toolbar(self) -> None:
         from PyQt5.QtWidgets import QToolBar
         toolbar = QToolBar("Controls")
@@ -189,8 +202,8 @@ class TouchPopulationExplorer(QMainWindow):
         toolbar.addSeparator()
         toolbar.addWidget(QLabel("Heatmap:"))
         self._heatmap_mode_combo = QComboBox()
-        for mode_label in _HEATMAP_MODES:
-            self._heatmap_mode_combo.addItem(mode_label)
+        for mode_label, mode_key in zip(_HEATMAP_MODES, _MODE_KEYS):
+            self._heatmap_mode_combo.addItem(mode_label, mode_key)
         self._heatmap_mode_combo.currentIndexChanged.connect(self._on_heatmap_mode_changed)
         toolbar.addWidget(self._heatmap_mode_combo)
 
@@ -352,6 +365,8 @@ class TouchPopulationExplorer(QMainWindow):
 
     def _heatmap_clim(self) -> Tuple[float, float]:
         mode = self._heatmap_mode
+        if self._rf_data is not None and mode == f"rf_mean_{self._rf_data.neuron_mode}":
+            return (0.0, self._rf_data.session_max_value)
         if mode == "mean_iff":
             raw_max = float(np.max(self._data.cp_iff)) if len(self._data.cp_iff) > 0 else 0.0
             max_iff = raw_max if raw_max > 0.0 else 1.0
@@ -365,11 +380,21 @@ class TouchPopulationExplorer(QMainWindow):
         return (0.0, 1.0)
 
     def _on_heatmap_mode_changed(self, index: int) -> None:
-        if index < 0 or index >= len(_MODE_KEYS):
+        if index < 0 or index >= self._heatmap_mode_combo.count():
             raise ValueError(
                 f"TouchPopulationExplorer: heatmap mode index {index} out of range"
             )
-        self._heatmap_mode = _MODE_KEYS[index]
+        # Derive the mode key from the combo item's user data (set by _sync_heatmap_modes),
+        # falling back to the static _MODE_KEYS for built-in modes.
+        item_data = self._heatmap_mode_combo.itemData(index)
+        if item_data is not None:
+            self._heatmap_mode = item_data
+        elif index < len(_MODE_KEYS):
+            self._heatmap_mode = _MODE_KEYS[index]
+        else:
+            raise ValueError(
+                f"TouchPopulationExplorer: heatmap mode index {index} has no key"
+            )
         self._render_3d()
         if self._rect is not None:
             self._apply_filter_update()
@@ -388,8 +413,12 @@ class TouchPopulationExplorer(QMainWindow):
         vertices = self._data.forearm_vertices
         n_verts = len(vertices)
 
-        cp_mask_all = np.ones(len(self._data.cp_touch_idx), dtype=bool)
-        heatmap_val = self._compute_heatmap(cp_mask_all, n_verts)
+        if self._rf_data is not None and self._heatmap_mode == f"rf_mean_{self._rf_data.neuron_mode}":
+            n_touches = len(self._data.gesture_types)
+            heatmap_val = self._compute_rf_heatmap(list(range(n_touches)), n_verts)
+        else:
+            cp_mask_all = np.ones(len(self._data.cp_touch_idx), dtype=bool)
+            heatmap_val = self._compute_heatmap(cp_mask_all, n_verts)
 
         self._cloud = pv.PolyData(vertices)
         self._cloud["heatmap"] = heatmap_val
@@ -441,6 +470,90 @@ class TouchPopulationExplorer(QMainWindow):
         result = val.astype(float)
         result[contact_count == 0] = np.nan
         return result
+
+    def _compute_rf_heatmap(self, touch_indices: list, n_verts: int) -> np.ndarray:
+        """Compute mean RF heatmap across *touch_indices* using pre-loaded RF maps.
+
+        For each vertex contacted by at least one selected touch, computes the
+        mean of the per-touch RF values (mean neuron response per vertex index).
+        Vertices not contacted by any selected touch are set to NaN.
+
+        Parameters
+        ----------
+        touch_indices:
+            List of integer touch indices (into ``self._rf_data`` lists).
+        n_verts:
+            Total number of forearm mesh vertices.
+        """
+        if self._rf_data is None:
+            raise ValueError(
+                "_compute_rf_heatmap: called with self._rf_data=None — RF mode is not available"
+            )
+        result = np.zeros(n_verts, dtype=np.float64)
+        count = np.zeros(n_verts, dtype=np.int64)
+        for idx in touch_indices:
+            verts = self._rf_data.rf_vertex_indices[idx]
+            vals = self._rf_data.rf_values[idx]
+            if len(verts) == 0:
+                continue
+            np.add.at(result, verts, vals)
+            np.add.at(count, verts, 1)
+        nonzero = count > 0
+        result[nonzero] /= count[nonzero]
+        result[~nonzero] = np.nan
+        return result
+
+    def _sync_heatmap_modes(self) -> None:
+        """Add or remove the RF heatmap mode item from the dropdown.
+
+        Called after ``self._rf_data`` changes (session load or session switch).
+        When RF data is available, adds the RF mode item if not already present.
+        When RF data is unavailable, removes the RF mode item if present and
+        falls back to ``"spike_density"`` if the current mode was an RF mode.
+        """
+        combo = self._heatmap_mode_combo
+        combo.blockSignals(True)
+
+        if self._rf_data is not None:
+            rf_key = f"rf_mean_{self._rf_data.neuron_mode}"
+            rf_label = f"RF Mean {self._rf_data.neuron_mode.upper()}"
+
+            # Check whether the RF mode item is already in the combo (by key).
+            rf_idx = None
+            for i in range(combo.count()):
+                if combo.itemData(i) == rf_key:
+                    rf_idx = i
+                    break
+
+            if rf_idx is None:
+                # Remove any stale RF mode items (different neuron_mode from a prior session).
+                indices_to_remove = []
+                for i in range(combo.count()):
+                    key = combo.itemData(i)
+                    if isinstance(key, str) and key.startswith("rf_mean_"):
+                        indices_to_remove.append(i)
+                for i in reversed(indices_to_remove):
+                    combo.removeItem(i)
+                combo.addItem(rf_label, rf_key)
+        else:
+            # Remove RF mode item(s) if present.
+            indices_to_remove = []
+            for i in range(combo.count()):
+                key = combo.itemData(i)
+                if isinstance(key, str) and key.startswith("rf_mean_"):
+                    indices_to_remove.append(i)
+            for i in reversed(indices_to_remove):
+                combo.removeItem(i)
+
+            # If the current mode was an RF mode, fall back to spike_density.
+            if self._heatmap_mode.startswith("rf_mean_"):
+                self._heatmap_mode = "spike_density"
+                for i in range(combo.count()):
+                    if combo.itemData(i) == "spike_density":
+                        combo.setCurrentIndex(i)
+                        break
+
+        combo.blockSignals(False)
 
     # ------------------------------------------------------------------
     # Filter update
@@ -503,9 +616,13 @@ class TouchPopulationExplorer(QMainWindow):
         touch_mask = rect_mask & type_mask
 
         n_verts = len(self._data.forearm_vertices)
-        cp_mask = np.isin(self._data.cp_touch_idx, np.where(touch_mask)[0])
 
-        heatmap_val = self._compute_heatmap(cp_mask, n_verts)
+        if self._rf_data is not None and self._heatmap_mode == f"rf_mean_{self._rf_data.neuron_mode}":
+            selected_indices = list(np.where(touch_mask)[0])
+            heatmap_val = self._compute_rf_heatmap(selected_indices, n_verts)
+        else:
+            cp_mask = np.isin(self._data.cp_touch_idx, np.where(touch_mask)[0])
+            heatmap_val = self._compute_heatmap(cp_mask, n_verts)
 
         self._cloud["heatmap"] = heatmap_val
         self._cloud.Modified()
@@ -625,16 +742,19 @@ class TouchPopulationExplorer(QMainWindow):
             return
 
         n_verts = len(self._data.forearm_vertices)
-        cp_mask = self._data.cp_touch_idx == self._selected_touch_idx
+        sel_idx = self._selected_touch_idx
 
-        heatmap_val = self._compute_heatmap(cp_mask, n_verts)
+        if self._rf_data is not None and self._heatmap_mode == f"rf_mean_{self._rf_data.neuron_mode}":
+            heatmap_val = self._compute_rf_heatmap([sel_idx], n_verts)
+        else:
+            cp_mask = self._data.cp_touch_idx == sel_idx
+            heatmap_val = self._compute_heatmap(cp_mask, n_verts)
 
         self._cloud["heatmap"] = heatmap_val
         self._cloud.Modified()
         self._actor.mapper.scalar_range = self._heatmap_clim()
         self._plotter.render()
 
-        sel_idx = self._selected_touch_idx
         gtype = str(self._data.gesture_types[sel_idx])
         self._touch_count_label.setText(f"Touch {sel_idx} ({gtype})")
 
@@ -670,6 +790,13 @@ class TouchPopulationExplorer(QMainWindow):
         self._rect = None
         self._cloud = None
         self._actor = None
+
+        # Update RF data for the new session (None if rf_sessions not set or index out of range).
+        if self._rf_sessions and session_idx < len(self._rf_sessions):
+            self._rf_data = self._rf_sessions[session_idx]
+        else:
+            self._rf_data = None
+        self._sync_heatmap_modes()
 
         # Rebuild gesture checkboxes for the new session's gesture types.
         unique_types = [str(g) for g in np.unique(self._data.gesture_types)]

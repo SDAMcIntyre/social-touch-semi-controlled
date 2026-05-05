@@ -22,7 +22,7 @@ from .tangent_plane_alignment import compute_tangent_plane_rotation
 
 logger = logging.getLogger(__name__)
 
-_CACHE_SCHEMA_VERSION = 2
+_CACHE_SCHEMA_VERSION = 4
 
 _REQUIRED_COLUMNS = (
     "contact_points",
@@ -58,6 +58,7 @@ class PopulationData:
     tangent_rotation: np.ndarray        # (3, 3)
 
     # Per-touch arrays (length T = n_touches)
+    touch_triple_keys: np.ndarray       # (T, 3) int64 — (block_order_id, trial_id, single_touch_id)
     gesture_types: np.ndarray           # (T,) object — gesture type strings
     spike_elicited: np.ndarray          # (T,) bool
 
@@ -112,6 +113,7 @@ def _save_population_cache(series_csv_path: Path, data: PopulationData) -> None:
             cache_schema_version=np.array(_CACHE_SCHEMA_VERSION, dtype=np.int64),
             forearm_vertices=data.forearm_vertices,
             tangent_rotation=data.tangent_rotation,
+            touch_triple_keys=data.touch_triple_keys,
             gesture_type_codes=codes.astype(np.int32),
             gesture_type_labels=np.array(unique_labels, dtype=str),
             spike_elicited=data.spike_elicited,
@@ -168,6 +170,7 @@ def _load_population_cache(
 
     required_keys = (
         "forearm_vertices", "tangent_rotation",
+        "touch_triple_keys",
         "gesture_type_codes", "gesture_type_labels",
         "spike_elicited",
         "feature_names", "feature_matrix",
@@ -183,6 +186,7 @@ def _load_population_cache(
 
     forearm_vertices = npz["forearm_vertices"]
     tangent_rotation = npz["tangent_rotation"]
+    touch_triple_keys = npz["touch_triple_keys"]
     gesture_type_codes = npz["gesture_type_codes"]
     gesture_type_labels = npz["gesture_type_labels"]
     spike_elicited = npz["spike_elicited"]
@@ -205,6 +209,13 @@ def _load_population_cache(
         )
 
     T = len(spike_elicited)
+
+    if touch_triple_keys.ndim != 2 or touch_triple_keys.shape != (T, 3):
+        raise ValueError(
+            f"_load_population_cache: 'touch_triple_keys' has shape "
+            f"{touch_triple_keys.shape} (expected ({T}, 3)): {cache_path}"
+        )
+
     for arr_name, arr in [
         ("gesture_type_codes", gesture_type_codes),
         ("spike_elicited", spike_elicited),
@@ -240,6 +251,7 @@ def _load_population_cache(
     return PopulationData(
         forearm_vertices=forearm_vertices.astype(np.float64),
         tangent_rotation=tangent_rotation.astype(np.float64),
+        touch_triple_keys=touch_triple_keys.astype(np.int64),
         gesture_types=gesture_types.astype(object),
         spike_elicited=spike_elicited.astype(bool),
         feature_names=feature_names,
@@ -271,7 +283,7 @@ def _merge_stage3_features(
     On any error, logs a warning and returns an empty result rather than raising,
     because Stage 3 enrichment is explicitly optional.
     """
-    session_stem = series_csv_path.stem
+    session_stem = series_csv_path.stem.removesuffix('_series_augmented')
     T = len(touch_keys)
 
     candidates = list(touch_features_dir.rglob(f"{session_stem}*.csv"))
@@ -304,10 +316,24 @@ def _merge_stage3_features(
     if not merged_dfs:
         return [], np.empty((T, 0), dtype=np.float64)
 
+    # Join all Stage 3 CSVs column-wise on the touch key so that features
+    # from every family are present in one row per touch.  A naive concat+
+    # drop_duplicates would silently discard all but the first CSV's data.
     try:
-        combined = pd.concat(merged_dfs, ignore_index=True)
+        combined = merged_dfs[0].drop_duplicates(subset=["trial_id", "single_touch_id"])
+        for extra in merged_dfs[1:]:
+            extra = extra.drop_duplicates(subset=["trial_id", "single_touch_id"])
+            new_cols = [c for c in extra.columns if c not in set(combined.columns)]
+            if not new_cols:
+                continue
+            combined = pd.merge(
+                combined,
+                extra[["trial_id", "single_touch_id"] + new_cols],
+                on=["trial_id", "single_touch_id"],
+                how="outer",
+            )
     except Exception as exc:
-        logger.warning("_merge_stage3_features: concat failed — %s", exc)
+        logger.warning("_merge_stage3_features: join failed — %s", exc)
         return [], np.empty((T, 0), dtype=np.float64)
 
     key_cols = {"trial_id", "single_touch_id"}
@@ -319,8 +345,6 @@ def _merge_stage3_features(
     if not numeric_cols:
         return [], np.empty((T, 0), dtype=np.float64)
 
-    # Build lookup: (trial_id, single_touch_id) -> row index in combined.
-    combined = combined.drop_duplicates(subset=["trial_id", "single_touch_id"])
     combined = combined.set_index(["trial_id", "single_touch_id"])
 
     matrix = np.full((T, len(numeric_cols)), np.nan, dtype=np.float64)
@@ -437,6 +461,7 @@ def load_population_data(
         gesture_type = str(grp["gesture_type"].iloc[0])
 
         touch_records.append({
+            "block_order_id": int(block_order_id),
             "trial_id": int(trial_id),
             "single_touch_id": int(single_touch_id),
             "gesture_type": gesture_type,
@@ -716,9 +741,18 @@ def load_population_data(
         feature_names = []
         feature_matrix = np.empty((T, 0), dtype=np.float64)
 
+    touch_triple_keys = np.array(
+        [
+            [rec["block_order_id"], rec["trial_id"], rec["single_touch_id"]]
+            for rec in touch_records
+        ],
+        dtype=np.int64,
+    )
+
     result = PopulationData(
         forearm_vertices=rotated_vertices,
         tangent_rotation=rotation,
+        touch_triple_keys=touch_triple_keys,
         gesture_types=gesture_types_arr,
         spike_elicited=spike_elicited_arr,
         feature_names=feature_names,
@@ -743,3 +777,135 @@ def load_population_data(
         flush=True,
     )
     return result
+
+
+# ------------------------------------------------------------------
+# RF companion data model and loader
+# ------------------------------------------------------------------
+
+@dataclass
+class PopulationRFData:
+    """Pre-loaded per-touch RF maps aligned to a ``PopulationData`` instance.
+
+    Arrays have length T matching ``PopulationData.touch_triple_keys``.
+    Each entry corresponds to one touch; the index space is shared.
+
+    Attributes
+    ----------
+    rf_vertex_indices:
+        List of length T.  Entry ``i`` is a 1-D int64 array of vertex indices
+        that were contacted during touch ``i``.  Empty array when the touch had
+        no contacted vertices in the RF map.
+    rf_values:
+        List of length T.  Entry ``i`` is a 1-D float64 array of mean neuron
+        values for each vertex in ``rf_vertex_indices[i]``.  Parallel to
+        ``rf_vertex_indices``.
+    neuron_mode:
+        ``"iff"`` or ``"spike"`` — the accumulation mode used when the RF maps
+        were computed by ``run_single_touch_rf_mapping()``.
+    session_max_value:
+        Maximum value across all ``rf_values`` entries in the session.  Used as
+        a stable per-session colour scale upper bound.  At least 1.0 even when
+        all RF maps are empty.
+    """
+
+    rf_vertex_indices: list   # list[np.ndarray] length T — per-touch vertex indices
+    rf_values: list           # list[np.ndarray] length T — per-touch mean neuron values
+    neuron_mode: str          # "iff" or "spike"
+    session_max_value: float  # stable colour-scale upper bound (>= 1.0)
+
+
+def load_population_rf_data(
+    npz_path: Path,
+    touch_triple_keys: np.ndarray,
+    n_vertices: int,
+) -> "PopulationRFData":
+    """Load per-touch RF maps from *npz_path* and align to *touch_triple_keys*.
+
+    Reads the ``.npz`` produced by ``run_single_touch_rf_mapping()``, recovers
+    the ``touch_id_map`` dict, and looks up each touch in *touch_triple_keys*
+    (shape T×3, columns: block_order_id / trial_id / single_touch_id) to get
+    the corresponding RF row from the file.  Per-touch sparse pairs are
+    pre-converted to numpy arrays for fast per-touch lookup during drag.
+
+    Parameters
+    ----------
+    npz_path:
+        Full path to the ``single_touch_rf_maps.npz`` file.
+    touch_triple_keys:
+        Shape ``(T, 3)`` int64 array from ``PopulationData.touch_triple_keys``.
+    n_vertices:
+        Total number of vertices in the forearm mesh (unused here but checked
+        for documentation — indices from the RF file are trusted as valid).
+
+    Returns
+    -------
+    ``PopulationRFData`` with T entries aligned to *touch_triple_keys*.
+
+    Raises
+    ------
+    ValueError
+        If *npz_path* does not exist, required fields are missing from the
+        file, or any touch key in *touch_triple_keys* is not found in the
+        ``touch_id_map`` stored in the file.
+    """
+    npz_path = Path(npz_path)
+    if not npz_path.exists():
+        raise ValueError(
+            f"load_population_rf_data: RF .npz not found: {npz_path}"
+        )
+
+    npz = np.load(npz_path, allow_pickle=True)
+
+    required_fields = ("touch_id_map", "rf_data", "neuron_mode")
+    missing = [f for f in required_fields if f not in npz]
+    if missing:
+        raise ValueError(
+            f"load_population_rf_data: .npz at {npz_path} is missing required "
+            f"field(s): {missing}"
+        )
+
+    touch_id_map: dict = npz["touch_id_map"].item()
+    rf_data: dict = npz["rf_data"].item()
+    neuron_mode: str = str(npz["neuron_mode"])
+
+    T = len(touch_triple_keys)
+    rf_vertex_indices: list = []
+    rf_values: list = []
+
+    for ti in range(T):
+        row = touch_triple_keys[ti]
+        key = (int(row[0]), int(row[1]), int(row[2]))
+        if key not in touch_id_map:
+            raise ValueError(
+                f"load_population_rf_data: touch key {key} (touch index {ti}) "
+                f"not found in touch_id_map of {npz_path}. "
+                f"The RF .npz may have been computed from a different session or "
+                f"preparation run."
+            )
+        row_idx = touch_id_map[key]
+        pairs = rf_data.get(row_idx, [])
+        if pairs:
+            vtx_arr = np.array([p[0] for p in pairs], dtype=np.int64)
+            val_arr = np.array([p[1] for p in pairs], dtype=np.float64)
+        else:
+            vtx_arr = np.empty(0, dtype=np.int64)
+            val_arr = np.empty(0, dtype=np.float64)
+        rf_vertex_indices.append(vtx_arr)
+        rf_values.append(val_arr)
+
+    # Compute session_max_value — stable colour scale upper bound.
+    all_max = 0.0
+    for val_arr in rf_values:
+        if len(val_arr) > 0:
+            local_max = float(val_arr.max())
+            if local_max > all_max:
+                all_max = local_max
+    session_max_value = max(all_max, 1.0)
+
+    return PopulationRFData(
+        rf_vertex_indices=rf_vertex_indices,
+        rf_values=rf_values,
+        neuron_mode=neuron_mode,
+        session_max_value=session_max_value,
+    )
