@@ -12,9 +12,11 @@ import numpy as np
 import pandas as pd
 from scipy.spatial import cKDTree
 
-from .rf_data_loader import load_forearm_vertices
+from .rf_data_loader import load_forearm_vertex_colors, load_forearm_vertices
 
 logger = logging.getLogger(__name__)
+
+_CACHE_SCHEMA_VERSION = 2
 
 _REQUIRED_COLUMNS = (
     "contact_points",
@@ -22,6 +24,7 @@ _REQUIRED_COLUMNS = (
     "trial_id",
     "single_touch_id",
     "Nerve_spike",
+    "Nerve_freq",
     "gesture_type",
 )
 
@@ -38,7 +41,8 @@ def _ts() -> str:
 
 @dataclass
 class PlaybackSessionData:
-    forearm_vertices: np.ndarray    # (N, 3) raw coordinates
+    forearm_vertices: np.ndarray              # (N, 3) raw coordinates
+    forearm_vertex_colors: Optional[np.ndarray]  # (N, 3) uint8 RGB, or None
 
 
 @dataclass
@@ -51,6 +55,7 @@ class TouchEvent:
     frame_contact_pts: list                 # list of (K_i, 3) raw contact coords
     frame_vertex_indices: list              # list of (K_i,) nearest vertex per contact pt
     frame_spikes: np.ndarray               # (n_frames,) bool — per-row Nerve_spike
+    frame_iff: np.ndarray                  # (n_frames,) float64 — per-row Nerve_freq (Hz)
 
 
 @dataclass
@@ -106,6 +111,11 @@ def _save_playback_cache(
         [t.frame_spikes for t in all_touches]
     ).astype(bool) if n_touches > 0 else np.array([], dtype=bool)
 
+    # frame_iff: concatenate all (n_frames_i,) float64 arrays (same counts as frame_spikes).
+    frame_iff_data = np.concatenate(
+        [t.frame_iff for t in all_touches]
+    ).astype(np.float64) if n_touches > 0 else np.array([], dtype=np.float64)
+
     # Contact points: flatten per-touch, per-frame arrays.
     # cp_pts_data      : (total_pts, 3) float64 — all raw contact coords
     # cp_vertex_data   : (total_pts,)   int64   — vertex index per contact pt
@@ -139,19 +149,26 @@ def _save_playback_cache(
         cp_pts_frame_touch = np.empty(0, dtype=np.int64)
         cp_pts_frame_idx = np.empty(0, dtype=np.int64)
 
+    optional_arrays: dict = {}
+    if data.session_data.forearm_vertex_colors is not None:
+        optional_arrays["forearm_vertex_colors"] = data.session_data.forearm_vertex_colors
+
     try:
         np.savez_compressed(
             cache_path,
+            cache_schema_version=np.array(_CACHE_SCHEMA_VERSION, dtype=np.int64),
             touch_keys=touch_keys,
             touch_block_ids=touch_block_ids,
             gesture_types=gesture_types,
             frame_spikes_data=frame_spikes_data,
             frame_spikes_counts=frame_spikes_counts,
+            frame_iff_data=frame_iff_data,
             cp_pts_data=cp_pts_data,
             cp_vertex_data=cp_vertex_data,
             cp_pts_frame_touch=cp_pts_frame_touch,
             cp_pts_frame_idx=cp_pts_frame_idx,
             forearm_vertices=data.session_data.forearm_vertices,
+            **optional_arrays,
         )
     except Exception as exc:
         logger.warning(
@@ -190,10 +207,19 @@ def _load_playback_cache(
 
     npz = np.load(cache_path, allow_pickle=True)
 
+    # Validate schema version.
+    if "cache_schema_version" not in npz or int(npz["cache_schema_version"]) != _CACHE_SCHEMA_VERSION:
+        logger.debug(
+            "_load_playback_cache: schema version mismatch for %s — recomputing",
+            series_csv_path.name,
+        )
+        return None
+
     # Validate that all expected keys are present (old-format guard).
     required_keys = (
         "touch_keys", "touch_block_ids", "gesture_types",
         "frame_spikes_data", "frame_spikes_counts",
+        "frame_iff_data",
         "cp_pts_data", "cp_vertex_data",
         "cp_pts_frame_touch", "cp_pts_frame_idx",
         "forearm_vertices",
@@ -221,11 +247,16 @@ def _load_playback_cache(
     gesture_types = npz["gesture_types"]
     frame_spikes_data = npz["frame_spikes_data"]
     frame_spikes_counts = npz["frame_spikes_counts"]
+    frame_iff_data = npz["frame_iff_data"]
     cp_pts_data = npz["cp_pts_data"]
     cp_vertex_data = npz["cp_vertex_data"]
     cp_pts_frame_touch = npz["cp_pts_frame_touch"]
     cp_pts_frame_idx = npz["cp_pts_frame_idx"]
     forearm_vertices = npz["forearm_vertices"]
+    # forearm_vertex_colors is optional — missing means PLY had no colours.
+    forearm_vertex_colors: Optional[np.ndarray] = (
+        npz["forearm_vertex_colors"] if "forearm_vertex_colors" in npz else None
+    )
 
     # Shape validation — raise on corruption.
     if touch_keys.ndim != 2 or touch_keys.shape[1] != 2:
@@ -257,6 +288,11 @@ def _load_playback_cache(
             f"_load_playback_cache: 'frame_spikes_data' has length "
             f"{len(frame_spikes_data)}, expected {expected_spikes_len}: {cache_path}"
         )
+    if frame_iff_data.ndim != 1 or len(frame_iff_data) != expected_spikes_len:
+        raise ValueError(
+            f"_load_playback_cache: 'frame_iff_data' has length "
+            f"{len(frame_iff_data)}, expected {expected_spikes_len}: {cache_path}"
+        )
     total_pts = len(cp_pts_data)
     for arr_name, arr in [
         ("cp_vertex_data", cp_vertex_data),
@@ -280,7 +316,7 @@ def _load_playback_cache(
         )
 
     # Reconstruct touch events.
-    spikes_offset = 0
+    frames_offset = 0
     touches_by_block_trial: dict[tuple[str, int], list[TouchEvent]] = {}
 
     for ti in range(n_touches):
@@ -289,8 +325,9 @@ def _load_playback_cache(
         single_touch_id = int(touch_keys[ti, 1])
         gesture = str(gesture_types[ti])
         n_frames = int(frame_spikes_counts[ti])
-        spikes = frame_spikes_data[spikes_offset: spikes_offset + n_frames].astype(bool)
-        spikes_offset += n_frames
+        spikes = frame_spikes_data[frames_offset: frames_offset + n_frames].astype(bool)
+        iff = frame_iff_data[frames_offset: frames_offset + n_frames].astype(np.float64)
+        frames_offset += n_frames
 
         # Collect per-frame contact pts and vertex indices for this touch.
         touch_mask = cp_pts_frame_touch == ti
@@ -313,6 +350,7 @@ def _load_playback_cache(
             frame_contact_pts=frame_pts_list,
             frame_vertex_indices=frame_vtx_list,
             frame_spikes=spikes,
+            frame_iff=iff,
         )
         touches_by_block_trial.setdefault((block_order_id, trial_id), []).append(event)
 
@@ -329,6 +367,7 @@ def _load_playback_cache(
 
     session_data = PlaybackSessionData(
         forearm_vertices=forearm_vertices,
+        forearm_vertex_colors=forearm_vertex_colors,
     )
     return PlaybackData(
         session_data=session_data,
@@ -424,9 +463,10 @@ def load_playback_data(
         raise ValueError(
             f"load_playback_data: could not load forearm vertices from {forearm_ply_path}"
         )
+    vertex_colors = load_forearm_vertex_colors(forearm_ply_path)
     print(
         f"{_ts()} | [Touch Playback] [{tag}]   forearm mesh: {time.perf_counter() - t:.1f}s  "
-        f"verts={len(vertices)}",
+        f"verts={len(vertices)}  colors={'yes' if vertex_colors is not None else 'none'}",
         flush=True,
     )
 
@@ -445,6 +485,7 @@ def load_playback_data(
 
         cp_strings = group_df["contact_points"].values
         spikes_arr = group_df["Nerve_spike"].to_numpy(dtype=bool)
+        iff_arr = group_df["Nerve_freq"].to_numpy(dtype=np.float64)
         gesture_type = str(group_df["gesture_type"].iloc[0])
 
         # Row-by-row parsing matching preparation_viewer_data.py exactly.
@@ -452,6 +493,7 @@ def load_playback_data(
         frame_contact_pts: list[np.ndarray] = []
         frame_vertex_indices: list[np.ndarray] = []
         frame_spikes: list[bool] = []
+        frame_iff: list[float] = []
 
         prev_string: Optional[str] = None
         prev_pts: np.ndarray = np.empty((0, 3), dtype=np.float64)
@@ -488,6 +530,7 @@ def load_playback_data(
                 frame_vertex_indices.append(prev_vtx)
 
             frame_spikes.append(bool(spikes_arr[row_idx]))
+            frame_iff.append(float(iff_arr[row_idx]))
 
         event = TouchEvent(
             block_order_id=block_order_id,
@@ -497,6 +540,7 @@ def load_playback_data(
             frame_contact_pts=frame_contact_pts,
             frame_vertex_indices=frame_vertex_indices,
             frame_spikes=np.array(frame_spikes, dtype=bool),
+            frame_iff=np.array(frame_iff, dtype=np.float64),
         )
         touches_by_block_trial.setdefault((block_order_id, trial_id), []).append(event)
 
@@ -522,7 +566,10 @@ def load_playback_data(
 
     block_order_ids = sorted(trial_ids_by_block.keys(), key=int)
 
-    session_data = PlaybackSessionData(forearm_vertices=vertices)
+    session_data = PlaybackSessionData(
+        forearm_vertices=vertices,
+        forearm_vertex_colors=vertex_colors,
+    )
 
     result = PlaybackData(
         session_data=session_data,
