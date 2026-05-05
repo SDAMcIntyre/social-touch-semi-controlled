@@ -11,7 +11,9 @@ from preprocessing.forearm_extraction.registration.csv_spatial_transformer impor
 )
 
 
-def deduplicate_xy(points: np.ndarray, epsilon: float = 0.35) -> tuple[np.ndarray, int]:
+def deduplicate_xy(
+    points: np.ndarray, epsilon: float = 0.35, *, return_indices: bool = False
+) -> tuple[np.ndarray, int] | tuple[np.ndarray, int, np.ndarray]:
     """Deduplicate points by (x, y) position using single-linkage clustering.
 
     Any two points within epsilon (Euclidean distance on x, y only) are merged
@@ -22,13 +24,19 @@ def deduplicate_xy(points: np.ndarray, epsilon: float = 0.35) -> tuple[np.ndarra
         points: Array of shape (N, 3) in mm, float64.
         epsilon: Radius in mm. Two points within this distance in (x, y) are
             considered in the same cluster.
+        return_indices: If True, also return the indices of kept points.
 
     Returns:
-        Tuple of (deduped_points, n_removed). deduped_points contains rows from
-        the input array in their original relative order, preserving the relative
-        order of surviving points from the input.
+        If return_indices is False (default):
+            Tuple of (deduped_points, n_removed).
+        If return_indices is True:
+            Tuple of (deduped_points, n_removed, kept_indices) where
+            kept_indices is a 1-D int array such that
+            deduped_points == points[kept_indices].
     """
     if len(points) == 0:
+        if return_indices:
+            return points, 0, np.empty(0, dtype=np.intp)
         return points, 0
 
     labels = DBSCAN(eps=epsilon, min_samples=1).fit_predict(points[:, :2])
@@ -51,6 +59,8 @@ def deduplicate_xy(points: np.ndarray, epsilon: float = 0.35) -> tuple[np.ndarra
     assert len(deduped) + n_removed == len(points), (
         f"Deduplication invariant violated: {len(deduped)} + {n_removed} != {len(points)}"
     )
+    if return_indices:
+        return deduped, n_removed, np.array(kept, dtype=np.intp)
     return deduped, n_removed
 
 
@@ -266,10 +276,18 @@ def deduplicate_forearm_ply(input_ply: Path, output_ply: Path, epsilon: float = 
         o3d.io.write_point_cloud(str(output_ply), pcd)
         return {"n_original": 0, "n_deduped": 0, "n_removed": 0}
 
-    deduped, n_removed = deduplicate_xy(vertices, epsilon)
+    deduped, n_removed, kept_indices = deduplicate_xy(vertices, epsilon, return_indices=True)
 
     deduped_pcd = o3d.geometry.PointCloud()
     deduped_pcd.points = o3d.utility.Vector3dVector(deduped)
+
+    if pcd.has_colors():
+        colors = np.asarray(pcd.colors)
+        deduped_pcd.colors = o3d.utility.Vector3dVector(colors[kept_indices])
+
+    if pcd.has_normals():
+        normals = np.asarray(pcd.normals)
+        deduped_pcd.normals = o3d.utility.Vector3dVector(normals[kept_indices])
 
     output_ply.parent.mkdir(parents=True, exist_ok=True)
     o3d.io.write_point_cloud(str(output_ply), deduped_pcd)

@@ -439,3 +439,66 @@ class TestDeduplicateXyContract:
         deduplicate_xy(pts, epsilon=1.0)
 
         np.testing.assert_array_equal(pts, pts_copy)
+
+
+class TestDeduplicateXyReturnIndices:
+    """Tests for the return_indices=True mode."""
+
+    def test_return_indices_basic(self) -> None:
+        """return_indices=True returns a 3-tuple with correct indices."""
+        pts = np.array([
+            [0.0, 0.0, 2.0],
+            [0.0, 0.0, 0.5],
+            [5.0, 0.0, 1.0],
+        ], dtype=np.float64)
+
+        result, n_removed, indices = deduplicate_xy(pts, epsilon=0.1, return_indices=True)
+
+        assert n_removed == 1
+        assert len(indices) == 2
+        np.testing.assert_array_equal(indices, [1, 2])
+        np.testing.assert_array_equal(result, pts[indices])
+
+    def test_return_indices_empty(self) -> None:
+        """return_indices=True with empty input returns empty index array."""
+        empty = np.empty((0, 3), dtype=np.float64)
+        result, n_removed, indices = deduplicate_xy(empty, epsilon=0.5, return_indices=True)
+
+        assert len(indices) == 0
+        assert indices.dtype == np.intp
+
+    def test_return_indices_false_default(self) -> None:
+        """Without return_indices, still returns 2-tuple (backward compat)."""
+        pts = np.array([[1.0, 2.0, 3.0]], dtype=np.float64)
+        result = deduplicate_xy(pts, epsilon=1.0)
+
+        assert isinstance(result, tuple)
+        assert len(result) == 2
+
+    def test_indices_index_original_array(self) -> None:
+        """Returned indices correctly index the original array."""
+        pts = np.array([
+            [0.0, 0.0, 0.0],
+            [0.5, 0.0, 1.0],
+            [5.0, 0.0, 2.0],
+            [5.5, 0.0, 3.0],
+            [10.0, 0.0, 4.0],
+        ], dtype=np.float64)
+
+        result, n_removed, indices = deduplicate_xy(pts, epsilon=1.0, return_indices=True)
+
+        assert n_removed == 2
+        np.testing.assert_array_equal(result, pts[indices])
+
+    def test_no_dedup_returns_all_indices(self) -> None:
+        """When no deduplication occurs, all indices are returned."""
+        pts = np.array([
+            [0.0, 0.0, 0.0],
+            [5.0, 0.0, 1.0],
+            [10.0, 0.0, 2.0],
+        ], dtype=np.float64)
+
+        result, n_removed, indices = deduplicate_xy(pts, epsilon=0.1, return_indices=True)
+
+        assert n_removed == 0
+        np.testing.assert_array_equal(indices, [0, 1, 2])
