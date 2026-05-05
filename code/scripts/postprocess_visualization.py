@@ -158,6 +158,16 @@ def _load_unified_forearm(config: KinectConfig) -> Optional[Path]:
         return plies[0]
     return None
 
+def _resolve_deduped_forearm(config: KinectConfig) -> Optional[Path]:
+    """Return the path to the deduplicated unified forearm PLY, or None."""
+    if config.session_merged_output_dir is None:
+        return None
+    deduped_dir = config.session_merged_output_dir / "forearm_deduped"
+    if not deduped_dir.exists():
+        return None
+    plies = sorted(deduped_dir.glob("*.ply"))
+    return plies[0] if plies else None
+
 
 def resolve_before_after_paths(config: KinectConfig) -> List[Dict]:
     """Return a list of step descriptors for the 4 postprocessing steps.
@@ -188,27 +198,35 @@ def resolve_before_after_paths(config: KinectConfig) -> List[Dict]:
     # Forearms for steps 1 and 2 require loading from the preprocessing outputs.
     per_video_forearm = _load_per_video_forearm(config)   # Open3D PointCloud or None
     unified_forearm_ply = _load_unified_forearm(config)   # Path or None
+    deduped_forearm = _resolve_deduped_forearm(config)    # Path or None
 
     return [
         {
-            "step_label": "Step 1: Contact Projection",
+            "step_label": "Step 0: ICP Registration",
             "before_csv": base / "blocks_merged" / raw_name,
-            "after_csv": base / "blocks_merged_projected" / raw_name,
-            "before_forearm": per_video_forearm,
-            "after_forearm": per_video_forearm,
-        },
-        {
-            "step_label": "Step 2: ICP Registration",
-            "before_csv": base / "blocks_merged_projected" / raw_name,
             "after_csv": base / "blocks_registered" / raw_name,
             "before_forearm": per_video_forearm,
             "after_forearm": unified_forearm_ply,
         },
         {
-            "step_label": "Step 3: PCA Calibration",
+            "step_label": "Step 1: XY Deduplication",
             "before_csv": base / "blocks_registered" / raw_name,
-            "after_csv": base / "blocks_pca_calibrated" / pca_name,
+            "after_csv": base / "blocks_registered_deduped" / raw_name,
             "before_forearm": unified_forearm_ply,
+            "after_forearm": deduped_forearm or unified_forearm_ply,
+        },
+        {
+            "step_label": "Step 2: Contact Projection",
+            "before_csv": base / "blocks_registered_deduped" / raw_name,
+            "after_csv": base / "blocks_registered_projected" / raw_name,
+            "before_forearm": deduped_forearm or unified_forearm_ply,
+            "after_forearm": deduped_forearm or unified_forearm_ply,
+        },
+        {
+            "step_label": "Step 3: PCA Calibration",
+            "before_csv": base / "blocks_registered_projected" / raw_name,
+            "after_csv": base / "blocks_pca_calibrated" / pca_name,
+            "before_forearm": deduped_forearm or unified_forearm_ply,
             "after_forearm": forearm_pca_dir / forearm_ply_name,
         },
         {
@@ -238,6 +256,7 @@ def resolve_stage_paths(config: KinectConfig) -> List[StagePaths]:
 
     per_video_forearm = _load_per_video_forearm(config)
     unified_forearm_ply = _load_unified_forearm(config)
+    deduped_forearm = _resolve_deduped_forearm(config)
 
     if base is not None:
         forearm_pca_ply = base / "forearm_pca_calibrated" / f"{session_id}_forearm.ply"
@@ -255,24 +274,30 @@ def resolve_stage_paths(config: KinectConfig) -> List[StagePaths]:
         ),
         StagePaths(
             stage_label=STAGE_LABELS[1],
-            csv_path=base / "blocks_merged_projected" / raw_name if base is not None else None,
-            forearm=per_video_forearm,
-            coordinate_frame="camera",
-        ),
-        StagePaths(
-            stage_label=STAGE_LABELS[2],
             csv_path=base / "blocks_registered" / raw_name if base is not None else None,
             forearm=unified_forearm_ply,
             coordinate_frame="camera",
         ),
         StagePaths(
+            stage_label=STAGE_LABELS[2],
+            csv_path=base / "blocks_registered_deduped" / raw_name if base is not None else None,
+            forearm=deduped_forearm or unified_forearm_ply,
+            coordinate_frame="camera",
+        ),
+        StagePaths(
             stage_label=STAGE_LABELS[3],
+            csv_path=base / "blocks_registered_projected" / raw_name if base is not None else None,
+            forearm=deduped_forearm or unified_forearm_ply,
+            coordinate_frame="camera",
+        ),
+        StagePaths(
+            stage_label=STAGE_LABELS[4],
             csv_path=base / "blocks_pca_calibrated" / pca_name if base is not None else None,
             forearm=forearm_pca_ply,
             coordinate_frame="pca",
         ),
         StagePaths(
-            stage_label=STAGE_LABELS[4],
+            stage_label=STAGE_LABELS[5],
             csv_path=base / "blocks_rf_centered" / pca_name if base is not None else None,
             forearm=forearm_rf_ply,
             coordinate_frame="pca",

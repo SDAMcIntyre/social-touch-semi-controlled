@@ -7,4 +7,5 @@ from .deduplicate_xy_points import (
     deduplicate_xy,
     deduplicate_forearm_ply,
     deduplicate_contact_points_csv,
+    monitor_deduplicate_xy_interactive,
 )

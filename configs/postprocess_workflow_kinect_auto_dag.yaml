@@ -11,35 +11,39 @@ parameters:
 tasks:
 
   # --- Spatial Transform Pipeline ---
-  # Step 0: Deduplicate (x,y) in forearm PLYs and contact_points CSVs.
-  # Removes layered Kinect depth points at the same (x,y) keeping lowest z.
-  deduplicate_xy:
+  # Step 0: ICP Registration — aligns all blocks into a common coordinate frame.
+  # Input: blocks_merged/ CSVs
+  # Output: blocks_registered/
+  apply_icp_registration:
     enabled: true
     options:
       force_processing: true
     depends_on: []
 
-  # Step 1: Project contact points onto per-block forearm surface (before ICP).
-  # Contact points from blocks_merged/ are snapped to the per-block forearm
-  # so every subsequent rigid transform (ICP, PCA) preserves on-surface membership.
+  # Step 1: Deduplicate (x,y) in forearm PLYs and contact_points CSVs.
+  # Removes layered Kinect depth points at the same (x,y) keeping lowest z.
+  deduplicate_xy:
+    enabled: true
+    options:
+      force_processing: true
+      monitor: false
+      epsilon: 15.0
+    depends_on: [apply_icp_registration]
+
+  # Step 2: Project contact points onto the deduplicated forearm surface.
+  # Contact points are snapped to the forearm so every subsequent rigid transform
+  # (PCA) preserves on-surface membership.
   project_contacts_onto_forearm:
     enabled: true
     options:
       force_processing: true
     depends_on: [deduplicate_xy]
 
-  # Step 2: ICP Registration — consumes projected (on-surface) merged CSVs.
-  apply_icp_registration:
-    enabled: true
-    options:
-      force_processing: true
-    depends_on: [project_contacts_onto_forearm]
-
   set_xyz_reference_from_gestures:
     enabled: true
     options:
       force_processing: true
-    depends_on: [apply_icp_registration]
+    depends_on: [project_contacts_onto_forearm]
 
   export_forearm_pca_calibrated:
     enabled: true

@@ -1,7 +1,6 @@
 import argparse
 import os
 import logging
-import tempfile
 from pathlib import Path
 from datetime import datetime
 import shutil
@@ -35,11 +34,6 @@ from primary_processing import (
     KinectConfig,
 )
 
-from preprocessing.forearm_extraction import (
-    ForearmFrameParametersFileHandler,
-    ForearmCatalog,
-    get_forearms_with_fallback,
-)
 
 from _5_postprocessing import (
     apply_icp_registration,
@@ -49,6 +43,7 @@ from _5_postprocessing import (
     center_on_receptive_field,
     deduplicate_forearm_ply,
     deduplicate_contact_points_csv,
+    monitor_deduplicate_xy_interactive,
 )
 from _4_merging.aggregate_blocks_session import aggregate_session_blocks
 
@@ -91,12 +86,14 @@ def export_forearm_pca_calibrated_flow(
     session_configs: List[KinectConfig],
     pca_output_dir: Path,
     output_dir: Path,
+    forearm_ply_path: Optional[Path] = None,
     force_processing: bool = False,
 ) -> Optional[Path]:
     """Export the forearm-of-reference PLY transformed into PCA-calibrated space."""
     print(f"[{output_dir.name}] Exporting PCA-calibrated forearm PLY...")
     return export_forearm_pca_calibrated(
         session_configs, pca_output_dir, output_dir,
+        forearm_ply_path=forearm_ply_path,
         force_processing=force_processing,
     )
 
@@ -104,143 +101,91 @@ def export_forearm_pca_calibrated_flow(
 @flow(name="deduplicate_xy")
 def deduplicate_xy_flow(
     input_files: List[Path],
-    session_configs: List[KinectConfig],
+    forearm_ply_path: Path,
     output_dir: Path,
     forearm_output_dir: Path,
     force_processing: bool = False,
-) -> Tuple[List[Path], List[Optional[Path]]]:
-    if len(input_files) != len(session_configs):
-        raise ValueError(
-            f"input_files length ({len(input_files)}) does not match "
-            f"session_configs length ({len(session_configs)}) — cannot pair "
-            "blocks to configs for per-block deduplication."
-        )
-
+    monitor: bool = True,
+    epsilon: float = 5.0,
+) -> Tuple[List[Path], Optional[Path]]:
+    """Deduplicate the unified forearm PLY and contact points in registered CSVs."""
     output_dir.mkdir(parents=True, exist_ok=True)
     forearm_output_dir.mkdir(parents=True, exist_ok=True)
 
-    deduped_csv_paths: List[Path] = []
-    deduped_forearm_ply_paths: List[Optional[Path]] = []
-
-    with tempfile.TemporaryDirectory() as _tmp:
-        tmp_dir = Path(_tmp)
-
-        for config, input_csv in zip(session_configs, input_files):
-            forearm_ply = _load_per_block_forearm_ply(config, tmp_dir)
-
-            if forearm_ply is not None:
-                forearm_out = forearm_output_dir / forearm_ply.name
-                stats = deduplicate_forearm_ply(forearm_ply, forearm_out, epsilon=0.1)
-                logging.info(
-                    "Block %s forearm dedup: %d → %d (removed %d)",
-                    config.block_id,
-                    stats["n_original"],
-                    stats["n_deduped"],
-                    stats["n_removed"],
-                )
-                deduped_forearm_ply_paths.append(forearm_out)
+    if monitor:
+        try:
+            pcd = o3d.io.read_point_cloud(str(forearm_ply_path))
+            vertices = np.asarray(pcd.points, dtype=np.float64)
+            if len(vertices) > 0:
+                epsilon = monitor_deduplicate_xy_interactive(vertices, initial_epsilon=epsilon)
+                logging.info("User selected epsilon = %.4f from interactive monitor.", epsilon)
             else:
-                logging.warning(
-                    "Block %s — forearm unavailable, skipping forearm deduplication.",
-                    config.block_id,
-                )
-                deduped_forearm_ply_paths.append(None)
+                logging.warning("Forearm PLY has 0 points, skipping monitor.")
+        except KeyboardInterrupt:
+            logging.info("Monitor aborted by user. Using default epsilon=%.4f.", epsilon)
 
-            csv_out = output_dir / input_csv.name
-            stats = deduplicate_contact_points_csv(input_csv, csv_out, epsilon=0.1)
-            logging.info(
-                "Block %s CSV dedup: %d rows, %d → %d contact points",
-                config.block_id,
-                stats["n_rows_processed"],
-                stats["total_points_before"],
-                stats["total_points_after"],
-            )
-            deduped_csv_paths.append(csv_out)
+    # Deduplicate the single forearm PLY
+    forearm_out = forearm_output_dir / forearm_ply_path.name
+    stats = deduplicate_forearm_ply(forearm_ply_path, forearm_out, epsilon=epsilon)
+    logging.info(
+        "Forearm dedup: %d → %d (removed %d)",
+        stats["n_original"],
+        stats["n_deduped"],
+        stats["n_removed"],
+    )
 
-    return deduped_csv_paths, deduped_forearm_ply_paths
+    # Deduplicate contact points in each registered CSV
+    deduped_csv_paths: List[Path] = []
+    for input_csv in input_files:
+        csv_out = output_dir / input_csv.name
+        stats = deduplicate_contact_points_csv(input_csv, csv_out, epsilon=epsilon)
+        logging.info(
+            "CSV dedup (%s): %d rows, %d → %d contact points",
+            input_csv.stem,
+            stats["n_rows_processed"],
+            stats["total_points_before"],
+            stats["total_points_after"],
+        )
+        deduped_csv_paths.append(csv_out)
+
+    return deduped_csv_paths, forearm_out
 
 
-@flow(name="project_contacts_onto_forearm_early")
-def project_contacts_onto_merged_forearm_flow(
+@flow(name="project_contacts_onto_registered_forearm")
+def project_contacts_onto_registered_forearm_flow(
     input_files: List[Path],
-    session_configs: List[KinectConfig],
+    forearm_ply_path: Path,
     output_dir: Path,
     projection_stats_path: Path,
     force_processing: bool = False,
-    deduped_forearm_plys: Optional[List[Optional[Path]]] = None,
 ) -> List[Path]:
-    """Project contact points onto the per-block forearm surface before ICP.
-
-    Iterates over each (config, input_file) pair.  For each block, the
-    per-block reference forearm (frame 0) is resolved from the preprocessing
-    forearm catalogue, saved to a temporary PLY, and passed to
-    project_contacts_onto_forearm().
-
-    Blocks whose forearm metadata is missing are skipped with a warning; their
-    input CSV is forwarded unchanged so the ICP step still receives all files.
-    All other blocks raise immediately if an unexpected error occurs (fail-fast).
+    """Project contact points onto the deduplicated forearm surface.
 
     Args:
-        input_files: Per-block merged CSVs from ``blocks_merged/``.
-        session_configs: KinectConfig instances in the same order as
-            *input_files* (one per block).
-        output_dir: Destination directory (``blocks_merged_projected/``).
+        input_files: Per-block deduplicated CSVs from ``blocks_registered_deduped/``.
+        forearm_ply_path: Deduplicated forearm PLY to project onto.
+        output_dir: Destination directory (``blocks_registered_projected/``).
         projection_stats_path: Path for the combined projection-stats CSV.
         force_processing: Re-run even when outputs are already up-to-date.
-        deduped_forearm_plys: Pre-deduped per-block forearm PLY paths from
-            ``deduplicate_xy_flow``.  When provided, used directly instead of
-            loading raw forearms via ``_load_per_block_forearm_ply``.
 
     Returns:
-        List of output CSV paths (projected where forearm was available,
-        otherwise the original input path copied through unchanged).
+        List of output CSV paths in *output_dir*.
     """
-    if len(input_files) != len(session_configs):
-        raise ValueError(
-            f"input_files length ({len(input_files)}) does not match "
-            f"session_configs length ({len(session_configs)}) — cannot pair "
-            "blocks to configs for per-block forearm projection."
+    print(f"[{output_dir.name}] Projecting {len(input_files)} blocks onto forearm surface...")
+
+    output_files = project_contacts_onto_forearm(
+        input_files=input_files,
+        forearm_ply_path=forearm_ply_path,
+        output_dir=output_dir,
+        projection_stats_path=projection_stats_path,
+        force_processing=force_processing,
+    )
+    if not output_files:
+        raise RuntimeError(
+            f"project_contacts_onto_forearm returned no outputs — "
+            f"expected {len(input_files)} output CSVs."
         )
-
-    print(f"[{output_dir.name}] Projecting {len(input_files)} blocks onto per-block forearm surfaces...")
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    all_output_files: List[Path] = []
-
-    with tempfile.TemporaryDirectory() as _tmp:
-        tmp_dir = Path(_tmp)
-
-        for i, (config, input_csv) in enumerate(zip(session_configs, input_files)):
-            if deduped_forearm_plys is not None:
-                forearm_ply = deduped_forearm_plys[i]
-            else:
-                forearm_ply = _load_per_block_forearm_ply(config, tmp_dir)
-
-            if forearm_ply is None:
-                # No forearm metadata for this block — forward input unchanged.
-                logging.warning(
-                    "Skipping projection for block %s — forearm unavailable. "
-                    "Forwarding original CSV to ICP step.",
-                    config.block_id,
-                )
-                all_output_files.append(input_csv)
-                continue
-
-            block_outputs = project_contacts_onto_forearm(
-                input_files=[input_csv],
-                forearm_ply_path=forearm_ply,
-                output_dir=output_dir,
-                projection_stats_path=projection_stats_path,
-                force_processing=force_processing,
-            )
-            if not block_outputs:
-                raise RuntimeError(
-                    f"project_contacts_onto_forearm returned no output for block "
-                    f"{config.block_id} — expected exactly one output CSV."
-                )
-            all_output_files.extend(block_outputs)
-
-    return all_output_files
+    return output_files
 
 
 @flow(name="center_on_receptive_field")
@@ -286,50 +231,24 @@ def _resolve_latest_forearm_ply(session_output_dir: Path) -> Optional[Path]:
     return None
 
 
-def _load_per_block_forearm_ply(config: KinectConfig, tmp_dir: Path) -> Optional[Path]:
-    """Return a PLY path for the per-block reference forearm (frame 0), or None.
+def _resolve_session_forearm(session_configs: List[KinectConfig]) -> Optional[Path]:
+    """Return _unified_registered.ply for multi-forearm, or any PLY fallback for single-forearm."""
+    first = session_configs[0]
+    forearm_dir = first.session_processed_output_dir / "forearm_pointclouds"
+    unified = forearm_dir / f"{first.session_id}_unified_registered.ply"
+    if unified.exists():
+        return unified
 
-    Loads the forearm metadata for the current block via ForearmCatalog and
-    retrieves the frame-0 reference point cloud using get_forearms_with_fallback().
-    Saves it as a temporary PLY file inside *tmp_dir* so that the path-based
-    projection API can consume it.
-
-    Returns None when the metadata file is missing or when no forearm can be
-    loaded for this block — the caller must handle the None case (fail-fast:
-    raise if projection is required and forearm is missing).
-    """
-    forearm_dir = config.session_processed_output_dir / "forearm_pointclouds"
-    metadata_path = forearm_dir / f"{config.session_id}_arm_roi_metadata.json"
-    if not metadata_path.exists():
-        logging.warning(
-            "Forearm metadata not found at %s — per-block projection unavailable for block %s.",
-            metadata_path,
-            config.block_id,
+    # Single-forearm fallback: any PLY in forearm_pointclouds/
+    plies = sorted(forearm_dir.glob("*.ply"))
+    if plies:
+        logging.info(
+            "[%s] No unified_registered.ply found; using fallback: %s",
+            first.session_id,
+            plies[0].name,
         )
-        return None
-    try:
-        forearm_params = ForearmFrameParametersFileHandler.load(metadata_path)
-        catalog = ForearmCatalog(forearm_params, forearm_dir)
-        forearms = get_forearms_with_fallback(catalog, config.source_video.name)
-    except Exception as exc:
-        logging.warning(
-            "Could not load per-block forearm for block %s: %s",
-            config.block_id,
-            exc,
-        )
-        return None
-
-    reference_cloud = forearms.get(0)
-    if reference_cloud is None:
-        logging.warning(
-            "No frame-0 forearm found for block %s — per-block projection unavailable.",
-            config.block_id,
-        )
-        return None
-
-    tmp_ply = tmp_dir / f"{config.session_id}_{config.block_id}_forearm_ref.ply"
-    o3d.io.write_point_cloud(str(tmp_ply), reference_cloud)
-    return tmp_ply
+        return plies[0]
+    return None
 
 
 # --- Worker Flow ---
@@ -369,54 +288,63 @@ def run_single_session_postprocessing(
         "session_configs": session_configs
     }
 
-    # UPDATED: Pipeline stages using the architecture of function_of_reference
+    # Resolve the session forearm (unified_registered.ply or single-forearm fallback)
+    session_forearm_ply = _resolve_session_forearm(session_configs)
+    if session_forearm_ply is None:
+        raise FileNotFoundError(
+            f"No forearm PLY found for session {session_id} — "
+            "cannot run postprocessing. Check forearm_pointclouds/ directory."
+        )
+
+    # Pipeline stages in execution order
     pipeline_stages = [
-        # Step 0: Deduplicate (x,y) in forearm PLYs and contact_points CSVs
-        #   Input:  blocks_merged/ CSVs + per-block forearm PLYs
-        #   Output: blocks_merged_deduped/ + forearm_deduped/
-        {
-            "name": "deduplicate_xy",
-            "func": deduplicate_xy_flow,
-            "params": lambda: {
-                "input_files": context.get("source_files"),
-                "session_configs": context.get("session_configs"),
-                "output_dir": session_output_dir / "blocks_merged_deduped",
-                "forearm_output_dir": session_output_dir / "forearm_deduped",
-            },
-            "outputs": ["deduped_source_files", "deduped_forearm_plys"]
-        },
-        # Step 1: Project contact points onto per-block forearm surface (before ICP)
-        #   Input:  blocks_merged_deduped/ CSVs + forearm_deduped/ PLYs
-        #   Output: blocks_merged_projected/ (contact points snapped to per-block forearm)
-        {
-            "name": "project_contacts_onto_forearm",
-            "func": project_contacts_onto_merged_forearm_flow,
-            "params": lambda: {
-                "input_files": context.get("deduped_source_files"),
-                "session_configs": context.get("session_configs"),
-                "output_dir": session_output_dir / "blocks_merged_projected",
-                "projection_stats_path": session_output_dir / "blocks_merged_projected" / "projection_stats.csv",
-                "deduped_forearm_plys": context.get("deduped_forearm_plys"),
-            },
-            "outputs": ["projected_source_files"]
-        },
-        # Step 2: ICP Registration — consumes projected (on-surface) merged CSVs
+        # Step 0: ICP Registration — aligns all blocks into a common coordinate frame
+        #   Input:  blocks_merged/ CSVs
+        #   Output: blocks_registered/
         {
             "name": "apply_icp_registration",
             "func": apply_icp_registration_flow,
             "params": lambda: {
-                "input_files": context.get("projected_source_files"),
+                "input_files": context.get("source_files"),
                 "session_configs": context.get("session_configs"),
                 "output_dir": session_output_dir / "blocks_registered",
             },
             "outputs": ["registered_files"]
+        },
+        # Step 1: Deduplicate (x,y) in the unified forearm PLY and contact CSVs
+        #   Input:  blocks_registered/ CSVs + _unified_registered.ply
+        #   Output: blocks_registered_deduped/ + forearm_deduped/
+        {
+            "name": "deduplicate_xy",
+            "func": deduplicate_xy_flow,
+            "params": lambda: {
+                "input_files": context.get("registered_files"),
+                "forearm_ply_path": session_forearm_ply,
+                "output_dir": session_output_dir / "blocks_registered_deduped",
+                "forearm_output_dir": session_output_dir / "forearm_deduped",
+            },
+            "outputs": ["deduped_source_files", "deduped_forearm_ply"]
+        },
+        # Step 2: Project contact points onto the deduplicated forearm surface
+        #   Input:  blocks_registered_deduped/ CSVs + forearm_deduped/ PLY
+        #   Output: blocks_registered_projected/
+        {
+            "name": "project_contacts_onto_forearm",
+            "func": project_contacts_onto_registered_forearm_flow,
+            "params": lambda: {
+                "input_files": context.get("deduped_source_files"),
+                "forearm_ply_path": context.get("deduped_forearm_ply"),
+                "output_dir": session_output_dir / "blocks_registered_projected",
+                "projection_stats_path": session_output_dir / "blocks_registered_projected" / "projection_stats.csv",
+            },
+            "outputs": ["projected_source_files"]
         },
         # Step 3: PCA XYZ Reference Calibration
         {
             "name": "set_xyz_reference_from_gestures",
             "func": set_xyz_reference_from_gestures_flow,
             "params": lambda: {
-                "input_files": context.get("registered_files"),
+                "input_files": context.get("projected_source_files"),
                 "output_dir": session_output_dir / "blocks_pca_calibrated",
             },
             "outputs": ["pca_data_files", "pca_report"]
@@ -429,12 +357,11 @@ def run_single_session_postprocessing(
                 "session_configs": context.get("session_configs"),
                 "pca_output_dir": context.get("pca_report"),
                 "output_dir": session_output_dir / "forearm_pca_calibrated",
+                "forearm_ply_path": context.get("deduped_forearm_ply"),
             },
             "outputs": ["forearm_pca_ply"]
         },
         # Step 5: Center spatial data on the receptive field origin
-        #   Input: pca_data_files (PCA-calibrated; contact points are already on-surface
-        #          since projection happened before ICP in step 1)
         {
             "name": "center_on_receptive_field",
             "func": center_on_receptive_field_flow,
@@ -484,6 +411,10 @@ def run_single_session_postprocessing(
             # Inject options into params when supported by the flow
             if 'force_processing' in options:
                 params['force_processing'] = options['force_processing']
+            if 'monitor' in options:
+                params['monitor'] = options['monitor']
+            if 'epsilon' in options:
+                params['epsilon'] = options['epsilon']
             
             # Validation: Check if list inputs are empty
             # Note: We must exclude 'configs' from this check if configs are not lists of files, 

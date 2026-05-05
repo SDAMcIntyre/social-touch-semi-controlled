@@ -610,14 +610,30 @@ class TaskDetailPanel(QWidget):
             self.task_changed.emit()
         return _handler
 
+    @staticmethod
+    def _native_type(val: Any) -> type:
+        """Return the Python builtin type for a YAML scalar value.
+
+        ruamel.yaml round-trip mode may store scalars as ScalarFloat,
+        ScalarInt, etc.  Normalise to builtins so that type(text) works
+        reliably for user-entered values.
+        """
+        if isinstance(val, bool):
+            return bool
+        if isinstance(val, int):
+            return int
+        if isinstance(val, float):
+            return float
+        return str
+
     def _make_scalar_edit_handler(self, key: str, original_val: Any, edit: QLineEdit):
-        original_type = type(original_val)
+        cast = self._native_type(original_val)
 
         def _handler() -> None:
             if self._model is None or self._task_name is None:
                 return
             try:
-                new_val = original_type(edit.text())
+                new_val = cast(edit.text())
             except (ValueError, TypeError):
                 edit.setText(str(original_val))
                 return

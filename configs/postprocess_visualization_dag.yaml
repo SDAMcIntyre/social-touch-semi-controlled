@@ -13,13 +13,8 @@
 # ==============================================================================
 
 parameters:
-  kinect_configs: [
-      valid_configs_ST13-02/kinect_config_2022-06-14_ST13-02_semicontrolled_block-order03.yaml,
-    valid_configs_ST13-02/kinect_config_2022-06-14_ST13-02_semicontrolled_block-order04.yaml,
-    valid_configs_ST13-02/kinect_config_2022-06-14_ST13-02_semicontrolled_block-order05.yaml,
-    valid_configs_ST13-02/kinect_config_2022-06-14_ST13-02_semicontrolled_block-order06.yaml,
-    valid_configs_ST13-02/kinect_config_2022-06-14_ST13-02_semicontrolled_block-order07.yaml,
-    valid_configs_ST13-02/kinect_config_2022-06-14_ST13-02_semicontrolled_block-order08.yaml]
+  kinect_configs: 
+    valid_configs_ST13-02/kinect_config_2022-06-14_ST13-02_semicontrolled_block-order03.yaml
 
 tasks:
   view_forearm_stage_inspector:
@@ -47,18 +42,18 @@ tasks:
 
   view_before_after_steps:
     enabled: false
-    description: "Launch BeforeAfterStepViewer for each of the 4 postprocessing steps
-      (contact projection, ICP registration, PCA calibration, RF centering). Opens
-      one side-by-side dual-plotter window per step sequentially; steps with missing
-      intermediate data are skipped with a warning."
+    description: "Launch BeforeAfterStepViewer for each of the 5 postprocessing steps
+      (ICP registration, XY deduplication, contact projection, PCA calibration, RF
+      centering). Opens one side-by-side dual-plotter window per step sequentially;
+      steps with missing intermediate data are skipped with a warning."
     options: {}
     depends_on: []
 
   view_postprocessing_stages:
     enabled: true
     description: "Launch PostprocessingStageViewer: single window with stage dropdown
-      to switch between all 5 postprocessing stages (Merged, Contact Projected,
-      ICP Registered, PCA Calibrated, RF Centered). Shows forearm PLY, contact points,
-      and NeuralDataPanel for each stage."
+      to switch between all 6 postprocessing stages (Merged, ICP Registered, Deduplicated,
+      Contact Projected, PCA Calibrated, RF Centered). Shows forearm PLY, contact
+      points, and NeuralDataPanel for each stage."
     options: {}
     depends_on: []

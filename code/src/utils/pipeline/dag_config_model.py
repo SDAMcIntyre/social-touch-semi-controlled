@@ -6,6 +6,7 @@ loading, modifying, and saving DAG workflow YAML files.
 
 from __future__ import annotations
 
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +29,10 @@ class DagConfigModel:
         self._yaml.preserve_quotes = True
         with open(config_path, "r") as fh:
             self._data = self._yaml.load(fh)
+        if self._data is None:
+            raise ValueError(
+                f"DAG config file is empty or invalid: {config_path}"
+            )
         self._dirty = False
 
     # ------------------------------------------------------------------
@@ -346,9 +351,21 @@ class DagConfigModel:
         self._dirty = False
 
     def save_as(self, path: Path) -> None:
-        """Write the current state to *path*."""
-        with open(path, "w") as fh:
-            self._yaml.dump(self._data, fh)
+        """Write the current state to *path* atomically.
+
+        Writes to a temporary file first, then replaces the target.  This
+        prevents file corruption if the process crashes mid-write.
+        """
+        tmp_fd, tmp_path = tempfile.mkstemp(
+            suffix=".yaml", dir=str(path.parent)
+        )
+        try:
+            with open(tmp_fd, "w") as fh:
+                self._yaml.dump(self._data, fh)
+            Path(tmp_path).replace(path)
+        except BaseException:
+            Path(tmp_path).unlink(missing_ok=True)
+            raise
         if path == self._path:
             self._dirty = False
 

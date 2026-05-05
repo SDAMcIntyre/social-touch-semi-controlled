@@ -42,14 +42,15 @@ from merging.gui.neural_kinect_scene_viewer import NeuralDataPanel
 
 STAGE_LABELS: List[str] = [
     "Merged (Raw)",
-    "Contact Projected",
     "ICP Registered",
+    "Deduplicated",
+    "Contact Projected",
     "PCA Calibrated",
     "RF Centered",
 ]
 
-_CAMERA_FRAME_STAGES = {0, 1, 2}
-_PCA_FRAME_STAGES = {3, 4}
+_CAMERA_FRAME_STAGES = {0, 1, 2, 3}
+_PCA_FRAME_STAGES = {4, 5}
 
 
 # ---------------------------------------------------------------------------

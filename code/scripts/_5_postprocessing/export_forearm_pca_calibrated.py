@@ -48,6 +48,7 @@ def export_forearm_pca_calibrated(
     pca_output_dir: Path,
     output_dir: Path,
     *,
+    forearm_ply_path: Optional[Path] = None,
     force_processing: bool = False,
 ) -> Optional[Path]:
     """Transform the forearm-of-reference PLY into PCA-calibrated space and save it.
@@ -56,6 +57,8 @@ def export_forearm_pca_calibrated(
         session_configs: KinectConfig objects for the session (one per block).
         pca_output_dir: Directory produced by stage 2 (contains the calibration JSON).
         output_dir: Destination directory (``forearm_pca_calibrated/``).
+        forearm_ply_path: Explicit forearm PLY to transform. When None, falls back to
+            ``_find_forearm_ply()`` resolution (unified_registered or single forearm).
         force_processing: Re-run even if output is up-to-date.
 
     Returns:
@@ -72,7 +75,8 @@ def export_forearm_pca_calibrated(
         )
         return None
 
-    forearm_ply_path = _find_forearm_ply(session_configs)
+    if forearm_ply_path is None:
+        forearm_ply_path = _find_forearm_ply(session_configs)
     if forearm_ply_path is None:
         logger.warning(
             "[%s] No forearm PLY found in forearm_pointclouds/. Skipping.",
