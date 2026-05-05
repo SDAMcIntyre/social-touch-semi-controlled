@@ -22,7 +22,7 @@ from .tangent_plane_alignment import compute_tangent_plane_rotation
 
 logger = logging.getLogger(__name__)
 
-_CACHE_SCHEMA_VERSION = 1
+_CACHE_SCHEMA_VERSION = 2
 
 _REQUIRED_COLUMNS = (
     "contact_points",
@@ -32,8 +32,6 @@ _REQUIRED_COLUMNS = (
     "Nerve_spike",
     "Nerve_freq",
     "gesture_type",
-    "pressure",
-    "hand_velocity_signed",
 )
 
 _bracket_re = re.compile(r'\[([^\[\]]+)\]')
@@ -62,12 +60,10 @@ class PopulationData:
     # Per-touch arrays (length T = n_touches)
     gesture_types: np.ndarray           # (T,) object — gesture type strings
     spike_elicited: np.ndarray          # (T,) bool
-    pressure_mean: np.ndarray           # (T,) float64
-    velocity_amplitude_mean: np.ndarray # (T,) float64
 
-    # Extra features from Stage 3 CSVs (optional; empty when not available)
-    extra_feature_names: list            # list[str], length F
-    extra_feature_matrix: np.ndarray    # (T, F) float64
+    # Features from Stage 3 CSVs (optional; empty when not available)
+    feature_names: list                  # list[str], length F
+    feature_matrix: np.ndarray          # (T, F) float64
 
     # Per-contact-point flat arrays (all touches concatenated, length C)
     cp_vertex_idx: np.ndarray           # (C,) int64 — forearm vertex per contact pt
@@ -78,21 +74,15 @@ class PopulationData:
     def get_feature_array(self, name: str) -> np.ndarray:
         """Return the per-touch array for *name*.
 
-        Built-in names: ``"pressure_mean"``, ``"velocity_amplitude_mean"``.
-        Extra names are looked up in ``extra_feature_names``.
+        Names are looked up in ``feature_names`` (sourced from Stage 3 CSVs).
         Raises ``KeyError`` if *name* is not recognised.
         """
-        if name == "pressure_mean":
-            return self.pressure_mean
-        if name == "velocity_amplitude_mean":
-            return self.velocity_amplitude_mean
-        if name in self.extra_feature_names:
-            col = self.extra_feature_names.index(name)
-            return self.extra_feature_matrix[:, col]
+        if name in self.feature_names:
+            col = self.feature_names.index(name)
+            return self.feature_matrix[:, col]
         raise KeyError(
             f"get_feature_array: unknown feature '{name}'. "
-            f"Available: 'pressure_mean', 'velocity_amplitude_mean'"
-            + (f", {self.extra_feature_names}" if self.extra_feature_names else "")
+            f"Available: {self.feature_names if self.feature_names else '(none — run Stage 3 feature extraction)'}"
         )
 
 
@@ -114,7 +104,7 @@ def _save_population_cache(series_csv_path: Path, data: PopulationData) -> None:
     cache_path = _population_cache_path(series_csv_path)
 
     unique_labels, codes = np.unique(data.gesture_types, return_inverse=True)
-    extra_names_arr = np.array(data.extra_feature_names, dtype=str)
+    feature_names_arr = np.array(data.feature_names, dtype=str)
 
     try:
         np.savez_compressed(
@@ -125,10 +115,8 @@ def _save_population_cache(series_csv_path: Path, data: PopulationData) -> None:
             gesture_type_codes=codes.astype(np.int32),
             gesture_type_labels=np.array(unique_labels, dtype=str),
             spike_elicited=data.spike_elicited,
-            pressure_mean=data.pressure_mean,
-            velocity_amplitude_mean=data.velocity_amplitude_mean,
-            extra_feature_names=extra_names_arr,
-            extra_feature_matrix=data.extra_feature_matrix,
+            feature_names=feature_names_arr,
+            feature_matrix=data.feature_matrix,
             cp_vertex_idx=data.cp_vertex_idx,
             cp_touch_idx=data.cp_touch_idx,
             cp_iff=data.cp_iff,
@@ -181,8 +169,8 @@ def _load_population_cache(
     required_keys = (
         "forearm_vertices", "tangent_rotation",
         "gesture_type_codes", "gesture_type_labels",
-        "spike_elicited", "pressure_mean", "velocity_amplitude_mean",
-        "extra_feature_names", "extra_feature_matrix",
+        "spike_elicited",
+        "feature_names", "feature_matrix",
         "cp_vertex_idx", "cp_touch_idx", "cp_iff", "cp_spike",
     )
     missing = [k for k in required_keys if k not in npz]
@@ -198,10 +186,8 @@ def _load_population_cache(
     gesture_type_codes = npz["gesture_type_codes"]
     gesture_type_labels = npz["gesture_type_labels"]
     spike_elicited = npz["spike_elicited"]
-    pressure_mean = npz["pressure_mean"]
-    velocity_amplitude_mean = npz["velocity_amplitude_mean"]
-    extra_feature_names_arr = npz["extra_feature_names"]
-    extra_feature_matrix = npz["extra_feature_matrix"]
+    feature_names_arr = npz["feature_names"]
+    feature_matrix = npz["feature_matrix"]
     cp_vertex_idx = npz["cp_vertex_idx"]
     cp_touch_idx = npz["cp_touch_idx"]
     cp_iff = npz["cp_iff"]
@@ -218,11 +204,10 @@ def _load_population_cache(
             f"{tangent_rotation.shape} (expected (3, 3)): {cache_path}"
         )
 
-    T = len(pressure_mean)
+    T = len(spike_elicited)
     for arr_name, arr in [
         ("gesture_type_codes", gesture_type_codes),
         ("spike_elicited", spike_elicited),
-        ("velocity_amplitude_mean", velocity_amplitude_mean),
     ]:
         if arr.ndim != 1 or len(arr) != T:
             raise ValueError(
@@ -242,25 +227,23 @@ def _load_population_cache(
                 f"expected ({C},): {cache_path}"
             )
 
-    F = len(extra_feature_names_arr)
-    if extra_feature_matrix.ndim != 2 or extra_feature_matrix.shape != (T, F):
+    F = len(feature_names_arr)
+    if feature_matrix.ndim != 2 or feature_matrix.shape != (T, F):
         raise ValueError(
-            f"_load_population_cache: 'extra_feature_matrix' has shape "
-            f"{extra_feature_matrix.shape} (expected ({T}, {F})): {cache_path}"
+            f"_load_population_cache: 'feature_matrix' has shape "
+            f"{feature_matrix.shape} (expected ({T}, {F})): {cache_path}"
         )
 
     gesture_types = gesture_type_labels[gesture_type_codes]
-    extra_feature_names = [str(n) for n in extra_feature_names_arr]
+    feature_names = [str(n) for n in feature_names_arr]
 
     return PopulationData(
         forearm_vertices=forearm_vertices.astype(np.float64),
         tangent_rotation=tangent_rotation.astype(np.float64),
         gesture_types=gesture_types.astype(object),
         spike_elicited=spike_elicited.astype(bool),
-        pressure_mean=pressure_mean.astype(np.float64),
-        velocity_amplitude_mean=velocity_amplitude_mean.astype(np.float64),
-        extra_feature_names=extra_feature_names,
-        extra_feature_matrix=extra_feature_matrix.astype(np.float64),
+        feature_names=feature_names,
+        feature_matrix=feature_matrix.astype(np.float64),
         cp_vertex_idx=cp_vertex_idx.astype(np.int64),
         cp_touch_idx=cp_touch_idx.astype(np.int64),
         cp_iff=cp_iff.astype(np.float64),
@@ -277,11 +260,11 @@ def _merge_stage3_features(
     touch_features_dir: Path,
     series_csv_path: Path,
 ) -> tuple[list, np.ndarray]:
-    """Scan *touch_features_dir* for CSVs matching the session and merge on touch key.
+    """Scan *touch_features_dir* recursively for CSVs matching the session and merge on touch key.
 
-    Returns ``(extra_feature_names, extra_feature_matrix)`` where
-    ``extra_feature_matrix`` has shape ``(T, F)`` with ``T = len(touch_keys)``
-    and ``F = len(extra_feature_names)``.
+    Returns ``(feature_names, feature_matrix)`` where
+    ``feature_matrix`` has shape ``(T, F)`` with ``T = len(touch_keys)``
+    and ``F = len(feature_names)``.
 
     Touch keys are matched on ``(trial_id, single_touch_id)`` columns.
     Rows in Stage 3 CSVs that do not match a touch key are silently skipped.
@@ -291,7 +274,7 @@ def _merge_stage3_features(
     session_stem = series_csv_path.stem
     T = len(touch_keys)
 
-    candidates = list(touch_features_dir.glob(f"{session_stem}*.csv"))
+    candidates = list(touch_features_dir.rglob(f"{session_stem}*.csv"))
     if not candidates:
         logger.debug(
             "_merge_stage3_features: no Stage 3 CSVs matching '%s' in %s",
@@ -366,12 +349,11 @@ def load_population_data(
 
     Applies 30Hz-to-1kHz deduplication when parsing contact_points, then
     tangent-plane rotation and KDTree vertex snapping (15mm threshold) on
-    the unique contact positions.  Per-touch scalars (pressure mean,
-    velocity amplitude mean, spike_elicited) are derived from frame data
-    within each touch group.
+    the unique contact positions.  Per-touch scalars (spike_elicited) are
+    derived from frame data within each touch group.
 
-    When *touch_features_dir* is provided, scans for matching Stage 3 CSVs
-    and merges numeric feature columns into ``extra_feature_matrix``.
+    When *touch_features_dir* is provided, scans recursively for matching
+    Stage 3 CSVs and merges numeric feature columns into ``feature_matrix``.
 
     Results are cached in a ``.npz`` sidecar next to *series_csv_path*.
     Subsequent calls with an up-to-date cache skip all computation.
@@ -452,8 +434,6 @@ def load_population_data(
         cp_strings = grp["contact_points"].fillna("[]").values
         spikes_arr = grp["Nerve_spike"].to_numpy(dtype=bool)
         iff_arr = grp["Nerve_freq"].to_numpy(dtype=np.float64)
-        pressure_arr = grp["pressure"].to_numpy(dtype=np.float64)
-        velocity_arr = grp["hand_velocity_signed"].to_numpy(dtype=np.float64)
         gesture_type = str(grp["gesture_type"].iloc[0])
 
         touch_records.append({
@@ -461,8 +441,6 @@ def load_population_data(
             "single_touch_id": int(single_touch_id),
             "gesture_type": gesture_type,
             "spike_elicited": bool(spikes_arr.any()),
-            "pressure_mean": float(pressure_arr.mean()),
-            "velocity_amplitude_mean": float(np.abs(velocity_arr).mean()),
             "cp_strings": cp_strings,
             "spikes_arr": spikes_arr,
             "iff_arr": iff_arr,
@@ -649,14 +627,10 @@ def load_population_data(
 
     gesture_types_arr = np.empty(T, dtype=object)
     spike_elicited_arr = np.empty(T, dtype=bool)
-    pressure_mean_arr = np.empty(T, dtype=np.float64)
-    velocity_amplitude_mean_arr = np.empty(T, dtype=np.float64)
 
     for ti, rec in enumerate(touch_records):
         gesture_types_arr[ti] = rec["gesture_type"]
         spike_elicited_arr[ti] = rec["spike_elicited"]
-        pressure_mean_arr[ti] = rec["pressure_mean"]
-        velocity_amplitude_mean_arr[ti] = rec["velocity_amplitude_mean"]
 
     for ti, rec in enumerate(touch_records):
         n_unique = per_touch_n_unique[ti]
@@ -730,27 +704,25 @@ def load_population_data(
 
     if touch_features_dir is not None and touch_features_dir.is_dir():
         t = time.perf_counter()
-        extra_feature_names, extra_feature_matrix = _merge_stage3_features(
+        feature_names, feature_matrix = _merge_stage3_features(
             touch_keys, touch_features_dir, series_csv_path
         )
         print(
             f"{_ts()} | [Population] [{tag}]   stage3 merge: "
-            f"{time.perf_counter() - t:.1f}s  features={len(extra_feature_names)}",
+            f"{time.perf_counter() - t:.1f}s  features={len(feature_names)}",
             flush=True,
         )
     else:
-        extra_feature_names = []
-        extra_feature_matrix = np.empty((T, 0), dtype=np.float64)
+        feature_names = []
+        feature_matrix = np.empty((T, 0), dtype=np.float64)
 
     result = PopulationData(
         forearm_vertices=rotated_vertices,
         tangent_rotation=rotation,
         gesture_types=gesture_types_arr,
         spike_elicited=spike_elicited_arr,
-        pressure_mean=pressure_mean_arr,
-        velocity_amplitude_mean=velocity_amplitude_mean_arr,
-        extra_feature_names=extra_feature_names,
-        extra_feature_matrix=extra_feature_matrix,
+        feature_names=feature_names,
+        feature_matrix=feature_matrix,
         cp_vertex_idx=cp_vertex_idx,
         cp_touch_idx=cp_touch_idx,
         cp_iff=cp_iff,

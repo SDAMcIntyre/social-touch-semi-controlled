@@ -32,8 +32,6 @@ from analysis.receptive_field_mapping.touch_population_data import PopulationDat
 
 logger = logging.getLogger(__name__)
 
-_BUILTIN_FEATURES = ["pressure_mean", "velocity_amplitude_mean"]
-
 _GESTURE_COLORS = [
     "tab:blue",
     "tab:orange",
@@ -191,7 +189,7 @@ class TouchPopulationExplorer(QMainWindow):
         self._populate_axis_combos()
 
     def _populate_axis_combos(self) -> None:
-        all_features = _BUILTIN_FEATURES + list(self._data.extra_feature_names)
+        all_features = list(self._data.feature_names)
         self._x_axis_combo.blockSignals(True)
         self._y_axis_combo.blockSignals(True)
         self._x_axis_combo.clear()
@@ -199,9 +197,9 @@ class TouchPopulationExplorer(QMainWindow):
         for name in all_features:
             self._x_axis_combo.addItem(name)
             self._y_axis_combo.addItem(name)
-        # Default: X = velocity, Y = pressure
-        x_idx = all_features.index("velocity_amplitude_mean") if "velocity_amplitude_mean" in all_features else 0
-        y_idx = all_features.index("pressure_mean") if "pressure_mean" in all_features else min(1, len(all_features) - 1)
+        # Default: X = first feature, Y = second feature (if available)
+        x_idx = 0
+        y_idx = min(1, len(all_features) - 1) if len(all_features) > 1 else 0
         self._x_axis_combo.setCurrentIndex(x_idx)
         self._y_axis_combo.setCurrentIndex(y_idx)
         self._x_axis_combo.blockSignals(False)
@@ -443,6 +441,15 @@ class TouchPopulationExplorer(QMainWindow):
         p25_y = float(np.nanpercentile(y_data, 25))
         p75_y = float(np.nanpercentile(y_data, 75))
 
+        if not (np.isfinite(p25_x) and np.isfinite(p75_x) and np.isfinite(p25_y) and np.isfinite(p75_y)):
+            logger.warning(
+                "TouchPopulationExplorer: percentiles for '%s'/'%s' are NaN — "
+                "skipping filter rectangle initialization",
+                x_name,
+                y_name,
+            )
+            return
+
         if p75_x <= p25_x:
             p75_x = p25_x + 1.0
         if p75_y <= p25_y:
@@ -518,8 +525,28 @@ class TouchPopulationExplorer(QMainWindow):
         self._touch_count_label = QLabel("N touches shown: —")
         right_layout.addWidget(self._touch_count_label)
 
-        # Repopulate axis combos (extra features may differ between sessions).
+        # Repopulate axis combos (features may differ between sessions).
         self._populate_axis_combos()
+
+        if not self._data.feature_names:
+            # No Stage 3 features for this session — show informative message,
+            # still render the 3D heatmap with all contact points.
+            self._ax.cla()
+            self._ax.set_axis_off()
+            self._ax.text(
+                0.5,
+                0.5,
+                "No touch features — run feature extraction first",
+                ha="center",
+                va="center",
+                transform=self._ax.transAxes,
+                fontsize=11,
+                color="grey",
+            )
+            self._figure.tight_layout()
+            self._canvas.draw()
+            self._render_3d()
+            return
 
         self._draw_scatter()
         self._render_3d()
@@ -556,6 +583,27 @@ class TouchPopulationExplorer(QMainWindow):
         sz = self._plotter.interactor.size()
         if sz.width() > 0 and sz.height() > 0:
             self._plotter.render_window.SetSize(sz.width(), sz.height())
+
+        if not self._data.feature_names:
+            # No Stage 3 features available — show informative message in scatter area,
+            # but still render the 3D heatmap with all contact points.
+            self._ax.cla()
+            self._ax.set_axis_off()
+            self._ax.text(
+                0.5,
+                0.5,
+                "No touch features — run feature extraction first",
+                ha="center",
+                va="center",
+                transform=self._ax.transAxes,
+                fontsize=11,
+                color="grey",
+            )
+            self._figure.tight_layout()
+            self._canvas.draw()
+            self._render_3d()
+            return
+
         self._draw_scatter()
         self._render_3d()
         self._init_filter_rect()

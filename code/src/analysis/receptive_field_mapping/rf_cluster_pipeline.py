@@ -917,7 +917,8 @@ def launch_touch_population_explorer(
 
     def _load_one(spec: Tuple[str, Path, Path]) -> Tuple[str, object]:
         session_id, series_csv, forearm_ply = spec
-        return session_id, load_population_data(series_csv, forearm_ply)
+        touch_features_dir = series_csv.parent.parent / 'touch_features'
+        return session_id, load_population_data(series_csv, forearm_ply, touch_features_dir=touch_features_dir)
 
     with ThreadPoolExecutor(max_workers=min(4, n)) as executor:
         sessions: List[Tuple[str, object]] = list(executor.map(_load_one, session_specs))
