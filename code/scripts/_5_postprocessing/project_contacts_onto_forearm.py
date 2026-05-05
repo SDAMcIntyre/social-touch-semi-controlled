@@ -16,9 +16,7 @@ from typing import List
 import numpy as np
 import open3d as o3d
 import pandas as pd
-from scipy.optimize import linear_sum_assignment
 from scipy.spatial import KDTree
-from scipy.spatial.distance import cdist
 
 from preprocessing.forearm_extraction.registration.csv_spatial_transformer import (
     parse_contact_points,
@@ -52,12 +50,17 @@ def _project_single_csv(
     """Project the contact points in one CSV onto the forearm surface.
 
     For every non-empty ``contact_points`` cell, each (x, y, z) point is
-    replaced by the nearest forearm vertex.  ``contact_location_x/y/z`` is
-    updated to the mean of the projected points.  Rows with no contact points
-    are written through unchanged.
+    independently snapped to its nearest forearm vertex via a KD-tree query.
+    ``contact_location_x/y/z`` is updated to the mean of the projected points.
+    Rows with no contact points are written through unchanged.
+
+    All M contact points in each row are guaranteed to appear in the output —
+    no uniqueness constraint is enforced, so two nearby points may snap to the
+    same vertex.  The ``assert`` below documents that guarantee and will raise
+    immediately if it is ever violated (fail-fast).
 
     Args:
-        input_csv: Source CSV (PCA-calibrated session data).
+        input_csv: Source CSV (session data to be projected).
         output_csv: Destination CSV.
         kdtree: KD-tree built from the forearm PLY vertices.
         vertices: The ``(N, 3)`` vertex array used to build *kdtree*.
@@ -83,26 +86,16 @@ def _project_single_csv(
             location_z.append(row.get("contact_location_z"))
             continue
 
-        # Query nearest vertex for each contact point, enforcing unique assignment
-        # within each row so no two contact points snap to the same forearm vertex.
+        # Query the single nearest forearm vertex for each contact point
+        # independently.  All M points are guaranteed in the output.
         query = np.array(points, dtype=np.float64)  # (M, 3)
         M = len(points)
-        if M == 1:
-            # Fast path: single point, collision is impossible
-            distances, indices = kdtree.query(query)
-            projected = vertices[indices]  # (1, 3)
-        else:
-            # Build candidate pool from each point's M nearest neighbors, then solve
-            # the optimal one-to-one assignment (minimum total displacement) via the
-            # Hungarian algorithm. This prevents two close contact points from
-            # collapsing onto the same vertex.
-            knn_dists, knn_indices = kdtree.query(query, k=M)  # (M, M) each
-            candidate_indices = np.unique(knn_indices)           # (C,), C >= M
-            cost = cdist(query, vertices[candidate_indices])     # (M, C)
-            row_ind, col_ind = linear_sum_assignment(cost)
-            indices = candidate_indices[col_ind]                 # (M,)
-            distances = cost[row_ind, col_ind]                   # (M,)
-            projected = vertices[indices]                        # (M, 3)
+        distances, indices = kdtree.query(query)
+        projected = vertices[indices]
+        assert len(projected) == M, (
+            f"Projection dropped {M - len(projected)} of {M} contact points — "
+            "impossible with per-point NN."
+        )
 
         all_distances.append(np.asarray(distances, dtype=np.float64).ravel())
 

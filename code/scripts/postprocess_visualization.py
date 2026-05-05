@@ -74,7 +74,7 @@ def resolve_postprocessed_paths(config: KinectConfig) -> Dict[str, Optional[Path
     """Derive all paths required by PostprocessedSceneViewer from a KinectConfig.
 
     Expected pipeline outputs:
-      - contact_projected_csv : session_merged_output_dir/blocks_contact_projected/{merged_csv_name}
+      - contact_projected_csv : session_merged_output_dir/blocks_pca_calibrated/{merged_csv_name}
       - forearm_pca_ply       : session_merged_output_dir/forearm_pca_calibrated/{session_id}_forearm.ply
       - pca_calib_json        : session_merged_output_dir/blocks_pca_calibrated/pca-xyz_transformation-matrices.json
       - hand_motion_path      : video_processed_output_dir/kinematics_analysis/{stem}_handmodel_motion.npz
@@ -90,7 +90,7 @@ def resolve_postprocessed_paths(config: KinectConfig) -> Dict[str, Optional[Path
     pca_calib_json: Optional[Path] = None
     if config.session_merged_output_dir:
         contact_projected_csv = (
-            config.session_merged_output_dir / "blocks_contact_projected" / merged_name
+            config.session_merged_output_dir / "blocks_pca_calibrated" / merged_name
         )
         forearm_pca_ply = (
             config.session_merged_output_dir
@@ -191,29 +191,29 @@ def resolve_before_after_paths(config: KinectConfig) -> List[Dict]:
 
     return [
         {
-            "step_label": "Step 1: ICP Registration",
+            "step_label": "Step 1: Contact Projection",
             "before_csv": base / "blocks_merged" / raw_name,
+            "after_csv": base / "blocks_merged_projected" / raw_name,
+            "before_forearm": per_video_forearm,
+            "after_forearm": per_video_forearm,
+        },
+        {
+            "step_label": "Step 2: ICP Registration",
+            "before_csv": base / "blocks_merged_projected" / raw_name,
             "after_csv": base / "blocks_registered" / raw_name,
             "before_forearm": per_video_forearm,
             "after_forearm": unified_forearm_ply,
         },
         {
-            "step_label": "Step 2: PCA Calibration",
+            "step_label": "Step 3: PCA Calibration",
             "before_csv": base / "blocks_registered" / raw_name,
             "after_csv": base / "blocks_pca_calibrated" / pca_name,
             "before_forearm": unified_forearm_ply,
             "after_forearm": forearm_pca_dir / forearm_ply_name,
         },
         {
-            "step_label": "Step 3: Forearm Projection",
-            "before_csv": base / "blocks_pca_calibrated" / pca_name,
-            "after_csv": base / "blocks_contact_projected" / pca_name,
-            "before_forearm": forearm_pca_dir / forearm_ply_name,
-            "after_forearm": forearm_pca_dir / forearm_ply_name,
-        },
-        {
             "step_label": "Step 4: RF Centering",
-            "before_csv": base / "blocks_contact_projected" / pca_name,
+            "before_csv": base / "blocks_pca_calibrated" / pca_name,
             "after_csv": base / "blocks_rf_centered" / pca_name,
             "before_forearm": forearm_pca_dir / forearm_ply_name,
             "after_forearm": forearm_rf_dir / forearm_ply_name,
@@ -255,19 +255,19 @@ def resolve_stage_paths(config: KinectConfig) -> List[StagePaths]:
         ),
         StagePaths(
             stage_label=STAGE_LABELS[1],
+            csv_path=base / "blocks_merged_projected" / raw_name if base is not None else None,
+            forearm=per_video_forearm,
+            coordinate_frame="camera",
+        ),
+        StagePaths(
+            stage_label=STAGE_LABELS[2],
             csv_path=base / "blocks_registered" / raw_name if base is not None else None,
             forearm=unified_forearm_ply,
             coordinate_frame="camera",
         ),
         StagePaths(
-            stage_label=STAGE_LABELS[2],
-            csv_path=base / "blocks_pca_calibrated" / pca_name if base is not None else None,
-            forearm=forearm_pca_ply,
-            coordinate_frame="pca",
-        ),
-        StagePaths(
             stage_label=STAGE_LABELS[3],
-            csv_path=base / "blocks_contact_projected" / pca_name if base is not None else None,
+            csv_path=base / "blocks_pca_calibrated" / pca_name if base is not None else None,
             forearm=forearm_pca_ply,
             coordinate_frame="pca",
         ),

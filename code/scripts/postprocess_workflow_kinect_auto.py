@@ -1,6 +1,7 @@
 import argparse
 import os
 import logging
+import tempfile
 from pathlib import Path
 from datetime import datetime
 import shutil
@@ -12,8 +13,9 @@ from collections import defaultdict
 
 import pandas as pd
 import numpy as np
+import open3d as o3d
 # sklearn is assumed to be present in the Anaconda environment
-from sklearn.decomposition import PCA 
+from sklearn.decomposition import PCA
 
 from prefect import flow
 
@@ -31,6 +33,12 @@ from utils.pipeline.session_config_resolver import resolve_session_configs
 from primary_processing import (
     KinectConfigFileHandler,
     KinectConfig,
+)
+
+from preprocessing.forearm_extraction import (
+    ForearmFrameParametersFileHandler,
+    ForearmCatalog,
+    get_forearms_with_fallback,
 )
 
 from _5_postprocessing import (
@@ -91,20 +99,80 @@ def export_forearm_pca_calibrated_flow(
     )
 
 
-@flow(name="project_contacts_onto_forearm")
-def project_contacts_onto_forearm_flow(
+@flow(name="project_contacts_onto_forearm_early")
+def project_contacts_onto_merged_forearm_flow(
     input_files: List[Path],
-    forearm_ply_path: Optional[Path],
+    session_configs: List[KinectConfig],
     output_dir: Path,
     projection_stats_path: Path,
     force_processing: bool = False,
 ) -> List[Path]:
-    """Project contact points onto the PCA-calibrated forearm surface."""
-    print(f"[{output_dir.name}] Projecting contact points onto forearm surface...")
-    return project_contacts_onto_forearm(
-        input_files, forearm_ply_path, output_dir, projection_stats_path,
-        force_processing=force_processing,
-    )
+    """Project contact points onto the per-block forearm surface before ICP.
+
+    Iterates over each (config, input_file) pair.  For each block, the
+    per-block reference forearm (frame 0) is resolved from the preprocessing
+    forearm catalogue, saved to a temporary PLY, and passed to
+    project_contacts_onto_forearm().
+
+    Blocks whose forearm metadata is missing are skipped with a warning; their
+    input CSV is forwarded unchanged so the ICP step still receives all files.
+    All other blocks raise immediately if an unexpected error occurs (fail-fast).
+
+    Args:
+        input_files: Per-block merged CSVs from ``blocks_merged/``.
+        session_configs: KinectConfig instances in the same order as
+            *input_files* (one per block).
+        output_dir: Destination directory (``blocks_merged_projected/``).
+        projection_stats_path: Path for the combined projection-stats CSV.
+        force_processing: Re-run even when outputs are already up-to-date.
+
+    Returns:
+        List of output CSV paths (projected where forearm was available,
+        otherwise the original input path copied through unchanged).
+    """
+    if len(input_files) != len(session_configs):
+        raise ValueError(
+            f"input_files length ({len(input_files)}) does not match "
+            f"session_configs length ({len(session_configs)}) — cannot pair "
+            "blocks to configs for per-block forearm projection."
+        )
+
+    print(f"[{output_dir.name}] Projecting {len(input_files)} blocks onto per-block forearm surfaces...")
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    all_output_files: List[Path] = []
+
+    with tempfile.TemporaryDirectory() as _tmp:
+        tmp_dir = Path(_tmp)
+
+        for config, input_csv in zip(session_configs, input_files):
+            forearm_ply = _load_per_block_forearm_ply(config, tmp_dir)
+
+            if forearm_ply is None:
+                # No forearm metadata for this block — forward input unchanged.
+                logging.warning(
+                    "Skipping projection for block %s — forearm unavailable. "
+                    "Forwarding original CSV to ICP step.",
+                    config.block_id,
+                )
+                all_output_files.append(input_csv)
+                continue
+
+            block_outputs = project_contacts_onto_forearm(
+                input_files=[input_csv],
+                forearm_ply_path=forearm_ply,
+                output_dir=output_dir,
+                projection_stats_path=projection_stats_path,
+                force_processing=force_processing,
+            )
+            if not block_outputs:
+                raise RuntimeError(
+                    f"project_contacts_onto_forearm returned no output for block "
+                    f"{config.block_id} — expected exactly one output CSV."
+                )
+            all_output_files.extend(block_outputs)
+
+    return all_output_files
 
 
 @flow(name="center_on_receptive_field")
@@ -150,6 +218,52 @@ def _resolve_latest_forearm_ply(session_output_dir: Path) -> Optional[Path]:
     return None
 
 
+def _load_per_block_forearm_ply(config: KinectConfig, tmp_dir: Path) -> Optional[Path]:
+    """Return a PLY path for the per-block reference forearm (frame 0), or None.
+
+    Loads the forearm metadata for the current block via ForearmCatalog and
+    retrieves the frame-0 reference point cloud using get_forearms_with_fallback().
+    Saves it as a temporary PLY file inside *tmp_dir* so that the path-based
+    projection API can consume it.
+
+    Returns None when the metadata file is missing or when no forearm can be
+    loaded for this block — the caller must handle the None case (fail-fast:
+    raise if projection is required and forearm is missing).
+    """
+    forearm_dir = config.session_processed_output_dir / "forearm_pointclouds"
+    metadata_path = forearm_dir / f"{config.session_id}_arm_roi_metadata.json"
+    if not metadata_path.exists():
+        logging.warning(
+            "Forearm metadata not found at %s — per-block projection unavailable for block %s.",
+            metadata_path,
+            config.block_id,
+        )
+        return None
+    try:
+        forearm_params = ForearmFrameParametersFileHandler.load(metadata_path)
+        catalog = ForearmCatalog(forearm_params, forearm_dir)
+        forearms = get_forearms_with_fallback(catalog, config.source_video.name)
+    except Exception as exc:
+        logging.warning(
+            "Could not load per-block forearm for block %s: %s",
+            config.block_id,
+            exc,
+        )
+        return None
+
+    reference_cloud = forearms.get(0)
+    if reference_cloud is None:
+        logging.warning(
+            "No frame-0 forearm found for block %s — per-block projection unavailable.",
+            config.block_id,
+        )
+        return None
+
+    tmp_ply = tmp_dir / f"{config.session_id}_{config.block_id}_forearm_ref.ply"
+    o3d.io.write_point_cloud(str(tmp_ply), reference_cloud)
+    return tmp_ply
+
+
 # --- Worker Flow ---
 
 # @flow(name="Run Single Session Postprocessing")
@@ -189,18 +303,32 @@ def run_single_session_postprocessing(
 
     # UPDATED: Pipeline stages using the architecture of function_of_reference
     pipeline_stages = [
-        # Step 1: ICP Registration
+        # Step 1: Project contact points onto per-block forearm surface (before ICP)
+        #   Input:  blocks_merged/ CSVs (raw merged data)
+        #   Output: blocks_merged_projected/ (contact points snapped to per-block forearm)
+        {
+            "name": "project_contacts_onto_forearm",
+            "func": project_contacts_onto_merged_forearm_flow,
+            "params": lambda: {
+                "input_files": context.get("source_files"),
+                "session_configs": context.get("session_configs"),
+                "output_dir": session_output_dir / "blocks_merged_projected",
+                "projection_stats_path": session_output_dir / "blocks_merged_projected" / "projection_stats.csv",
+            },
+            "outputs": ["projected_source_files"]
+        },
+        # Step 2: ICP Registration — consumes projected (on-surface) merged CSVs
         {
             "name": "apply_icp_registration",
             "func": apply_icp_registration_flow,
             "params": lambda: {
-                "input_files": context.get("source_files"),
+                "input_files": context.get("projected_source_files"),
                 "session_configs": context.get("session_configs"),
                 "output_dir": session_output_dir / "blocks_registered",
             },
             "outputs": ["registered_files"]
         },
-        # Step 2: PCA XYZ Reference Calibration
+        # Step 3: PCA XYZ Reference Calibration
         {
             "name": "set_xyz_reference_from_gestures",
             "func": set_xyz_reference_from_gestures_flow,
@@ -210,7 +338,7 @@ def run_single_session_postprocessing(
             },
             "outputs": ["pca_data_files", "pca_report"]
         },
-        # Step 3: Export forearm PLY in PCA-calibrated space
+        # Step 4: Export forearm PLY in PCA-calibrated space
         {
             "name": "export_forearm_pca_calibrated",
             "func": export_forearm_pca_calibrated_flow,
@@ -221,24 +349,14 @@ def run_single_session_postprocessing(
             },
             "outputs": ["forearm_pca_ply"]
         },
-        # Step 4: Project contact points onto forearm surface
-        {
-            "name": "project_contacts_onto_forearm",
-            "func": project_contacts_onto_forearm_flow,
-            "params": lambda: {
-                "input_files": context.get("pca_data_files"),
-                "forearm_ply_path": context.get("forearm_pca_ply"),
-                "output_dir": session_output_dir / "blocks_contact_projected",
-                "projection_stats_path": session_output_dir / "blocks_contact_projected" / "projection_stats.csv",
-            },
-            "outputs": ["projected_files"]
-        },
         # Step 5: Center spatial data on the receptive field origin
+        #   Input: pca_data_files (PCA-calibrated; contact points are already on-surface
+        #          since projection happened before ICP in step 1)
         {
             "name": "center_on_receptive_field",
             "func": center_on_receptive_field_flow,
             "params": lambda: {
-                "input_files": context.get("projected_files"),
+                "input_files": context.get("pca_data_files"),
                 "forearm_ply_path": context.get("forearm_pca_ply"),
                 "output_dir": session_output_dir / "blocks_rf_centered",
                 "forearm_output_dir": session_output_dir / "forearm_rf_centered",

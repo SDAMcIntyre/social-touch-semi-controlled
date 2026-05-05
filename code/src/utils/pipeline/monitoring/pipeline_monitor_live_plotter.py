@@ -86,7 +86,12 @@ def _plot_process_target(queue: Queue):
         except Exception:
             pass
         
-        plt.pause(plt_pause_interval)
+        backend = plt.get_backend()
+        if backend.lower() != "agg":
+            plt.pause(plt_pause_interval)
+        else:
+            import time
+            time.sleep(plt_pause_interval)
 
     plt.close(fig)
 
@@ -109,11 +114,8 @@ class LivePlotter:
     def stop(self, block: bool = False):
         if not self.is_running():
             return
-        if block:
-            self._plot_process.join()
-        else:
-            self._plot_process.terminate()
-            self._plot_process.join(timeout=1)
+        self._plot_process.terminate()
+        self._plot_process.join(timeout=3 if block else 1)
 
     def is_running(self) -> bool:
         return self._plot_process is not None and self._plot_process.is_alive()
