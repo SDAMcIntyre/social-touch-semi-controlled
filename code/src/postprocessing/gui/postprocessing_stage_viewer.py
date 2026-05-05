@@ -42,14 +42,14 @@ from merging.gui.neural_kinect_scene_viewer import NeuralDataPanel
 
 STAGE_LABELS: List[str] = [
     "Merged (Raw)",
+    "Contact Projected",
     "ICP Registered",
     "PCA Calibrated",
-    "Contact Projected",
     "RF Centered",
 ]
 
-_CAMERA_FRAME_STAGES = {0, 1}
-_PCA_FRAME_STAGES = {2, 3, 4}
+_CAMERA_FRAME_STAGES = {0, 1, 2}
+_PCA_FRAME_STAGES = {3, 4}
 
 
 # ---------------------------------------------------------------------------
@@ -152,6 +152,7 @@ class PostprocessingStageViewer(QMainWindow):
         self._drag_timer.setInterval(80)
         self._pending_drag_frame: Optional[int] = None
         self._slider_dragging = False
+        self._stage_switch_generation: int = 0
 
     # ------------------------------------------------------------------
     # Data loading
@@ -513,33 +514,45 @@ class PostprocessingStageViewer(QMainWindow):
         self.plotter.clear()
         self.plotter.set_background("black")
         self._build_right_panel_controls()
-        self._init_actors()
 
-        if frame_changed:
-            pos, focal, up = self._compute_camera_params()
-            self.plotter.camera.position = pos
-            self.plotter.camera.focal_point = focal
-            self.plotter.camera.up = up
-            self.plotter.camera_set = True
+        # Defer actor initialization and rendering to the next event loop tick
+        # so the OpenGL context from clear() is fully released first.
+        # Without this, wglMakeCurrent fails on Windows.
+        self._stage_switch_generation += 1
+        current_gen = self._stage_switch_generation
 
-        # Recreate NeuralDataPanel
-        old_panel = self._neural_panel
-        if old_panel is not None:
-            self._outer_layout.removeWidget(old_panel)
-            old_panel.deleteLater()
-            self._neural_panel = None
-        self._maybe_create_neural_panel()
+        def _deferred_stage_init():
+            if self._stage_switch_generation != current_gen:
+                return
+            self._init_actors()
 
-        # Update frame controls
-        self.frame_slider.blockSignals(True)
-        self.frame_slider.setMaximum(max(self._total_frames - 1, 0))
-        self.frame_slider.setEnabled(self._total_frames > 0)
-        restored_frame = min(saved_frame, max(self._total_frames - 1, 0))
-        self.frame_slider.setValue(restored_frame)
-        self.frame_slider.blockSignals(False)
+            if frame_changed:
+                pos, focal, up = self._compute_camera_params()
+                self.plotter.camera.position = pos
+                self.plotter.camera.focal_point = focal
+                self.plotter.camera.up = up
+                self.plotter.camera_set = True
 
-        self.current_index = restored_frame
-        self._update_frame(restored_frame)
+            # Recreate NeuralDataPanel
+            old_panel = self._neural_panel
+            if old_panel is not None:
+                self._outer_layout.removeWidget(old_panel)
+                old_panel.deleteLater()
+                self._neural_panel = None
+            self._maybe_create_neural_panel()
+
+            # Update frame controls
+            self.frame_slider.blockSignals(True)
+            self.frame_slider.setMaximum(max(self._total_frames - 1, 0))
+            self.frame_slider.setEnabled(self._total_frames > 0)
+            restored_frame = min(saved_frame, max(self._total_frames - 1, 0))
+            self.frame_slider.setValue(restored_frame)
+            self.frame_slider.blockSignals(False)
+
+            self.current_index = restored_frame
+            self._update_frame(restored_frame)
+
+        QTimer.singleShot(0, _deferred_stage_init)
 
     # ------------------------------------------------------------------
     # Camera helpers
@@ -589,6 +602,10 @@ class PostprocessingStageViewer(QMainWindow):
     def closeEvent(self, event) -> None:
         self._play_timer.stop()
         self._drag_timer.stop()
+        try:
+            self.plotter.close()
+        except Exception:
+            pass
         super().closeEvent(event)
 
     # ------------------------------------------------------------------
