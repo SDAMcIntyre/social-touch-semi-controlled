@@ -49,6 +49,7 @@ from _5_postprocessing import (
     center_on_receptive_field,
     deduplicate_forearm_ply,
     deduplicate_contact_points_csv,
+    monitor_deduplicate_xy_interactive,
 )
 from _4_merging.aggregate_blocks_session import aggregate_session_blocks
 
@@ -108,6 +109,8 @@ def deduplicate_xy_flow(
     output_dir: Path,
     forearm_output_dir: Path,
     force_processing: bool = False,
+    monitor: bool = True,
+    epsilon: float = 5.0,
 ) -> Tuple[List[Path], List[Optional[Path]]]:
     if len(input_files) != len(session_configs):
         raise ValueError(
@@ -118,6 +121,29 @@ def deduplicate_xy_flow(
 
     output_dir.mkdir(parents=True, exist_ok=True)
     forearm_output_dir.mkdir(parents=True, exist_ok=True)
+
+    if monitor:
+        try:
+            with tempfile.TemporaryDirectory() as _monitor_tmp:
+                monitor_tmp_dir = Path(_monitor_tmp)
+                representative_ply = None
+                for config in session_configs:
+                    representative_ply = _load_per_block_forearm_ply(config, monitor_tmp_dir)
+                    if representative_ply is not None:
+                        break
+
+                if representative_ply is not None:
+                    pcd = o3d.io.read_point_cloud(str(representative_ply))
+                    vertices = np.asarray(pcd.points, dtype=np.float64)
+                    if len(vertices) > 0:
+                        epsilon = monitor_deduplicate_xy_interactive(vertices, initial_epsilon=epsilon)
+                        logging.info("User selected epsilon = %.4f from interactive monitor.", epsilon)
+                    else:
+                        logging.warning("Representative forearm has 0 points, skipping monitor.")
+                else:
+                    logging.warning("No forearm PLY available for monitor. Using default epsilon=%.4f.", epsilon)
+        except KeyboardInterrupt:
+            logging.info("Monitor aborted by user. Using default epsilon=%.4f.", epsilon)
 
     deduped_csv_paths: List[Path] = []
     deduped_forearm_ply_paths: List[Optional[Path]] = []
@@ -130,7 +156,7 @@ def deduplicate_xy_flow(
 
             if forearm_ply is not None:
                 forearm_out = forearm_output_dir / forearm_ply.name
-                stats = deduplicate_forearm_ply(forearm_ply, forearm_out, epsilon=0.1)
+                stats = deduplicate_forearm_ply(forearm_ply, forearm_out, epsilon=epsilon)
                 logging.info(
                     "Block %s forearm dedup: %d → %d (removed %d)",
                     config.block_id,
@@ -147,7 +173,7 @@ def deduplicate_xy_flow(
                 deduped_forearm_ply_paths.append(None)
 
             csv_out = output_dir / input_csv.name
-            stats = deduplicate_contact_points_csv(input_csv, csv_out, epsilon=0.1)
+            stats = deduplicate_contact_points_csv(input_csv, csv_out, epsilon=epsilon)
             logging.info(
                 "Block %s CSV dedup: %d rows, %d → %d contact points",
                 config.block_id,
@@ -484,6 +510,10 @@ def run_single_session_postprocessing(
             # Inject options into params when supported by the flow
             if 'force_processing' in options:
                 params['force_processing'] = options['force_processing']
+            if 'monitor' in options:
+                params['monitor'] = options['monitor']
+            if 'epsilon' in options:
+                params['epsilon'] = options['epsilon']
             
             # Validation: Check if list inputs are empty
             # Note: We must exclude 'configs' from this check if configs are not lists of files, 

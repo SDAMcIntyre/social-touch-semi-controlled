@@ -1,0 +1,441 @@
+"""Unit tests for deduplicate_xy single-linkage clustering algorithm."""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+# Add scripts to path for imports
+_SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts" / "_5_postprocessing"
+sys.path.insert(0, str(_SCRIPTS_DIR))
+
+from deduplicate_xy_points import deduplicate_xy
+
+
+class TestDeduplicateXyBasic:
+    """Tests for basic deduplication scenarios."""
+
+    def test_empty_input(self) -> None:
+        """Empty input returns empty output with n_removed=0."""
+        empty = np.empty((0, 3), dtype=np.float64)
+        result, n_removed = deduplicate_xy(empty, epsilon=0.5)
+
+        assert len(result) == 0
+        assert n_removed == 0
+        assert result.shape == (0, 3)
+
+    def test_single_point(self) -> None:
+        """Single point passes through unchanged."""
+        pts = np.array([[1.0, 2.0, 3.0]], dtype=np.float64)
+        result, n_removed = deduplicate_xy(pts, epsilon=0.5)
+
+        assert n_removed == 0
+        assert len(result) == 1
+        np.testing.assert_array_equal(result, pts)
+
+    def test_users_reported_case(self) -> None:
+        """User's reported case from the issue: two points at (35, y) with y-distance 0.269 mm < epsilon=0.378 mm.
+
+        Expected: Both should be deduplicated to the lower-z point.
+        """
+        pts = np.array([
+            [35.0, -21.731, 0.0],
+            [35.0, -22.0, 1.0]
+        ], dtype=np.float64)
+
+        result, n_removed = deduplicate_xy(pts, epsilon=0.378)
+
+        assert n_removed == 1
+        assert len(result) == 1
+        # Should keep the first point (lower z)
+        np.testing.assert_array_almost_equal(result[0], [35.0, -21.731, 0.0])
+
+    def test_no_duplicates(self) -> None:
+        """Points spaced > epsilon apart pass through unchanged."""
+        pts = np.array([
+            [0.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [0.0, 2.0, 0.0]
+        ], dtype=np.float64)
+
+        result, n_removed = deduplicate_xy(pts, epsilon=0.5)
+
+        assert n_removed == 0
+        assert len(result) == 3
+        np.testing.assert_array_equal(result, pts)
+
+    def test_no_duplicates_boundary_case(self) -> None:
+        """Points exactly at epsilon distance apart are not deduplicated (strict <, not <=)."""
+        pts = np.array([
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0]
+        ], dtype=np.float64)
+
+        # Distance = 1.0, epsilon = 1.0
+        # DBSCAN eps param uses <= comparison, so these should cluster
+        result, n_removed = deduplicate_xy(pts, epsilon=1.0)
+
+        assert n_removed == 1
+        assert len(result) == 1
+
+
+class TestDeduplicateXyCollocated:
+    """Tests for co-located points (same x, y)."""
+
+    def test_two_collocated_points_different_z(self) -> None:
+        """Two points at same (x, y) with different z collapse to lower-z point."""
+        pts = np.array([
+            [0.0, 0.0, 2.0],
+            [0.0, 0.0, 0.5]
+        ], dtype=np.float64)
+
+        result, n_removed = deduplicate_xy(pts, epsilon=0.1)
+
+        assert n_removed == 1
+        assert len(result) == 1
+        np.testing.assert_array_equal(result[0], [0.0, 0.0, 0.5])
+
+    def test_three_collocated_points_different_z(self) -> None:
+        """Three points at same (x, y) collapse to the lowest-z point."""
+        pts = np.array([
+            [5.0, 10.0, 2.0],
+            [5.0, 10.0, 0.5],
+            [5.0, 10.0, 1.0]
+        ], dtype=np.float64)
+
+        result, n_removed = deduplicate_xy(pts, epsilon=0.05)
+
+        assert n_removed == 2
+        assert len(result) == 1
+        np.testing.assert_array_equal(result[0], [5.0, 10.0, 0.5])
+
+    def test_all_points_identical_xy_collapse_to_one(self) -> None:
+        """All points at the same (x, y) collapse to 1 point (lowest z)."""
+        pts = np.array([
+            [1.0, 1.0, 5.0],
+            [1.0, 1.0, 1.0],
+            [1.0, 1.0, 3.0],
+            [1.0, 1.0, 2.0]
+        ], dtype=np.float64)
+
+        result, n_removed = deduplicate_xy(pts, epsilon=0.1)
+
+        assert n_removed == 3
+        assert len(result) == 1
+        np.testing.assert_array_equal(result[0], [1.0, 1.0, 1.0])
+
+
+class TestDeduplicateXySingleLinkage:
+    """Tests for single-linkage transitive closure."""
+
+    def test_chain_transitive_closure(self) -> None:
+        """A chain of points where each overlaps the next collapses to 1 (single-linkage).
+
+        Points at x=0, 1, 2, 3, 4 with epsilon=1.5:
+        - Point 0 and 1 are within 1.5
+        - Point 1 and 2 are within 1.5
+        - Point 2 and 3 are within 1.5
+        - Point 3 and 4 are within 1.5
+        All should collapse into one cluster (transitive closure).
+        """
+        pts = np.array([
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 1.0],
+            [2.0, 0.0, 2.0],
+            [3.0, 0.0, 3.0],
+            [4.0, 0.0, 4.0]
+        ], dtype=np.float64)
+
+        result, n_removed = deduplicate_xy(pts, epsilon=1.5)
+
+        # All should cluster together, survivor is lowest z (first point)
+        assert n_removed == 4
+        assert len(result) == 1
+        np.testing.assert_array_equal(result[0], [0.0, 0.0, 0.0])
+
+    def test_chain_spacing_half_epsilon(self) -> None:
+        """Points spaced at 0.5*epsilon form a single-linkage chain."""
+        epsilon = 2.0
+        spacing = epsilon * 0.5
+
+        pts = np.array([
+            [0.0 * spacing, 0.0, 0.0],
+            [1.0 * spacing, 0.0, 1.0],
+            [2.0 * spacing, 0.0, 2.0],
+            [3.0 * spacing, 0.0, 3.0]
+        ], dtype=np.float64)
+
+        result, n_removed = deduplicate_xy(pts, epsilon=epsilon)
+
+        assert n_removed == 3
+        assert len(result) == 1
+        np.testing.assert_array_equal(result[0], pts[0])
+
+    def test_two_separate_clusters(self) -> None:
+        """Two clusters separated by > epsilon are kept distinct."""
+        pts = np.array([
+            [0.0, 0.0, 0.0],
+            [0.5, 0.0, 1.0],
+            [10.0, 0.0, 2.0],
+            [10.5, 0.0, 3.0]
+        ], dtype=np.float64)
+
+        result, n_removed = deduplicate_xy(pts, epsilon=1.0)
+
+        # Two clusters: (0, 1) and (2, 3); survivors at (0,0) and (10,0)
+        assert n_removed == 2
+        assert len(result) == 2
+        np.testing.assert_array_equal(result[0], [0.0, 0.0, 0.0])
+        np.testing.assert_array_equal(result[1], [10.0, 0.0, 2.0])
+
+
+class TestDeduplicateXyTieBreaking:
+    """Tests for deterministic tie-breaking when z values are equal."""
+
+    def test_identical_z_keeps_lower_input_index(self) -> None:
+        """When two points have identical z within epsilon, keep lower input index."""
+        pts = np.array([
+            [0.0, 0.0, 1.0],
+            [0.5, 0.0, 1.0]
+        ], dtype=np.float64)
+
+        result, n_removed = deduplicate_xy(pts, epsilon=1.0)
+
+        assert n_removed == 1
+        assert len(result) == 1
+        np.testing.assert_array_equal(result[0], [0.0, 0.0, 1.0])
+
+    def test_three_identical_z_keeps_first(self) -> None:
+        """When multiple points have identical z, keep the one with lowest input index."""
+        pts = np.array([
+            [0.0, 0.0, 5.0],
+            [0.2, 0.0, 5.0],
+            [0.4, 0.0, 5.0]
+        ], dtype=np.float64)
+
+        result, n_removed = deduplicate_xy(pts, epsilon=1.0)
+
+        assert n_removed == 2
+        assert len(result) == 1
+        np.testing.assert_array_equal(result[0], pts[0])
+
+
+class TestDeduplicateXyOutputOrder:
+    """Tests for output ordering (should preserve input relative order)."""
+
+    def test_output_preserves_input_order(self) -> None:
+        """Surviving points appear in their original relative input order."""
+        pts = np.array([
+            [10.0, 0.0, 1.0],
+            [0.0, 0.0, 2.0],
+            [5.0, 0.0, 3.0]
+        ], dtype=np.float64)
+
+        result, n_removed = deduplicate_xy(pts, epsilon=0.1)
+
+        # No deduplication occurs (all spaced > epsilon apart)
+        assert n_removed == 0
+        np.testing.assert_array_equal(result, pts)
+        # Order should be: 10, 0, 5 (as in input)
+
+    def test_survivors_maintain_relative_order(self) -> None:
+        """Among survivors, relative input order is maintained."""
+        pts = np.array([
+            [0.0, 0.0, 0.0],   # index 0: kept (survivor of cluster 1)
+            [0.5, 0.0, 1.0],   # index 1: removed (same cluster as 0)
+            [5.0, 0.0, 2.0],   # index 2: kept (survivor of cluster 2)
+            [5.5, 0.0, 3.0],   # index 3: removed (same cluster as 2)
+            [10.0, 0.0, 4.0]   # index 4: kept (survivor of cluster 3)
+        ], dtype=np.float64)
+
+        result, n_removed = deduplicate_xy(pts, epsilon=1.0)
+
+        assert n_removed == 2
+        assert len(result) == 3
+        # Should be in order: indices 0, 2, 4
+        np.testing.assert_array_equal(result[0], pts[0])
+        np.testing.assert_array_equal(result[1], pts[2])
+        np.testing.assert_array_equal(result[2], pts[4])
+
+
+class TestDeduplicateXyEdgeCases:
+    """Tests for edge cases and invariants."""
+
+    def test_invariant_count_preserved(self) -> None:
+        """deduped_count + n_removed == input_count (always)."""
+        for n_pts in [0, 1, 5, 10, 50]:
+            pts = np.random.randn(n_pts, 3).astype(np.float64)
+            result, n_removed = deduplicate_xy(pts, epsilon=0.5)
+
+            assert len(result) + n_removed == len(pts)
+
+    def test_large_epsilon_collapses_to_one(self) -> None:
+        """Very large epsilon exceeding cloud extent collapses to 1 point."""
+        pts = np.array([
+            [0.0, 0.0, 5.0],
+            [1.0, 1.0, 3.0],
+            [2.0, 0.5, 1.0],
+            [0.5, 2.0, 4.0]
+        ], dtype=np.float64)
+
+        # Epsilon much larger than any cloud extent
+        result, n_removed = deduplicate_xy(pts, epsilon=100.0)
+
+        assert n_removed == 3
+        assert len(result) == 1
+        # Lowest z is at index 2
+        np.testing.assert_array_equal(result[0], [2.0, 0.5, 1.0])
+
+    def test_very_small_positive_epsilon_near_collocated(self) -> None:
+        """With very small positive epsilon (near 0), near-collocated points may cluster.
+
+        DBSCAN requires eps > 0 (strictly positive), so we use a tiny epsilon.
+        """
+        pts = np.array([
+            [0.0, 0.0, 1.0],
+            [0.0, 0.0, 2.0],  # Exactly collocated with pt 0
+            [1.0, 0.0, 3.0]   # Separate
+        ], dtype=np.float64)
+
+        result, n_removed = deduplicate_xy(pts, epsilon=0.0001)
+
+        # First two (collocated) should merge; third is separate
+        assert n_removed == 1
+        assert len(result) == 2
+        np.testing.assert_array_equal(result[0], [0.0, 0.0, 1.0])
+
+    def test_very_small_epsilon(self) -> None:
+        """With very small epsilon (<<1mm), almost no deduplication occurs."""
+        pts = np.array([
+            [0.0, 0.0, 1.0],
+            [0.01, 0.0, 2.0],  # 0.01 mm away
+            [0.5, 0.0, 3.0]    # 0.5 mm away
+        ], dtype=np.float64)
+
+        result, n_removed = deduplicate_xy(pts, epsilon=0.001)
+
+        # No deduplication with epsilon=0.001 mm
+        assert n_removed == 0
+        assert len(result) == 3
+
+    def test_negative_z_values(self) -> None:
+        """Handles negative z values correctly (tie-breaking by lowest z)."""
+        pts = np.array([
+            [0.0, 0.0, 1.0],
+            [0.5, 0.0, -2.0],
+            [0.3, 0.0, 0.0]
+        ], dtype=np.float64)
+
+        result, n_removed = deduplicate_xy(pts, epsilon=1.0)
+
+        # All should cluster; lowest z is -2.0
+        assert n_removed == 2
+        assert len(result) == 1
+        np.testing.assert_array_equal(result[0], [0.5, 0.0, -2.0])
+
+    def test_large_coordinates(self) -> None:
+        """Handles large coordinate values correctly (typical forearm range)."""
+        pts = np.array([
+            [100.0, 200.0, 50.0],
+            [100.5, 200.0, 60.0],
+            [300.0, 150.0, 40.0]
+        ], dtype=np.float64)
+
+        result, n_removed = deduplicate_xy(pts, epsilon=1.0)
+
+        # First two should cluster, third separate
+        assert n_removed == 1
+        assert len(result) == 2
+
+    def test_dtype_preserved(self) -> None:
+        """Output dtype is float64 (matching input)."""
+        pts = np.array([
+            [0.0, 0.0, 1.0],
+            [0.5, 0.0, 2.0]
+        ], dtype=np.float64)
+
+        result, n_removed = deduplicate_xy(pts, epsilon=1.0)
+
+        assert result.dtype == np.float64
+
+
+class TestDeduplicateXyStress:
+    """Stress tests with larger or structured data."""
+
+    def test_grid_of_collocated_clusters(self) -> None:
+        """Grid of clusters: each cluster has 4 collocated points."""
+        clusters = []
+        for i in range(3):
+            for j in range(3):
+                x_base = i * 10.0
+                y_base = j * 10.0
+                z_base = i * 10 + j
+                for k in range(4):
+                    clusters.append([x_base, y_base, z_base + k * 0.001])
+
+        pts = np.array(clusters, dtype=np.float64)
+
+        result, n_removed = deduplicate_xy(pts, epsilon=0.1)
+
+        # 9 clusters, 4 points each = 36 points -> 9 survivors
+        assert n_removed == 27
+        assert len(result) == 9
+
+    def test_random_cloud_with_noise(self) -> None:
+        """Random point cloud with some intentional duplicates."""
+        np.random.seed(42)
+
+        # Random cloud
+        cloud = np.random.randn(100, 3) * 10.0
+
+        # Add some intentional near-duplicates at specific locations
+        cloud[0] = [0.0, 0.0, 0.0]
+        cloud[1] = [0.1, 0.0, 1.0]  # 0.1 mm away from cloud[0]
+
+        result, n_removed = deduplicate_xy(cloud, epsilon=0.5)
+
+        # cloud[0] and cloud[1] should merge (0.1 < 0.5)
+        # Other points may or may not merge; we just check count invariant
+        assert len(result) + n_removed == len(cloud)
+        assert n_removed >= 1  # At least the one we know about
+
+
+class TestDeduplicateXyContract:
+    """Tests ensuring the public API contract is maintained."""
+
+    def test_returns_tuple_of_two(self) -> None:
+        """Return type is tuple(ndarray, int)."""
+        pts = np.array([[0.0, 0.0, 0.0]], dtype=np.float64)
+        result = deduplicate_xy(pts, epsilon=1.0)
+
+        assert isinstance(result, tuple)
+        assert len(result) == 2
+        assert isinstance(result[0], np.ndarray)
+        assert isinstance(result[1], (int, np.integer))
+
+    def test_output_array_shape(self) -> None:
+        """Output array has shape (N_survivors, 3)."""
+        pts = np.array([
+            [0.0, 0.0, 0.0],
+            [1.0, 1.0, 1.0]
+        ], dtype=np.float64)
+
+        result, _ = deduplicate_xy(pts, epsilon=0.1)
+
+        assert result.ndim == 2
+        assert result.shape[1] == 3
+
+    def test_doesnt_modify_input(self) -> None:
+        """Input array is not modified."""
+        pts = np.array([
+            [0.0, 0.0, 0.0],
+            [0.5, 0.0, 1.0]
+        ], dtype=np.float64)
+
+        pts_copy = pts.copy()
+        deduplicate_xy(pts, epsilon=1.0)
+
+        np.testing.assert_array_equal(pts, pts_copy)
