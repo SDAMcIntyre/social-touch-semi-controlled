@@ -18,9 +18,11 @@ from PyQt5.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QDoubleSpinBox,
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QPushButton,
     QSplitter,
     QVBoxLayout,
     QWidget,
@@ -47,6 +49,9 @@ _GESTURE_COLORS = [
 
 _HEATMAP_MODES = ["Spike density", "Mean IFF (Hz)", "Cumulative IFF (Hz)"]
 _MODE_KEYS = ["spike_density", "mean_iff", "cumulative_iff"]
+
+_DEFAULT_X_FEATURE = "hand_velocity_amplitude_mean_during_iff"
+_DEFAULT_Y_FEATURE = "pressure_mean_during_iff"
 
 
 class TouchPopulationExplorer(QMainWindow):
@@ -82,6 +87,10 @@ class TouchPopulationExplorer(QMainWindow):
         self._initialized = False
         self._heatmap_mode: str = "spike_density"
         self._rect: Optional[DraggableFilterRect] = None
+        self._controls_updating: bool = False
+        self._single_touch_mode: bool = False
+        self._selected_touch_idx: int | None = None
+        self._single_touch_cid: int | None = None
         self._filter_timer = QTimer(self)
         self._filter_timer.setSingleShot(True)
         self._filter_timer.setInterval(30)
@@ -115,13 +124,23 @@ class TouchPopulationExplorer(QMainWindow):
         bottom_layout.setContentsMargins(0, 0, 0, 0)
         bottom_layout.setSpacing(4)
 
+        scatter_container = QWidget()
+        scatter_layout = QVBoxLayout(scatter_container)
+        scatter_layout.setContentsMargins(0, 0, 0, 0)
+        scatter_layout.setSpacing(2)
+
         self._figure = Figure()
         self._figure.patch.set_facecolor("white")
-        self._canvas = FigureCanvasQTAgg(self._figure)
+        self._scatter_canvas = FigureCanvasQTAgg(self._figure)
+        self._canvas = self._scatter_canvas
         self._ax = self._figure.add_subplot(111)
         self._ax.set_facecolor("white")
-        self._canvas.setMinimumSize(350, 180)
-        bottom_layout.addWidget(self._canvas, stretch=1)
+        self._scatter_canvas.setMinimumSize(350, 180)
+        scatter_layout.addWidget(self._scatter_canvas, stretch=1)
+
+        scatter_layout.addLayout(self._build_rect_controls())
+
+        bottom_layout.addWidget(scatter_container, stretch=1)
 
         right_panel = QWidget()
         right_layout = QVBoxLayout(right_panel)
@@ -186,6 +205,12 @@ class TouchPopulationExplorer(QMainWindow):
         self._y_axis_combo.currentIndexChanged.connect(self._on_axis_changed)
         toolbar.addWidget(self._y_axis_combo)
 
+        toolbar.addSeparator()
+        self._single_touch_btn = QPushButton("Single touch")
+        self._single_touch_btn.setCheckable(True)
+        self._single_touch_btn.toggled.connect(self._set_single_touch_mode)
+        toolbar.addWidget(self._single_touch_btn)
+
         self._populate_axis_combos()
 
     def _populate_axis_combos(self) -> None:
@@ -197,13 +222,42 @@ class TouchPopulationExplorer(QMainWindow):
         for name in all_features:
             self._x_axis_combo.addItem(name)
             self._y_axis_combo.addItem(name)
-        # Default: X = first feature, Y = second feature (if available)
-        x_idx = 0
-        y_idx = min(1, len(all_features) - 1) if len(all_features) > 1 else 0
+        if _DEFAULT_X_FEATURE in all_features:
+            x_idx = all_features.index(_DEFAULT_X_FEATURE)
+        else:
+            x_idx = 0
+        if _DEFAULT_Y_FEATURE in all_features:
+            y_idx = all_features.index(_DEFAULT_Y_FEATURE)
+        else:
+            y_idx = min(1, len(all_features) - 1) if len(all_features) > 1 else 0
         self._x_axis_combo.setCurrentIndex(x_idx)
         self._y_axis_combo.setCurrentIndex(y_idx)
         self._x_axis_combo.blockSignals(False)
         self._y_axis_combo.blockSignals(False)
+
+    def _build_rect_controls(self) -> QHBoxLayout:
+        bar = QHBoxLayout()
+        bar.setContentsMargins(4, 2, 4, 2)
+        bar.setSpacing(6)
+
+        bar.addWidget(QLabel("W:"))
+        self._w_spinbox = QDoubleSpinBox()
+        self._w_spinbox.setRange(0.001, 1e9)
+        self._w_spinbox.setSingleStep(0.1)
+        self._w_spinbox.setDecimals(4)
+        self._w_spinbox.valueChanged.connect(self._update_rect_from_controls)
+        bar.addWidget(self._w_spinbox)
+
+        bar.addWidget(QLabel("H:"))
+        self._h_spinbox = QDoubleSpinBox()
+        self._h_spinbox.setRange(0.001, 1e9)
+        self._h_spinbox.setSingleStep(0.1)
+        self._h_spinbox.setDecimals(4)
+        self._h_spinbox.valueChanged.connect(self._update_rect_from_controls)
+        bar.addWidget(self._h_spinbox)
+
+        bar.addStretch()
+        return bar
 
     # ------------------------------------------------------------------
     # Scatter
@@ -276,6 +330,19 @@ class TouchPopulationExplorer(QMainWindow):
 
         if self._rect is not None:
             self._ax.add_patch(self._rect._patch)
+
+        if self._single_touch_mode and self._selected_touch_idx is not None:
+            sel_idx = self._selected_touch_idx
+            if str(self._data.gesture_types[sel_idx]) in checked_types:
+                self._ax.scatter(
+                    [x_data[sel_idx]],
+                    [y_data[sel_idx]],
+                    s=80,
+                    facecolors="none",
+                    edgecolors="black",
+                    linewidths=2,
+                    zorder=10,
+                )
 
         self._canvas.draw()
 
@@ -384,12 +451,35 @@ class TouchPopulationExplorer(QMainWindow):
     ) -> None:
         if self._rect is None:
             return
+        self._update_controls_from_rect(x_min, x_max, y_min, y_max)
         self._canvas.draw_idle()
         self._filter_timer.start()
 
+    def _update_controls_from_rect(
+        self, x_min: float, x_max: float, y_min: float, y_max: float
+    ) -> None:
+        self._controls_updating = True
+        self._w_spinbox.setValue(x_max - x_min)
+        self._h_spinbox.setValue(y_max - y_min)
+        self._controls_updating = False
+
+    def _update_rect_from_controls(self, *_) -> None:
+        if self._controls_updating or self._rect is None:
+            return
+        x_min, x_max, y_min, y_max = self._rect.get_bounds()
+        cx = (x_min + x_max) / 2
+        cy = (y_min + y_max) / 2
+        w = self._w_spinbox.value()
+        h = self._h_spinbox.value()
+        self._rect.set_bounds(cx - w / 2, cx + w / 2, cy - h / 2, cy + h / 2)
+        self._scatter_canvas.draw_idle()
+
     def _on_checkbox_changed(self, _state: int) -> None:
         self._draw_scatter()
-        self._apply_filter_update()
+        if self._single_touch_mode:
+            self._apply_single_touch_display()
+        else:
+            self._apply_filter_update()
 
     def _apply_filter_update(self) -> None:
         if self._rect is None or self._cloud is None or self._actor is None:
@@ -463,23 +553,119 @@ class TouchPopulationExplorer(QMainWindow):
             height=p75_y - p25_y,
             on_changed=self._on_rect_changed,
         )
+        self._update_controls_from_rect(p25_x, p75_x, p25_y, p75_y)
         self._canvas.draw_idle()
         self._apply_filter_update()
+
+    # ------------------------------------------------------------------
+    # Single-touch mode
+    # ------------------------------------------------------------------
+
+    def _set_single_touch_mode(self, enabled: bool) -> None:
+        if enabled:
+            if self._rect is not None:
+                self._rect.disconnect()
+                self._rect = None
+            self._single_touch_cid = self._scatter_canvas.figure.canvas.mpl_connect(
+                "button_press_event", self._on_scatter_click_single_touch
+            )
+            self._single_touch_mode = True
+            self._w_spinbox.setVisible(False)
+            self._h_spinbox.setVisible(False)
+            self._selected_touch_idx = None
+            self._draw_scatter()
+        else:
+            if self._single_touch_cid is not None:
+                self._scatter_canvas.figure.canvas.mpl_disconnect(self._single_touch_cid)
+                self._single_touch_cid = None
+            self._single_touch_mode = False
+            self._selected_touch_idx = None
+            self._w_spinbox.setVisible(True)
+            self._h_spinbox.setVisible(True)
+            self._init_filter_rect()
+            self._on_rect_changed(*self._rect.get_bounds()) if self._rect is not None else None
+
+    def _on_scatter_click_single_touch(self, event) -> None:
+        if event.inaxes is None:
+            return
+
+        x_name = self._x_feature()
+        y_name = self._y_feature()
+        x_data = self._data.get_feature_array(x_name)
+        y_data = self._data.get_feature_array(y_name)
+
+        checked_types = {gtype for gtype, cb in self._checkboxes.items() if cb.isChecked()}
+        visible_mask = np.isin(self._data.gesture_types, list(checked_types))
+        visible_indices = np.where(visible_mask)[0]
+
+        if len(visible_indices) == 0:
+            return
+
+        x_lim = self._ax.get_xlim()
+        y_lim = self._ax.get_ylim()
+        x_range = x_lim[1] - x_lim[0]
+        y_range = y_lim[1] - y_lim[0]
+        if x_range == 0.0:
+            x_range = 1.0
+        if y_range == 0.0:
+            y_range = 1.0
+
+        dx = (x_data[visible_indices] - event.xdata) / x_range
+        dy = (y_data[visible_indices] - event.ydata) / y_range
+        nearest_local = int(np.argmin(dx**2 + dy**2))
+        self._selected_touch_idx = int(visible_indices[nearest_local])
+
+        self._draw_scatter()
+        self._apply_single_touch_display()
+
+    def _apply_single_touch_display(self) -> None:
+        if self._selected_touch_idx is None:
+            return
+        if self._cloud is None or self._actor is None:
+            return
+
+        n_verts = len(self._data.forearm_vertices)
+        cp_mask = self._data.cp_touch_idx == self._selected_touch_idx
+
+        heatmap_val = self._compute_heatmap(cp_mask, n_verts)
+
+        self._cloud["heatmap"] = heatmap_val
+        self._cloud.Modified()
+        self._actor.mapper.scalar_range = self._heatmap_clim()
+        self._plotter.render()
+
+        sel_idx = self._selected_touch_idx
+        gtype = str(self._data.gesture_types[sel_idx])
+        self._touch_count_label.setText(f"Touch {sel_idx} ({gtype})")
 
     # ------------------------------------------------------------------
     # Axis changes
     # ------------------------------------------------------------------
 
     def _on_axis_changed(self, _index: int) -> None:
+        if self._rect is not None:
+            self._rect.disconnect()
         self._rect = None
         self._draw_scatter()
-        self._init_filter_rect()
+        if not self._single_touch_mode:
+            self._init_filter_rect()
 
     # ------------------------------------------------------------------
     # Session management
     # ------------------------------------------------------------------
 
     def _load_session(self, session_idx: int, new_data: PopulationData) -> None:
+        if self._single_touch_cid is not None:
+            self._scatter_canvas.figure.canvas.mpl_disconnect(self._single_touch_cid)
+            self._single_touch_cid = None
+        self._single_touch_mode = False
+        self._selected_touch_idx = None
+        self._single_touch_btn.blockSignals(True)
+        self._single_touch_btn.setChecked(False)
+        self._single_touch_btn.blockSignals(False)
+        self._w_spinbox.setVisible(True)
+        self._h_spinbox.setVisible(True)
+
         self._data = new_data
         self._rect = None
         self._cloud = None
