@@ -63,9 +63,9 @@ Last checked: 2026-05-05. Status applies to session `2022-06-17_ST16-05`.
 | Stage | Task key | Output path | Status |
 |---|---|---|---|
 | 0 | `touch_preparation` | `4_analysed/preparation/<session>_prepared.csv` | ✅ complete |
-| 1 | `touch_series_transforms` | `4_analysed/series_transforms/<session>_series_augmented.csv` | not started |
+| 1 | `touch_series_transforms` | `4_analysed/series_transforms/<session>_series_augmented.csv` | ✅ complete |
 | 2a | `touch_feature_extraction` | `4_analysed/touch_features/<agg>/<session>_touch_summary.csv` | not started |
-| 2b | `map_receptive_fields_simple` | `4_analysed/receptive_field_maps_simple/<session>/` | not started |
+| 2b | `map_receptive_fields_simple` | `4_analysed/receptive_field_maps_simple/<session>/` | blocked (pyk4a/macOS) |
 | 3 | `touch_clustering` | `4_analysed/touch_clusters/<group>/<clusterer>/` | not started |
 | 4 | `extract_receptive_fields_clustered` | `4_analysed/receptive_field_extraction/<combo>/<clusterer>/` | not started |
 | 5 | `visualize_receptive_fields_clustered` | same dir, adds heatmaps + rf_metrics.json | not started |
@@ -93,9 +93,14 @@ For clustering, RF mapping, and data aggregation details see [`code/src/analysis
   repo. `analysis_workflow.py` falls back to scanning `3_merged/` directly when they are absent,
   so the analysis pipeline still runs.
 
-- **macOS: `pyk4a` import error**: RF mapping imports chain through `preprocessing.forearm_extraction`
-  → `pyk4a` (Windows-only). Fixed in `analysis_workflow.py` by deferring those imports into
-  `_rf_mapping()`, called only inside RF flow functions.
+- **macOS: `pyk4a` import error — `map_receptive_fields_simple` broken**: `pyk4a` is
+  Windows-only. `_rf_mapping()` in `analysis_workflow.py` defers the import, which protects
+  non-RF tasks. But `receptive_field_mapping/__init__.py` eagerly imports `rf_camera_angle_task`,
+  which chains through `preprocessing.forearm_extraction` → `pyk4a`. `rf_simple_pipeline.py`
+  itself has no `pyk4a` dependency; the fix is to move `rf_camera_angle_task` out of the package
+  `__init__.py` into a separate deferred import used only by clustered RF flows. The batch runner
+  also masks this failure — it reports SUCCESS even when the Prefect flow raises an exception.
+  See `docs/development/knowledge-base/bug-pyk4a-blocks-rf-simple-pipeline-macos.md`.
 
 - **`clustering` import error**: `CLUSTERER_REGISTRY` and `get_clusterer` fail to import in
   the current branch. This breaks `test_gmm_clusterer.py`, `test_parallax_correction.py`, and
