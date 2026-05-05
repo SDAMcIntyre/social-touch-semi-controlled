@@ -13,7 +13,6 @@ import pandas as pd
 from scipy.spatial import cKDTree
 
 from .rf_data_loader import load_forearm_vertices
-from .tangent_plane_alignment import compute_tangent_plane_rotation
 
 logger = logging.getLogger(__name__)
 
@@ -25,8 +24,6 @@ _REQUIRED_COLUMNS = (
     "Nerve_spike",
     "gesture_type",
 )
-
-_DISTANCE_THRESHOLD_MM = 15.0
 
 _bracket_re = re.compile(r'\[([^\[\]]+)\]')
 
@@ -41,8 +38,7 @@ def _ts() -> str:
 
 @dataclass
 class PlaybackSessionData:
-    forearm_vertices: np.ndarray    # (N, 3) rotated to tangent plane
-    tangent_rotation: np.ndarray    # (3, 3) rotation matrix
+    forearm_vertices: np.ndarray    # (N, 3) raw coordinates
 
 
 @dataclass
@@ -51,10 +47,10 @@ class TouchEvent:
     trial_id: int
     single_touch_id: int
     gesture_type: str                       # 'tap', 'stroke_proximal', etc.
-    # Per deduplicated 30Hz frame:
-    frame_contact_pts: list                 # list of (K_i, 3) rotated contact coords
+    # Per 1kHz row:
+    frame_contact_pts: list                 # list of (K_i, 3) raw contact coords
     frame_vertex_indices: list              # list of (K_i,) nearest vertex per contact pt
-    frame_spikes: np.ndarray               # (n_frames,) bool — any spike in the 1kHz run
+    frame_spikes: np.ndarray               # (n_frames,) bool — per-row Nerve_spike
 
 
 @dataclass
@@ -111,7 +107,7 @@ def _save_playback_cache(
     ).astype(bool) if n_touches > 0 else np.array([], dtype=bool)
 
     # Contact points: flatten per-touch, per-frame arrays.
-    # cp_pts_data      : (total_pts, 3) float64 — all rotated contact coords
+    # cp_pts_data      : (total_pts, 3) float64 — all raw contact coords
     # cp_vertex_data   : (total_pts,)   int64   — vertex index per contact pt
     # cp_pts_frame_touch: (total_pts,)  int64   — touch index (into all_touches)
     # cp_pts_frame_idx : (total_pts,)   int64   — frame index within that touch
@@ -156,7 +152,6 @@ def _save_playback_cache(
             cp_pts_frame_touch=cp_pts_frame_touch,
             cp_pts_frame_idx=cp_pts_frame_idx,
             forearm_vertices=data.session_data.forearm_vertices,
-            tangent_rotation=data.session_data.tangent_rotation,
         )
     except Exception as exc:
         logger.warning(
@@ -201,13 +196,23 @@ def _load_playback_cache(
         "frame_spikes_data", "frame_spikes_counts",
         "cp_pts_data", "cp_vertex_data",
         "cp_pts_frame_touch", "cp_pts_frame_idx",
-        "forearm_vertices", "tangent_rotation",
+        "forearm_vertices",
     )
     missing_keys = [k for k in required_keys if k not in npz]
     if missing_keys:
         logger.debug(
             "_load_playback_cache: old-format cache (missing %s) for %s — recomputing",
             missing_keys, series_csv_path.name,
+        )
+        return None
+
+    # Reject caches that still contain the old tangent_rotation key — they were
+    # produced by the pre-refactor loader and must be regenerated.
+    if "tangent_rotation" in npz:
+        logger.debug(
+            "_load_playback_cache: old-format cache (contains tangent_rotation) for %s "
+            "— recomputing",
+            series_csv_path.name,
         )
         return None
 
@@ -221,7 +226,6 @@ def _load_playback_cache(
     cp_pts_frame_touch = npz["cp_pts_frame_touch"]
     cp_pts_frame_idx = npz["cp_pts_frame_idx"]
     forearm_vertices = npz["forearm_vertices"]
-    tangent_rotation = npz["tangent_rotation"]
 
     # Shape validation — raise on corruption.
     if touch_keys.ndim != 2 or touch_keys.shape[1] != 2:
@@ -274,11 +278,6 @@ def _load_playback_cache(
             f"_load_playback_cache: 'forearm_vertices' has shape "
             f"{forearm_vertices.shape} (expected (N, 3)): {cache_path}"
         )
-    if tangent_rotation.ndim != 2 or tangent_rotation.shape != (3, 3):
-        raise ValueError(
-            f"_load_playback_cache: 'tangent_rotation' has shape "
-            f"{tangent_rotation.shape} (expected (3, 3)): {cache_path}"
-        )
 
     # Reconstruct touch events.
     spikes_offset = 0
@@ -330,7 +329,6 @@ def _load_playback_cache(
 
     session_data = PlaybackSessionData(
         forearm_vertices=forearm_vertices,
-        tangent_rotation=tangent_rotation,
     )
     return PlaybackData(
         session_data=session_data,
@@ -348,19 +346,18 @@ def load_playback_data(
     series_csv_path: Path,
     forearm_ply_path: Path,
 ) -> PlaybackData:
-    """Load per-touch playback data from *series_csv_path* + *forearm_ply_path*.
+    """Load per-touch data at 1kHz frame rate from *series_csv_path* + *forearm_ply_path*.
 
-    Groups rows by ``(trial_id, single_touch_id)``, deduplicates consecutive
-    identical ``contact_points`` strings (30Hz Kinect frames), rotates contact
-    points and forearm vertices to the tangent plane, and snaps contacts to the
-    nearest forearm vertex via cKDTree.
+    No coordinate transforms, no deduplication, no distance filtering.
+    Matches preparation_viewer_data.py exactly: each CSV row becomes one frame,
+    contact_points are forward-filled within each touch group, empty frames are
+    kept as np.empty((0, 3)), and Nerve_spike is taken directly per row.
 
-    Returns a ``PlaybackData`` with one ``TouchEvent`` per ``(trial_id,
-    single_touch_id)`` pair, with empty/distance-filtered touches silently
-    skipped (warning logged).
+    Vertex snapping (cKDTree on raw forearm vertices) is applied for heatmap
+    accumulation only.
 
     Raises ``ValueError`` on missing required columns, empty data after
-    filtering, forearm loading failure, or rotation failure.
+    filtering, or forearm loading failure.
     """
     t_session = time.perf_counter()
 
@@ -433,56 +430,12 @@ def load_playback_data(
         flush=True,
     )
 
-    # --- Compute tangent-plane rotation from ALL contact points ---
-    t = time.perf_counter()
-    # Deduplicate contact_points strings before parsing — the 1kHz CSV forward-fills
-    # each 30Hz Kinect frame ~33 times, so parsing all rows is ~33x slower than needed.
-    unique_cp_for_centroid = pd.unique(df["contact_points"].fillna("[]").values)
-    centroid_pts: list[list[float]] = []
-    for s in unique_cp_for_centroid:
-        for m in _bracket_re.findall(str(s)):
-            coords = m.split()
-            if len(coords) == 3:
-                try:
-                    centroid_pts.append([float(coords[0]), float(coords[1]), float(coords[2])])
-                except ValueError:
-                    pass
-
-    if not centroid_pts:
-        raise ValueError(
-            f"load_playback_data: no parseable contact points found in {series_csv_path}"
-        )
-
-    all_pts_for_centroid = np.array(centroid_pts, dtype=np.float64)
-    nan_rows = np.any(np.isnan(all_pts_for_centroid), axis=1)
-    all_pts_for_centroid = all_pts_for_centroid[~nan_rows]
-    if len(all_pts_for_centroid) == 0:
-        raise ValueError(
-            f"load_playback_data: all contact points have NaN coordinates in {series_csv_path}"
-        )
-
-    contact_centroid = all_pts_for_centroid.mean(axis=0)
-    rotation = compute_tangent_plane_rotation(vertices, contact_centroid)
-    if rotation is None:
-        raise ValueError(
-            f"load_playback_data: compute_tangent_plane_rotation returned None "
-            f"for {forearm_ply_path}"
-        )
-
-    rotated_vertices = (rotation @ vertices.T).T
-    print(
-        f"{_ts()} | [Touch Playback] [{tag}]   rotation: {time.perf_counter() - t:.1f}s",
-        flush=True,
-    )
-
-    # --- Build KDTree over rotated vertices ---
-    tree = cKDTree(rotated_vertices)
+    # --- Build KDTree over raw (unrotated) vertices ---
+    tree = cKDTree(vertices)
 
     # --- Group by (block_order_id, trial_id, single_touch_id) and build TouchEvents ---
     t = time.perf_counter()
     touches_by_block_trial: dict[tuple[str, int], list[TouchEvent]] = {}
-    n_skipped_empty = 0
-    n_skipped_distance = 0
 
     group_keys = ["block_order_id", "trial_id", "single_touch_id"]
     for (block_order_id, trial_id, single_touch_id), group_df in df.groupby(group_keys, sort=True):
@@ -490,87 +443,51 @@ def load_playback_data(
         trial_id = int(trial_id)
         single_touch_id = int(single_touch_id)
 
-        # Deduplicate consecutive identical contact_points strings (30Hz frames).
-        cp_strings = group_df["contact_points"].fillna("[]").values
+        cp_strings = group_df["contact_points"].values
         spikes_arr = group_df["Nerve_spike"].to_numpy(dtype=bool)
         gesture_type = str(group_df["gesture_type"].iloc[0])
 
-        n_rows = len(cp_strings)
-        # Build change mask for deduplication.
-        change_mask = np.empty(n_rows, dtype=bool)
-        change_mask[0] = True
-        change_mask[1:] = cp_strings[1:] != cp_strings[:-1]
-        unique_indices = np.where(change_mask)[0]
-        n_unique = len(unique_indices)
-
-        # Run lengths: how many 1kHz rows belong to each unique 30Hz frame.
-        run_lengths = np.empty(n_unique, dtype=np.int64)
-        run_lengths[:-1] = np.diff(unique_indices)
-        run_lengths[-1] = n_rows - unique_indices[-1]
-
-        unique_cp_strings = cp_strings[unique_indices]
-
-        # Aggregate per-frame spikes: any spike in the 1kHz run for each frame.
-        frame_spikes = np.empty(n_unique, dtype=bool)
-        for fi in range(n_unique):
-            start = unique_indices[fi]
-            end = start + int(run_lengths[fi])
-            frame_spikes[fi] = bool(spikes_arr[start:end].any())
-
-        # Parse contact coords for each unique frame, rotate and distance-filter.
+        # Row-by-row parsing matching preparation_viewer_data.py exactly.
+        # Optimization: reuse parsed result for consecutive identical strings.
         frame_contact_pts: list[np.ndarray] = []
         frame_vertex_indices: list[np.ndarray] = []
-        valid_frame_spikes: list[bool] = []
+        frame_spikes: list[bool] = []
 
-        for fi, s in enumerate(unique_cp_strings):
-            matches = _bracket_re.findall(str(s))
-            if not matches:
-                continue
+        prev_string: Optional[str] = None
+        prev_pts: np.ndarray = np.empty((0, 3), dtype=np.float64)
+        prev_vtx: np.ndarray = np.empty(0, dtype=np.int64)
 
-            raw_coords: list[list[float]] = []
-            for m in matches:
-                parts = m.split()
-                if len(parts) == 3:
-                    try:
-                        raw_coords.append([float(parts[0]), float(parts[1]), float(parts[2])])
-                    except ValueError:
-                        pass
+        for row_idx, s in enumerate(cp_strings):
+            s_str = str(s)
+            if s_str == prev_string:
+                # Reuse parsed result from previous identical string.
+                frame_contact_pts.append(prev_pts)
+                frame_vertex_indices.append(prev_vtx)
+            else:
+                matches = _bracket_re.findall(s_str)
+                pts: list[list[float]] = []
+                for m in matches:
+                    parts = m.split()
+                    if len(parts) == 3:
+                        try:
+                            pts.append([float(parts[0]), float(parts[1]), float(parts[2])])
+                        except ValueError:
+                            pass
 
-            if not raw_coords:
-                continue
+                if pts:
+                    pts_arr = np.array(pts, dtype=np.float64)
+                    _, vtx_idx = tree.query(pts_arr)
+                    prev_pts = pts_arr
+                    prev_vtx = vtx_idx.astype(np.int64)
+                else:
+                    prev_pts = np.empty((0, 3), dtype=np.float64)
+                    prev_vtx = np.empty(0, dtype=np.int64)
 
-            pts = np.array(raw_coords, dtype=np.float64)
-            nan_mask = np.any(np.isnan(pts), axis=1)
-            pts = pts[~nan_mask]
-            if len(pts) == 0:
-                continue
+                prev_string = s_str
+                frame_contact_pts.append(prev_pts)
+                frame_vertex_indices.append(prev_vtx)
 
-            # Rotate contact points to tangent plane.
-            rotated_pts = (rotation @ pts.T).T
-
-            # Apply 15mm distance filter.
-            distances, vertex_idx = tree.query(rotated_pts)
-            bad = distances > _DISTANCE_THRESHOLD_MM
-            if bad.any():
-                n_skipped_distance += int(bad.sum())
-                rotated_pts = rotated_pts[~bad]
-                vertex_idx = vertex_idx[~bad]
-
-            if len(rotated_pts) == 0:
-                continue
-
-            frame_contact_pts.append(rotated_pts)
-            frame_vertex_indices.append(vertex_idx.astype(np.int64))
-            valid_frame_spikes.append(bool(frame_spikes[fi]))
-
-        if not frame_contact_pts:
-            n_skipped_empty += 1
-            logger.warning(
-                "load_playback_data: touch (trial=%d, touch=%d) has zero valid frames "
-                "after dedup+filtering — skipping",
-                trial_id, single_touch_id,
-            )
-            continue
+            frame_spikes.append(bool(spikes_arr[row_idx]))
 
         event = TouchEvent(
             block_order_id=block_order_id,
@@ -579,7 +496,7 @@ def load_playback_data(
             gesture_type=gesture_type,
             frame_contact_pts=frame_contact_pts,
             frame_vertex_indices=frame_vertex_indices,
-            frame_spikes=np.array(valid_frame_spikes, dtype=bool),
+            frame_spikes=np.array(frame_spikes, dtype=bool),
         )
         touches_by_block_trial.setdefault((block_order_id, trial_id), []).append(event)
 
@@ -588,20 +505,9 @@ def load_playback_data(
         flush=True,
     )
 
-    if n_skipped_empty > 0:
-        logger.warning(
-            "load_playback_data: skipped %d touch(es) with zero valid frames", n_skipped_empty
-        )
-    if n_skipped_distance > 0:
-        logger.warning(
-            "load_playback_data: dropped %d contact point(s) with nearest-vertex "
-            "distance > %.0fmm",
-            n_skipped_distance, _DISTANCE_THRESHOLD_MM,
-        )
-
     if not touches_by_block_trial:
         raise ValueError(
-            f"load_playback_data: no valid touch events remain after filtering "
+            f"load_playback_data: no touch events found after filtering "
             f"for {series_csv_path}"
         )
 
@@ -616,10 +522,7 @@ def load_playback_data(
 
     block_order_ids = sorted(trial_ids_by_block.keys(), key=int)
 
-    session_data = PlaybackSessionData(
-        forearm_vertices=rotated_vertices,
-        tangent_rotation=rotation,
-    )
+    session_data = PlaybackSessionData(forearm_vertices=vertices)
 
     result = PlaybackData(
         session_data=session_data,
