@@ -865,9 +865,18 @@ def load_population_rf_data(
             f"field(s): {missing}"
         )
 
-    touch_id_map: dict = npz["touch_id_map"].item()
+    touch_id_map_raw: dict = npz["touch_id_map"].item()
     rf_data: dict = npz["rf_data"].item()
     neuron_mode: str = str(npz["neuron_mode"])
+
+    # Normalize touch_id_map keys: numpy pickle preserves numpy scalar types
+    # (numpy.str_, numpy.int64, etc.) rather than plain Python types.  Mirror
+    # the normalization in single_touch_rf_explorer.py: block_order_id → str,
+    # trial_id and single_touch_id → int.
+    touch_id_map: dict = {
+        (str(k[0]), int(k[1]), int(k[2])): int(v)
+        for k, v in touch_id_map_raw.items()
+    }
 
     T = len(touch_triple_keys)
     rf_vertex_indices: list = []
@@ -875,11 +884,12 @@ def load_population_rf_data(
 
     for ti in range(T):
         row = touch_triple_keys[ti]
-        key = (int(row[0]), int(row[1]), int(row[2]))
+        key = (str(int(row[0])), int(row[1]), int(row[2]))
         if key not in touch_id_map:
             raise ValueError(
                 f"load_population_rf_data: touch key {key} (touch index {ti}) "
                 f"not found in touch_id_map of {npz_path}. "
+                f"Available keys (sample): {list(touch_id_map)[:5]}. "
                 f"The RF .npz may have been computed from a different session or "
                 f"preparation run."
             )
