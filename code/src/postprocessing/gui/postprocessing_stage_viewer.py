@@ -42,14 +42,15 @@ from merging.gui.neural_kinect_scene_viewer import NeuralDataPanel
 
 STAGE_LABELS: List[str] = [
     "Merged (Raw)",
+    "Deduplicated",
     "Contact Projected",
     "ICP Registered",
     "PCA Calibrated",
     "RF Centered",
 ]
 
-_CAMERA_FRAME_STAGES = {0, 1, 2}
-_PCA_FRAME_STAGES = {3, 4}
+_CAMERA_FRAME_STAGES = {0, 1, 2, 3}
+_PCA_FRAME_STAGES = {4, 5}
 
 
 # ---------------------------------------------------------------------------
@@ -163,6 +164,10 @@ class PostprocessingStageViewer(QMainWindow):
 
         # --- CSV ---
         if sp.csv_path is None or not sp.csv_path.exists():
+            if sp.csv_path is None:
+                print(f"  [{sp.stage_label}] csv_path is None — no data to display.")
+            else:
+                print(f"  [{sp.stage_label}] CSV not found: {sp.csv_path}")
             self._full_df = pd.DataFrame()
             self._kinect_df = pd.DataFrame()
             self._contact_pts_by_frame: List[Optional[np.ndarray]] = []
@@ -175,6 +180,9 @@ class PostprocessingStageViewer(QMainWindow):
         self._full_df = full_df
         self._kinect_df = full_df.dropna(subset=["time_kinect"]).reset_index(drop=True)
         self._total_frames = len(self._kinect_df)
+
+        if self._total_frames == 0 and len(full_df) > 0:
+            print(f"  [{sp.stage_label}] CSV has {len(full_df)} rows but time_kinect is all NaN.")
 
         if "contact_points" in self._kinect_df.columns:
             self._contact_pts_by_frame = [
@@ -355,6 +363,7 @@ class PostprocessingStageViewer(QMainWindow):
         )
         if has_neural:
             self._neural_panel = NeuralDataPanel(self._full_df, self._total_frames)
+            self._neural_panel.frame_requested.connect(self.frame_slider.setValue)
             self._outer_layout.addWidget(self._neural_panel)
             self._neural_scale = (
                 len(self._full_df) / self._total_frames if self._total_frames > 0 else 1.0

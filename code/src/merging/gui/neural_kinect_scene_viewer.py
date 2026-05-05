@@ -44,7 +44,7 @@ import pandas as pd
 import pyvista as pv
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
-from PyQt5.QtCore import Qt, QEvent, QTimer
+from PyQt5.QtCore import Qt, QEvent, QTimer, pyqtSignal
 from PyQt5.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -338,6 +338,8 @@ class NeuralDataPanel(QWidget):
     half the full recording length.
     """
 
+    frame_requested = pyqtSignal(int)
+
     def __init__(
         self,
         merged_df: pd.DataFrame,
@@ -395,6 +397,7 @@ class NeuralDataPanel(QWidget):
         layout.addWidget(btn_row)
 
         self.canvas.installEventFilter(self)
+        self.canvas.mpl_connect('button_press_event', self._on_canvas_click)
         layout.addWidget(self.canvas)
         self.setFixedHeight(220)
 
@@ -494,6 +497,18 @@ class NeuralDataPanel(QWidget):
         hi = min(self._total_samples - 1, self._current_sample + self._zoom_half_window)
         self.ax_freq.set_xlim(lo, hi)
         self.canvas.draw_idle()
+
+    def _on_canvas_click(self, event) -> None:
+        """Convert a matplotlib left-click to a kinect frame and emit frame_requested."""
+        if event.inaxes is None or event.button != 1:
+            return
+        sample_idx = event.xdata
+        if sample_idx is None:
+            return
+        scale = self._total_samples / self._total_kinect_frames
+        frame = int(round(sample_idx / scale))
+        frame = max(0, min(frame, self._total_kinect_frames - 1))
+        self.frame_requested.emit(frame)
 
     def eventFilter(self, obj, event) -> bool:
         """Intercept mouse-wheel events on the canvas for continuous zoom."""
@@ -870,6 +885,7 @@ class NeuralKinectViewer(QMainWindow):
         self.neural_panel: Optional[NeuralDataPanel] = None
         if self.merged_df is not None:
             self.neural_panel = NeuralDataPanel(self.merged_df, self._total_frames)
+            self.neural_panel.frame_requested.connect(self.frame_slider.setValue)
             outer.addWidget(self.neural_panel)
 
     def _build_right_panel_controls(self) -> None:

@@ -6,10 +6,16 @@
 # ==============================================================================
 
 parameters:
-  kinect_configs: valid_configs_ST13-02
+  kinect_configs: [
+      valid_configs_ST13-02/kinect_config_2022-06-14_ST13-02_semicontrolled_block-order03.yaml,
+    valid_configs_ST13-02/kinect_config_2022-06-14_ST13-02_semicontrolled_block-order04.yaml,
+    valid_configs_ST13-02/kinect_config_2022-06-14_ST13-02_semicontrolled_block-order05.yaml,
+    valid_configs_ST13-02/kinect_config_2022-06-14_ST13-02_semicontrolled_block-order06.yaml,
+    valid_configs_ST13-02/kinect_config_2022-06-14_ST13-02_semicontrolled_block-order07.yaml,
+    valid_configs_ST13-02/kinect_config_2022-06-14_ST13-02_semicontrolled_block-order08.yaml]
 tasks:
   view_neural_kinect_scene:
-    enabled: true
+    enabled: false
     description: "Launch the NeuralKinectViewer for the merged neural + Kinect 3D
       scene."
     options:
@@ -17,7 +23,7 @@ tasks:
     depends_on: []
 
   view_neural_kinect_scene_transformed:
-    enabled: false
+    enabled: true
     description: "Launch the NeuralKinectViewer in registered-frame mode.  Shows the
       unified forearm PLY and applies the per-block ICP transform to the MKV cloud,
       hand mesh, and stickers.  Skipped automatically for single-forearm sessions
