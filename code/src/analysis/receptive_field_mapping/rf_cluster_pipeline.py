@@ -888,6 +888,71 @@ def launch_touch_playback_explorer(
     app.exec_()
 
 
+def launch_single_touch_rf_explorer(
+    input_items: List[Tuple[Path, Path]],
+    neuron_mode: str = "iff",
+) -> None:
+    """Launch the Single-Touch RF Explorer GUI for all sessions in input_items.
+
+    Resolves the per-session ``.npz`` file and forearm PLY, loads
+    ``SingleTouchRFViewerData`` via ``load_single_touch_rf_data()`` in a thread
+    pool, then opens the ``SingleTouchRFExplorer`` window.  Blocks until the
+    user closes the window.
+
+    Parameters
+    ----------
+    input_items:
+        List of ``(aggregated_csv_path, database_path)`` tuples, one per
+        session — the same format used throughout the analysis pipeline.
+    neuron_mode:
+        ``"iff"`` or ``"spike"`` — must match the mode used when
+        ``run_single_touch_rf_mapping`` was run.  Only used to validate the
+        loaded data; the actual mode is stored in the ``.npz`` file.
+    """
+    from .gui.single_touch_rf_explorer import SingleTouchRFExplorer, load_single_touch_rf_data
+
+    n = len(input_items)
+    if n == 0:
+        raise ValueError("launch_single_touch_rf_explorer: no sessions to display.")
+
+    def _resolve_and_load(item: Tuple[Path, Path]) -> Tuple[str, object]:
+        csv_path, database_path = item
+        session_id = session_id_from_path(csv_path)
+        npz_path = (
+            database_path / "4_analysed" / "single_touch_rf_maps"
+            / session_id / "single_touch_rf_maps.npz"
+        )
+        if not npz_path.exists():
+            raise ValueError(
+                f"launch_single_touch_rf_explorer: npz not found for session "
+                f"'{session_id}': {npz_path}"
+            )
+        forearm_ply_path = resolve_forearm_ply(csv_path.parent, session_id)
+        if forearm_ply_path is None:
+            raise ValueError(
+                f"launch_single_touch_rf_explorer: forearm PLY not found for "
+                f"session '{session_id}' in {csv_path.parent}"
+            )
+        return session_id, load_single_touch_rf_data(npz_path, forearm_ply_path, session_id)
+
+    print(f"[Single-Touch RF Explorer] Loading {n} session(s)...")
+
+    with ThreadPoolExecutor(max_workers=min(4, n)) as executor:
+        sessions: List[Tuple[str, object]] = list(
+            executor.map(_resolve_and_load, input_items)
+        )
+
+    first_label, first_data = sessions[0]
+
+    app = QApplication.instance() or QApplication(sys.argv)
+    viewer = SingleTouchRFExplorer(
+        data=first_data,
+        sessions=sessions,
+    )
+    viewer.show()
+    app.exec_()
+
+
 def launch_touch_population_explorer(
     input_items: List[Tuple[Path, Path]],
 ) -> None:

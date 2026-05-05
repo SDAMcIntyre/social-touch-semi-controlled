@@ -6,7 +6,7 @@
 parameters:
   # List of directories containing Kinect session config files to scan.
   # Paths are relative to configs/kinect_configs/.
-  kinect_configs: valid_configs_ST13-01
+  kinect_configs: valid_configs_ST13-02
 
 tasks:
   # ============================================================
@@ -19,7 +19,7 @@ tasks:
   # sessions with a fresh cache are skipped automatically.
   precompute_explorer_caches:
     category: viewer_support
-    enabled: true
+    enabled: false
     options:
       force_processing: false
       max_workers: 1
@@ -45,7 +45,7 @@ tasks:
   # precompute_explorer_caches has already warmed the .npz sidecars.
   explore_rf_feature_space:
     category: viewer
-    enabled: true
+    enabled: false
     options:
       force_processing: false
     depends_on: [precompute_explorer_caches]
@@ -54,7 +54,7 @@ tasks:
   # forearm model with accumulating spike heatmap. Opens instantly when series CSVs are cached.
   explore_touch_playback:
     category: viewer
-    enabled: true
+    enabled: false
     options:
       force_processing: false
     depends_on: []
@@ -65,10 +65,22 @@ tasks:
   # Output: interactive GUI (no files written)
   explore_touch_population:
     category: viewer
+    enabled: true
+    options:
+      force_processing: false
+    depends_on: []
+
+  # Single-Touch RF Explorer: per-touch RF heatmap viewer on the 3D forearm model.
+  # Cascading Session / Block / Trial / Touch dropdowns render the pre-computed
+  # per-touch RF map from single_touch_rf_maps.npz (produced by map_single_touch_rf).
+  # Output: interactive GUI (no files written)
+  explore_single_touch_rf:
+    category: viewer
     enabled: false
     options:
       force_processing: false
-    depends_on: [touch_series_transforms]
+      neuron_mode: iff
+    depends_on: []
 
   # RF Cluster Gallery Viewer: interactive gallery of RF heatmaps with thumbnail sidebar and
   # 3D PyVista view. Iterates all enabled cluster_groups and clusterers from touch_clustering.
