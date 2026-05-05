@@ -87,6 +87,18 @@ For clustering, RF mapping, and data aggregation details see [`code/src/analysis
 
 ---
 
+## Working with GitHub Issues
+
+This branch (`sarah_sandbox`) is a working/exploration branch and is not pushed or merged into `dev`. Code changes made here are discarded at the end of a session.
+
+When asked to post or update a GitHub issue:
+- Write it as a **self-contained description** that someone working only on `dev` can understand and act on — no references to this branch, no "we found" or "I fixed", no session-specific context.
+- Present fixes as **suggested fixes**, not as completed work.
+- The issue body should be a **single, coherent description**: one summary, one root cause, one suggested fix. Do not append update comments; instead, edit the issue body in place to incorporate new information while preserving the format.
+- As more is learned (e.g. after testing a fix or discovering a downstream issue), update the issue body to reflect the current full understanding — replace stale details, extend the description, do not layer comments on top.
+
+---
+
 ## Common Gotchas
 
 - **`configs/kinect_configs/` missing**: Per-session preprocessing config YAMLs are not in the
