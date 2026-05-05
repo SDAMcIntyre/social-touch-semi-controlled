@@ -75,8 +75,6 @@ def resolve_postprocessed_paths(config: KinectConfig) -> Dict[str, Optional[Path
 
     Expected pipeline outputs:
       - contact_projected_csv : session_merged_output_dir/blocks_pca_calibrated/{merged_csv_name}
-                                (blocks_contact_projected/ no longer exists — projection runs before
-                                ICP so PCA-calibrated data is already on-surface)
       - forearm_pca_ply       : session_merged_output_dir/forearm_pca_calibrated/{session_id}_forearm.ply
       - pca_calib_json        : session_merged_output_dir/blocks_pca_calibrated/pca-xyz_transformation-matrices.json
       - hand_motion_path      : video_processed_output_dir/kinematics_analysis/{stem}_handmodel_motion.npz
@@ -193,36 +191,28 @@ def resolve_before_after_paths(config: KinectConfig) -> List[Dict]:
 
     return [
         {
-            "step_label": "Step 1: ICP Registration",
+            "step_label": "Step 1: Contact Projection",
             "before_csv": base / "blocks_merged" / raw_name,
+            "after_csv": base / "blocks_merged_projected" / raw_name,
+            "before_forearm": per_video_forearm,
+            "after_forearm": per_video_forearm,
+        },
+        {
+            "step_label": "Step 2: ICP Registration",
+            "before_csv": base / "blocks_merged_projected" / raw_name,
             "after_csv": base / "blocks_registered" / raw_name,
             "before_forearm": per_video_forearm,
             "after_forearm": unified_forearm_ply,
         },
         {
-            "step_label": "Step 2: PCA Calibration",
+            "step_label": "Step 3: PCA Calibration",
             "before_csv": base / "blocks_registered" / raw_name,
             "after_csv": base / "blocks_pca_calibrated" / pca_name,
             "before_forearm": unified_forearm_ply,
             "after_forearm": forearm_pca_dir / forearm_ply_name,
         },
         {
-            # blocks_contact_projected/ no longer exists — projection runs before ICP
-            # so PCA-calibrated data is already on-surface.  This step now shows the
-            # before/after of PCA calibration with the on-surface note, reusing
-            # blocks_pca_calibrated/ for both sides (identical data, step is a no-op
-            # visually; the slot is preserved for forward-compatibility with a
-            # relabelling follow-up).
-            "step_label": "Step 3: Forearm Projection",
-            "before_csv": base / "blocks_pca_calibrated" / pca_name,
-            "after_csv": base / "blocks_pca_calibrated" / pca_name,
-            "before_forearm": forearm_pca_dir / forearm_ply_name,
-            "after_forearm": forearm_pca_dir / forearm_ply_name,
-        },
-        {
             "step_label": "Step 4: RF Centering",
-            # before_csv was blocks_contact_projected/ which no longer exists;
-            # use blocks_pca_calibrated/ (equivalent after the architecture change).
             "before_csv": base / "blocks_pca_calibrated" / pca_name,
             "after_csv": base / "blocks_rf_centered" / pca_name,
             "before_forearm": forearm_pca_dir / forearm_ply_name,
@@ -265,22 +255,18 @@ def resolve_stage_paths(config: KinectConfig) -> List[StagePaths]:
         ),
         StagePaths(
             stage_label=STAGE_LABELS[1],
+            csv_path=base / "blocks_merged_projected" / raw_name if base is not None else None,
+            forearm=per_video_forearm,
+            coordinate_frame="camera",
+        ),
+        StagePaths(
+            stage_label=STAGE_LABELS[2],
             csv_path=base / "blocks_registered" / raw_name if base is not None else None,
             forearm=unified_forearm_ply,
             coordinate_frame="camera",
         ),
         StagePaths(
-            stage_label=STAGE_LABELS[2],
-            csv_path=base / "blocks_pca_calibrated" / pca_name if base is not None else None,
-            forearm=forearm_pca_ply,
-            coordinate_frame="pca",
-        ),
-        StagePaths(
             stage_label=STAGE_LABELS[3],
-            # blocks_contact_projected/ no longer exists as a pipeline output —
-            # projection now runs before ICP so PCA-calibrated data is already
-            # on-surface.  Point this slot to blocks_pca_calibrated/ so the
-            # viewer displays valid data at Stage 3.
             csv_path=base / "blocks_pca_calibrated" / pca_name if base is not None else None,
             forearm=forearm_pca_ply,
             coordinate_frame="pca",
