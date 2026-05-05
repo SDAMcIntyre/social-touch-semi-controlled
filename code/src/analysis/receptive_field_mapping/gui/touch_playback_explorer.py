@@ -185,10 +185,10 @@ class TouchPlaybackExplorer(QMainWindow):
         # Speed spinbox
         toolbar.addWidget(QLabel("Speed:"))
         self._speed_spin = QDoubleSpinBox()
-        self._speed_spin.setRange(0.1, 4.0)
-        self._speed_spin.setValue(1.0)
-        self._speed_spin.setSingleStep(0.25)
-        self._speed_spin.setDecimals(2)
+        self._speed_spin.setRange(0.1, 33.0)
+        self._speed_spin.setValue(33.0)
+        self._speed_spin.setSingleStep(1.0)
+        self._speed_spin.setDecimals(1)
         self._speed_spin.valueChanged.connect(self._on_speed_changed)
         toolbar.addWidget(self._speed_spin)
 
@@ -303,6 +303,12 @@ class TouchPlaybackExplorer(QMainWindow):
         if bid is None:
             return
         self._populate_trial_combo(self._data, bid)
+        trial_ids = self._data.trial_ids_by_block.get(bid, [])
+        if trial_ids:
+            touches = self._data.touches_by_block_trial.get((bid, trial_ids[0]), [])
+            if touches:
+                self._load_touch(touches[0])
+                self._render_frame(0)
 
     def _on_trial_changed(self, index: int) -> None:
         if not self._initialized or index < 0:
