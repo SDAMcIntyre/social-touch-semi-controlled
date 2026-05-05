@@ -36,9 +36,9 @@ from primary_processing import (
 
 
 from _5_postprocessing import (
+    fetch_forearm_of_reference,
     apply_icp_registration,
-    set_xyz_reference_from_gestures,
-    export_forearm_pca_calibrated,
+    calibrate_pca_xyz,
     project_contacts_onto_forearm,
     center_on_receptive_field,
     deduplicate_forearm_ply,
@@ -48,6 +48,20 @@ from _5_postprocessing import (
 from _4_merging.aggregate_blocks_session import aggregate_session_blocks
 
 # --- Post-Processing Sub-Flows ---
+
+@flow(name="fetch_forearm_of_reference")
+def fetch_forearm_of_reference_flow(
+    session_configs: List[KinectConfig],
+    output_dir: Path,
+    force_processing: bool = False,
+) -> Path:
+    """Fetch and stage the session forearm PLY into forearm_source/."""
+    print(f"[{output_dir.name}] Fetching forearm-of-reference PLY...")
+    return fetch_forearm_of_reference(
+        session_configs, output_dir,
+        force_processing=force_processing,
+    )
+
 
 @flow(name="apply_icp_registration")
 def apply_icp_registration_flow(
@@ -63,37 +77,20 @@ def apply_icp_registration_flow(
         force_processing=force_processing,
     )
 
-@flow(name="analyze_pca_components")
-def set_xyz_reference_from_gestures_flow(input_files: List[Path], output_dir: Path, force_processing: bool = False) -> Tuple[List[Path], Path]:
-    """
-    Analyse the principal component of the XYZ position for stroke and tapping.
-    Iterates over a list of files and produces a distinct output for each.
-    """
-    print(f"[{output_dir.name}] Performing PCA analysis on {len(input_files)} files...")
-
-    output_files = set_xyz_reference_from_gestures(
-        input_files, output_dir,
+@flow(name="calibrate_pca_xyz")
+def calibrate_pca_xyz_flow(
+    input_files: List[Path],
+    output_dir: Path,
+    forearm_ply_path: Path,
+    forearm_output_dir: Path,
+    force_processing: bool = False,
+) -> Tuple[List[Path], Path, Path]:
+    """Apply PCA calibration to block CSVs and the forearm PLY."""
+    print(f"[{output_dir.name}] Calibrating PCA XYZ reference on {len(input_files)} files...")
+    return calibrate_pca_xyz(
+        input_files, output_dir, forearm_ply_path, forearm_output_dir,
         monitor=False,
         monitor_segment=False,
-        force_processing=force_processing
-    )
-
-    return output_files
-
-
-@flow(name="export_forearm_pca_calibrated")
-def export_forearm_pca_calibrated_flow(
-    session_configs: List[KinectConfig],
-    pca_output_dir: Path,
-    output_dir: Path,
-    forearm_ply_path: Optional[Path] = None,
-    force_processing: bool = False,
-) -> Optional[Path]:
-    """Export the forearm-of-reference PLY transformed into PCA-calibrated space."""
-    print(f"[{output_dir.name}] Exporting PCA-calibrated forearm PLY...")
-    return export_forearm_pca_calibrated(
-        session_configs, pca_output_dir, output_dir,
-        forearm_ply_path=forearm_ply_path,
         force_processing=force_processing,
     )
 
@@ -222,35 +219,6 @@ def aggregate_session_blocks_flow(
     )
 
 
-def _resolve_latest_forearm_ply(session_output_dir: Path) -> Optional[Path]:
-    """Return the most recent forearm PLY: RF-centered if available, else PCA-calibrated."""
-    for subdir in ("forearm_rf_centered", "forearm_pca_calibrated"):
-        candidates = sorted((session_output_dir / subdir).glob("*.ply"))
-        if candidates:
-            return candidates[-1]
-    return None
-
-
-def _resolve_session_forearm(session_configs: List[KinectConfig]) -> Optional[Path]:
-    """Return _unified_registered.ply for multi-forearm, or any PLY fallback for single-forearm."""
-    first = session_configs[0]
-    forearm_dir = first.session_processed_output_dir / "forearm_pointclouds"
-    unified = forearm_dir / f"{first.session_id}_unified_registered.ply"
-    if unified.exists():
-        return unified
-
-    # Single-forearm fallback: any PLY in forearm_pointclouds/
-    plies = sorted(forearm_dir.glob("*.ply"))
-    if plies:
-        logging.info(
-            "[%s] No unified_registered.ply found; using fallback: %s",
-            first.session_id,
-            plies[0].name,
-        )
-        return plies[0]
-    return None
-
-
 # --- Worker Flow ---
 
 # @flow(name="Run Single Session Postprocessing")
@@ -288,19 +256,19 @@ def run_single_session_postprocessing(
         "session_configs": session_configs
     }
 
-    # Resolve the session forearm (unified_registered.ply or single-forearm fallback)
-    session_forearm_ply = _resolve_session_forearm(session_configs)
-    if session_forearm_ply is None:
-        raise FileNotFoundError(
-            f"No forearm PLY found for session {session_id} — "
-            "cannot run postprocessing. Check forearm_pointclouds/ directory."
-        )
-
     # Pipeline stages in execution order
     pipeline_stages = [
-        # Step 0: ICP Registration — aligns all blocks into a common coordinate frame
-        #   Input:  blocks_merged/ CSVs
-        #   Output: blocks_registered/
+        # Step 0: Fetch forearm-of-reference — copies the canonical forearm PLY into forearm_source/
+        {
+            "name": "fetch_forearm_of_reference",
+            "func": fetch_forearm_of_reference_flow,
+            "params": lambda: {
+                "session_configs": context.get("session_configs"),
+                "output_dir": session_output_dir / "forearm_source",
+            },
+            "outputs": ["source_forearm"]
+        },
+        # Step 1: ICP Registration — aligns all blocks into a common coordinate frame
         {
             "name": "apply_icp_registration",
             "func": apply_icp_registration_flow,
@@ -311,77 +279,65 @@ def run_single_session_postprocessing(
             },
             "outputs": ["registered_files"]
         },
-        # Step 1: Deduplicate (x,y) in the unified forearm PLY and contact CSVs
-        #   Input:  blocks_registered/ CSVs + _unified_registered.ply
-        #   Output: blocks_registered_deduped/ + forearm_deduped/
+        # Step 2: Deduplicate (x,y) in the unified forearm PLY and contact CSVs
         {
             "name": "deduplicate_xy",
             "func": deduplicate_xy_flow,
             "params": lambda: {
                 "input_files": context.get("registered_files"),
-                "forearm_ply_path": session_forearm_ply,
-                "output_dir": session_output_dir / "blocks_registered_deduped",
+                "forearm_ply_path": context.get("source_forearm"),
+                "output_dir": session_output_dir / "blocks_deduped",
                 "forearm_output_dir": session_output_dir / "forearm_deduped",
             },
-            "outputs": ["deduped_source_files", "deduped_forearm_ply"]
+            "outputs": ["deduped_files", "deduped_forearm"]
         },
-        # Step 2: Project contact points onto the deduplicated forearm surface
-        #   Input:  blocks_registered_deduped/ CSVs + forearm_deduped/ PLY
-        #   Output: blocks_registered_projected/
+        # Step 3: Project contact points onto the deduplicated forearm surface
         {
             "name": "project_contacts_onto_forearm",
             "func": project_contacts_onto_registered_forearm_flow,
             "params": lambda: {
-                "input_files": context.get("deduped_source_files"),
-                "forearm_ply_path": context.get("deduped_forearm_ply"),
-                "output_dir": session_output_dir / "blocks_registered_projected",
-                "projection_stats_path": session_output_dir / "blocks_registered_projected" / "projection_stats.csv",
+                "input_files": context.get("deduped_files"),
+                "forearm_ply_path": context.get("deduped_forearm"),
+                "output_dir": session_output_dir / "blocks_projected",
+                "projection_stats_path": session_output_dir / "blocks_projected" / "projection_stats.csv",
             },
-            "outputs": ["projected_source_files"]
+            "outputs": ["projected_files"]
         },
-        # Step 3: PCA XYZ Reference Calibration
+        # Step 4: PCA XYZ Calibration — applies PCA transform to CSVs and forearm PLY
         {
-            "name": "set_xyz_reference_from_gestures",
-            "func": set_xyz_reference_from_gestures_flow,
+            "name": "calibrate_pca_xyz",
+            "func": calibrate_pca_xyz_flow,
             "params": lambda: {
-                "input_files": context.get("projected_source_files"),
+                "input_files": context.get("projected_files"),
                 "output_dir": session_output_dir / "blocks_pca_calibrated",
+                "forearm_ply_path": context.get("deduped_forearm"),
+                "forearm_output_dir": session_output_dir / "forearm_pca_calibrated",
             },
-            "outputs": ["pca_data_files", "pca_report"]
-        },
-        # Step 4: Export forearm PLY in PCA-calibrated space
-        {
-            "name": "export_forearm_pca_calibrated",
-            "func": export_forearm_pca_calibrated_flow,
-            "params": lambda: {
-                "session_configs": context.get("session_configs"),
-                "pca_output_dir": context.get("pca_report"),
-                "output_dir": session_output_dir / "forearm_pca_calibrated",
-                "forearm_ply_path": context.get("deduped_forearm_ply"),
-            },
-            "outputs": ["forearm_pca_ply"]
+            "outputs": ["pca_files", "pca_output_dir", "pca_forearm"]
         },
         # Step 5: Center spatial data on the receptive field origin
         {
             "name": "center_on_receptive_field",
             "func": center_on_receptive_field_flow,
             "params": lambda: {
-                "input_files": context.get("pca_data_files"),
-                "forearm_ply_path": context.get("forearm_pca_ply"),
+                "input_files": context.get("pca_files"),
+                "forearm_ply_path": context.get("pca_forearm"),
                 "output_dir": session_output_dir / "blocks_rf_centered",
                 "forearm_output_dir": session_output_dir / "forearm_rf_centered",
                 "rf_origin_path": session_output_dir / "rf_center_origin.json",
             },
-            "outputs": ["rf_centered_files"]
+            "outputs": ["rf_files"]
         },
         # Step 6: Aggregate fully-processed blocks into one session-level CSV
         {
             "name": "aggregate_session",
             "func": aggregate_session_blocks_flow,
             "params": lambda: {
-                "input_files": context.get("rf_centered_files"),
+                "input_files": context.get("rf_files"),
                 "output_path": session_output_dir / f"{session_id}_semicontrolled_aggregated_session.csv",
-                "forearm_ply_path": _resolve_latest_forearm_ply(session_output_dir),
+                "forearm_ply_path": session_output_dir / "forearm_rf_centered" / context.get("pca_forearm").name
+                    if context.get("pca_forearm") is not None
+                    else None,
             },
             "outputs": ["aggregated_file"]
         },

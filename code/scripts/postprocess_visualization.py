@@ -211,20 +211,20 @@ def resolve_before_after_paths(config: KinectConfig) -> List[Dict]:
         {
             "step_label": "Step 1: XY Deduplication",
             "before_csv": base / "blocks_registered" / raw_name,
-            "after_csv": base / "blocks_registered_deduped" / raw_name,
+            "after_csv": base / "blocks_deduped" / raw_name,
             "before_forearm": unified_forearm_ply,
             "after_forearm": deduped_forearm or unified_forearm_ply,
         },
         {
             "step_label": "Step 2: Contact Projection",
-            "before_csv": base / "blocks_registered_deduped" / raw_name,
-            "after_csv": base / "blocks_registered_projected" / raw_name,
+            "before_csv": base / "blocks_deduped" / raw_name,
+            "after_csv": base / "blocks_projected" / raw_name,
             "before_forearm": deduped_forearm or unified_forearm_ply,
             "after_forearm": deduped_forearm or unified_forearm_ply,
         },
         {
             "step_label": "Step 3: PCA Calibration",
-            "before_csv": base / "blocks_registered_projected" / raw_name,
+            "before_csv": base / "blocks_projected" / raw_name,
             "after_csv": base / "blocks_pca_calibrated" / pca_name,
             "before_forearm": deduped_forearm or unified_forearm_ply,
             "after_forearm": forearm_pca_dir / forearm_ply_name,
@@ -239,10 +239,22 @@ def resolve_before_after_paths(config: KinectConfig) -> List[Dict]:
     ]
 
 
+def _resolve_source_forearm(config: KinectConfig) -> Optional[Path]:
+    """Return the path to the fetched source forearm PLY from forearm_source/, or None."""
+    if config.session_merged_output_dir is None:
+        return None
+    source_ply = (
+        config.session_merged_output_dir
+        / "forearm_source"
+        / f"{config.session_id}_forearm.ply"
+    )
+    return source_ply if source_ply.exists() else None
+
+
 def resolve_stage_paths(config: KinectConfig) -> List[StagePaths]:
     """Return one StagePaths instance per postprocessing stage.
 
-    Always returns a list of exactly 5 entries (one per label in STAGE_LABELS).
+    Always returns a list of exactly 6 entries (one per label in STAGE_LABELS).
     CSV paths are set to None when config.session_merged_output_dir is None;
     otherwise the path is set regardless of whether the file exists yet —
     the viewer handles missing files gracefully.
@@ -255,7 +267,8 @@ def resolve_stage_paths(config: KinectConfig) -> List[StagePaths]:
     pca_name = f"{session_id}_semicontrolled_{block_id}_merged_data_pca-xyz.csv"
 
     per_video_forearm = _load_per_video_forearm(config)
-    unified_forearm_ply = _load_unified_forearm(config)
+    source_forearm_ply = _resolve_source_forearm(config)
+    unified_forearm_ply = source_forearm_ply or _load_unified_forearm(config)
     deduped_forearm = _resolve_deduped_forearm(config)
 
     if base is not None:
@@ -280,13 +293,13 @@ def resolve_stage_paths(config: KinectConfig) -> List[StagePaths]:
         ),
         StagePaths(
             stage_label=STAGE_LABELS[2],
-            csv_path=base / "blocks_registered_deduped" / raw_name if base is not None else None,
+            csv_path=base / "blocks_deduped" / raw_name if base is not None else None,
             forearm=deduped_forearm or unified_forearm_ply,
             coordinate_frame="camera",
         ),
         StagePaths(
             stage_label=STAGE_LABELS[3],
-            csv_path=base / "blocks_registered_projected" / raw_name if base is not None else None,
+            csv_path=base / "blocks_projected" / raw_name if base is not None else None,
             forearm=deduped_forearm or unified_forearm_ply,
             coordinate_frame="camera",
         ),
@@ -532,7 +545,7 @@ def run_single_session_pipeline_stage_viewer(
         print(f"[{block_name}] No stage CSV files found — skipping.")
         return
     recording_name = config.source_video.stem
-    print(f"[{block_name}] Launching PostprocessingStageViewer ({len(available)}/5 stages with data)...")
+    print(f"[{block_name}] Launching PostprocessingStageViewer ({len(available)}/6 stages with data)...")
     app = QApplication.instance() or QApplication(sys.argv)
     viewer = PostprocessingStageViewer(stage_paths, recording_name=recording_name)
     viewer.show()
