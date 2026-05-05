@@ -356,6 +356,7 @@ class PostprocessingStageViewer(QMainWindow):
         )
         if has_neural:
             self._neural_panel = NeuralDataPanel(self._full_df, self._total_frames)
+            self._neural_panel.frame_requested.connect(self._on_neural_frame_requested)
             self._outer_layout.addWidget(self._neural_panel)
             self._neural_scale = (
                 len(self._full_df) / self._total_frames if self._total_frames > 0 else 1.0
@@ -658,6 +659,10 @@ class PostprocessingStageViewer(QMainWindow):
             self.plotter.render()
         else:
             self._update_frame(self.current_index)
+
+    def _on_neural_frame_requested(self, frame: int) -> None:
+        if 0 <= frame < self._total_frames:
+            self.frame_slider.setValue(frame)
 
     # ------------------------------------------------------------------
     # Play/pause

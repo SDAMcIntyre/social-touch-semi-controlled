@@ -45,7 +45,6 @@ def main() -> None:
     app = QApplication(sys.argv)
     window = LauncherWindow(entries, configs_dir)
     window.show()
-    window.showMaximized()
     sys.exit(app.exec_())
 
 

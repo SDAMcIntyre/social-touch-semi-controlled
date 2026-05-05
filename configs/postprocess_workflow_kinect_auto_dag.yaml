@@ -6,8 +6,7 @@
 parameters:
   # Set to true to run different sessions in parallel, false to run them one by one.
   parallel_execution: false
-  kinect_configs:
-    valid_configs_ST13-03/kinect_config_2022-06-14_ST13-03_semicontrolled_block-order05.yaml
+  kinect_configs: valid_configs_ST13-03
 
 tasks:
 
@@ -15,7 +14,7 @@ tasks:
   fetch_forearm_of_reference:
     enabled: true
     options:
-      force_processing: false
+      force_processing: true
     depends_on: []
 
   # Step 1: ICP Registration — aligns all blocks into a common coordinate frame.
@@ -29,7 +28,7 @@ tasks:
   deduplicate_xy:
     enabled: true
     options:
-      force_processing: false
+      force_processing: true
       monitor: false
       epsilon: 15.0
     depends_on: [apply_icp_registration]
@@ -38,26 +37,26 @@ tasks:
   project_contacts_onto_forearm:
     enabled: true
     options:
-      force_processing: false
+      force_processing: true
     depends_on: [deduplicate_xy]
 
   # Step 4: PCA XYZ calibration — applies PCA transform to CSVs and forearm PLY.
   calibrate_pca_xyz:
     enabled: true
     options:
-      force_processing: false
+      force_processing: true
     depends_on: [project_contacts_onto_forearm]
 
   # Step 5: Center spatial data on the receptive field origin.
   center_on_receptive_field:
     enabled: true
     options:
-      force_processing: false
+      force_processing: true
     depends_on: [calibrate_pca_xyz]
 
   # Step 6: Aggregate fully-processed blocks into one session-level CSV.
   aggregate_session:
     enabled: true
     options:
-      force_processing: false
+      force_processing: true
     depends_on: [center_on_receptive_field]
