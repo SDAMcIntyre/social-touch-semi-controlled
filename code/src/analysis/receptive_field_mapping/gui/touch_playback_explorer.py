@@ -1,11 +1,14 @@
 """Touch Playback Explorer GUI — dual 3D view for per-touch animation.
 
 Presents two side-by-side PyVista 3D forearm views:
-  - Left:  current-frame contact points as red spheres on a grey point cloud
-  - Right: spike heatmap accumulating from touch start (jet colormap, NaN=grey)
+  - Left:  current-frame contact points as red spheres on the forearm point
+           cloud (PLY vertex colours when available, grey otherwise)
+  - Right: heatmap accumulating from touch start (jet colormap, NaN=grey);
+           mode toggleable between spike density and mean IFF (Hz)
 
 A toolbar provides session / trial / touch dropdowns, playback controls
-(Play, Play All, Stop), a speed spinbox, and a frame counter.
+(Play, Play All, Stop), a speed spinbox, a heatmap mode combo, and a frame
+counter.
 """
 
 import logging
@@ -77,10 +80,16 @@ class TouchPlaybackExplorer(QMainWindow):
         self._forearm_cloud_left: Optional[pv.PolyData] = None
         self._forearm_cloud_right: Optional[pv.PolyData] = None
 
-        # Running spike accumulators — reset in _load_touch().
+        # Running spike + IFF accumulators — reset in _load_touch().
         n_verts = len(self._data.session_data.forearm_vertices)
         self._spike_sum = np.zeros(n_verts, dtype=np.float64)
+        self._iff_sum = np.zeros(n_verts, dtype=np.float64)
         self._contact_count = np.zeros(n_verts, dtype=np.float64)
+
+        # Heatmap mode: "spike" (default) or "iff".
+        self._heatmap_mode: str = "spike"
+        # Stable IFF upper clim for the current touch (set in _load_touch).
+        self._touch_max_iff: float = 1.0
 
         self._build_ui()
 
@@ -185,12 +194,22 @@ class TouchPlaybackExplorer(QMainWindow):
         # Speed spinbox
         toolbar.addWidget(QLabel("Speed:"))
         self._speed_spin = QDoubleSpinBox()
-        self._speed_spin.setRange(0.1, 4.0)
-        self._speed_spin.setValue(1.0)
-        self._speed_spin.setSingleStep(0.25)
-        self._speed_spin.setDecimals(2)
+        self._speed_spin.setRange(0.1, 33.0)
+        self._speed_spin.setValue(33.0)
+        self._speed_spin.setSingleStep(1.0)
+        self._speed_spin.setDecimals(1)
         self._speed_spin.valueChanged.connect(self._on_speed_changed)
         toolbar.addWidget(self._speed_spin)
+
+        toolbar.addSeparator()
+
+        # Heatmap mode combo
+        toolbar.addWidget(QLabel("Mode:"))
+        self._heatmap_mode_combo = QComboBox()
+        self._heatmap_mode_combo.addItem("Spike density")
+        self._heatmap_mode_combo.addItem("IFF (Hz)")
+        self._heatmap_mode_combo.currentIndexChanged.connect(self._on_heatmap_mode_changed)
+        toolbar.addWidget(self._heatmap_mode_combo)
 
         toolbar.addSeparator()
 
@@ -269,6 +288,7 @@ class TouchPlaybackExplorer(QMainWindow):
         self._stop()
         n_verts = len(self._data.session_data.forearm_vertices)
         self._spike_sum = np.zeros(n_verts, dtype=np.float64)
+        self._iff_sum = np.zeros(n_verts, dtype=np.float64)
         self._contact_count = np.zeros(n_verts, dtype=np.float64)
         self._reset_heatmap()
         self._render_frame(value)
@@ -303,6 +323,12 @@ class TouchPlaybackExplorer(QMainWindow):
         if bid is None:
             return
         self._populate_trial_combo(self._data, bid)
+        trial_ids = self._data.trial_ids_by_block.get(bid, [])
+        if trial_ids:
+            touches = self._data.touches_by_block_trial.get((bid, trial_ids[0]), [])
+            if touches:
+                self._load_touch(touches[0])
+                self._render_frame(0)
 
     def _on_trial_changed(self, index: int) -> None:
         if not self._initialized or index < 0:
@@ -353,17 +379,23 @@ class TouchPlaybackExplorer(QMainWindow):
         self._slider_value_label.setText(f"0 / {n_frames}")
         self._frame_slider.blockSignals(False)
 
-        # Reset running spike accumulators.
+        # Reset running spike + IFF accumulators.
         n_verts = len(self._data.session_data.forearm_vertices)
         self._spike_sum = np.zeros(n_verts, dtype=np.float64)
+        self._iff_sum = np.zeros(n_verts, dtype=np.float64)
         self._contact_count = np.zeros(n_verts, dtype=np.float64)
 
-    def _render_forearm(self) -> None:
-        """Render the grey forearm point cloud on both plotters.
+        # Stable IFF upper clim: max IFF value across all frames of this touch.
+        max_iff = float(np.max(touch.frame_iff)) if len(touch.frame_iff) > 0 else 0.0
+        self._touch_max_iff = max_iff if max_iff > 0.0 else 1.0
 
-        Left plotter shows a plain grey cloud.
-        Right plotter shows the cloud with an initialised ``spike_density``
-        scalar (NaN everywhere so the forearm appears grey until data arrive).
+    def _render_forearm(self) -> None:
+        """Render the forearm point cloud on both plotters.
+
+        Left plotter: PLY vertex colours when available, grey otherwise.
+        Right plotter: scalar cloud for the active heatmap mode (spike density
+        or IFF), NaN everywhere initially so the forearm appears grey until
+        data arrive.
         """
         self._plotter_left.clear()
         self._plotter_left.set_background("black")
@@ -371,27 +403,43 @@ class TouchPlaybackExplorer(QMainWindow):
         self._plotter_right.set_background("black")
 
         vertices = self._data.session_data.forearm_vertices
+        vertex_colors = self._data.session_data.forearm_vertex_colors
 
-        # Left — plain grey cloud.
+        # Left — PLY vertex colours when available, grey otherwise.
         cloud_left = pv.PolyData(vertices)
         self._forearm_cloud_left = cloud_left
-        self._plotter_left.add_mesh(
-            cloud_left,
-            color=[0.3, 0.3, 0.3],
-            point_size=3,
-            name="forearm",
+        use_vertex_colors = (
+            vertex_colors is not None
+            and vertex_colors.shape == (len(vertices), 3)
         )
+        if use_vertex_colors:
+            cloud_left["rgb"] = vertex_colors
+            self._plotter_left.add_mesh(
+                cloud_left,
+                scalars="rgb",
+                rgb=True,
+                point_size=3,
+                name="forearm",
+            )
+        else:
+            self._plotter_left.add_mesh(
+                cloud_left,
+                color=[0.3, 0.3, 0.3],
+                point_size=3,
+                name="forearm",
+            )
 
-        # Right — scalar cloud for spike heatmap.
+        # Right — scalar cloud for the active heatmap mode.
         cloud_right = pv.PolyData(vertices)
-        spike_density = np.full(len(vertices), np.nan, dtype=np.float64)
-        cloud_right["spike_density"] = spike_density
+        heatmap_scalars = np.full(len(vertices), np.nan, dtype=np.float64)
+        cloud_right["heatmap"] = heatmap_scalars
         self._forearm_cloud_right = cloud_right
+        clim = self._current_heatmap_clim()
         self._plotter_right.add_mesh(
             cloud_right,
-            scalars="spike_density",
+            scalars="heatmap",
             cmap="jet",
-            clim=(0, 1),
+            clim=clim,
             nan_color=[0.3, 0.3, 0.3],
             show_scalar_bar=True,
             render_points_as_spheres=False,
@@ -406,12 +454,78 @@ class TouchPlaybackExplorer(QMainWindow):
         self._plotter_right.render()
 
     def _reset_heatmap(self) -> None:
-        """Reset the right plotter's spike heatmap to all-NaN without touching cameras."""
+        """Reset the right plotter's heatmap to all-NaN without touching cameras."""
         if self._forearm_cloud_right is None:
             return
         n_verts = len(self._data.session_data.forearm_vertices)
-        self._forearm_cloud_right["spike_density"] = np.full(n_verts, np.nan, dtype=np.float64)
+        self._forearm_cloud_right["heatmap"] = np.full(n_verts, np.nan, dtype=np.float64)
         self._forearm_cloud_right.Modified()
+        self._plotter_right.render()
+
+    def _current_heatmap_clim(self) -> Tuple[float, float]:
+        """Return the colour-limit pair for the active heatmap mode."""
+        if self._heatmap_mode == "iff":
+            return (0.0, self._touch_max_iff)
+        return (0.0, 1.0)
+
+    def _update_heatmap_scalars(self) -> None:
+        """Write the active heatmap mode's mean values into the right-panel mesh."""
+        if self._forearm_cloud_right is None:
+            return
+        has_contact = self._contact_count > 0
+        if self._heatmap_mode == "iff":
+            scalars = np.where(
+                has_contact,
+                self._iff_sum / np.where(has_contact, self._contact_count, 1.0),
+                np.nan,
+            )
+        else:
+            scalars = np.where(
+                has_contact,
+                self._spike_sum / np.where(has_contact, self._contact_count, 1.0),
+                np.nan,
+            )
+        self._forearm_cloud_right["heatmap"] = scalars
+        self._forearm_cloud_right.Modified()
+
+    def _on_heatmap_mode_changed(self, index: int) -> None:
+        """Switch the active heatmap mode and rebuild the display."""
+        self._heatmap_mode = "iff" if index == 1 else "spike"
+        # Re-add the right-panel mesh with the correct clim for the new mode.
+        if self._initialized and self._forearm_cloud_right is not None:
+            clim = self._current_heatmap_clim()
+            self._plotter_right.add_mesh(
+                self._forearm_cloud_right,
+                scalars="heatmap",
+                cmap="jet",
+                clim=clim,
+                nan_color=[0.3, 0.3, 0.3],
+                show_scalar_bar=True,
+                render_points_as_spheres=False,
+                point_size=3,
+                name="forearm",
+                copy_mesh=False,
+            )
+            self._recompute_heatmap_from_scratch()
+
+    def _recompute_heatmap_from_scratch(self) -> None:
+        """Reset accumulators and replay accumulation up to the current frame."""
+        if self._current_touch is None:
+            return
+        n_verts = len(self._data.session_data.forearm_vertices)
+        self._spike_sum = np.zeros(n_verts, dtype=np.float64)
+        self._iff_sum = np.zeros(n_verts, dtype=np.float64)
+        self._contact_count = np.zeros(n_verts, dtype=np.float64)
+
+        # Vectorised replay: accumulate all frames from 0 to current_frame (inclusive).
+        touch = self._current_touch
+        for fi in range(self._current_frame + 1):
+            verts = touch.frame_vertex_indices[fi]
+            np.add.at(self._spike_sum, verts, float(touch.frame_spikes[fi]))
+            np.add.at(self._iff_sum, verts, float(touch.frame_iff[fi]))
+            np.add.at(self._contact_count, verts, 1.0)
+
+        self._update_heatmap_scalars()
         self._plotter_right.render()
 
     def _render_frame(self, frame_idx: int) -> None:
@@ -456,21 +570,15 @@ class TouchPlaybackExplorer(QMainWindow):
                 name="contacts",
             )
 
-        # ---- Right view: accumulate spike heatmap ----
+        # ---- Right view: accumulate spike + IFF heatmap ----
         verts_this_frame = self._current_touch.frame_vertex_indices[frame_idx]
         spike_this_frame = float(self._current_touch.frame_spikes[frame_idx])
+        iff_this_frame = float(self._current_touch.frame_iff[frame_idx])
         np.add.at(self._spike_sum, verts_this_frame, spike_this_frame)
+        np.add.at(self._iff_sum, verts_this_frame, iff_this_frame)
         np.add.at(self._contact_count, verts_this_frame, 1.0)
 
-        spike_density = np.where(
-            self._contact_count > 0,
-            self._spike_sum / self._contact_count,
-            np.nan,
-        )
-
-        if self._forearm_cloud_right is not None:
-            self._forearm_cloud_right["spike_density"] = spike_density
-            self._forearm_cloud_right.Modified()
+        self._update_heatmap_scalars()
 
         self._plotter_left.render()
         self._plotter_right.render()
