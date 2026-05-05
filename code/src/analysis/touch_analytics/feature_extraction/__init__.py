@@ -9,6 +9,8 @@
 from ..representation.feature_characterization import (
     FeatureExtractor,
     StatisticalExtractor,
+    MeanDuringIffExtractor,
+    MeanBeforeIffExtractor,
     AGGREGATION_NAMES,
     EXTRACTOR_REGISTRY,
     get_feature_extractor,
@@ -18,6 +20,8 @@ from ..representation.feature_characterization import (
 __all__ = [
     'FeatureExtractor',
     'StatisticalExtractor',
+    'MeanDuringIffExtractor',
+    'MeanBeforeIffExtractor',
     'AGGREGATION_NAMES',
     'EXTRACTOR_REGISTRY',
     'get_feature_extractor',

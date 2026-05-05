@@ -5,7 +5,10 @@
 parameters:
   # List of directories containing Kinect session config files to scan.
   # Paths are relative to configs/kinect_configs/.
-  kinect_configs: valid_configs_ST13-02
+  kinect_configs: [valid_configs_ST13-01, valid_configs_ST13-02, 
+      valid_configs_ST13-03, valid_configs_ST14-01, valid_configs_ST14-02, 
+      valid_configs_ST14-03, valid_configs_ST14-04, valid_configs_ST15-01, 
+      valid_configs_ST15-02]
 
 tasks:
   # ============================================================
@@ -41,7 +44,7 @@ tasks:
     category: processing
     enabled: true
     options:
-      force_processing: true
+      force_processing: false
       preparation:
         interpolation:
           method: cubic
@@ -107,6 +110,17 @@ tasks:
           enabled: true
         skewness:
           enabled: true
+        # Mean of each numeric column over frames where IFF activity is detected
+        # (Nerve_freq > 0, or contact_detected == 1 as fallback).
+        # Requires 'Nerve_freq' column; session must include neural frequency data.
+        mean_during_iff:
+          enabled: false
+        # Mean of each numeric column over the window before the first IFF-active frame.
+        # pre_iff_window_ms controls the look-back window size (default 250 frames).
+        # Returns NaN for all columns when activity starts at the first frame.
+        mean_before_iff:
+          enabled: false
+          pre_iff_window_ms: 250
     depends_on: [touch_series_transforms]
 
   # Stages 3–5 (Reduction + Clustering + Evaluation): Global clustering on pooled feature CSVs.
@@ -321,7 +335,7 @@ tasks:
   # Consumes output from touch_feature_extraction
   analyse_ap_efficacy:
     category: processing
-    enabled: true
+    enabled: false
     options:
       force_processing: false
     depends_on: [touch_feature_extraction]
@@ -330,7 +344,7 @@ tasks:
   # Idempotent against clustered CSV mtime; does not re-run on vis-param changes.
   extract_receptive_fields_clustered:
     category: processing
-    enabled: true
+    enabled: false
     options:
       force_processing: false
       cluster_groups: [pressure_velocity_mean_cartesian_binning]
@@ -340,7 +354,7 @@ tasks:
   # Re-runs only when projection_method / disjoint_mask_distance_mm change or force=true.
   visualize_receptive_fields_clustered:
     category: processing
-    enabled: true
+    enabled: false
     options:
       force_processing: false
       cluster_groups: [pressure_velocity_mean_cartesian_binning]

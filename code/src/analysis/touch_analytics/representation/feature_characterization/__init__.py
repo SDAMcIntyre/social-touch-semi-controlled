@@ -2,10 +2,14 @@
 import warnings
 from .base import FeatureExtractor
 from .statistical import StatisticalExtractor
+from .iff_windowed_mean import MeanDuringIffExtractor, MeanBeforeIffExtractor
 
 AGGREGATION_NAMES = frozenset({'max', 'min', 'mean', 'median', 'std', 'range', 'skewness'})
 
-EXTRACTOR_REGISTRY: dict[str, type[FeatureExtractor]] = {}
+EXTRACTOR_REGISTRY: dict[str, type[FeatureExtractor]] = {
+    'mean_during_iff': MeanDuringIffExtractor,
+    'mean_before_iff': MeanBeforeIffExtractor,
+}
 
 
 def get_feature_extractor(feature_name: str, feature_config: dict) -> FeatureExtractor:
@@ -54,6 +58,8 @@ def get_extractor(method: str) -> FeatureExtractor:
 __all__ = [
     'FeatureExtractor',
     'StatisticalExtractor',
+    'MeanDuringIffExtractor',
+    'MeanBeforeIffExtractor',
     'AGGREGATION_NAMES',
     'EXTRACTOR_REGISTRY',
     'get_feature_extractor',
