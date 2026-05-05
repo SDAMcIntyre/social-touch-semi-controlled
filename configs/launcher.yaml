@@ -65,6 +65,9 @@ categories:
 
   - name: Analysis
     workflows:
-      - name: Analysis Workflow
-        script: code/scripts/analysis_workflow.py
-        dag_config: configs/analyse_workflow_dag.yaml
+      - name: Analysis [Processing]
+        script: code/scripts/analysis_workflow_processing.py
+        dag_config: configs/analyse_workflow_processing_dag.yaml
+      - name: Analysis [Viewers]
+        script: code/scripts/analysis_workflow_viewers.py
+        dag_config: configs/analyse_workflow_viewers_dag.yaml
