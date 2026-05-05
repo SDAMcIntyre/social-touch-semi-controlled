@@ -122,7 +122,7 @@ class TouchPlaybackExplorer(QMainWindow):
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 1)
 
-        root.addWidget(splitter)
+        root.addWidget(splitter, 1)
 
     def _build_toolbar(self) -> None:
         toolbar = QToolBar("Controls")
@@ -137,6 +137,15 @@ class TouchPlaybackExplorer(QMainWindow):
             self._session_combo.addItem(label)
         self._session_combo.currentIndexChanged.connect(self._on_session_changed)
         toolbar.addWidget(self._session_combo)
+
+        toolbar.addSeparator()
+
+        # Block combo
+        toolbar.addWidget(QLabel("Block:"))
+        self._block_combo = QComboBox()
+        self._block_combo.setMinimumWidth(80)
+        self._block_combo.currentIndexChanged.connect(self._on_block_changed)
+        toolbar.addWidget(self._block_combo)
 
         toolbar.addSeparator()
 
@@ -194,22 +203,34 @@ class TouchPlaybackExplorer(QMainWindow):
     # Combo cascade helpers
     # ------------------------------------------------------------------
 
-    def _populate_trial_combo(self, data: PlaybackData) -> None:
-        """Repopulate the trial combo from *data* and cascade to touch combo."""
+    def _populate_block_combo(self, data: PlaybackData) -> None:
+        """Repopulate the block combo from *data* and cascade to trial combo."""
+        self._block_combo.blockSignals(True)
+        self._block_combo.clear()
+        for bid in data.block_order_ids:
+            self._block_combo.addItem(f"Block {bid}")
+        self._block_combo.blockSignals(False)
+
+        if data.block_order_ids:
+            self._populate_trial_combo(data, data.block_order_ids[0])
+
+    def _populate_trial_combo(self, data: PlaybackData, block_id: str) -> None:
+        """Repopulate the trial combo for *block_id* and cascade to touch combo."""
         self._trial_combo.blockSignals(True)
         self._trial_combo.clear()
-        for tid in data.trial_ids:
+        for tid in data.trial_ids_by_block.get(block_id, []):
             self._trial_combo.addItem(f"Trial {tid}")
         self._trial_combo.blockSignals(False)
 
-        if data.trial_ids:
-            self._populate_touch_combo(data, data.trial_ids[0])
+        trial_ids = data.trial_ids_by_block.get(block_id, [])
+        if trial_ids:
+            self._populate_touch_combo(data, block_id, trial_ids[0])
 
-    def _populate_touch_combo(self, data: PlaybackData, trial_id: int) -> None:
-        """Repopulate the touch combo for *trial_id* and select index 0."""
+    def _populate_touch_combo(self, data: PlaybackData, block_id: str, trial_id: int) -> None:
+        """Repopulate the touch combo for *(block_id, trial_id)* and select index 0."""
         self._touch_combo.blockSignals(True)
         self._touch_combo.clear()
-        for te in data.touches_by_trial.get(trial_id, []):
+        for te in data.touches_by_block_trial.get((block_id, trial_id), []):
             self._touch_combo.addItem(
                 f"Touch {te.single_touch_id} ({te.gesture_type})"
             )
@@ -217,6 +238,26 @@ class TouchPlaybackExplorer(QMainWindow):
 
         if self._touch_combo.count() > 0:
             self._touch_combo.setCurrentIndex(0)
+
+    # ------------------------------------------------------------------
+    # Current-selection helpers
+    # ------------------------------------------------------------------
+
+    def _current_block_id(self) -> Optional[str]:
+        idx = self._block_combo.currentIndex()
+        if idx < 0 or idx >= len(self._data.block_order_ids):
+            return None
+        return self._data.block_order_ids[idx]
+
+    def _current_trial_id(self) -> Optional[int]:
+        bid = self._current_block_id()
+        if bid is None:
+            return None
+        trial_ids = self._data.trial_ids_by_block.get(bid, [])
+        idx = self._trial_combo.currentIndex()
+        if idx < 0 or idx >= len(trial_ids):
+            return None
+        return trial_ids[idx]
 
     # ------------------------------------------------------------------
     # Signal handlers
@@ -240,25 +281,42 @@ class TouchPlaybackExplorer(QMainWindow):
             )
         _, new_data = self._sessions[index]
         self._data = new_data
-        self._populate_trial_combo(new_data)
+        self._populate_block_combo(new_data)
 
         if self._initialized:
             self._render_forearm()
-            # Load first touch of first trial (if available).
-            if new_data.trial_ids:
-                first_trial = new_data.trial_ids[0]
-                touches = new_data.touches_by_trial.get(first_trial, [])
-                if touches:
-                    self._load_touch(touches[0])
-                    self._render_frame(0)
+            if new_data.block_order_ids:
+                first_block = new_data.block_order_ids[0]
+                first_trial_ids = new_data.trial_ids_by_block.get(first_block, [])
+                if first_trial_ids:
+                    touches = new_data.touches_by_block_trial.get(
+                        (first_block, first_trial_ids[0]), []
+                    )
+                    if touches:
+                        self._load_touch(touches[0])
+                        self._render_frame(0)
+
+    def _on_block_changed(self, index: int) -> None:
+        if not self._initialized or index < 0:
+            return
+        bid = self._current_block_id()
+        if bid is None:
+            return
+        self._populate_trial_combo(self._data, bid)
 
     def _on_trial_changed(self, index: int) -> None:
         if not self._initialized or index < 0:
             return
-        trial_id = self._data.trial_ids[index]
-        self._populate_touch_combo(self._data, trial_id)
+        bid = self._current_block_id()
+        if bid is None:
+            return
+        trial_ids = self._data.trial_ids_by_block.get(bid, [])
+        if index >= len(trial_ids):
+            return
+        trial_id = trial_ids[index]
+        self._populate_touch_combo(self._data, bid, trial_id)
 
-        touches = self._data.touches_by_trial.get(trial_id, [])
+        touches = self._data.touches_by_block_trial.get((bid, trial_id), [])
         if touches:
             self._load_touch(touches[0])
             self._render_frame(0)
@@ -266,11 +324,11 @@ class TouchPlaybackExplorer(QMainWindow):
     def _on_touch_changed(self, index: int) -> None:
         if not self._initialized or index < 0:
             return
-        trial_idx = self._trial_combo.currentIndex()
-        if trial_idx < 0 or trial_idx >= len(self._data.trial_ids):
+        bid = self._current_block_id()
+        tid = self._current_trial_id()
+        if bid is None or tid is None:
             return
-        trial_id = self._data.trial_ids[trial_idx]
-        touches = self._data.touches_by_trial.get(trial_id, [])
+        touches = self._data.touches_by_block_trial.get((bid, tid), [])
         if index >= len(touches):
             return
         touch = touches[index]
@@ -483,16 +541,19 @@ class TouchPlaybackExplorer(QMainWindow):
             if sz.width() > 0 and sz.height() > 0:
                 plotter.render_window.SetSize(sz.width(), sz.height())
 
-        self._populate_trial_combo(self._data)
+        self._populate_block_combo(self._data)
         self._render_forearm()
 
-        # Load first touch of the first trial if available.
-        if self._data.trial_ids:
-            first_trial = self._data.trial_ids[0]
-            touches = self._data.touches_by_trial.get(first_trial, [])
-            if touches:
-                self._load_touch(touches[0])
-                self._render_frame(0)
+        if self._data.block_order_ids:
+            first_block = self._data.block_order_ids[0]
+            first_trial_ids = self._data.trial_ids_by_block.get(first_block, [])
+            if first_trial_ids:
+                touches = self._data.touches_by_block_trial.get(
+                    (first_block, first_trial_ids[0]), []
+                )
+                if touches:
+                    self._load_touch(touches[0])
+                    self._render_frame(0)
 
         self._setup_camera_link()
 
@@ -531,11 +592,11 @@ class TouchPlaybackExplorer(QMainWindow):
         """Queue all touches in the selected trial and play sequentially."""
         self._timer.stop()
         self._play_queue.clear()
-        trial_idx = self._trial_combo.currentIndex()
-        if trial_idx < 0 or trial_idx >= len(self._data.trial_ids):
+        bid = self._current_block_id()
+        tid = self._current_trial_id()
+        if bid is None or tid is None:
             return
-        trial_id = self._data.trial_ids[trial_idx]
-        touches = self._data.touches_by_trial.get(trial_id, [])
+        touches = self._data.touches_by_block_trial.get((bid, tid), [])
         if not touches:
             return
         # Load first touch; queue the rest
@@ -572,16 +633,25 @@ class TouchPlaybackExplorer(QMainWindow):
         self._current_frame += 1
 
     def _sync_combos_to_touch(self, touch: TouchEvent) -> None:
-        """Update trial/touch combos to reflect *touch* without triggering playback."""
-        # Find trial index
-        if touch.trial_id not in self._data.trial_ids:
+        """Update block/trial/touch combos to reflect *touch* without triggering playback."""
+        if touch.block_order_id not in self._data.block_order_ids:
             return
-        trial_idx = self._data.trial_ids.index(touch.trial_id)
+        block_idx = self._data.block_order_ids.index(touch.block_order_id)
+        self._block_combo.blockSignals(True)
+        self._block_combo.setCurrentIndex(block_idx)
+        self._block_combo.blockSignals(False)
+
+        trial_ids = self._data.trial_ids_by_block.get(touch.block_order_id, [])
+        if touch.trial_id not in trial_ids:
+            return
+        trial_idx = trial_ids.index(touch.trial_id)
         self._trial_combo.blockSignals(True)
         self._trial_combo.setCurrentIndex(trial_idx)
         self._trial_combo.blockSignals(False)
-        # Find touch index within trial
-        touches = self._data.touches_by_trial.get(touch.trial_id, [])
+
+        touches = self._data.touches_by_block_trial.get(
+            (touch.block_order_id, touch.trial_id), []
+        )
         touch_idx = next(
             (i for i, t in enumerate(touches) if t.single_touch_id == touch.single_touch_id),
             -1,

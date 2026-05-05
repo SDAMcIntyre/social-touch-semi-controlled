@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 _REQUIRED_COLUMNS = (
     "contact_points",
+    "block_order_id",
     "trial_id",
     "single_touch_id",
     "Nerve_spike",
@@ -46,6 +47,7 @@ class PlaybackSessionData:
 
 @dataclass
 class TouchEvent:
+    block_order_id: str
     trial_id: int
     single_touch_id: int
     gesture_type: str                       # 'tap', 'stroke_proximal', etc.
@@ -58,8 +60,9 @@ class TouchEvent:
 @dataclass
 class PlaybackData:
     session_data: PlaybackSessionData
-    trial_ids: list                         # sorted unique ints, excluding 0
-    touches_by_trial: dict                  # trial_id -> sorted list[TouchEvent]
+    block_order_ids: list                   # sorted unique strings (by numeric value)
+    trial_ids_by_block: dict                # block_order_id -> sorted list[int]
+    touches_by_block_trial: dict            # (block_order_id, trial_id) -> sorted list[TouchEvent]
 
 
 # ------------------------------------------------------------------
@@ -85,10 +88,11 @@ def _save_playback_cache(
     """
     cache_path = _playback_cache_path(series_csv_path)
 
-    # Collect all touches in a stable order (sorted by trial_id, then single_touch_id).
+    # Collect all touches in a stable order (block → trial → touch_id).
     all_touches: list[TouchEvent] = []
-    for tid in sorted(data.touches_by_trial.keys()):
-        all_touches.extend(data.touches_by_trial[tid])
+    for bid in data.block_order_ids:
+        for tid in data.trial_ids_by_block[bid]:
+            all_touches.extend(data.touches_by_block_trial[(bid, tid)])
 
     n_touches = len(all_touches)
 
@@ -96,6 +100,7 @@ def _save_playback_cache(
         [[t.trial_id, t.single_touch_id] for t in all_touches],
         dtype=np.int64,
     )  # (n_touches, 2)
+    touch_block_ids = np.array([t.block_order_id for t in all_touches], dtype=str)
 
     gesture_types = np.array([t.gesture_type for t in all_touches], dtype=str)
 
@@ -142,6 +147,7 @@ def _save_playback_cache(
         np.savez_compressed(
             cache_path,
             touch_keys=touch_keys,
+            touch_block_ids=touch_block_ids,
             gesture_types=gesture_types,
             frame_spikes_data=frame_spikes_data,
             frame_spikes_counts=frame_spikes_counts,
@@ -191,7 +197,7 @@ def _load_playback_cache(
 
     # Validate that all expected keys are present (old-format guard).
     required_keys = (
-        "touch_keys", "gesture_types",
+        "touch_keys", "touch_block_ids", "gesture_types",
         "frame_spikes_data", "frame_spikes_counts",
         "cp_pts_data", "cp_vertex_data",
         "cp_pts_frame_touch", "cp_pts_frame_idx",
@@ -206,6 +212,7 @@ def _load_playback_cache(
         return None
 
     touch_keys = npz["touch_keys"]
+    touch_block_ids = npz["touch_block_ids"]
     gesture_types = npz["gesture_types"]
     frame_spikes_data = npz["frame_spikes_data"]
     frame_spikes_counts = npz["frame_spikes_counts"]
@@ -223,6 +230,12 @@ def _load_playback_cache(
             f"(expected (n_touches, 2)): {cache_path}"
         )
     n_touches = len(touch_keys)
+
+    if touch_block_ids.ndim != 1 or len(touch_block_ids) != n_touches:
+        raise ValueError(
+            f"_load_playback_cache: 'touch_block_ids' has shape {touch_block_ids.shape}, "
+            f"expected ({n_touches},): {cache_path}"
+        )
 
     if gesture_types.ndim != 1 or len(gesture_types) != n_touches:
         raise ValueError(
@@ -269,9 +282,10 @@ def _load_playback_cache(
 
     # Reconstruct touch events.
     spikes_offset = 0
-    touches_by_trial: dict[int, list[TouchEvent]] = {}
+    touches_by_block_trial: dict[tuple[str, int], list[TouchEvent]] = {}
 
     for ti in range(n_touches):
+        block_order_id = str(touch_block_ids[ti])
         trial_id = int(touch_keys[ti, 0])
         single_touch_id = int(touch_keys[ti, 1])
         gesture = str(gesture_types[ti])
@@ -293,6 +307,7 @@ def _load_playback_cache(
                 frame_vtx_list[fi] = vtx_for_touch[fi_mask]
 
         event = TouchEvent(
+            block_order_id=block_order_id,
             trial_id=trial_id,
             single_touch_id=single_touch_id,
             gesture_type=gesture,
@@ -300,13 +315,18 @@ def _load_playback_cache(
             frame_vertex_indices=frame_vtx_list,
             frame_spikes=spikes,
         )
-        touches_by_trial.setdefault(trial_id, []).append(event)
+        touches_by_block_trial.setdefault((block_order_id, trial_id), []).append(event)
 
-    # Sort within each trial by single_touch_id.
-    for tid in touches_by_trial:
-        touches_by_trial[tid].sort(key=lambda e: e.single_touch_id)
+    for key in touches_by_block_trial:
+        touches_by_block_trial[key].sort(key=lambda e: e.single_touch_id)
 
-    trial_ids = sorted(touches_by_trial.keys())
+    trial_ids_by_block: dict[str, list[int]] = {}
+    for bid, tid in touches_by_block_trial:
+        trial_ids_by_block.setdefault(bid, []).append(tid)
+    for bid in trial_ids_by_block:
+        trial_ids_by_block[bid].sort()
+
+    block_order_ids = sorted(trial_ids_by_block.keys(), key=int)
 
     session_data = PlaybackSessionData(
         forearm_vertices=forearm_vertices,
@@ -314,8 +334,9 @@ def _load_playback_cache(
     )
     return PlaybackData(
         session_data=session_data,
-        trial_ids=trial_ids,
-        touches_by_trial=touches_by_trial,
+        block_order_ids=block_order_ids,
+        trial_ids_by_block=trial_ids_by_block,
+        touches_by_block_trial=touches_by_block_trial,
     )
 
 
@@ -386,6 +407,13 @@ def load_playback_data(
             f"in {series_csv_path}"
         )
 
+    nan_block_mask = df["block_order_id"].isna()
+    if nan_block_mask.any():
+        raise ValueError(
+            f"load_playback_data: block_order_id is NaN for {nan_block_mask.sum()} rows "
+            f"with trial_id > 0 and single_touch_id > 0 in {series_csv_path}"
+        )
+
     print(
         f"{_ts()} | [Touch Playback] [{tag}]   after filter: {len(df)} rows",
         flush=True,
@@ -407,11 +435,11 @@ def load_playback_data(
 
     # --- Compute tangent-plane rotation from ALL contact points ---
     t = time.perf_counter()
-    cp_raw_all = df["contact_points"].fillna("[]").values
-    # Quick parse to get a centroid for the rotation — parse every row here
-    # since we need the global centroid, not just unique frames.
+    # Deduplicate contact_points strings before parsing — the 1kHz CSV forward-fills
+    # each 30Hz Kinect frame ~33 times, so parsing all rows is ~33x slower than needed.
+    unique_cp_for_centroid = pd.unique(df["contact_points"].fillna("[]").values)
     centroid_pts: list[list[float]] = []
-    for s in cp_raw_all:
+    for s in unique_cp_for_centroid:
         for m in _bracket_re.findall(str(s)):
             coords = m.split()
             if len(coords) == 3:
@@ -450,14 +478,15 @@ def load_playback_data(
     # --- Build KDTree over rotated vertices ---
     tree = cKDTree(rotated_vertices)
 
-    # --- Group by (trial_id, single_touch_id) and build TouchEvents ---
+    # --- Group by (block_order_id, trial_id, single_touch_id) and build TouchEvents ---
     t = time.perf_counter()
-    touches_by_trial: dict[int, list[TouchEvent]] = {}
+    touches_by_block_trial: dict[tuple[str, int], list[TouchEvent]] = {}
     n_skipped_empty = 0
     n_skipped_distance = 0
 
-    group_keys = ["trial_id", "single_touch_id"]
-    for (trial_id, single_touch_id), group_df in df.groupby(group_keys, sort=True):
+    group_keys = ["block_order_id", "trial_id", "single_touch_id"]
+    for (block_order_id, trial_id, single_touch_id), group_df in df.groupby(group_keys, sort=True):
+        block_order_id = str(block_order_id)
         trial_id = int(trial_id)
         single_touch_id = int(single_touch_id)
 
@@ -544,6 +573,7 @@ def load_playback_data(
             continue
 
         event = TouchEvent(
+            block_order_id=block_order_id,
             trial_id=trial_id,
             single_touch_id=single_touch_id,
             gesture_type=gesture_type,
@@ -551,7 +581,7 @@ def load_playback_data(
             frame_vertex_indices=frame_vertex_indices,
             frame_spikes=np.array(valid_frame_spikes, dtype=bool),
         )
-        touches_by_trial.setdefault(trial_id, []).append(event)
+        touches_by_block_trial.setdefault((block_order_id, trial_id), []).append(event)
 
     print(
         f"{_ts()} | [Touch Playback] [{tag}]   grouping+parse: {time.perf_counter() - t:.1f}s",
@@ -569,18 +599,22 @@ def load_playback_data(
             n_skipped_distance, _DISTANCE_THRESHOLD_MM,
         )
 
-    if not touches_by_trial:
+    if not touches_by_block_trial:
         raise ValueError(
             f"load_playback_data: no valid touch events remain after filtering "
             f"for {series_csv_path}"
         )
 
-    # Sort within each trial by single_touch_id (groupby sort=True already orders
-    # the keys, but we ensure the list is in order for deterministic access).
-    for tid in touches_by_trial:
-        touches_by_trial[tid].sort(key=lambda e: e.single_touch_id)
+    for key in touches_by_block_trial:
+        touches_by_block_trial[key].sort(key=lambda e: e.single_touch_id)
 
-    trial_ids = sorted(touches_by_trial.keys())
+    trial_ids_by_block: dict[str, list[int]] = {}
+    for bid, tid in touches_by_block_trial:
+        trial_ids_by_block.setdefault(bid, []).append(tid)
+    for bid in trial_ids_by_block:
+        trial_ids_by_block[bid].sort()
+
+    block_order_ids = sorted(trial_ids_by_block.keys(), key=int)
 
     session_data = PlaybackSessionData(
         forearm_vertices=rotated_vertices,
@@ -589,8 +623,9 @@ def load_playback_data(
 
     result = PlaybackData(
         session_data=session_data,
-        trial_ids=trial_ids,
-        touches_by_trial=touches_by_trial,
+        block_order_ids=block_order_ids,
+        trial_ids_by_block=trial_ids_by_block,
+        touches_by_block_trial=touches_by_block_trial,
     )
 
     # --- Save cache ---
@@ -601,11 +636,11 @@ def load_playback_data(
         flush=True,
     )
 
-    total_touches = sum(len(v) for v in touches_by_trial.values())
+    total_touches = sum(len(v) for v in touches_by_block_trial.values())
     print(
         f"{_ts()} | [Touch Playback] [{tag}]: done in "
         f"{time.perf_counter() - t_session:.1f}s  "
-        f"trials={len(trial_ids)}  touches={total_touches}",
+        f"blocks={len(block_order_ids)}  touches={total_touches}",
         flush=True,
     )
     return result
