@@ -47,6 +47,8 @@ from _5_postprocessing import (
     export_forearm_pca_calibrated,
     project_contacts_onto_forearm,
     center_on_receptive_field,
+    deduplicate_forearm_ply,
+    deduplicate_contact_points_csv,
 )
 from _4_merging.aggregate_blocks_session import aggregate_session_blocks
 
@@ -99,6 +101,65 @@ def export_forearm_pca_calibrated_flow(
     )
 
 
+@flow(name="deduplicate_xy")
+def deduplicate_xy_flow(
+    input_files: List[Path],
+    session_configs: List[KinectConfig],
+    output_dir: Path,
+    forearm_output_dir: Path,
+    force_processing: bool = False,
+) -> Tuple[List[Path], List[Optional[Path]]]:
+    if len(input_files) != len(session_configs):
+        raise ValueError(
+            f"input_files length ({len(input_files)}) does not match "
+            f"session_configs length ({len(session_configs)}) — cannot pair "
+            "blocks to configs for per-block deduplication."
+        )
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    forearm_output_dir.mkdir(parents=True, exist_ok=True)
+
+    deduped_csv_paths: List[Path] = []
+    deduped_forearm_ply_paths: List[Optional[Path]] = []
+
+    with tempfile.TemporaryDirectory() as _tmp:
+        tmp_dir = Path(_tmp)
+
+        for config, input_csv in zip(session_configs, input_files):
+            forearm_ply = _load_per_block_forearm_ply(config, tmp_dir)
+
+            if forearm_ply is not None:
+                forearm_out = forearm_output_dir / forearm_ply.name
+                stats = deduplicate_forearm_ply(forearm_ply, forearm_out, epsilon=0.1)
+                logging.info(
+                    "Block %s forearm dedup: %d → %d (removed %d)",
+                    config.block_id,
+                    stats["n_original"],
+                    stats["n_deduped"],
+                    stats["n_removed"],
+                )
+                deduped_forearm_ply_paths.append(forearm_out)
+            else:
+                logging.warning(
+                    "Block %s — forearm unavailable, skipping forearm deduplication.",
+                    config.block_id,
+                )
+                deduped_forearm_ply_paths.append(None)
+
+            csv_out = output_dir / input_csv.name
+            stats = deduplicate_contact_points_csv(input_csv, csv_out, epsilon=0.1)
+            logging.info(
+                "Block %s CSV dedup: %d rows, %d → %d contact points",
+                config.block_id,
+                stats["n_rows_processed"],
+                stats["total_points_before"],
+                stats["total_points_after"],
+            )
+            deduped_csv_paths.append(csv_out)
+
+    return deduped_csv_paths, deduped_forearm_ply_paths
+
+
 @flow(name="project_contacts_onto_forearm_early")
 def project_contacts_onto_merged_forearm_flow(
     input_files: List[Path],
@@ -106,6 +167,7 @@ def project_contacts_onto_merged_forearm_flow(
     output_dir: Path,
     projection_stats_path: Path,
     force_processing: bool = False,
+    deduped_forearm_plys: Optional[List[Optional[Path]]] = None,
 ) -> List[Path]:
     """Project contact points onto the per-block forearm surface before ICP.
 
@@ -125,6 +187,9 @@ def project_contacts_onto_merged_forearm_flow(
         output_dir: Destination directory (``blocks_merged_projected/``).
         projection_stats_path: Path for the combined projection-stats CSV.
         force_processing: Re-run even when outputs are already up-to-date.
+        deduped_forearm_plys: Pre-deduped per-block forearm PLY paths from
+            ``deduplicate_xy_flow``.  When provided, used directly instead of
+            loading raw forearms via ``_load_per_block_forearm_ply``.
 
     Returns:
         List of output CSV paths (projected where forearm was available,
@@ -145,8 +210,11 @@ def project_contacts_onto_merged_forearm_flow(
     with tempfile.TemporaryDirectory() as _tmp:
         tmp_dir = Path(_tmp)
 
-        for config, input_csv in zip(session_configs, input_files):
-            forearm_ply = _load_per_block_forearm_ply(config, tmp_dir)
+        for i, (config, input_csv) in enumerate(zip(session_configs, input_files)):
+            if deduped_forearm_plys is not None:
+                forearm_ply = deduped_forearm_plys[i]
+            else:
+                forearm_ply = _load_per_block_forearm_ply(config, tmp_dir)
 
             if forearm_ply is None:
                 # No forearm metadata for this block — forward input unchanged.
@@ -303,17 +371,32 @@ def run_single_session_postprocessing(
 
     # UPDATED: Pipeline stages using the architecture of function_of_reference
     pipeline_stages = [
+        # Step 0: Deduplicate (x,y) in forearm PLYs and contact_points CSVs
+        #   Input:  blocks_merged/ CSVs + per-block forearm PLYs
+        #   Output: blocks_merged_deduped/ + forearm_deduped/
+        {
+            "name": "deduplicate_xy",
+            "func": deduplicate_xy_flow,
+            "params": lambda: {
+                "input_files": context.get("source_files"),
+                "session_configs": context.get("session_configs"),
+                "output_dir": session_output_dir / "blocks_merged_deduped",
+                "forearm_output_dir": session_output_dir / "forearm_deduped",
+            },
+            "outputs": ["deduped_source_files", "deduped_forearm_plys"]
+        },
         # Step 1: Project contact points onto per-block forearm surface (before ICP)
-        #   Input:  blocks_merged/ CSVs (raw merged data)
+        #   Input:  blocks_merged_deduped/ CSVs + forearm_deduped/ PLYs
         #   Output: blocks_merged_projected/ (contact points snapped to per-block forearm)
         {
             "name": "project_contacts_onto_forearm",
             "func": project_contacts_onto_merged_forearm_flow,
             "params": lambda: {
-                "input_files": context.get("source_files"),
+                "input_files": context.get("deduped_source_files"),
                 "session_configs": context.get("session_configs"),
                 "output_dir": session_output_dir / "blocks_merged_projected",
                 "projection_stats_path": session_output_dir / "blocks_merged_projected" / "projection_stats.csv",
+                "deduped_forearm_plys": context.get("deduped_forearm_plys"),
             },
             "outputs": ["projected_source_files"]
         },

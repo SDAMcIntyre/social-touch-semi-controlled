@@ -11,6 +11,14 @@ parameters:
 tasks:
 
   # --- Spatial Transform Pipeline ---
+  # Step 0: Deduplicate (x,y) in forearm PLYs and contact_points CSVs.
+  # Removes layered Kinect depth points at the same (x,y) keeping lowest z.
+  deduplicate_xy:
+    enabled: true
+    options:
+      force_processing: true
+    depends_on: []
+
   # Step 1: Project contact points onto per-block forearm surface (before ICP).
   # Contact points from blocks_merged/ are snapped to the per-block forearm
   # so every subsequent rigid transform (ICP, PCA) preserves on-surface membership.
@@ -18,7 +26,7 @@ tasks:
     enabled: true
     options:
       force_processing: true
-    depends_on: []
+    depends_on: [deduplicate_xy]
 
   # Step 2: ICP Registration — consumes projected (on-surface) merged CSVs.
   apply_icp_registration:
