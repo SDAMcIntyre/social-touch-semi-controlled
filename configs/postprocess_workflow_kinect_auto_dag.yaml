@@ -6,59 +6,60 @@
 parameters:
   # Set to true to run different sessions in parallel, false to run them one by one.
   parallel_execution: false
-  kinect_configs: 
-    valid_configs_ST13-02/kinect_config_2022-06-14_ST13-02_semicontrolled_block-order03.yaml
+  kinect_configs: valid_configs_ST13-03
 
 tasks:
 
   # --- Spatial Transform Pipeline ---
-  # Step 0: Deduplicate (x,y) in forearm PLYs and contact_points CSVs.
+  # Step 0: ICP Registration — aligns all blocks into a common coordinate frame.
+  # Input: blocks_merged/ CSVs
+  # Output: blocks_registered/
+  apply_icp_registration:
+    enabled: true
+    options:
+      force_processing: true
+    depends_on: []
+
+  # Step 1: Deduplicate (x,y) in forearm PLYs and contact_points CSVs.
   # Removes layered Kinect depth points at the same (x,y) keeping lowest z.
   deduplicate_xy:
     enabled: true
     options:
       force_processing: true
       monitor: false
-      epsilon: 0.35
-    depends_on: []
+      epsilon: 15.0
+    depends_on: [apply_icp_registration]
 
-  # Step 1: Project contact points onto per-block forearm surface (before ICP).
-  # Contact points from blocks_merged/ are snapped to the per-block forearm
-  # so every subsequent rigid transform (ICP, PCA) preserves on-surface membership.
+  # Step 2: Project contact points onto the deduplicated forearm surface.
+  # Contact points are snapped to the forearm so every subsequent rigid transform
+  # (PCA) preserves on-surface membership.
   project_contacts_onto_forearm:
     enabled: true
     options:
-      force_processing: false
+      force_processing: true
     depends_on: [deduplicate_xy]
-
-  # Step 2: ICP Registration — consumes projected (on-surface) merged CSVs.
-  apply_icp_registration:
-    enabled: true
-    options:
-      force_processing: false
-    depends_on: [project_contacts_onto_forearm]
 
   set_xyz_reference_from_gestures:
     enabled: true
     options:
-      force_processing: false
-    depends_on: [apply_icp_registration]
+      force_processing: true
+    depends_on: [project_contacts_onto_forearm]
 
   export_forearm_pca_calibrated:
     enabled: true
     options:
-      force_processing: false
+      force_processing: true
     depends_on: [set_xyz_reference_from_gestures]
 
   # Contact points are already on-surface after step 1; no late-stage projection needed.
   center_on_receptive_field:
     enabled: true
     options:
-      force_processing: false
+      force_processing: true
     depends_on: [export_forearm_pca_calibrated]
 
   aggregate_session:
     enabled: true
     options:
-      force_processing: false
+      force_processing: true
     depends_on: [center_on_receptive_field]
