@@ -16,7 +16,7 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 import pyvista as pv
-from PyQt5.QtCore import QTimer
+from PyQt5.QtCore import QEvent, Qt, QTimer
 from PyQt5.QtWidgets import (
     QApplication,
     QComboBox,
@@ -188,7 +188,10 @@ def load_single_touch_rf_data(
     rf_data: dict = {}
     for raw_touch_id, pairs in rf_data_raw.items():
         norm_id = int(raw_touch_id)
-        # pairs is a list of (vertex_idx, mean_value); normalize element types
+        # pairs is a list of (vertex_idx, mean_value); normalize element types.
+        # NaN values are kept here so the viewer can distinguish "touched but no
+        # neural data" from "no contact" via the info label; rendering filters
+        # them out so they don't tint the cloud uniformly via nan_color.
         normalized_pairs = [(int(vi), float(mv)) for vi, mv in pairs]
         rf_data[norm_id] = normalized_pairs
 
@@ -347,6 +350,7 @@ class SingleTouchRFExplorer(QMainWindow):
         root.setSpacing(0)
 
         self._plotter = QtInteractor(self)
+        self._plotter.interactor.installEventFilter(self)
         root.addWidget(self._plotter.interactor, 1)
 
     def _build_toolbar(self) -> None:
@@ -583,9 +587,26 @@ class SingleTouchRFExplorer(QMainWindow):
         self._cloud.Modified()
 
         n_contacted = len(pairs)
-        self._info_label.setText(
-            f"Touch {single_touch_id} | {n_contacted} vertices | {self._data.neuron_mode}"
-        )
+        n_valid = sum(1 for _, v in pairs if not np.isnan(v))
+        if n_contacted == 0:
+            label = f"Touch {single_touch_id} | no contact / no neural data"
+        elif n_valid == 0:
+            # Legacy .npz files (pre-NaN-filter fix) can still land here.
+            label = (
+                f"Touch {single_touch_id} | {n_contacted} contacted vertices, "
+                f"no neural data"
+            )
+        elif n_valid < n_contacted:
+            label = (
+                f"Touch {single_touch_id} | {n_valid}/{n_contacted} vertices | "
+                f"{self._data.neuron_mode}"
+            )
+        else:
+            label = (
+                f"Touch {single_touch_id} | {n_contacted} vertices | "
+                f"{self._data.neuron_mode}"
+            )
+        self._info_label.setText(label)
 
         self._restore_camera_state()
         self._plotter.render()
@@ -628,6 +649,112 @@ class SingleTouchRFExplorer(QMainWindow):
         stid = self._current_single_touch_id()
         if stid is not None:
             self._update_heatmap(stid)
+
+    # ------------------------------------------------------------------
+    # Keyboard navigation
+    # ------------------------------------------------------------------
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        if event.type() == QEvent.KeyPress:
+            key = event.key()
+            if key == Qt.Key_Right:
+                self._navigate(+1)
+                return True
+            if key == Qt.Key_Left:
+                self._navigate(-1)
+                return True
+        return super().eventFilter(obj, event)
+
+    def _navigate(self, direction: int) -> None:
+        """Navigate touches (±1), cascading to trial then block at boundaries.
+
+        direction=+1 advances (right), direction=-1 retreats (left).
+        Stops silently at the first/last touch of the session.
+        """
+        if not self._initialized:
+            return
+
+        block_idx = self._block_combo.currentIndex()
+        if block_idx < 0 or block_idx >= len(self._data.block_order_ids):
+            return
+        bid = self._data.block_order_ids[block_idx]
+
+        trial_ids = self._data.trial_ids_by_block.get(bid, [])
+        trial_idx = self._trial_combo.currentIndex()
+        if trial_idx < 0 or trial_idx >= len(trial_ids):
+            return
+        tid = trial_ids[trial_idx]
+
+        touch_ids = self._data.touches_by_block_trial.get((bid, tid), [])
+        touch_idx = self._touch_combo.currentIndex()
+        if touch_idx < 0 or touch_idx >= len(touch_ids):
+            return
+
+        new_bid = bid
+        new_tid = tid
+        new_touch_ids = touch_ids
+        new_touch_idx = touch_idx + direction
+
+        if 0 <= new_touch_idx < len(touch_ids):
+            # Stays in same trial/block — only touch index changes.
+            pass
+        else:
+            # Try adjacent trial within the same block.
+            new_trial_idx = trial_idx + direction
+            if 0 <= new_trial_idx < len(trial_ids):
+                new_tid = trial_ids[new_trial_idx]
+                new_touch_ids = self._data.touches_by_block_trial.get(
+                    (new_bid, new_tid), []
+                )
+                if not new_touch_ids:
+                    return
+                new_touch_idx = 0 if direction > 0 else len(new_touch_ids) - 1
+
+                self._trial_combo.blockSignals(True)
+                self._trial_combo.setCurrentIndex(new_trial_idx)
+                self._trial_combo.blockSignals(False)
+            else:
+                # Try adjacent block.
+                new_block_idx = block_idx + direction
+                if new_block_idx < 0 or new_block_idx >= len(self._data.block_order_ids):
+                    return
+
+                new_bid = self._data.block_order_ids[new_block_idx]
+                new_trial_ids = self._data.trial_ids_by_block.get(new_bid, [])
+                if not new_trial_ids:
+                    return
+                new_trial_idx = 0 if direction > 0 else len(new_trial_ids) - 1
+                new_tid = new_trial_ids[new_trial_idx]
+                new_touch_ids = self._data.touches_by_block_trial.get(
+                    (new_bid, new_tid), []
+                )
+                if not new_touch_ids:
+                    return
+                new_touch_idx = 0 if direction > 0 else len(new_touch_ids) - 1
+
+                self._block_combo.blockSignals(True)
+                self._block_combo.setCurrentIndex(new_block_idx)
+                self._block_combo.blockSignals(False)
+
+                self._trial_combo.blockSignals(True)
+                self._trial_combo.clear()
+                for t in new_trial_ids:
+                    self._trial_combo.addItem(f"Trial {t}")
+                self._trial_combo.setCurrentIndex(new_trial_idx)
+                self._trial_combo.blockSignals(False)
+
+            # Repopulate touch combo for the new trial.
+            self._touch_combo.blockSignals(True)
+            self._touch_combo.clear()
+            for stid in new_touch_ids:
+                self._touch_combo.addItem(f"Touch {stid}")
+            self._touch_combo.blockSignals(False)
+
+        self._save_camera_state()
+        self._touch_combo.blockSignals(True)
+        self._touch_combo.setCurrentIndex(new_touch_idx)
+        self._touch_combo.blockSignals(False)
+        self._update_heatmap(new_touch_ids[new_touch_idx])
 
     # ------------------------------------------------------------------
     # Deferred VTK initialisation

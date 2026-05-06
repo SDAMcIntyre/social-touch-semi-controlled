@@ -34,7 +34,7 @@ class ExplorerData:
     """Per-frame scatter data and per-contact-point vertex mapping.
 
     Source-frame arrays (``pressure``, ``velocity_signed``, ``gesture_types``,
-    ``spikes``) are indexed 0 … n_frames-1.
+    ``spikes``, ``iff``) are indexed 0 … n_frames-1.
 
     Contact-point arrays (``cp_frame_idx``, ``cp_vertex_idx``) have length
     n_contact_pts ≥ n_frames.  ``cp_frame_idx[i]`` is the index into the
@@ -46,6 +46,7 @@ class ExplorerData:
     velocity_signed: np.ndarray
     gesture_types: np.ndarray
     spikes: np.ndarray
+    iff: np.ndarray
     cp_frame_idx: np.ndarray
     cp_vertex_idx: np.ndarray
     session_data: ExplorerSessionData
@@ -84,6 +85,7 @@ def _save_explorer_cache(series_csv_path: Path, data: ExplorerData) -> None:
             gesture_type_codes=codes.astype(np.int32),
             gesture_type_labels=np.array(unique_labels, dtype=str),
             spikes=data.spikes,
+            iff=data.iff,
             cp_frame_idx=data.cp_frame_idx,
             cp_vertex_idx=data.cp_vertex_idx,
             forearm_vertices=data.session_data.forearm_vertices,
@@ -133,11 +135,19 @@ def _load_explorer_cache(
         )
         return None
 
+    if "iff" not in npz:
+        logger.debug(
+            "_load_explorer_cache: old-format cache (no iff) for %s — recomputing",
+            series_csv_path.name,
+        )
+        return None
+
     pressure = npz["pressure"]
     velocity_signed = npz["velocity_signed"]
     gesture_type_codes = npz["gesture_type_codes"]
     gesture_type_labels = npz["gesture_type_labels"]
     spikes = npz["spikes"]
+    iff = npz["iff"]
     cp_frame_idx = npz["cp_frame_idx"]
     cp_vertex_idx = npz["cp_vertex_idx"]
     forearm_vertices = npz["forearm_vertices"]
@@ -149,6 +159,7 @@ def _load_explorer_cache(
         ("velocity_signed", velocity_signed),
         ("gesture_type_codes", gesture_type_codes),
         ("spikes", spikes),
+        ("iff", iff),
     ]:
         if arr.ndim != 1 or len(arr) != n:
             raise ValueError(
@@ -191,6 +202,7 @@ def _load_explorer_cache(
         velocity_signed=velocity_signed,
         gesture_types=gesture_types,
         spikes=spikes,
+        iff=iff.astype(np.float64),
         cp_frame_idx=cp_frame_idx.astype(np.int64),
         cp_vertex_idx=cp_vertex_idx.astype(np.int64),
         session_data=session_data,
@@ -213,10 +225,11 @@ def load_explorer_data(
     df = pd.read_csv(series_csv_path)
     print(f"{_ts()} | [RF Explorer] [{tag}]   CSV read: {time.perf_counter() - t:.1f}s  rows={len(df)}", flush=True)
 
-    if "contact_points" not in df.columns:
-        raise ValueError(
-            f"load_explorer_data: 'contact_points' column missing from {series_csv_path}"
-        )
+    for required_col in ("contact_points", "Nerve_freq"):
+        if required_col not in df.columns:
+            raise ValueError(
+                f"load_explorer_data: '{required_col}' column missing from {series_csv_path}"
+            )
 
     cp_raw = df["contact_points"].fillna("[]").values
 
@@ -244,6 +257,7 @@ def load_explorer_data(
     velocity_signed = df["hand_velocity_signed"].to_numpy(dtype=np.float64)
     gesture_types = df["gesture_type"].to_numpy(dtype=object)
     spikes = df["Nerve_spike"].to_numpy(dtype=bool)
+    iff = df["Nerve_freq"].to_numpy(dtype=np.float64)
 
     # Deduplicate forward-filled contact_points to unique 30Hz frames.
     n_valid = len(cp_raw)
@@ -368,6 +382,7 @@ def load_explorer_data(
         velocity_signed = velocity_signed[surviving_row_mask]
         gesture_types = gesture_types[surviving_row_mask]
         spikes = spikes[surviving_row_mask]
+        iff = iff[surviving_row_mask]
         full_pts_per_row = full_pts_per_row[surviving_row_mask]
 
     # Build cp_frame_idx: maps each contact point to its 1kHz frame index.
@@ -396,6 +411,7 @@ def load_explorer_data(
         velocity_signed=velocity_signed,
         gesture_types=gesture_types,
         spikes=spikes,
+        iff=iff,
         cp_frame_idx=cp_frame_idx,
         cp_vertex_idx=cp_vertex_idx,
         session_data=session_data,
