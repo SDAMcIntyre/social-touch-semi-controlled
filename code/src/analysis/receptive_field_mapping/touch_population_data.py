@@ -1,8 +1,8 @@
 """Per-touch population data model and loader for the Touch Population Explorer GUI.
 
 Groups 1kHz frame-level contact points, IFF, and spike values by single touch,
-applies tangent-plane rotation and KDTree vertex snapping, and stores the result
-in flat numpy arrays for vectorised heatmap aggregation.
+applies KDTree vertex snapping (with 15mm threshold), and stores the result in
+flat numpy arrays for vectorised heatmap aggregation.
 """
 
 import logging
@@ -18,11 +18,10 @@ import pandas as pd
 from scipy.spatial import cKDTree
 
 from .rf_data_loader import load_forearm_vertices
-from .tangent_plane_alignment import compute_tangent_plane_rotation
 
 logger = logging.getLogger(__name__)
 
-_CACHE_SCHEMA_VERSION = 4
+_CACHE_SCHEMA_VERSION = 5
 
 _REQUIRED_COLUMNS = (
     "contact_points",
@@ -54,8 +53,7 @@ class PopulationData:
     """
 
     # Session geometry
-    forearm_vertices: np.ndarray        # (V, 3) rotated mesh
-    tangent_rotation: np.ndarray        # (3, 3)
+    forearm_vertices: np.ndarray        # (V, 3) raw mesh
 
     # Per-touch arrays (length T = n_touches)
     touch_triple_keys: np.ndarray       # (T, 3) int64 — (block_order_id, trial_id, single_touch_id)
@@ -112,7 +110,6 @@ def _save_population_cache(series_csv_path: Path, data: PopulationData) -> None:
             cache_path,
             cache_schema_version=np.array(_CACHE_SCHEMA_VERSION, dtype=np.int64),
             forearm_vertices=data.forearm_vertices,
-            tangent_rotation=data.tangent_rotation,
             touch_triple_keys=data.touch_triple_keys,
             gesture_type_codes=codes.astype(np.int32),
             gesture_type_labels=np.array(unique_labels, dtype=str),
@@ -169,7 +166,7 @@ def _load_population_cache(
         return None
 
     required_keys = (
-        "forearm_vertices", "tangent_rotation",
+        "forearm_vertices",
         "touch_triple_keys",
         "gesture_type_codes", "gesture_type_labels",
         "spike_elicited",
@@ -185,7 +182,6 @@ def _load_population_cache(
         return None
 
     forearm_vertices = npz["forearm_vertices"]
-    tangent_rotation = npz["tangent_rotation"]
     touch_triple_keys = npz["touch_triple_keys"]
     gesture_type_codes = npz["gesture_type_codes"]
     gesture_type_labels = npz["gesture_type_labels"]
@@ -201,11 +197,6 @@ def _load_population_cache(
         raise ValueError(
             f"_load_population_cache: 'forearm_vertices' has shape "
             f"{forearm_vertices.shape} (expected (V, 3)): {cache_path}"
-        )
-    if tangent_rotation.ndim != 2 or tangent_rotation.shape != (3, 3):
-        raise ValueError(
-            f"_load_population_cache: 'tangent_rotation' has shape "
-            f"{tangent_rotation.shape} (expected (3, 3)): {cache_path}"
         )
 
     T = len(spike_elicited)
@@ -250,7 +241,6 @@ def _load_population_cache(
 
     return PopulationData(
         forearm_vertices=forearm_vertices.astype(np.float64),
-        tangent_rotation=tangent_rotation.astype(np.float64),
         touch_triple_keys=touch_triple_keys.astype(np.int64),
         gesture_types=gesture_types.astype(object),
         spike_elicited=spike_elicited.astype(bool),
@@ -583,29 +573,13 @@ def load_population_data(
                 f"{series_csv_path}"
             )
 
-    # --- Tangent plane rotation ---
-    t = time.perf_counter()
-    contact_centroid = all_pts.mean(axis=0)
-    rotation = compute_tangent_plane_rotation(vertices, contact_centroid)
-    if rotation is None:
-        raise ValueError(
-            f"load_population_data: compute_tangent_plane_rotation returned None "
-            f"for {forearm_ply_path}"
-        )
-    rotated_vertices = (rotation @ vertices.T).T
-    rotated_contacts = (rotation @ all_pts.T).T
-    print(
-        f"{_ts()} | [Population] [{tag}]   rotation: {time.perf_counter() - t:.1f}s",
-        flush=True,
-    )
-
     # --- KDTree vertex snapping with 15mm threshold ---
     t_kd = time.perf_counter()
-    tree = cKDTree(rotated_vertices)
-    distances, vertex_indices = tree.query(rotated_contacts)
+    tree = cKDTree(vertices)
+    distances, vertex_indices = tree.query(all_pts)
     print(
         f"{_ts()} | [Population] [{tag}]   KDTree: {time.perf_counter() - t_kd:.1f}s  "
-        f"queries={len(rotated_contacts)}",
+        f"queries={len(all_pts)}",
         flush=True,
     )
 
@@ -750,8 +724,7 @@ def load_population_data(
     )
 
     result = PopulationData(
-        forearm_vertices=rotated_vertices,
-        tangent_rotation=rotation,
+        forearm_vertices=vertices,
         touch_triple_keys=touch_triple_keys,
         gesture_types=gesture_types_arr,
         spike_elicited=spike_elicited_arr,
@@ -898,6 +871,14 @@ def load_population_rf_data(
         if pairs:
             vtx_arr = np.array([p[0] for p in pairs], dtype=np.int64)
             val_arr = np.array([p[1] for p in pairs], dtype=np.float64)
+            # Strip NaN entries left over from legacy .npz files written before
+            # the NaN-filter fix in _compute_touch_rf. NaN means "no neural
+            # signal during that touch"; carrying it here would poison
+            # _compute_rf_heatmap's accumulator and erase aggregated heatmaps.
+            valid = ~np.isnan(val_arr)
+            if not valid.all():
+                vtx_arr = vtx_arr[valid]
+                val_arr = val_arr[valid]
         else:
             vtx_arr = np.empty(0, dtype=np.int64)
             val_arr = np.empty(0, dtype=np.float64)
