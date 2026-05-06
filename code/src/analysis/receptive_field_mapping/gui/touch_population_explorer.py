@@ -61,40 +61,65 @@ _DEFAULT_X_FEATURE = "hand_velocity_amplitude_mean_during_iff"
 _DEFAULT_Y_FEATURE = "pressure_mean_during_iff"
 
 _FEATURE_UNITS: dict[str, str] = {
+    # velocity (mm/s)
+    "hand_velocity_x": "mm/s",
+    "hand_velocity_y": "mm/s",
+    "hand_velocity_z": "mm/s",
+    "hand_velocity_amplitude": "mm/s",
+    "hand_velocity_signed": "mm/s",
     "velocity": "mm/s",
     "speed": "mm/s",
-    "area": "mm²",
+    # acceleration (mm/s²)
+    "hand_acceleration_x": "mm/s²",
+    "hand_acceleration_y": "mm/s²",
+    "hand_acceleration_z": "mm/s²",
+    # geometry
     "contact_area": "mm²",
-    "force": "N",
-    "pressure": "N/mm²",
-    "duration": "s",
-    "distance": "mm",
-    "angle": "°",
-    "curvature": "1/mm",
+    "area": "mm²",
+    "contact_depth": "mm",
     "depth": "mm",
+    "distance": "mm",
     "radius": "mm",
     "perimeter": "mm",
+    # mechanics of solids
+    "mos_stress_kpa": "kPa",
+    "mos_strain_rate": "1/s",
+    "mos_elastic_energy_mj": "mJ",
+    "mos_impulse_mns": "mN·s",
+    "mos_strain": "",
+    # pressure / neural
+    "pressure": "N/mm²",
+    "Nerve_freq": "Hz",
+    "force": "N",
+    # shape descriptors (dimensionless)
+    "angle": "°",
+    "curvature": "1/mm",
     "eccentricity": "",
     "aspect_ratio": "",
+    "duration": "s",
 }
 
 _AGG_SUFFIXES: list[str] = [
-    "_mean_std",
+    # IFF-windowed (longest first to avoid partial matches)
+    "_mean_during_iff",
+    "_mean_before_iff",
+    # standard statistical
+    "_skewness",
+    "_median",
+    "_initial",
+    "_range",
+    "_first",
+    "_final",
     "_mean",
-    "_max",
-    "_min",
+    "_last",
+    "_kurt",
+    "_skew",
     "_std",
     "_sum",
-    "_range",
-    "_median",
+    "_max",
+    "_min",
     "_iqr",
     "_cv",
-    "_skew",
-    "_kurt",
-    "_first",
-    "_last",
-    "_initial",
-    "_final",
 ]
 
 
@@ -533,7 +558,7 @@ class TouchPopulationExplorer(QMainWindow):
             nan_color=[0.3, 0.3, 0.3],
             below_color=[0.75, 0.75, 0.75],
             show_scalar_bar=True,
-            scalar_bar_args={"n_labels": 5},
+            scalar_bar_args={"title": "", "n_labels": 5, "color": "white", "fmt": "%.3g", "below_label": "below threshold"},
             render_points_as_spheres=False,
             point_size=3,
             smooth_shading=True,
@@ -1103,9 +1128,11 @@ class TouchPopulationExplorer(QMainWindow):
         trial_id = int(triple[1])
         touch_id = int(triple[2])
         gesture_type = str(self._data.gesture_types[touch_idx])
+        n_contacts = int(np.sum(self._data.cp_touch_idx == touch_idx))
 
         line1 = (
-            f"Block {block_id} | Trial {trial_id} | Touch {touch_id} | {gesture_type}"
+            f"Block {block_id} | Trial {trial_id} | Touch {touch_id}"
+            f" | {gesture_type} | {n_contacts} contacts"
         )
 
         x_display = _feature_display(x_feature)
@@ -1123,7 +1150,16 @@ class TouchPopulationExplorer(QMainWindow):
         else:
             y_str = "N/A"
 
-        line2 = f"X: {x_display} = {x_str} | Y: {y_display} = {y_str}"
+        if self._threshold_ratio_mode:
+            threshold_str = f"{self._threshold_ratio_value}%"
+        else:
+            ratio = round(self._vertex_threshold / max(1, self._n_filtered) * 100)
+            threshold_str = f"{min(ratio, 100)}%"
+
+        line2 = (
+            f"X: {x_display} = {x_str} | Y: {y_display} = {y_str}"
+            f" | Min overlaps: {threshold_str}"
+        )
 
         margin = 8
         draw.text((margin, margin), line1, fill=(0, 0, 0), font=font)
@@ -1157,7 +1193,7 @@ class TouchPopulationExplorer(QMainWindow):
 
         session_idx = self._session_combo.currentIndex()
         saved_camera = None
-        if self._cloud is not None and session_idx in self._camera_states:
+        if self._cloud is not None:
             try:
                 saved_camera = self._plotter.camera.copy()
             except Exception:
@@ -1170,6 +1206,11 @@ class TouchPopulationExplorer(QMainWindow):
             self._single_touch_mode = True
             self._selected_touch_idx = None
             self._render_3d()
+            if saved_camera is not None:
+                try:
+                    self._plotter.camera = saved_camera
+                except Exception:
+                    pass
 
         n = len(filtered_indices)
         self._export_touches_btn.setEnabled(False)
