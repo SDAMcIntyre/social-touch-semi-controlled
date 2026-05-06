@@ -29,6 +29,7 @@ from utils import (
     TaskExecutor
 )
 from utils.pipeline.session_config_resolver import resolve_session_configs
+from utils.should_process_task import should_process_task, clean_task_outputs
 from primary_processing import (
     KinectConfigFileHandler,
     KinectConfig,
@@ -108,6 +109,20 @@ def deduplicate_xy_flow(
     """Deduplicate the unified forearm PLY and contact points in registered CSVs."""
     output_dir.mkdir(parents=True, exist_ok=True)
     forearm_output_dir.mkdir(parents=True, exist_ok=True)
+
+    expected_output_csvs = [output_dir / f.name for f in input_files]
+    expected_forearm_out = forearm_output_dir / forearm_ply_path.name
+    all_outputs = expected_output_csvs + [expected_forearm_out]
+
+    if not should_process_task(
+        input_paths=list(input_files) + [forearm_ply_path],
+        output_paths=all_outputs,
+        force=force_processing,
+    ):
+        logging.info("Deduplication up-to-date. Skipping.")
+        return expected_output_csvs, expected_forearm_out
+
+    clean_task_outputs(all_outputs)
 
     if monitor:
         try:
