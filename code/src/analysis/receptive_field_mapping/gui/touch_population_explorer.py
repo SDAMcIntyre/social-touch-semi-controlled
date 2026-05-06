@@ -23,6 +23,7 @@ from PyQt5.QtWidgets import (
     QLabel,
     QMainWindow,
     QPushButton,
+    QSlider,
     QSplitter,
     QVBoxLayout,
     QWidget,
@@ -99,6 +100,7 @@ class TouchPopulationExplorer(QMainWindow):
         self._rect: Optional[DraggableFilterRect] = None
         self._controls_updating: bool = False
         self._single_touch_mode: bool = False
+        self._vertex_threshold: int = 1
         self._selected_touch_idx: int | None = None
         self._single_touch_cid: int | None = None
         self._filter_timer = QTimer(self)
@@ -169,6 +171,19 @@ class TouchPopulationExplorer(QMainWindow):
             self._checkboxes[gtype] = cb
             self._gesture_colors[gtype] = _GESTURE_COLORS[i % len(_GESTURE_COLORS)]
             right_layout.addWidget(cb)
+
+        self._threshold_row_layout = QHBoxLayout()
+        self._threshold_row_layout.setSpacing(4)
+        self._threshold_row_layout.addWidget(QLabel("Min overlaps:"))
+        self._threshold_slider = QSlider(Qt.Horizontal)
+        self._threshold_slider.setMinimum(1)
+        self._threshold_slider.setMaximum(1)
+        self._threshold_slider.setValue(1)
+        self._threshold_slider.valueChanged.connect(self._on_threshold_changed)
+        self._threshold_row_layout.addWidget(self._threshold_slider)
+        self._threshold_value_label = QLabel("1 / 1")
+        self._threshold_row_layout.addWidget(self._threshold_value_label)
+        right_layout.addLayout(self._threshold_row_layout)
 
         right_layout.addStretch()
 
@@ -332,9 +347,11 @@ class TouchPopulationExplorer(QMainWindow):
             y_lo = float(np.nanpercentile(y_vis, 1))
             y_hi = float(np.nanpercentile(y_vis, 99))
             if np.isfinite(x_lo) and np.isfinite(x_hi) and x_lo < x_hi:
-                self._ax.set_xlim(x_lo, x_hi)
+                margin_x = (x_hi - x_lo) * 0.1
+                self._ax.set_xlim(x_lo - margin_x, x_hi + margin_x)
             if np.isfinite(y_lo) and np.isfinite(y_hi) and y_lo < y_hi:
-                self._ax.set_ylim(y_lo, y_hi)
+                margin_y = (y_hi - y_lo) * 0.1
+                self._ax.set_ylim(y_lo - margin_y, y_hi + margin_y)
 
         self._ax.set_xlabel(x_name)
         self._ax.set_ylabel(y_name)
@@ -416,9 +433,16 @@ class TouchPopulationExplorer(QMainWindow):
         if self._rf_data is not None and self._heatmap_mode == f"rf_mean_{self._rf_data.neuron_mode}":
             n_touches = len(self._data.gesture_types)
             heatmap_val = self._compute_rf_heatmap(list(range(n_touches)), n_verts)
+            if not self._single_touch_mode:
+                cp_mask_all = np.ones(len(self._data.cp_touch_idx), dtype=bool)
+                unique_touch_count = self._compute_unique_touch_count(cp_mask_all, n_verts)
+                heatmap_val = self._apply_vertex_threshold(heatmap_val, unique_touch_count)
         else:
             cp_mask_all = np.ones(len(self._data.cp_touch_idx), dtype=bool)
             heatmap_val = self._compute_heatmap(cp_mask_all, n_verts)
+            if not self._single_touch_mode:
+                unique_touch_count = self._compute_unique_touch_count(cp_mask_all, n_verts)
+                heatmap_val = self._apply_vertex_threshold(heatmap_val, unique_touch_count)
 
         self._cloud = pv.PolyData(vertices)
         self._cloud["heatmap"] = heatmap_val
@@ -429,6 +453,7 @@ class TouchPopulationExplorer(QMainWindow):
             cmap="jet",
             clim=self._heatmap_clim(),
             nan_color=[0.3, 0.3, 0.3],
+            below_color=[0.75, 0.75, 0.75],
             show_scalar_bar=True,
             render_points_as_spheres=False,
             point_size=3,
@@ -446,6 +471,10 @@ class TouchPopulationExplorer(QMainWindow):
             self._plotter.view_xy()
 
         self._plotter.render()
+
+        if not self._single_touch_mode:
+            n_total = len(self._data.gesture_types)
+            self._update_threshold_slider_range(n_total)
 
     def _compute_heatmap(self, cp_mask: np.ndarray, n_verts: int) -> np.ndarray:
         active_verts = self._data.cp_vertex_idx[cp_mask]
@@ -616,22 +645,140 @@ class TouchPopulationExplorer(QMainWindow):
         touch_mask = rect_mask & type_mask
 
         n_verts = len(self._data.forearm_vertices)
+        active_touch_indices = list(np.where(touch_mask)[0])
+        cp_mask = np.isin(self._data.cp_touch_idx, active_touch_indices)
 
         if self._rf_data is not None and self._heatmap_mode == f"rf_mean_{self._rf_data.neuron_mode}":
-            selected_indices = list(np.where(touch_mask)[0])
-            heatmap_val = self._compute_rf_heatmap(selected_indices, n_verts)
+            heatmap_val = self._compute_rf_heatmap(active_touch_indices, n_verts)
         else:
-            cp_mask = np.isin(self._data.cp_touch_idx, np.where(touch_mask)[0])
             heatmap_val = self._compute_heatmap(cp_mask, n_verts)
+
+        n_shown = int(touch_mask.sum())
+        unique_touch_count = self._compute_unique_touch_count(cp_mask, n_verts)
+        self._update_threshold_slider_range(n_shown)
+        heatmap_val = self._apply_vertex_threshold(heatmap_val, unique_touch_count)
 
         self._cloud["heatmap"] = heatmap_val
         self._cloud.Modified()
         self._actor.mapper.scalar_range = self._heatmap_clim()
         self._plotter.render()
 
-        n_shown = int(touch_mask.sum())
         n_total = len(self._data.gesture_types)
         self._touch_count_label.setText(f"N touches shown: {n_shown} / {n_total}")
+
+    def _compute_unique_touch_count(self, cp_mask: np.ndarray, n_verts: int) -> np.ndarray:
+        """Return per-vertex count of unique touches in the masked contact points.
+
+        Parameters
+        ----------
+        cp_mask:
+            Boolean mask of shape ``(C,)`` over the full contact-point arrays
+            (``self._data.cp_vertex_idx``, ``self._data.cp_touch_idx``).
+        n_verts:
+            Total number of forearm mesh vertices.
+
+        Returns
+        -------
+        np.ndarray
+            Shape ``(n_verts,)`` int64 — number of distinct touches that
+            contacted each vertex among the masked contact points.
+        """
+        vertex_idx = self._data.cp_vertex_idx[cp_mask]
+        touch_idx = self._data.cp_touch_idx[cp_mask]
+
+        if len(vertex_idx) == 0:
+            return np.zeros(n_verts, dtype=np.int64)
+
+        # Encode (vertex, touch) pairs as a single integer for fast deduplication.
+        max_touch = int(touch_idx.max()) + 1
+        key = vertex_idx * max_touch + touch_idx
+        unique_keys = np.unique(key)
+
+        # Decode vertex indices from deduplicated keys.
+        unique_verts = unique_keys // max_touch
+
+        return np.bincount(unique_verts, minlength=n_verts).astype(np.int64)
+
+    def _apply_vertex_threshold(
+        self, heatmap_val: np.ndarray, unique_touch_count: np.ndarray
+    ) -> np.ndarray:
+        """Return a copy of *heatmap_val* with below-threshold contacted vertices set to -1.0.
+
+        Only contacted vertices (those with ``heatmap_val != 0.0``) that have
+        fewer unique touches than ``self._vertex_threshold`` are set to -1.0.
+        Uncontacted vertices (``heatmap_val == 0.0`` or NaN) are left unchanged
+        so that the dark-grey uncontacted colour is preserved.
+
+        Parameters
+        ----------
+        heatmap_val:
+            Float array of shape ``(n_verts,)`` produced by ``_compute_heatmap``
+            or ``_compute_rf_heatmap``.
+        unique_touch_count:
+            Integer array of shape ``(n_verts,)`` produced by
+            ``_compute_unique_touch_count``.
+
+        Returns
+        -------
+        np.ndarray
+            Modified copy of *heatmap_val*.
+        """
+        result = heatmap_val.copy()
+        # A vertex is "contacted" when it has a positive unique-touch count.
+        contacted = unique_touch_count > 0
+        below_threshold = contacted & (unique_touch_count < self._vertex_threshold)
+        result[below_threshold] = -1.0
+        return result
+
+    def _update_threshold_slider_range(self, n_filtered_touches: int) -> None:
+        """Update the threshold slider maximum to *n_filtered_touches*.
+
+        - Clamps the current slider value to the new maximum.
+        - Uses ``blockSignals`` to avoid triggering ``_on_threshold_changed``
+          during the range/value update.
+        - Disables the slider when ``n_filtered_touches == 0``.
+        - Updates the ``_threshold_value_label`` to show ``value / max``.
+
+        Parameters
+        ----------
+        n_filtered_touches:
+            Number of touches currently passing all filters.
+        """
+        slider = self._threshold_slider
+        slider.blockSignals(True)
+        try:
+            if n_filtered_touches == 0:
+                slider.setEnabled(False)
+                slider.setMaximum(1)
+                slider.setValue(1)
+                self._threshold_value_label.setText("1 / 1")
+            else:
+                slider.setEnabled(True)
+                new_max = max(1, n_filtered_touches)
+                slider.setMaximum(new_max)
+                clamped_val = min(slider.value(), new_max)
+                slider.setValue(clamped_val)
+                self._vertex_threshold = clamped_val
+                self._threshold_value_label.setText(f"{clamped_val} / {new_max}")
+        finally:
+            slider.blockSignals(False)
+
+    def _on_threshold_changed(self, value: int) -> None:
+        """Handle threshold slider value changes.
+
+        Updates ``self._vertex_threshold``, refreshes the value label, and
+        triggers a heatmap update via ``_apply_filter_update``.
+
+        Parameters
+        ----------
+        value:
+            New slider integer value.
+        """
+        self._vertex_threshold = value
+        self._threshold_value_label.setText(
+            f"{value} / {self._threshold_slider.maximum()}"
+        )
+        self._apply_filter_update()
 
     # ------------------------------------------------------------------
     # Filter rectangle initialization
@@ -689,6 +836,11 @@ class TouchPopulationExplorer(QMainWindow):
             self._single_touch_mode = True
             self._w_spinbox.setVisible(False)
             self._h_spinbox.setVisible(False)
+            # Hide threshold row widgets in single-touch mode.
+            for i in range(self._threshold_row_layout.count()):
+                item = self._threshold_row_layout.itemAt(i)
+                if item is not None and item.widget() is not None:
+                    item.widget().hide()
             self._selected_touch_idx = None
             self._draw_scatter()
         else:
@@ -699,6 +851,11 @@ class TouchPopulationExplorer(QMainWindow):
             self._selected_touch_idx = None
             self._w_spinbox.setVisible(True)
             self._h_spinbox.setVisible(True)
+            # Restore threshold row widgets when returning to population mode.
+            for i in range(self._threshold_row_layout.count()):
+                item = self._threshold_row_layout.itemAt(i)
+                if item is not None and item.widget() is not None:
+                    item.widget().show()
             self._init_filter_rect()
             self._on_rect_changed(*self._rect.get_bounds()) if self._rect is not None else None
 
@@ -818,12 +975,22 @@ class TouchPopulationExplorer(QMainWindow):
         right_panel = bottom.layout().itemAt(1).widget()
         right_layout = right_panel.layout()
 
-        # Remove all items from right_layout except the stretch and touch count label.
+        # Remove all items from right_layout.
+        # Sub-layouts (QHBoxLayout) require explicit child-widget removal before deletion.
         while right_layout.count() > 0:
             item = right_layout.takeAt(0)
             widget = item.widget()
             if widget is not None:
                 widget.setParent(None)
+            else:
+                sub_layout = item.layout()
+                if sub_layout is not None:
+                    while sub_layout.count() > 0:
+                        child_item = sub_layout.takeAt(0)
+                        child_widget = child_item.widget()
+                        if child_widget is not None:
+                            child_widget.setParent(None)
+                    sub_layout.deleteLater()
 
         right_layout.addWidget(QLabel("Gesture types:"))
         for i, gtype in enumerate(unique_types):
@@ -833,6 +1000,21 @@ class TouchPopulationExplorer(QMainWindow):
             self._checkboxes[gtype] = cb
             self._gesture_colors[gtype] = _GESTURE_COLORS[i % len(_GESTURE_COLORS)]
             right_layout.addWidget(cb)
+
+        # Rebuild threshold slider row and reset threshold to 1.
+        self._vertex_threshold = 1
+        self._threshold_row_layout = QHBoxLayout()
+        self._threshold_row_layout.setSpacing(4)
+        self._threshold_row_layout.addWidget(QLabel("Min overlaps:"))
+        self._threshold_slider = QSlider(Qt.Horizontal)
+        self._threshold_slider.setMinimum(1)
+        self._threshold_slider.setMaximum(1)
+        self._threshold_slider.setValue(1)
+        self._threshold_slider.valueChanged.connect(self._on_threshold_changed)
+        self._threshold_row_layout.addWidget(self._threshold_slider)
+        self._threshold_value_label = QLabel("1 / 1")
+        self._threshold_row_layout.addWidget(self._threshold_value_label)
+        right_layout.addLayout(self._threshold_row_layout)
 
         right_layout.addStretch()
         self._touch_count_label = QLabel("N touches shown: —")
