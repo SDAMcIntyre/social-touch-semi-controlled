@@ -13,8 +13,7 @@
 # ==============================================================================
 
 parameters:
-  kinect_configs: 
-    valid_configs_ST13-02/kinect_config_2022-06-14_ST13-02_semicontrolled_block-order03.yaml
+  kinect_configs: valid_configs_ST14-01
 
 tasks:
   view_forearm_stage_inspector:

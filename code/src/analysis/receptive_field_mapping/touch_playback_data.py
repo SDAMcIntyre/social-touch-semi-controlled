@@ -16,7 +16,7 @@ from .rf_data_loader import load_forearm_vertex_colors, load_forearm_vertices
 
 logger = logging.getLogger(__name__)
 
-_CACHE_SCHEMA_VERSION = 2
+_CACHE_SCHEMA_VERSION = 3
 
 _REQUIRED_COLUMNS = (
     "contact_points",
@@ -116,38 +116,59 @@ def _save_playback_cache(
         [t.frame_iff for t in all_touches]
     ).astype(np.float64) if n_touches > 0 else np.array([], dtype=np.float64)
 
-    # Contact points: flatten per-touch, per-frame arrays.
-    # cp_pts_data      : (total_pts, 3) float64 — all raw contact coords
-    # cp_vertex_data   : (total_pts,)   int64   — vertex index per contact pt
-    # cp_pts_frame_touch: (total_pts,)  int64   — touch index (into all_touches)
-    # cp_pts_frame_idx : (total_pts,)   int64   — frame index within that touch
-    pts_parts: list[np.ndarray] = []
-    vtx_parts: list[np.ndarray] = []
-    touch_tag_parts: list[np.ndarray] = []
-    frame_tag_parts: list[np.ndarray] = []
+    # Contact points: deduplicated format.
+    # The CSV parser already reuses the same ndarray object for consecutive
+    # identical contact_points strings within a touch event.  We exploit
+    # object identity (id()) to store each unique (pts, vtx) pair only once.
+    #
+    # cp_unique_pts     : (total_unique_pts, 3) float32 — unique contact coords
+    # cp_unique_vtx     : (total_unique_pts,)   int32   — unique vertex indices
+    # cp_unique_offsets : (n_groups + 1,)       int32   — cumulative group sizes
+    # cp_frame_group    : (n_contact_frames,)   int32   — group index per frame
+    # cp_frame_touch    : (n_contact_frames,)   int32   — touch index per frame
+    # cp_frame_fi       : (n_contact_frames,)   int32   — frame-within-touch index
+    seen: dict[int, int] = {}          # id(vtx_array) -> group index
+    unique_pts_parts: list[np.ndarray] = []
+    unique_vtx_parts: list[np.ndarray] = []
+    group_sizes: list[int] = []
+    frame_group_list: list[int] = []
+    frame_touch_list: list[int] = []
+    frame_fi_list: list[int] = []
 
     for ti, touch in enumerate(all_touches):
         for fi, (pts, vtx) in enumerate(zip(touch.frame_contact_pts, touch.frame_vertex_indices)):
-            pts_arr = np.asarray(pts, dtype=np.float64)
             vtx_arr = np.asarray(vtx, dtype=np.int64)
             k = len(vtx_arr)
             if k == 0:
                 continue
-            pts_parts.append(pts_arr)
-            vtx_parts.append(vtx_arr)
-            touch_tag_parts.append(np.full(k, ti, dtype=np.int64))
-            frame_tag_parts.append(np.full(k, fi, dtype=np.int64))
+            obj_id = id(vtx)
+            if obj_id not in seen:
+                group_idx = len(seen)
+                seen[obj_id] = group_idx
+                unique_pts_parts.append(np.asarray(pts, dtype=np.float32))
+                unique_vtx_parts.append(vtx_arr.astype(np.int32))
+                group_sizes.append(k)
+            else:
+                group_idx = seen[obj_id]
+            frame_group_list.append(group_idx)
+            frame_touch_list.append(ti)
+            frame_fi_list.append(fi)
 
-    if pts_parts:
-        cp_pts_data = np.concatenate(pts_parts, axis=0)
-        cp_vertex_data = np.concatenate(vtx_parts)
-        cp_pts_frame_touch = np.concatenate(touch_tag_parts)
-        cp_pts_frame_idx = np.concatenate(frame_tag_parts)
+    if unique_pts_parts:
+        cp_unique_pts = np.concatenate(unique_pts_parts, axis=0)
+        cp_unique_vtx = np.concatenate(unique_vtx_parts)
+        cp_unique_offsets = np.zeros(len(group_sizes) + 1, dtype=np.int32)
+        cp_unique_offsets[1:] = np.cumsum(group_sizes, dtype=np.int32)
+        cp_frame_group = np.array(frame_group_list, dtype=np.int32)
+        cp_frame_touch = np.array(frame_touch_list, dtype=np.int32)
+        cp_frame_fi = np.array(frame_fi_list, dtype=np.int32)
     else:
-        cp_pts_data = np.empty((0, 3), dtype=np.float64)
-        cp_vertex_data = np.empty(0, dtype=np.int64)
-        cp_pts_frame_touch = np.empty(0, dtype=np.int64)
-        cp_pts_frame_idx = np.empty(0, dtype=np.int64)
+        cp_unique_pts = np.empty((0, 3), dtype=np.float32)
+        cp_unique_vtx = np.empty(0, dtype=np.int32)
+        cp_unique_offsets = np.zeros(1, dtype=np.int32)
+        cp_frame_group = np.empty(0, dtype=np.int32)
+        cp_frame_touch = np.empty(0, dtype=np.int32)
+        cp_frame_fi = np.empty(0, dtype=np.int32)
 
     optional_arrays: dict = {}
     if data.session_data.forearm_vertex_colors is not None:
@@ -163,10 +184,12 @@ def _save_playback_cache(
             frame_spikes_data=frame_spikes_data,
             frame_spikes_counts=frame_spikes_counts,
             frame_iff_data=frame_iff_data,
-            cp_pts_data=cp_pts_data,
-            cp_vertex_data=cp_vertex_data,
-            cp_pts_frame_touch=cp_pts_frame_touch,
-            cp_pts_frame_idx=cp_pts_frame_idx,
+            cp_unique_pts=cp_unique_pts,
+            cp_unique_vtx=cp_unique_vtx,
+            cp_unique_offsets=cp_unique_offsets,
+            cp_frame_group=cp_frame_group,
+            cp_frame_touch=cp_frame_touch,
+            cp_frame_fi=cp_frame_fi,
             forearm_vertices=data.session_data.forearm_vertices,
             **optional_arrays,
         )
@@ -220,8 +243,8 @@ def _load_playback_cache(
         "touch_keys", "touch_block_ids", "gesture_types",
         "frame_spikes_data", "frame_spikes_counts",
         "frame_iff_data",
-        "cp_pts_data", "cp_vertex_data",
-        "cp_pts_frame_touch", "cp_pts_frame_idx",
+        "cp_unique_pts", "cp_unique_vtx", "cp_unique_offsets",
+        "cp_frame_group", "cp_frame_touch", "cp_frame_fi",
         "forearm_vertices",
     )
     missing_keys = [k for k in required_keys if k not in npz]
@@ -248,10 +271,12 @@ def _load_playback_cache(
     frame_spikes_data = npz["frame_spikes_data"]
     frame_spikes_counts = npz["frame_spikes_counts"]
     frame_iff_data = npz["frame_iff_data"]
-    cp_pts_data = npz["cp_pts_data"]
-    cp_vertex_data = npz["cp_vertex_data"]
-    cp_pts_frame_touch = npz["cp_pts_frame_touch"]
-    cp_pts_frame_idx = npz["cp_pts_frame_idx"]
+    cp_unique_pts = npz["cp_unique_pts"]
+    cp_unique_vtx = npz["cp_unique_vtx"]
+    cp_unique_offsets = npz["cp_unique_offsets"]
+    cp_frame_group = npz["cp_frame_group"]
+    cp_frame_touch = npz["cp_frame_touch"]
+    cp_frame_fi = npz["cp_frame_fi"]
     forearm_vertices = npz["forearm_vertices"]
     # forearm_vertex_colors is optional — missing means PLY had no colours.
     forearm_vertex_colors: Optional[np.ndarray] = (
@@ -293,27 +318,46 @@ def _load_playback_cache(
             f"_load_playback_cache: 'frame_iff_data' has length "
             f"{len(frame_iff_data)}, expected {expected_spikes_len}: {cache_path}"
         )
-    total_pts = len(cp_pts_data)
+    if cp_unique_pts.ndim != 2 or cp_unique_pts.shape[1] != 3:
+        raise ValueError(
+            f"_load_playback_cache: 'cp_unique_pts' has shape {cp_unique_pts.shape} "
+            f"(expected (total_unique_pts, 3)): {cache_path}"
+        )
+    total_unique_pts = len(cp_unique_pts)
+    if cp_unique_vtx.ndim != 1 or len(cp_unique_vtx) != total_unique_pts:
+        raise ValueError(
+            f"_load_playback_cache: 'cp_unique_vtx' has shape {cp_unique_vtx.shape}, "
+            f"expected ({total_unique_pts},): {cache_path}"
+        )
+    if cp_unique_offsets.ndim != 1 or len(cp_unique_offsets) < 1:
+        raise ValueError(
+            f"_load_playback_cache: 'cp_unique_offsets' has shape "
+            f"{cp_unique_offsets.shape} (expected (n_groups+1,)): {cache_path}"
+        )
+    n_contact_frames = len(cp_frame_group)
     for arr_name, arr in [
-        ("cp_vertex_data", cp_vertex_data),
-        ("cp_pts_frame_touch", cp_pts_frame_touch),
-        ("cp_pts_frame_idx", cp_pts_frame_idx),
+        ("cp_frame_touch", cp_frame_touch),
+        ("cp_frame_fi", cp_frame_fi),
     ]:
-        if arr.ndim != 1 or len(arr) != total_pts:
+        if arr.ndim != 1 or len(arr) != n_contact_frames:
             raise ValueError(
                 f"_load_playback_cache: '{arr_name}' has shape {arr.shape}, "
-                f"expected ({total_pts},): {cache_path}"
+                f"expected ({n_contact_frames},): {cache_path}"
             )
-    if cp_pts_data.ndim != 2 or cp_pts_data.shape[1] != 3:
-        raise ValueError(
-            f"_load_playback_cache: 'cp_pts_data' has shape {cp_pts_data.shape} "
-            f"(expected (total_pts, 3)): {cache_path}"
-        )
     if forearm_vertices.ndim != 2 or forearm_vertices.shape[1] != 3:
         raise ValueError(
             f"_load_playback_cache: 'forearm_vertices' has shape "
             f"{forearm_vertices.shape} (expected (N, 3)): {cache_path}"
         )
+
+    # Build a lookup: frame_lookup[ti][fi] = group_idx
+    # so we can reconstruct per-frame pts/vtx slices efficiently.
+    frame_lookup: dict[int, dict[int, int]] = {}
+    for i in range(n_contact_frames):
+        ti_val = int(cp_frame_touch[i])
+        fi_val = int(cp_frame_fi[i])
+        g_val = int(cp_frame_group[i])
+        frame_lookup.setdefault(ti_val, {})[fi_val] = g_val
 
     # Reconstruct touch events.
     frames_offset = 0
@@ -329,18 +373,20 @@ def _load_playback_cache(
         iff = frame_iff_data[frames_offset: frames_offset + n_frames].astype(np.float64)
         frames_offset += n_frames
 
-        # Collect per-frame contact pts and vertex indices for this touch.
-        touch_mask = cp_pts_frame_touch == ti
-        frame_pts_list: list[np.ndarray] = [np.empty((0, 3), dtype=np.float64)] * n_frames
-        frame_vtx_list: list[np.ndarray] = [np.empty(0, dtype=np.int64)] * n_frames
-        if touch_mask.any():
-            pts_for_touch = cp_pts_data[touch_mask]
-            vtx_for_touch = cp_vertex_data[touch_mask].astype(np.int64)
-            fidx_for_touch = cp_pts_frame_idx[touch_mask].astype(np.int64)
-            for fi in range(n_frames):
-                fi_mask = fidx_for_touch == fi
-                frame_pts_list[fi] = pts_for_touch[fi_mask]
-                frame_vtx_list[fi] = vtx_for_touch[fi_mask]
+        # Reconstruct per-frame contact pts and vertex indices via group offsets.
+        ti_lookup = frame_lookup.get(ti, {})
+        frame_pts_list: list[np.ndarray] = []
+        frame_vtx_list: list[np.ndarray] = []
+        for fi in range(n_frames):
+            if fi in ti_lookup:
+                g = ti_lookup[fi]
+                start = int(cp_unique_offsets[g])
+                end = int(cp_unique_offsets[g + 1])
+                frame_pts_list.append(cp_unique_pts[start:end].astype(np.float64))
+                frame_vtx_list.append(cp_unique_vtx[start:end].astype(np.int64))
+            else:
+                frame_pts_list.append(np.empty((0, 3), dtype=np.float64))
+                frame_vtx_list.append(np.empty(0, dtype=np.int64))
 
         event = TouchEvent(
             block_order_id=block_order_id,

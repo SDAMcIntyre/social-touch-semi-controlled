@@ -8,7 +8,7 @@
 parameters:
   parallel_execution: false
   kinect_configs: 
-    valid_configs_ST18-01/kinect_config_2022-06-22_ST18-01_semicontrolled_block-order01.yaml
+    valid_configs_ST13-02/kinect_config_2022-06-14_ST13-02_semicontrolled_block-order04.yaml
   #kinect_configs: "valid_configs_all"
 tasks:
   # ---------------------------------------------------------------------------
