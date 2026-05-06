@@ -167,6 +167,15 @@ tasks:
       projection_method: tangent_plane
     depends_on: [map_population_rf_grid]
 
+  # Renders per-IFF-metric heatmap PNGs from population RF grid metrics CSVs.
+  # Output: 4_analysed/population_rf_grid_metrics_heatmaps/<metric>/
+  visualize_population_rf_grid_metrics:
+    category: processing
+    enabled: true
+    options:
+      force_processing: false
+    depends_on: [reduce_population_rf_grid]
+
   # Stages 3–5 (Reduction + Clustering + Evaluation): Global clustering on pooled feature CSVs.
   # Each cluster_group defines which data types / aggregations to use and its own clustering_methods.
   # Output: 4_analysed/touch_clusters/<group_name>/<clusterer>/

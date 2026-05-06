@@ -46,6 +46,7 @@ from analysis.receptive_field_mapping import (
     PopulationRFGridConfig,
     run_population_rf_grid_metrics,
     PopulationRFGridMetricsConfig,
+    run_population_rf_grid_metrics_visualization,
     pick_rf_camera_angle_batch,
     precompute_explorer_caches,
     launch_feature_space_explorer,
@@ -278,6 +279,36 @@ def reduce_population_rf_grid_flow(
         input_items=resolved_items,
         output_dir=output_dir,
         config=config,
+        force=force_processing,
+    )
+
+
+@flow(name="visualize_population_rf_grid_metrics")
+def visualize_population_rf_grid_metrics_flow(
+    input_items: List[Tuple[Path, Path]],
+    force_processing: bool = False,
+) -> None:
+    """Render per-metric heatmap PNGs from population RF grid metrics CSVs.
+
+    Reads CSVs produced by ``reduce_population_rf_grid`` and renders one PNG
+    per IFF metric per session+gesture type into a metric-organized folder.
+    Output: ``4_analysed/population_rf_grid_metrics_heatmaps/<metric>/``
+    """
+    print(f"[Batch Analysis] Visualizing population RF grid metrics for {len(input_items)} item(s)...")
+    if not input_items:
+        return
+
+    database_path = input_items[0][1]
+    output_dir = database_path / '4_analysed' / 'population_rf_grid_metrics_heatmaps'
+
+    resolved_items = []
+    for csv_path, db_path in input_items:
+        session_id = session_id_from_path(csv_path)
+        resolved_items.append({"session_id": session_id})
+
+    run_population_rf_grid_metrics_visualization(
+        input_items=resolved_items,
+        output_dir=output_dir,
         force=force_processing,
     )
 
@@ -877,6 +908,7 @@ def run_batch_analysis(
         ("touch_feature_extraction", touch_feature_extraction_flow),
         ("map_population_rf_grid", map_population_rf_grid_flow),
         ("reduce_population_rf_grid", reduce_population_rf_grid_flow),
+        ("visualize_population_rf_grid_metrics", visualize_population_rf_grid_metrics_flow),
         ("touch_clustering", touch_clustering_flow),
         ("touch_comparing", touch_comparing_flow),
         ("analyse_ap_efficacy", analyse_ap_efficacy_flow),
