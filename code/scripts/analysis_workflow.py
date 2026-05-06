@@ -44,6 +44,8 @@ from analysis.receptive_field_mapping import (
     run_single_touch_rf_mapping,
     run_population_rf_grid,
     PopulationRFGridConfig,
+    run_population_rf_grid_metrics,
+    PopulationRFGridMetricsConfig,
     pick_rf_camera_angle_batch,
     precompute_explorer_caches,
     launch_feature_space_explorer,
@@ -218,6 +220,61 @@ def map_population_rf_grid_flow(
         per_gesture_type=per_gesture_type,
     )
     return run_population_rf_grid(
+        input_items=resolved_items,
+        output_dir=output_dir,
+        config=config,
+        force=force_processing,
+    )
+
+
+@flow(name="reduce_population_rf_grid")
+def reduce_population_rf_grid_flow(
+    input_items: List[Tuple[Path, Path]],
+    force_processing: bool = False,
+    projection_method: str = "tangent_plane",
+) -> List[Path]:
+    """Reduce per-gesture-type population RF grid NPZ files to scalar metric CSVs.
+
+    Reads NPZ files produced by ``map_population_rf_grid`` and computes per-cell
+    scalar descriptors (IFF intensity, topographic, distributional, shape metrics).
+    Output: ``4_analysed/population_rf_grid_metrics/<session_id>/``
+    """
+    print(f"[Batch Analysis] Running population RF grid metrics for {len(input_items)} item(s)...")
+    if not input_items:
+        return []
+
+    database_path = input_items[0][1]
+    output_dir = database_path / '4_analysed'
+
+    resolved_items = []
+    for csv_path, db_path in input_items:
+        session_id = session_id_from_path(csv_path)
+        forearm_ply_path = resolve_forearm_ply(csv_path.parent, session_id)
+        if forearm_ply_path is None:
+            raise ValueError(
+                f"reduce_population_rf_grid_flow: forearm PLY not found for "
+                f"session '{session_id}' in {csv_path.parent}"
+            )
+        grid_dir = db_path / '4_analysed' / 'population_rf_grid' / session_id
+        if not grid_dir.exists():
+            raise ValueError(
+                f"reduce_population_rf_grid_flow: population_rf_grid directory not found "
+                f"for session '{session_id}': {grid_dir}. Run map_population_rf_grid first."
+            )
+        npz_files = list(grid_dir.glob("population_rf_grid_*.npz"))
+        if not npz_files:
+            raise ValueError(
+                f"reduce_population_rf_grid_flow: no NPZ files found for session "
+                f"'{session_id}' in {grid_dir}. Run map_population_rf_grid first."
+            )
+        resolved_items.append({
+            "forearm_ply_path": forearm_ply_path,
+            "grid_dir": grid_dir,
+            "session_id": session_id,
+        })
+
+    config = PopulationRFGridMetricsConfig(projection_method=projection_method)
+    return run_population_rf_grid_metrics(
         input_items=resolved_items,
         output_dir=output_dir,
         config=config,
@@ -816,9 +873,10 @@ def run_batch_analysis(
         ("map_receptive_fields_simple", map_receptive_fields_simple_flow),
         ("touch_preparation", touch_preparation_flow),
         ("map_single_touch_rf", map_single_touch_rf_flow),
-        ("map_population_rf_grid", map_population_rf_grid_flow),
         ("touch_series_transforms", touch_series_transforms_flow),
         ("touch_feature_extraction", touch_feature_extraction_flow),
+        ("map_population_rf_grid", map_population_rf_grid_flow),
+        ("reduce_population_rf_grid", reduce_population_rf_grid_flow),
         ("touch_clustering", touch_clustering_flow),
         ("touch_comparing", touch_comparing_flow),
         ("analyse_ap_efficacy", analyse_ap_efficacy_flow),

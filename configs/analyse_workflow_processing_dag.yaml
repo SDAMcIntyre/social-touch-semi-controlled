@@ -64,30 +64,6 @@ tasks:
       neuron_mode: iff
     depends_on: [touch_preparation]
 
-  # Population RF grid: sweep N-D feature space, average single-touch RFs per cell.
-  # Depends on: map_single_touch_rf (RF maps), touch_feature_extraction (feature CSVs).
-  # Output: 4_analysed/population_rf_grid/<session_id>/
-  map_population_rf_grid:
-    category: processing
-    enabled: false
-    options:
-      force_processing: false
-      neuron_mode: iff
-      per_gesture_type: true
-      vertex_threshold_ratio: 0.25
-      features:
-        hand_velocity_amplitude_mean_during_iff:
-          min: 0
-          max: 200
-          step: 10
-          span: 20
-        pressure_mean_during_iff:
-          min: 0
-          max: 5
-          step: 0.5
-          span: 1.0
-    depends_on: [map_single_touch_rf, touch_feature_extraction]
-
   # Stage 2a (Series Transforms): Per-session kinematics, pressure, and MoS computation.
   # Adds hand_velocity_x/y/z, hand_acceleration_x/y/z, pressure, and (when enabled) MoS
   # columns to each session CSV.
@@ -156,6 +132,40 @@ tasks:
           enabled: true
           pre_iff_window_ms: 250
     depends_on: [touch_series_transforms]
+
+  # Population RF grid: sweep N-D feature space, average single-touch RFs per cell.
+  # Depends on: map_single_touch_rf (RF maps), touch_feature_extraction (feature CSVs).
+  # Output: 4_analysed/population_rf_grid/<session_id>/
+  map_population_rf_grid:
+    category: processing
+    enabled: true
+    options:
+      force_processing: false
+      neuron_mode: iff
+      per_gesture_type: true
+      vertex_threshold_ratio: 0.25
+      features:
+        hand_velocity_amplitude_mean_during_iff:
+          min: 0
+          max: 500
+          step: 5
+          span: 10
+        pressure_mean_during_iff:
+          min: 0
+          max: 10
+          step: 0.25
+          span: 0.50
+    depends_on: [map_single_touch_rf, touch_feature_extraction]
+
+  # Reduces per-gesture-type population RF grid NPZ files to scalar metric CSVs.
+  # Output: 4_analysed/population_rf_grid_metrics/<session_id>/
+  reduce_population_rf_grid:
+    category: processing
+    enabled: true
+    options:
+      force_processing: false
+      projection_method: tangent_plane
+    depends_on: [map_population_rf_grid]
 
   # Stages 3–5 (Reduction + Clustering + Evaluation): Global clustering on pooled feature CSVs.
   # Each cluster_group defines which data types / aggregations to use and its own clustering_methods.

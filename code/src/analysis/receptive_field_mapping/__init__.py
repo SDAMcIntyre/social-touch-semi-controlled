@@ -21,6 +21,7 @@ from .rf_projection import project_to_2d
 from .rf_simple_pipeline import run_simple_rf_mapping
 from .rf_single_touch_pipeline import run_single_touch_rf_mapping
 from .rf_population_grid_pipeline import run_population_rf_grid, PopulationRFGridConfig
+from .rf_population_grid_metrics_pipeline import run_population_rf_grid_metrics, PopulationRFGridMetricsConfig
 
 __all__ = [
     "project_to_2d",
@@ -41,4 +42,6 @@ __all__ = [
     "run_single_touch_rf_mapping",
     "run_population_rf_grid",
     "PopulationRFGridConfig",
+    "run_population_rf_grid_metrics",
+    "PopulationRFGridMetricsConfig",
 ]
