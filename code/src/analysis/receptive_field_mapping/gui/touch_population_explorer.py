@@ -7,10 +7,12 @@ to the 3D heatmap; gesture-type checkboxes provide additional filtering.
 """
 
 import logging
+from pathlib import Path
 from typing import List, Optional, Tuple
 
 import numpy as np
 import pyvista as pv
+from PIL import Image, ImageDraw, ImageFont
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 from PyQt5.QtCore import Qt, QTimer
@@ -19,11 +21,13 @@ from PyQt5.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
+    QFileDialog,
     QHBoxLayout,
     QLabel,
     QMainWindow,
     QPushButton,
-    QSlider,
+    QCompleter,
+    QSpinBox,
     QSplitter,
     QVBoxLayout,
     QWidget,
@@ -55,6 +59,57 @@ _MODE_KEYS = ["spike_density", "mean_iff", "cumulative_iff"]
 
 _DEFAULT_X_FEATURE = "hand_velocity_amplitude_mean_during_iff"
 _DEFAULT_Y_FEATURE = "pressure_mean_during_iff"
+
+_FEATURE_UNITS: dict[str, str] = {
+    "velocity": "mm/s",
+    "speed": "mm/s",
+    "area": "mm²",
+    "contact_area": "mm²",
+    "force": "N",
+    "pressure": "N/mm²",
+    "duration": "s",
+    "distance": "mm",
+    "angle": "°",
+    "curvature": "1/mm",
+    "depth": "mm",
+    "radius": "mm",
+    "perimeter": "mm",
+    "eccentricity": "",
+    "aspect_ratio": "",
+}
+
+_AGG_SUFFIXES: list[str] = [
+    "_mean_std",
+    "_mean",
+    "_max",
+    "_min",
+    "_std",
+    "_sum",
+    "_range",
+    "_median",
+    "_iqr",
+    "_cv",
+    "_skew",
+    "_kurt",
+    "_first",
+    "_last",
+    "_initial",
+    "_final",
+]
+
+
+def _feature_unit(name: str) -> str:
+    base = name
+    for suffix in _AGG_SUFFIXES:
+        if name.endswith(suffix):
+            base = name[: -len(suffix)]
+            break
+    return _FEATURE_UNITS.get(base, "")
+
+
+def _feature_display(name: str) -> str:
+    unit = _feature_unit(name)
+    return f"{name} ({unit})" if unit else name
 
 
 class TouchPopulationExplorer(QMainWindow):
@@ -101,6 +156,9 @@ class TouchPopulationExplorer(QMainWindow):
         self._controls_updating: bool = False
         self._single_touch_mode: bool = False
         self._vertex_threshold: int = 1
+        self._threshold_ratio_mode: bool = True
+        self._threshold_ratio_value: int = 50
+        self._n_filtered: int = 0
         self._selected_touch_idx: int | None = None
         self._single_touch_cid: int | None = None
         self._filter_timer = QTimer(self)
@@ -175,14 +233,20 @@ class TouchPopulationExplorer(QMainWindow):
         self._threshold_row_layout = QHBoxLayout()
         self._threshold_row_layout.setSpacing(4)
         self._threshold_row_layout.addWidget(QLabel("Min overlaps:"))
-        self._threshold_slider = QSlider(Qt.Horizontal)
-        self._threshold_slider.setMinimum(1)
-        self._threshold_slider.setMaximum(1)
-        self._threshold_slider.setValue(1)
-        self._threshold_slider.valueChanged.connect(self._on_threshold_changed)
-        self._threshold_row_layout.addWidget(self._threshold_slider)
-        self._threshold_value_label = QLabel("1 / 1")
-        self._threshold_row_layout.addWidget(self._threshold_value_label)
+        self._threshold_spinbox = QSpinBox()
+        self._threshold_spinbox.setMinimum(1)
+        self._threshold_spinbox.setMaximum(100)
+        self._threshold_spinbox.setValue(50)
+        self._threshold_spinbox.valueChanged.connect(self._on_threshold_changed)
+        self._threshold_row_layout.addWidget(self._threshold_spinbox)
+        self._threshold_mode_btn = QPushButton("%")
+        self._threshold_mode_btn.setCheckable(True)
+        self._threshold_mode_btn.setChecked(True)
+        self._threshold_mode_btn.setFixedWidth(28)
+        self._threshold_mode_btn.toggled.connect(self._on_threshold_mode_toggled)
+        self._threshold_row_layout.addWidget(self._threshold_mode_btn)
+        self._threshold_suffix_label = QLabel("% of filtered")
+        self._threshold_row_layout.addWidget(self._threshold_suffix_label)
         right_layout.addLayout(self._threshold_row_layout)
 
         right_layout.addStretch()
@@ -224,12 +288,12 @@ class TouchPopulationExplorer(QMainWindow):
 
         toolbar.addSeparator()
         toolbar.addWidget(QLabel("X axis:"))
-        self._x_axis_combo = QComboBox()
+        self._x_axis_combo = self._make_searchable_combo()
         self._x_axis_combo.currentIndexChanged.connect(self._on_axis_changed)
         toolbar.addWidget(self._x_axis_combo)
 
         toolbar.addWidget(QLabel("Y axis:"))
-        self._y_axis_combo = QComboBox()
+        self._y_axis_combo = self._make_searchable_combo()
         self._y_axis_combo.currentIndexChanged.connect(self._on_axis_changed)
         toolbar.addWidget(self._y_axis_combo)
 
@@ -239,7 +303,21 @@ class TouchPopulationExplorer(QMainWindow):
         self._single_touch_btn.toggled.connect(self._set_single_touch_mode)
         toolbar.addWidget(self._single_touch_btn)
 
+        self._export_touches_btn = QPushButton("Export touches")
+        self._export_touches_btn.clicked.connect(self._on_export_touches_clicked)
+        toolbar.addWidget(self._export_touches_btn)
+
         self._populate_axis_combos()
+
+    @staticmethod
+    def _make_searchable_combo() -> QComboBox:
+        combo = QComboBox()
+        combo.setEditable(True)
+        combo.setInsertPolicy(QComboBox.NoInsert)
+        completer = combo.completer()
+        completer.setCompletionMode(QCompleter.PopupCompletion)
+        completer.setFilterMode(Qt.MatchContains)
+        return combo
 
     def _populate_axis_combos(self) -> None:
         all_features = list(self._data.feature_names)
@@ -455,6 +533,7 @@ class TouchPopulationExplorer(QMainWindow):
             nan_color=[0.3, 0.3, 0.3],
             below_color=[0.75, 0.75, 0.75],
             show_scalar_bar=True,
+            scalar_bar_args={"n_labels": 5},
             render_points_as_spheres=False,
             point_size=3,
             smooth_shading=True,
@@ -474,7 +553,7 @@ class TouchPopulationExplorer(QMainWindow):
 
         if not self._single_touch_mode:
             n_total = len(self._data.gesture_types)
-            self._update_threshold_slider_range(n_total)
+            self._update_threshold_range(n_total)
 
     def _compute_heatmap(self, cp_mask: np.ndarray, n_verts: int) -> np.ndarray:
         active_verts = self._data.cp_vertex_idx[cp_mask]
@@ -564,6 +643,13 @@ class TouchPopulationExplorer(QMainWindow):
                 for i in reversed(indices_to_remove):
                     combo.removeItem(i)
                 combo.addItem(rf_label, rf_key)
+                # Auto-select the RF mode if the current selection is the spike_density default.
+                if combo.currentIndex() == 0 and (
+                    combo.itemData(0) == "spike_density" or combo.itemData(0) is None
+                ):
+                    new_rf_idx = combo.count() - 1
+                    combo.setCurrentIndex(new_rf_idx)
+                    self._heatmap_mode = rf_key
         else:
             # Remove RF mode item(s) if present.
             indices_to_remove = []
@@ -655,7 +741,7 @@ class TouchPopulationExplorer(QMainWindow):
 
         n_shown = int(touch_mask.sum())
         unique_touch_count = self._compute_unique_touch_count(cp_mask, n_verts)
-        self._update_threshold_slider_range(n_shown)
+        self._update_threshold_range(n_shown)
         heatmap_val = self._apply_vertex_threshold(heatmap_val, unique_touch_count)
 
         self._cloud["heatmap"] = heatmap_val
@@ -699,6 +785,12 @@ class TouchPopulationExplorer(QMainWindow):
 
         return np.bincount(unique_verts, minlength=n_verts).astype(np.int64)
 
+    def _effective_threshold(self, n_filtered: int) -> int:
+        """Return the effective integer threshold given the current mode and *n_filtered*."""
+        if self._threshold_ratio_mode:
+            return max(1, round(self._threshold_ratio_value / 100 * n_filtered))
+        return self._vertex_threshold
+
     def _apply_vertex_threshold(
         self, heatmap_val: np.ndarray, unique_touch_count: np.ndarray
     ) -> np.ndarray:
@@ -726,58 +818,105 @@ class TouchPopulationExplorer(QMainWindow):
         result = heatmap_val.copy()
         # A vertex is "contacted" when it has a positive unique-touch count.
         contacted = unique_touch_count > 0
-        below_threshold = contacted & (unique_touch_count < self._vertex_threshold)
+        below_threshold = contacted & (unique_touch_count < self._effective_threshold(self._n_filtered))
         result[below_threshold] = -1.0
         return result
 
-    def _update_threshold_slider_range(self, n_filtered_touches: int) -> None:
-        """Update the threshold slider maximum to *n_filtered_touches*.
+    def _update_threshold_range(self, n_filtered_touches: int) -> None:
+        """Update the threshold spinbox range and suffix label to reflect *n_filtered_touches*.
 
-        - Clamps the current slider value to the new maximum.
-        - Uses ``blockSignals`` to avoid triggering ``_on_threshold_changed``
-          during the range/value update.
-        - Disables the slider when ``n_filtered_touches == 0``.
-        - Updates the ``_threshold_value_label`` to show ``value / max``.
+        In ratio mode, the spinbox range stays 1–100 and the value is not changed;
+        only the suffix label is updated. In absolute mode, the spinbox maximum is
+        set to *n_filtered_touches* and the current value is clamped if it exceeds
+        the new maximum.
+
+        Uses ``blockSignals`` guards to avoid re-entering ``_on_threshold_changed``.
 
         Parameters
         ----------
         n_filtered_touches:
             Number of touches currently passing all filters.
         """
-        slider = self._threshold_slider
-        slider.blockSignals(True)
+        self._n_filtered = n_filtered_touches
+        spinbox = self._threshold_spinbox
+        spinbox.blockSignals(True)
         try:
-            if n_filtered_touches == 0:
-                slider.setEnabled(False)
-                slider.setMaximum(1)
-                slider.setValue(1)
-                self._threshold_value_label.setText("1 / 1")
+            if self._threshold_ratio_mode:
+                spinbox.setEnabled(n_filtered_touches > 0)
+                spinbox.setMinimum(1)
+                spinbox.setMaximum(100)
+                self._threshold_suffix_label.setText("% of filtered")
             else:
-                slider.setEnabled(True)
-                new_max = max(1, n_filtered_touches)
-                slider.setMaximum(new_max)
-                clamped_val = min(slider.value(), new_max)
-                slider.setValue(clamped_val)
-                self._vertex_threshold = clamped_val
-                self._threshold_value_label.setText(f"{clamped_val} / {new_max}")
+                if n_filtered_touches == 0:
+                    spinbox.setEnabled(False)
+                    spinbox.setMinimum(1)
+                    spinbox.setMaximum(1)
+                    spinbox.setValue(1)
+                    self._threshold_suffix_label.setText("/ 1")
+                else:
+                    spinbox.setEnabled(True)
+                    new_max = max(1, n_filtered_touches)
+                    spinbox.setMinimum(1)
+                    spinbox.setMaximum(new_max)
+                    effective = self._effective_threshold(n_filtered_touches)
+                    if effective > new_max:
+                        spinbox.setValue(new_max)
+                        self._vertex_threshold = new_max
+                    self._threshold_suffix_label.setText(f"/ {new_max}")
         finally:
-            slider.blockSignals(False)
+            spinbox.blockSignals(False)
 
     def _on_threshold_changed(self, value: int) -> None:
-        """Handle threshold slider value changes.
+        """Handle threshold spinbox value changes.
 
-        Updates ``self._vertex_threshold``, refreshes the value label, and
-        triggers a heatmap update via ``_apply_filter_update``.
+        In ratio mode stores to ``_threshold_ratio_value``; in absolute mode
+        stores to ``_vertex_threshold``. Then triggers a heatmap update.
 
         Parameters
         ----------
         value:
-            New slider integer value.
+            New spinbox integer value.
         """
-        self._vertex_threshold = value
-        self._threshold_value_label.setText(
-            f"{value} / {self._threshold_slider.maximum()}"
-        )
+        if self._threshold_ratio_mode:
+            self._threshold_ratio_value = value
+        else:
+            self._vertex_threshold = value
+        self._apply_filter_update()
+
+    def _on_threshold_mode_toggled(self, checked: bool) -> None:
+        """Toggle between ratio (checked=True) and absolute (checked=False) threshold mode.
+
+        Converts the current spinbox value to the equivalent in the new mode so
+        that the effective threshold is preserved across the toggle.
+
+        Parameters
+        ----------
+        checked:
+            ``True`` means ratio mode (spinbox shows percentage 1–100).
+            ``False`` means absolute mode (spinbox shows raw overlap count).
+        """
+        spinbox = self._threshold_spinbox
+        spinbox.blockSignals(True)
+        try:
+            if checked:
+                ratio = round(self._vertex_threshold / max(1, self._n_filtered) * 100)
+                ratio = max(1, min(100, ratio))
+                self._threshold_ratio_mode = True
+                self._threshold_ratio_value = ratio
+                spinbox.setMinimum(1)
+                spinbox.setMaximum(100)
+                spinbox.setValue(ratio)
+                self._threshold_suffix_label.setText("% of filtered")
+            else:
+                abs_val = max(1, round(self._threshold_ratio_value / 100 * self._n_filtered))
+                self._threshold_ratio_mode = False
+                self._vertex_threshold = abs_val
+                spinbox.setMinimum(1)
+                spinbox.setMaximum(max(1, self._n_filtered))
+                spinbox.setValue(abs_val)
+                self._threshold_suffix_label.setText(f"/ {self._n_filtered}")
+        finally:
+            spinbox.blockSignals(False)
         self._apply_filter_update()
 
     # ------------------------------------------------------------------
@@ -916,6 +1055,181 @@ class TouchPopulationExplorer(QMainWindow):
         self._touch_count_label.setText(f"Touch {sel_idx} ({gtype})")
 
     # ------------------------------------------------------------------
+    # Export
+    # ------------------------------------------------------------------
+
+    def _compose_touch_image(
+        self,
+        screenshot_arr: np.ndarray,
+        touch_idx: int,
+        x_feature: str,
+        y_feature: str,
+    ) -> "Image.Image":
+        """Compose an annotated PNG: white header strip above the PyVista screenshot.
+
+        Parameters
+        ----------
+        screenshot_arr:
+            H×W×3 or H×W×4 uint8 array from ``self._plotter.screenshot(return_img=True)``.
+        touch_idx:
+            Index into ``self._data.touch_triple_keys`` and ``self._data.gesture_types``.
+        x_feature:
+            Current X-axis feature name (used to label the header).
+        y_feature:
+            Current Y-axis feature name (used to label the header).
+
+        Returns
+        -------
+        PIL.Image.Image
+            RGB image with a ~60px white header strip above the screenshot.
+        """
+        if screenshot_arr.shape[2] == 4:
+            screenshot_arr = screenshot_arr[:, :, :3]
+
+        screenshot_img = Image.fromarray(screenshot_arr, mode="RGB")
+        img_w, img_h = screenshot_img.size
+
+        header_h = 60
+        header_img = Image.new("RGB", (img_w, header_h), color=(255, 255, 255))
+        draw = ImageDraw.Draw(header_img)
+
+        try:
+            font = ImageFont.truetype("arial.ttf", 16)
+        except (OSError, IOError):
+            font = ImageFont.load_default()
+
+        triple = self._data.touch_triple_keys[touch_idx]
+        block_id = int(triple[0])
+        trial_id = int(triple[1])
+        touch_id = int(triple[2])
+        gesture_type = str(self._data.gesture_types[touch_idx])
+
+        line1 = (
+            f"Block {block_id} | Trial {trial_id} | Touch {touch_id} | {gesture_type}"
+        )
+
+        x_display = _feature_display(x_feature)
+        y_display = _feature_display(y_feature)
+
+        if x_feature in self._data.feature_names:
+            x_val = float(self._data.get_feature_array(x_feature)[touch_idx])
+            x_str = f"{x_val:.3g}"
+        else:
+            x_str = "N/A"
+
+        if y_feature in self._data.feature_names:
+            y_val = float(self._data.get_feature_array(y_feature)[touch_idx])
+            y_str = f"{y_val:.3g}"
+        else:
+            y_str = "N/A"
+
+        line2 = f"X: {x_display} = {x_str} | Y: {y_display} = {y_str}"
+
+        margin = 8
+        draw.text((margin, margin), line1, fill=(0, 0, 0), font=font)
+        draw.text((margin, margin + 22), line2, fill=(0, 0, 0), font=font)
+
+        composed = Image.new("RGB", (img_w, header_h + img_h))
+        composed.paste(header_img, (0, 0))
+        composed.paste(screenshot_img, (0, header_h))
+        return composed
+
+    def _on_export_touches_clicked(self) -> None:
+        """Batch-export one annotated PNG per gesture-type-filtered touch."""
+        checked_types = {gtype for gtype, cb in self._checkboxes.items() if cb.isChecked()}
+        type_mask = np.isin(self._data.gesture_types, list(checked_types))
+        filtered_indices = list(np.where(type_mask)[0])
+
+        if not filtered_indices:
+            self.statusBar().showMessage("Export cancelled — no touches match the current gesture filter.")
+            return
+
+        out_dir_str = QFileDialog.getExistingDirectory(
+            self, "Select export directory", ""
+        )
+        if not out_dir_str:
+            return
+
+        out_dir = Path(out_dir_str)
+
+        x_feature = self._x_feature()
+        y_feature = self._y_feature()
+
+        session_idx = self._session_combo.currentIndex()
+        saved_camera = None
+        if self._cloud is not None and session_idx in self._camera_states:
+            try:
+                saved_camera = self._plotter.camera.copy()
+            except Exception:
+                pass
+
+        saved_selected_idx = self._selected_touch_idx
+        saved_single_touch_mode = self._single_touch_mode
+
+        if not self._single_touch_mode:
+            self._single_touch_mode = True
+            self._selected_touch_idx = None
+            self._render_3d()
+
+        n = len(filtered_indices)
+        self._export_touches_btn.setEnabled(False)
+        try:
+            for i, touch_idx in enumerate(filtered_indices, start=1):
+                triple = self._data.touch_triple_keys[touch_idx]
+                block_id = int(triple[0])
+                trial_id = int(triple[1])
+                touch_id = int(triple[2])
+
+                self.statusBar().showMessage(
+                    f"Exporting {i}/{n} — Block {block_id}, Trial {trial_id}, Touch {touch_id}…"
+                )
+                QApplication.processEvents()
+
+                self._selected_touch_idx = touch_idx
+                self._apply_single_touch_display()
+                QApplication.processEvents()
+
+                screenshot_arr = self._plotter.screenshot(return_img=True)
+                if screenshot_arr is None:
+                    raise ValueError(
+                        f"_on_export_touches_clicked: screenshot returned None for touch index {touch_idx}"
+                    )
+
+                composed = self._compose_touch_image(
+                    screenshot_arr, touch_idx, x_feature, y_feature
+                )
+
+                fname = f"touch_B{block_id}_T{trial_id}_S{touch_id}.png"
+                composed.save(out_dir / fname)
+
+            self.statusBar().showMessage(
+                f"Export done — {n} image(s) saved to {out_dir}"
+            )
+        finally:
+            self._single_touch_mode = saved_single_touch_mode
+            self._selected_touch_idx = saved_selected_idx
+
+            if not saved_single_touch_mode:
+                self._single_touch_mode = False
+                self._render_3d()
+                if self._rect is None:
+                    self._init_filter_rect()
+                else:
+                    self._apply_filter_update()
+            else:
+                if saved_selected_idx is not None:
+                    self._apply_single_touch_display()
+
+            if saved_camera is not None:
+                try:
+                    self._plotter.camera = saved_camera
+                    self._plotter.render()
+                except Exception:
+                    pass
+
+            self._export_touches_btn.setEnabled(True)
+
+    # ------------------------------------------------------------------
     # Axis changes
     # ------------------------------------------------------------------
 
@@ -1001,19 +1315,28 @@ class TouchPopulationExplorer(QMainWindow):
             self._gesture_colors[gtype] = _GESTURE_COLORS[i % len(_GESTURE_COLORS)]
             right_layout.addWidget(cb)
 
-        # Rebuild threshold slider row and reset threshold to 1.
+        # Rebuild threshold spinbox row and reset threshold to ratio 50%.
+        self._threshold_ratio_mode = True
+        self._threshold_ratio_value = 50
+        self._n_filtered = 0
         self._vertex_threshold = 1
         self._threshold_row_layout = QHBoxLayout()
         self._threshold_row_layout.setSpacing(4)
         self._threshold_row_layout.addWidget(QLabel("Min overlaps:"))
-        self._threshold_slider = QSlider(Qt.Horizontal)
-        self._threshold_slider.setMinimum(1)
-        self._threshold_slider.setMaximum(1)
-        self._threshold_slider.setValue(1)
-        self._threshold_slider.valueChanged.connect(self._on_threshold_changed)
-        self._threshold_row_layout.addWidget(self._threshold_slider)
-        self._threshold_value_label = QLabel("1 / 1")
-        self._threshold_row_layout.addWidget(self._threshold_value_label)
+        self._threshold_spinbox = QSpinBox()
+        self._threshold_spinbox.setMinimum(1)
+        self._threshold_spinbox.setMaximum(100)
+        self._threshold_spinbox.setValue(50)
+        self._threshold_spinbox.valueChanged.connect(self._on_threshold_changed)
+        self._threshold_row_layout.addWidget(self._threshold_spinbox)
+        self._threshold_mode_btn = QPushButton("%")
+        self._threshold_mode_btn.setCheckable(True)
+        self._threshold_mode_btn.setChecked(True)
+        self._threshold_mode_btn.setFixedWidth(28)
+        self._threshold_mode_btn.toggled.connect(self._on_threshold_mode_toggled)
+        self._threshold_row_layout.addWidget(self._threshold_mode_btn)
+        self._threshold_suffix_label = QLabel("% of filtered")
+        self._threshold_row_layout.addWidget(self._threshold_suffix_label)
         right_layout.addLayout(self._threshold_row_layout)
 
         right_layout.addStretch()
