@@ -18,7 +18,10 @@ import open3d as o3d  # type: ignore
 import pandas as pd
 from scipy.spatial import cKDTree  # type: ignore
 
-from analysis.receptive_field_mapping.rf_cluster_visualizer import render_forearm_heatmap
+from analysis.receptive_field_mapping.rf_cluster_visualizer import (
+    RFRenderContext,
+    render_forearm_heatmap,
+)
 from analysis.receptive_field_mapping.rf_data_loader import (
     parse_contact_points,
     resolve_forearm_ply,
@@ -184,11 +187,26 @@ def run_simple_rf_mapping(
         df = df.copy()
         df['contact_points'] = df.groupby(_KEY_COLS)['contact_points'].ffill()
 
-        # --- Filter spike rows and parse contact points ---
-        spike_rows = df[df['Nerve_spike'] == 1]
+        # --- Single-pass parse: collect spike-row contacts (raw_points) and the
+        # mm-rounded unique cloud across ALL rows (neuron_contacts_xyz) for the
+        # render-context centroid. Mirrors _parse_contacts_for_keys() in
+        # rf_cluster_pipeline.py so spike_set ⊆ neuron_set holds.
         raw_points: List[Tuple[float, float, float]] = []
-        for cp_str in spike_rows['contact_points']:
-            raw_points.extend(parse_contact_points(cp_str))
+        all_pts_mm: set = set()
+        dedup_mm = 1.0
+        for row in df.itertuples(index=False):
+            parsed = parse_contact_points(row.contact_points)
+            for pt in parsed:
+                all_pts_mm.add(tuple(round(v / dedup_mm) * dedup_mm for v in pt))
+            if row.Nerve_spike == 1:
+                raw_points.extend(parsed)
+
+        if all_pts_mm:
+            neuron_contacts_xyz = np.array(sorted(all_pts_mm), dtype=float)
+        else:
+            neuron_contacts_xyz = np.empty((0, 3))
+
+        neuron_touches = int(df[_KEY_COLS].drop_duplicates().shape[0])
 
         n_spikes = len(raw_points)
         print(f"[RF Simple] {session_id}: {n_spikes} spike contact vertices.")
@@ -205,7 +223,24 @@ def run_simple_rf_mapping(
 
         # --- Render heatmap PNG ---
         if raw_points:
+            if len(neuron_contacts_xyz) == 0:
+                raise ValueError(
+                    f"[RF Simple] {session_id}: spike rows present but no contact "
+                    "points parsed across the session — pipeline contract violation."
+                )
+
             spike_counts_df = _aggregate_spike_counts(positions_df, forearm_ply, session_id)
+
+            # Simple pipeline has no clustering: the "cluster" is the whole neuron,
+            # so cluster-scoped fields equal neuron-scoped fields.
+            render_context = RFRenderContext(
+                neuron_touches=neuron_touches,
+                neuron_cluster_touches=neuron_touches,
+                neuron_contacts_xyz=neuron_contacts_xyz,
+                neuron_cluster_contacts_xyz=neuron_contacts_xyz,
+                feature_ranges={},
+            )
+
             suffix = f'_{projection_method}' if projection_method else ''
             png_path = session_out / f'{session_id}_rf_simple{suffix}.png'
             try:
@@ -217,6 +252,7 @@ def run_simple_rf_mapping(
                     cluster_label='simple',
                     interactive=show_interactive,
                     projection_method=projection_method,
+                    render_context=render_context,
                 )
                 print(f"[RF Simple] {session_id}: heatmap saved -> {png_path.name}")
             except Exception:

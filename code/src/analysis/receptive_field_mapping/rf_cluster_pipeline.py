@@ -888,6 +888,150 @@ def launch_touch_playback_explorer(
     app.exec_()
 
 
+def launch_single_touch_rf_explorer(
+    input_items: List[Tuple[Path, Path]],
+    neuron_mode: str = "iff",
+) -> None:
+    """Launch the Single-Touch RF Explorer GUI for all sessions in input_items.
+
+    Resolves the per-session ``.npz`` file and forearm PLY, loads
+    ``SingleTouchRFViewerData`` via ``load_single_touch_rf_data()`` in a thread
+    pool, then opens the ``SingleTouchRFExplorer`` window.  Blocks until the
+    user closes the window.
+
+    Parameters
+    ----------
+    input_items:
+        List of ``(aggregated_csv_path, database_path)`` tuples, one per
+        session — the same format used throughout the analysis pipeline.
+    neuron_mode:
+        ``"iff"`` or ``"spike"`` — must match the mode used when
+        ``run_single_touch_rf_mapping`` was run.  Only used to validate the
+        loaded data; the actual mode is stored in the ``.npz`` file.
+    """
+    from .gui.single_touch_rf_explorer import SingleTouchRFExplorer, load_single_touch_rf_data
+
+    n = len(input_items)
+    if n == 0:
+        raise ValueError("launch_single_touch_rf_explorer: no sessions to display.")
+
+    def _resolve_and_load(item: Tuple[Path, Path]) -> Tuple[str, object]:
+        csv_path, database_path = item
+        session_id = session_id_from_path(csv_path)
+        npz_path = (
+            database_path / "4_analysed" / "single_touch_rf_maps"
+            / session_id / "single_touch_rf_maps.npz"
+        )
+        if not npz_path.exists():
+            raise ValueError(
+                f"launch_single_touch_rf_explorer: npz not found for session "
+                f"'{session_id}': {npz_path}"
+            )
+        forearm_ply_path = resolve_forearm_ply(csv_path.parent, session_id)
+        if forearm_ply_path is None:
+            raise ValueError(
+                f"launch_single_touch_rf_explorer: forearm PLY not found for "
+                f"session '{session_id}' in {csv_path.parent}"
+            )
+        return session_id, load_single_touch_rf_data(npz_path, forearm_ply_path, session_id)
+
+    print(f"[Single-Touch RF Explorer] Loading {n} session(s)...")
+
+    with ThreadPoolExecutor(max_workers=min(4, n)) as executor:
+        sessions: List[Tuple[str, object]] = list(
+            executor.map(_resolve_and_load, input_items)
+        )
+
+    first_label, first_data = sessions[0]
+
+    app = QApplication.instance() or QApplication(sys.argv)
+    viewer = SingleTouchRFExplorer(
+        data=first_data,
+        sessions=sessions,
+    )
+    viewer.show()
+    app.exec_()
+
+
+def launch_touch_population_explorer(
+    input_items: List[Tuple[Path, Path]],
+    neuron_mode: str = "iff",
+) -> None:
+    """Launch the Touch Population Explorer GUI for all sessions in input_items.
+
+    Resolves the series-augmented CSV and forearm PLY for each session, loads
+    ``PopulationData`` via ``load_population_data()`` in a thread pool, then opens
+    the ``TouchPopulationExplorer`` window.  When caches are warm the load is
+    near-instant; on a cache miss the computation runs in parallel across
+    sessions.  Blocks until the user closes the window.
+
+    For each session, also attempts to load a ``PopulationRFData`` from the
+    pre-computed ``single_touch_rf_maps.npz`` (produced by
+    ``run_single_touch_rf_mapping``).  If the ``.npz`` is absent for a session,
+    ``None`` is stored in ``rf_sessions`` for that position — the viewer
+    gracefully disables RF heatmap mode for that session.  If the file exists
+    but is corrupt or misaligned, the ``ValueError`` from
+    ``load_population_rf_data`` propagates immediately (fail-fast).
+
+    Parameters
+    ----------
+    input_items:
+        List of ``(aggregated_csv_path, database_path)`` tuples, one per
+        session — the same format used throughout the analysis pipeline.
+    neuron_mode:
+        ``"iff"`` or ``"spike"`` — must match the mode used when
+        ``run_single_touch_rf_mapping`` was run.  Passed to the viewer so it
+        can label the RF heatmap axis correctly.
+    """
+    from .touch_population_data import load_population_data, load_population_rf_data, PopulationRFData
+    from .gui import TouchPopulationExplorer
+
+    session_specs = _resolve_explorer_session_paths(input_items)
+    n = len(session_specs)
+    if n == 0:
+        raise ValueError("launch_touch_population_explorer: no sessions to display.")
+
+    print(f"[Touch Population] Loading {n} session(s)...")
+
+    def _load_one(spec: Tuple[str, Path, Path]) -> Tuple[str, object]:
+        session_id, series_csv, forearm_ply = spec
+        touch_features_dir = series_csv.parent.parent / 'touch_features'
+        return session_id, load_population_data(series_csv, forearm_ply, touch_features_dir=touch_features_dir)
+
+    with ThreadPoolExecutor(max_workers=min(4, n)) as executor:
+        sessions: List[Tuple[str, object]] = list(executor.map(_load_one, session_specs))
+
+    # Resolve RF data per session — None if .npz absent, ValueError propagates if corrupt.
+    rf_sessions: List[Optional[PopulationRFData]] = []
+    for (csv_path, database_path), (session_id, pop_data) in zip(input_items, sessions):
+        npz_path = (
+            database_path / "4_analysed" / "single_touch_rf_maps"
+            / session_id / "single_touch_rf_maps.npz"
+        )
+        if not npz_path.exists():
+            print(
+                f"[Touch Population] {session_id}: RF .npz not found — "
+                f"RF heatmap mode disabled for this session."
+            )
+            rf_sessions.append(None)
+        else:
+            n_vertices = len(pop_data.forearm_vertices)
+            rf_sessions.append(
+                load_population_rf_data(npz_path, pop_data.touch_triple_keys, n_vertices)
+            )
+
+    first_label, first_data = sessions[0]
+
+    app = QApplication.instance() or QApplication(sys.argv)
+    viewer = TouchPopulationExplorer(
+        population_data=first_data,
+        sessions=sessions,
+        rf_sessions=rf_sessions,
+    )
+    viewer.show()
+    app.exec_()
+
+
 def launch_gallery_viewer(
     output_dir: Path,
     combo_name: str,

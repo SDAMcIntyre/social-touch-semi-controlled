@@ -41,10 +41,13 @@ from analysis.receptive_field_mapping import (
     run_cluster_rf_mapping,
     run_cluster_rf_visualization,
     run_simple_rf_mapping,
+    run_single_touch_rf_mapping,
     pick_rf_camera_angle_batch,
     precompute_explorer_caches,
     launch_feature_space_explorer,
+    launch_single_touch_rf_explorer,
     launch_touch_playback_explorer,
+    launch_touch_population_explorer,
     launch_gallery_viewer,
 )
 from analysis.touch_analytics.pipeline_shared import session_id_from_path
@@ -110,6 +113,33 @@ def map_receptive_fields_simple_flow(
         force=force_processing,
         show_interactive=show_interactive,
         projection_method=projection_method,
+    )
+
+
+@flow(name="map_single_touch_rf")
+def map_single_touch_rf_flow(
+    input_items: List[Tuple[Path, Path]],
+    force_processing: bool = False,
+    neuron_mode: str = "iff",
+    preparation_dir: Optional[Path] = None,
+) -> List[Path]:
+    """Per-touch RF mapping: accumulate per-vertex neuron values for every single touch.
+
+    Reads the prepared CSV produced by ``touch_preparation`` via
+    ``load_playback_data()``, accumulates IFF or spike values per forearm vertex
+    for each touch event, and saves results as a sparse ``.npz`` file.
+    Output: ``4_analysed/single_touch_rf_maps/<session_id>/``
+    """
+    print(f"[Batch Analysis] Running single-touch RF mapping for {len(input_items)} item(s)...")
+    if not input_items:
+        return []
+    output_dir = input_items[0][1] / '4_analysed' / 'single_touch_rf_maps'
+    return run_single_touch_rf_mapping(
+        input_items=input_items,
+        output_dir=output_dir,
+        force=force_processing,
+        neuron_mode=neuron_mode,
+        preparation_dir=preparation_dir,
     )
 
 
@@ -499,6 +529,49 @@ def explore_touch_playback_flow(
     launch_touch_playback_explorer(input_items)
 
 
+@flow(name="explore_touch_population")
+def explore_touch_population_flow(
+    input_items: List[Tuple[Path, Path]],
+    force_processing: bool = False,
+    neuron_mode: str = "iff",
+) -> None:
+    """
+    Launch the Touch Population Explorer GUI for the given sessions.
+    Reads series-augmented CSVs produced by ``touch_series_transforms`` — no
+    dependency on RF clustering or visualization.
+    ``force_processing`` is accepted for interface consistency but is a no-op:
+    the GUI is stateless and always launches fresh.
+
+    ``neuron_mode`` is forwarded to ``launch_touch_population_explorer`` to
+    determine which pre-computed RF maps to load (``"iff"`` or ``"spike"``).
+    """
+    print(f"[Batch Analysis] Launching Touch Population Explorer for {len(input_items)} item(s)...")
+    if not input_items:
+        return
+
+    launch_touch_population_explorer(input_items, neuron_mode=neuron_mode)
+
+
+@flow(name="explore_single_touch_rf")
+def explore_single_touch_rf_flow(
+    input_items: List[Tuple[Path, Path]],
+    force_processing: bool = False,
+    neuron_mode: str = "iff",
+) -> None:
+    """
+    Launch the Single-Touch RF Explorer GUI for the given sessions.
+    Reads per-touch RF maps produced by ``map_single_touch_rf`` — no dependency
+    on clustering or visualization.
+    ``force_processing`` is accepted for interface consistency but is a no-op:
+    the GUI is stateless and always launches fresh.
+    """
+    print(f"[Batch Analysis] Launching Single-Touch RF Explorer for {len(input_items)} item(s)...")
+    if not input_items:
+        return
+
+    launch_single_touch_rf_explorer(input_items, neuron_mode=neuron_mode)
+
+
 @flow(name="explore_rf_gallery")
 def explore_rf_gallery_flow(
     input_items: List[Tuple[Path, Path]],
@@ -660,6 +733,7 @@ def run_batch_analysis(
         ("summarize_session_blocks", summarize_session_blocks_flow),
         ("map_receptive_fields_simple", map_receptive_fields_simple_flow),
         ("touch_preparation", touch_preparation_flow),
+        ("map_single_touch_rf", map_single_touch_rf_flow),
         ("touch_series_transforms", touch_series_transforms_flow),
         ("touch_feature_extraction", touch_feature_extraction_flow),
         ("touch_clustering", touch_clustering_flow),
@@ -675,6 +749,8 @@ def run_batch_analysis(
         ("explore_preparation", explore_preparation_flow),
         ("explore_rf_feature_space", explore_rf_feature_space_flow),
         ("explore_touch_playback", explore_touch_playback_flow),
+        ("explore_touch_population", explore_touch_population_flow),
+        ("explore_single_touch_rf", explore_single_touch_rf_flow),
         ("explore_rf_gallery", explore_rf_gallery_flow),
     ]
     
@@ -759,6 +835,16 @@ def run_batch_analysis(
                             kwargs["series_dir"] = series_dir
                         if preparation_dir is not None:
                             kwargs["preparation_dir"] = preparation_dir
+                    if task_name == "map_single_touch_rf":
+                        if "neuron_mode" in options:
+                            kwargs["neuron_mode"] = options["neuron_mode"]
+                        if preparation_dir is not None:
+                            kwargs["preparation_dir"] = preparation_dir
+                    if task_name == "explore_single_touch_rf":
+                        if "neuron_mode" in options:
+                            kwargs["neuron_mode"] = options["neuron_mode"]
+                    if task_name == "explore_touch_population":
+                        kwargs["neuron_mode"] = options.get("neuron_mode", "iff")
                     if "cluster_groups" in options:
                         kwargs["cluster_groups"] = options["cluster_groups"]
                     if task_name in (

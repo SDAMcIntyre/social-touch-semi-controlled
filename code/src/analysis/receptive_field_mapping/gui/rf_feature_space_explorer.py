@@ -88,18 +88,19 @@ class DraggableFilterRect:
             width,
             height,
             linewidth=1.5,
-            edgecolor="white",
-            facecolor="white",
-            alpha=0.15,
+            edgecolor="royalblue",
+            facecolor="royalblue",
+            alpha=0.10,
+            linestyle="--",
             zorder=5,
         )
         ax.add_patch(self._patch)
 
         canvas = ax.figure.canvas
         canvas.setMouseTracking(True)
-        canvas.mpl_connect("button_press_event", self._on_press)
-        canvas.mpl_connect("motion_notify_event", self._on_motion)
-        canvas.mpl_connect("button_release_event", self._on_release)
+        self._cid_press = canvas.mpl_connect("button_press_event", self._on_press)
+        self._cid_motion = canvas.mpl_connect("motion_notify_event", self._on_motion)
+        self._cid_release = canvas.mpl_connect("button_release_event", self._on_release)
 
     # ------------------------------------------------------------------
     # Public API
@@ -121,6 +122,17 @@ class DraggableFilterRect:
         self._patch.set_width(x_max - x_min)
         self._patch.set_height(y_max - y_min)
         self._on_changed(x_min, x_max, y_min, y_max)
+
+    def disconnect(self) -> None:
+        """Disconnect all canvas callbacks and remove the patch from the axes."""
+        canvas = self._ax.figure.canvas
+        canvas.mpl_disconnect(self._cid_press)
+        canvas.mpl_disconnect(self._cid_motion)
+        canvas.mpl_disconnect(self._cid_release)
+        try:
+            self._patch.remove()
+        except ValueError:
+            pass
 
     # ------------------------------------------------------------------
     # Hit testing
@@ -281,6 +293,9 @@ class RFFeatureSpaceExplorer(QMainWindow):
         )
         self._settings_path = settings_path
         self._initialized = False
+        self._heatmap_mode: str = "spike"
+        raw_max = float(np.max(explorer_data.iff)) if len(explorer_data.iff) > 0 else 0.0
+        self._max_iff: float = raw_max if raw_max > 0.0 else 1.0
         self._rect: Optional[DraggableFilterRect] = None
         self._filter_timer = QTimer(self)
         self._filter_timer.setSingleShot(True)
@@ -345,6 +360,14 @@ class RFFeatureSpaceExplorer(QMainWindow):
             self._session_combo.addItem(label)
         self._session_combo.currentIndexChanged.connect(self._on_session_changed)
         toolbar.addWidget(self._session_combo)
+
+        toolbar.addSeparator()
+        toolbar.addWidget(QLabel("Mode:"))
+        self._heatmap_mode_combo = QComboBox()
+        self._heatmap_mode_combo.addItem("Spike density")
+        self._heatmap_mode_combo.addItem("IFF (Hz)")
+        self._heatmap_mode_combo.currentIndexChanged.connect(self._on_heatmap_mode_changed)
+        toolbar.addWidget(self._heatmap_mode_combo)
 
         toolbar.addSeparator()
         save_btn = QPushButton("Save filter dims")
@@ -439,13 +462,15 @@ class RFFeatureSpaceExplorer(QMainWindow):
 
         unique_types = np.unique(self._data.gesture_types)
 
+        vel_amp = np.abs(self._data.velocity_signed)
+
         for gtype in _GESTURE_TYPES:
             if gtype not in unique_types or gtype not in checked_types:
                 continue
             mask = self._data.gesture_types == gtype
             color = _GESTURE_COLORS.get(gtype, "grey")
             self._ax.scatter(
-                self._data.velocity_signed[mask],
+                vel_amp[mask],
                 self._data.pressure[mask],
                 c=color,
                 alpha=0.3,
@@ -458,7 +483,7 @@ class RFFeatureSpaceExplorer(QMainWindow):
         for gtype in other_types:
             mask = self._data.gesture_types == gtype
             self._ax.scatter(
-                self._data.velocity_signed[mask],
+                vel_amp[mask],
                 self._data.pressure[mask],
                 alpha=0.3,
                 s=3,
@@ -466,8 +491,8 @@ class RFFeatureSpaceExplorer(QMainWindow):
                 label=gtype,
             )
 
-        x_lo, x_hi = float(np.nanpercentile(self._data.velocity_signed, 1)), float(
-            np.nanpercentile(self._data.velocity_signed, 99)
+        x_lo, x_hi = float(np.nanpercentile(vel_amp, 1)), float(
+            np.nanpercentile(vel_amp, 99)
         )
         y_lo, y_hi = float(np.nanpercentile(self._data.pressure, 1)), float(
             np.nanpercentile(self._data.pressure, 99)
@@ -477,7 +502,7 @@ class RFFeatureSpaceExplorer(QMainWindow):
         if np.isfinite(y_lo) and np.isfinite(y_hi) and y_lo < y_hi:
             self._ax.set_ylim(y_lo, y_hi)
 
-        self._ax.set_xlabel("Hand Velocity signed (mm/s)")
+        self._ax.set_xlabel("Hand velocity amplitude (mm/s)")
         self._ax.set_ylabel("Pressure (depth/area, mm⁻¹)")
         self._ax.legend(loc="best", markerscale=3, fontsize=8)
         self._figure.tight_layout()
@@ -494,6 +519,17 @@ class RFFeatureSpaceExplorer(QMainWindow):
     # 3D render
     # ------------------------------------------------------------------
 
+    def _current_heatmap_clim(self) -> Tuple[float, float]:
+        if self._heatmap_mode == "iff":
+            return (0.0, self._max_iff)
+        return (0.0, 1.0)
+
+    def _on_heatmap_mode_changed(self, index: int) -> None:
+        self._heatmap_mode = "iff" if index == 1 else "spike"
+        self._render_3d()
+        if self._rect is not None:
+            self._apply_filter_update()
+
     def _render_3d(self) -> None:
         self._plotter.clear()
         self._plotter.set_background("black")
@@ -502,31 +538,33 @@ class RFFeatureSpaceExplorer(QMainWindow):
         n_verts = len(vertices)
 
         cp_spikes = self._data.spikes[self._data.cp_frame_idx]
-        vertex_spike_sum = np.bincount(
+        cp_iff = self._data.iff[self._data.cp_frame_idx]
+        weights = cp_iff if self._heatmap_mode == "iff" else cp_spikes.astype(float)
+        vertex_val_sum = np.bincount(
             self._data.cp_vertex_idx,
-            weights=cp_spikes.astype(float),
+            weights=weights,
             minlength=n_verts,
         )
         vertex_n_contacts = np.bincount(
             self._data.cp_vertex_idx,
             minlength=n_verts,
         ).astype(float)
-        spike_density = np.divide(
-            vertex_spike_sum, vertex_n_contacts,
+        vertex_density = np.divide(
+            vertex_val_sum, vertex_n_contacts,
             out=np.zeros(n_verts), where=vertex_n_contacts > 0,
         )
 
-        spike_density_display = spike_density.astype(float)
-        spike_density_display[spike_density == 0] = np.nan
+        vertex_density_display = vertex_density.astype(float)
+        vertex_density_display[vertex_n_contacts == 0] = np.nan
 
         self._cloud = pv.PolyData(vertices)
-        self._cloud["spike_density"] = spike_density_display
+        self._cloud["heatmap"] = vertex_density_display
 
         self._actor = self._plotter.add_mesh(
             self._cloud,
-            scalars="spike_density",
+            scalars="heatmap",
             cmap="jet",
-            clim=(0, 1),
+            clim=self._current_heatmap_clim(),
             nan_color=[0.3, 0.3, 0.3],
             show_scalar_bar=True,
             render_points_as_spheres=False,
@@ -561,9 +599,10 @@ class RFFeatureSpaceExplorer(QMainWindow):
             return
 
         x_min, x_max, y_min, y_max = self._rect.get_bounds()
+        vel_amp = np.abs(self._data.velocity_signed)
         rect_mask = (
-            (self._data.velocity_signed >= x_min)
-            & (self._data.velocity_signed <= x_max)
+            (vel_amp >= x_min)
+            & (vel_amp <= x_max)
             & (self._data.pressure >= y_min)
             & (self._data.pressure <= y_max)
         )
@@ -581,10 +620,12 @@ class RFFeatureSpaceExplorer(QMainWindow):
         n_verts = len(self._data.session_data.forearm_vertices)
         cp_mask = frame_mask[self._data.cp_frame_idx]
         cp_spikes = self._data.spikes[self._data.cp_frame_idx]
+        cp_iff = self._data.iff[self._data.cp_frame_idx]
         active_cp_vertices = self._data.cp_vertex_idx[cp_mask]
-        vertex_spike_sum = np.bincount(
+        weights = cp_iff[cp_mask] if self._heatmap_mode == "iff" else cp_spikes[cp_mask].astype(float)
+        vertex_val_sum = np.bincount(
             active_cp_vertices,
-            weights=cp_spikes[cp_mask].astype(float),
+            weights=weights,
             minlength=n_verts,
         )
         vertex_n_contacts = np.bincount(
@@ -592,16 +633,16 @@ class RFFeatureSpaceExplorer(QMainWindow):
             minlength=n_verts,
         ).astype(float)
         vertex_ratio = np.divide(
-            vertex_spike_sum, vertex_n_contacts,
+            vertex_val_sum, vertex_n_contacts,
             out=np.zeros(n_verts), where=vertex_n_contacts > 0,
         )
 
         vertex_ratio_display = vertex_ratio.copy()
         vertex_ratio_display[vertex_n_contacts == 0] = np.nan
 
-        self._cloud["spike_density"] = vertex_ratio_display
+        self._cloud["heatmap"] = vertex_ratio_display
         self._cloud.Modified()
-        self._actor.mapper.scalar_range = (0, 1)
+        self._actor.mapper.scalar_range = self._current_heatmap_clim()
         self._plotter.render()
         self._frame_label.setText(f"Frames: {frame_mask.sum()} / {self._data.n_frames}")
 
@@ -610,8 +651,9 @@ class RFFeatureSpaceExplorer(QMainWindow):
     # ------------------------------------------------------------------
 
     def _init_filter_rect(self) -> None:
-        p25_x = float(np.nanpercentile(self._data.velocity_signed, 25))
-        p75_x = float(np.nanpercentile(self._data.velocity_signed, 75))
+        vel_amp = np.abs(self._data.velocity_signed)
+        p25_x = float(np.nanpercentile(vel_amp, 25))
+        p75_x = float(np.nanpercentile(vel_amp, 75))
         p25_y = float(np.nanpercentile(self._data.pressure, 25))
         p75_y = float(np.nanpercentile(self._data.pressure, 75))
 
@@ -723,6 +765,8 @@ class RFFeatureSpaceExplorer(QMainWindow):
         self._rect = None
         self._cloud = None
         self._actor = None
+        raw_max = float(np.max(self._data.iff)) if len(self._data.iff) > 0 else 0.0
+        self._max_iff = raw_max if raw_max > 0.0 else 1.0
         self._frame_label.setText(
             f"Frames: {self._data.n_frames} / {self._data.n_frames}"
         )

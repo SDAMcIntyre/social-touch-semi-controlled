@@ -29,6 +29,7 @@ from utils import (
     TaskExecutor
 )
 from utils.pipeline.session_config_resolver import resolve_session_configs
+from utils.should_process_task import should_process_task, clean_task_outputs
 from primary_processing import (
     KinectConfigFileHandler,
     KinectConfig,
@@ -108,6 +109,20 @@ def deduplicate_xy_flow(
     """Deduplicate the unified forearm PLY and contact points in registered CSVs."""
     output_dir.mkdir(parents=True, exist_ok=True)
     forearm_output_dir.mkdir(parents=True, exist_ok=True)
+
+    expected_output_csvs = [output_dir / f.name for f in input_files]
+    expected_forearm_out = forearm_output_dir / forearm_ply_path.name
+    all_outputs = expected_output_csvs + [expected_forearm_out]
+
+    if not should_process_task(
+        input_paths=list(input_files) + [forearm_ply_path],
+        output_paths=all_outputs,
+        force=force_processing,
+    ):
+        logging.info("Deduplication up-to-date. Skipping.")
+        return expected_output_csvs, expected_forearm_out
+
+    clean_task_outputs(all_outputs)
 
     if monitor:
         try:
@@ -238,9 +253,14 @@ def run_single_session_postprocessing(
     # We look for the specific file expected from the video processing stage
     session_input_files = []
     for config in session_configs:
-        input_dir = config.session_merged_output_dir / "blocks_merged"
+        input_dir = config.session_merged_output_dir / "blocks_filtered"
         input_path = input_dir / f"{config.session_id}_semicontrolled_{config.block_id}_merged_data.csv"
-        # Only add if it vaguely looks like a path, validation happens in tasks
+        if not input_path.exists():
+            raise FileNotFoundError(
+                f"Filtered merged block CSV not found: {input_path}. "
+                f"Run the merging pipeline's filter_by_neural_quality task to "
+                f"produce blocks_filtered/ before running postprocessing."
+            )
         session_input_files.append(input_path)
 
     if monitor_queue is not None:

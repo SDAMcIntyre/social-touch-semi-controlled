@@ -5,7 +5,11 @@
 parameters:
   # List of directories containing Kinect session config files to scan.
   # Paths are relative to configs/kinect_configs/.
-  kinect_configs: valid_configs_ST13-02
+  kinect_configs: [valid_configs_ST13-01, valid_configs_ST13-02, 
+      valid_configs_ST13-03, valid_configs_ST14-01, valid_configs_ST14-02, 
+      valid_configs_ST14-03, valid_configs_ST14-04, valid_configs_ST15-01, 
+      valid_configs_ST15-02, valid_configs_ST16-02, valid_configs_ST16-03, 
+      valid_configs_ST16-04]
 
 tasks:
   # ============================================================
@@ -41,11 +45,23 @@ tasks:
     category: processing
     enabled: true
     options:
-      force_processing: true
+      force_processing: false
       preparation:
         interpolation:
           method: cubic
     depends_on: []
+
+  # Per-touch RF mapping: accumulate per-vertex neuron values for every single touch.
+  # Reads the prepared CSV produced by touch_preparation and saves sparse vertex-value
+  # pairs per touch as an .npz file.
+  # Output: 4_analysed/single_touch_rf_maps/<session_id>/single_touch_rf_maps.npz
+  map_single_touch_rf:
+    category: processing
+    enabled: true
+    options:
+      force_processing: true
+      neuron_mode: iff
+    depends_on: [touch_preparation]
 
   # Stage 2a (Series Transforms): Per-session kinematics, pressure, and MoS computation.
   # Adds hand_velocity_x/y/z, hand_acceleration_x/y/z, pressure, and (when enabled) MoS
@@ -87,7 +103,7 @@ tasks:
   # Output: 4_analysed/touch_features/<feature>/<session>_touch_summary.csv
   touch_feature_extraction:
     category: processing
-    enabled: false
+    enabled: true
     options:
       force_processing: false
       # Each key is an aggregation family. StatisticalExtractor auto-discovers all numeric
@@ -107,6 +123,13 @@ tasks:
           enabled: true
         skewness:
           enabled: true
+        # Mean of numeric columns over frames where Nerve_freq > 0 (fallback: contact_detected == 1)
+        mean_during_iff:
+          enabled: true
+        # Mean of numeric columns over the window before the first IFF-active frame
+        mean_before_iff:
+          enabled: true
+          pre_iff_window_ms: 250
     depends_on: [touch_series_transforms]
 
   # Stages 3–5 (Reduction + Clustering + Evaluation): Global clustering on pooled feature CSVs.
@@ -321,7 +344,7 @@ tasks:
   # Consumes output from touch_feature_extraction
   analyse_ap_efficacy:
     category: processing
-    enabled: true
+    enabled: false
     options:
       force_processing: false
     depends_on: [touch_feature_extraction]
@@ -330,7 +353,7 @@ tasks:
   # Idempotent against clustered CSV mtime; does not re-run on vis-param changes.
   extract_receptive_fields_clustered:
     category: processing
-    enabled: true
+    enabled: false
     options:
       force_processing: false
       cluster_groups: [pressure_velocity_mean_cartesian_binning]
@@ -340,7 +363,7 @@ tasks:
   # Re-runs only when projection_method / disjoint_mask_distance_mm change or force=true.
   visualize_receptive_fields_clustered:
     category: processing
-    enabled: true
+    enabled: false
     options:
       force_processing: false
       cluster_groups: [pressure_velocity_mean_cartesian_binning]
