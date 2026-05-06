@@ -238,9 +238,14 @@ def run_single_session_postprocessing(
     # We look for the specific file expected from the video processing stage
     session_input_files = []
     for config in session_configs:
-        input_dir = config.session_merged_output_dir / "blocks_merged"
+        input_dir = config.session_merged_output_dir / "blocks_filtered"
         input_path = input_dir / f"{config.session_id}_semicontrolled_{config.block_id}_merged_data.csv"
-        # Only add if it vaguely looks like a path, validation happens in tasks
+        if not input_path.exists():
+            raise FileNotFoundError(
+                f"Filtered merged block CSV not found: {input_path}. "
+                f"Run the merging pipeline's filter_by_neural_quality task to "
+                f"produce blocks_filtered/ before running postprocessing."
+            )
         session_input_files.append(input_path)
 
     if monitor_queue is not None:
