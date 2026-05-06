@@ -93,7 +93,7 @@ For clustering, RF mapping, and data aggregation details see [`code/src/analysis
 
 ## Working with GitHub Issues
 
-This branch (`sarah_sandbox`) is a working/exploration branch and is not pushed or merged into `dev`. Code changes made here are discarded at the end of a session.
+This branch (`sarah_sandbox`) is a working/exploration branch and is not pushed or merged into `dev`. Code changes made here are discarded at the end of the current exploration. 
 
 When asked to post or update a GitHub issue:
 - Write it as a **self-contained description** that someone working only on `dev` can understand and act on — no references to this branch, no "we found" or "I fixed", no session-specific context.
