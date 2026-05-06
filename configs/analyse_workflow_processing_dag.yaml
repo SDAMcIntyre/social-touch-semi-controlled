@@ -8,7 +8,8 @@ parameters:
   kinect_configs: [valid_configs_ST13-01, valid_configs_ST13-02, 
       valid_configs_ST13-03, valid_configs_ST14-01, valid_configs_ST14-02, 
       valid_configs_ST14-03, valid_configs_ST14-04, valid_configs_ST15-01, 
-      valid_configs_ST15-02]
+      valid_configs_ST15-02, valid_configs_ST16-02, valid_configs_ST16-03, 
+      valid_configs_ST16-04]
 
 tasks:
   # ============================================================
@@ -50,6 +51,18 @@ tasks:
           method: cubic
     depends_on: []
 
+  # Per-touch RF mapping: accumulate per-vertex neuron values for every single touch.
+  # Reads the prepared CSV produced by touch_preparation and saves sparse vertex-value
+  # pairs per touch as an .npz file.
+  # Output: 4_analysed/single_touch_rf_maps/<session_id>/single_touch_rf_maps.npz
+  map_single_touch_rf:
+    category: processing
+    enabled: true
+    options:
+      force_processing: true
+      neuron_mode: iff
+    depends_on: [touch_preparation]
+
   # Stage 2a (Series Transforms): Per-session kinematics, pressure, and MoS computation.
   # Adds hand_velocity_x/y/z, hand_acceleration_x/y/z, pressure, and (when enabled) MoS
   # columns to each session CSV.
@@ -90,7 +103,7 @@ tasks:
   # Output: 4_analysed/touch_features/<feature>/<session>_touch_summary.csv
   touch_feature_extraction:
     category: processing
-    enabled: false
+    enabled: true
     options:
       force_processing: false
       # Each key is an aggregation family. StatisticalExtractor auto-discovers all numeric
@@ -110,16 +123,12 @@ tasks:
           enabled: true
         skewness:
           enabled: true
-        # Mean of each numeric column over frames where IFF activity is detected
-        # (Nerve_freq > 0, or contact_detected == 1 as fallback).
-        # Requires 'Nerve_freq' column; session must include neural frequency data.
+        # Mean of numeric columns over frames where Nerve_freq > 0 (fallback: contact_detected == 1)
         mean_during_iff:
-          enabled: false
-        # Mean of each numeric column over the window before the first IFF-active frame.
-        # pre_iff_window_ms controls the look-back window size (default 250 frames).
-        # Returns NaN for all columns when activity starts at the first frame.
+          enabled: true
+        # Mean of numeric columns over the window before the first IFF-active frame
         mean_before_iff:
-          enabled: false
+          enabled: true
           pre_iff_window_ms: 250
     depends_on: [touch_series_transforms]
 
