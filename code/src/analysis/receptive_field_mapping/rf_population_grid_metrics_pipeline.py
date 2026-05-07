@@ -274,8 +274,15 @@ def run_population_rf_grid_metrics(
             npz_data = _load_grid_npz(npz_path)
             gesture_type_str = npz_data["gesture_type"]
 
-            b_metrics = gesture_baseline_metrics.get(gesture_type_str) if has_baseline else None
-            b_rf_map = gesture_baselines[gesture_type_str]["rf_map"] if (has_baseline and gesture_type_str in gesture_baselines) else None
+            if has_baseline and gesture_type_str == "all_gestures":
+                b_metrics = global_baseline_metrics
+                b_rf_map = global_baseline["rf_map"]
+            elif has_baseline:
+                b_metrics = gesture_baseline_metrics.get(gesture_type_str)
+                b_rf_map = gesture_baselines[gesture_type_str]["rf_map"] if gesture_type_str in gesture_baselines else None
+            else:
+                b_metrics = None
+                b_rf_map = None
 
             df = _build_metrics_dataframe(
                 rf_maps=npz_data["rf_maps"],

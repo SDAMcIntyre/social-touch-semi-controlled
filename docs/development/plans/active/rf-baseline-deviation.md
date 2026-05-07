@@ -118,6 +118,11 @@ All ratios return NaN when denominator is zero or NaN.
 - Purpose: "within taps, how does velocity x pressure modulate the RF?"
 - Rationale: grid CSVs are already split by gesture type, so gesture-type baseline isolates the velocity-pressure effect from the gesture-type effect
 
+**Level 3 — All-gestures grid vs global baseline** (deviation columns in `population_rf_grid_metrics_all_gestures.csv`):
+- Grid sweep with ALL touches pooled (no gesture filter), deviation from global baseline
+- Purpose: "across all stimulus types, how does velocity x pressure modulate the RF?"
+- Produced alongside per-gesture grids when `per_gesture_type: true`
+
 ### Baseline NPZ Format
 
 ```
@@ -138,6 +143,7 @@ population_rf_grid_metrics/<session_id>/
     population_rf_grid_metrics_tap.csv                 # EXTENDED: +8 deviation_* columns
     population_rf_grid_metrics_stroke_proximal.csv
     population_rf_grid_metrics_stroke_distal.csv
+    population_rf_grid_metrics_all_gestures.csv        # NEW: all touches pooled, deviation vs global baseline
 
 population_rf_grid_metrics_heatmaps/
     deviation_area_ratio/<session_id>_<gtype>.png       # NEW

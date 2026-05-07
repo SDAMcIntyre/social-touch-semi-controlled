@@ -173,44 +173,6 @@ def render_grid_metric_heatmap(
     logger.info("Saved heatmap: %s", output_path)
 
 
-def _render_all_gestures_heatmaps(
-    gesture_dfs: list[pd.DataFrame],
-    session_id: str,
-    x_feature_col: str,
-    y_feature_col: str,
-    output_dir: Path,
-    global_metric_ranges: dict[str, tuple[float, float]],
-    metrics_to_render: list[str],
-    session_total_touches: int = 0,
-) -> None:
-    summable_metrics = [m for m in metrics_to_render if m not in DEVIATION_METRICS]
-
-    grid_cols = [x_feature_col, y_feature_col]
-    stacked = pd.concat(gesture_dfs, ignore_index=True)
-    combined = stacked.groupby(grid_cols, sort=False)[summable_metrics].sum().reset_index()
-
-    for metric_name in summable_metrics:
-        vmin, vmax = _get_shared_range(metric_name, global_metric_ranges)
-        output_path = output_dir / metric_name / "all_gestures" / f"{session_id}.png"
-
-        suffix = ""
-        if metric_name == "touch_count":
-            suffix = f"total count: {session_total_touches}"
-
-        render_grid_metric_heatmap(
-            df=combined,
-            metric_name=metric_name,
-            x_feature_col=x_feature_col,
-            y_feature_col=y_feature_col,
-            output_path=output_path,
-            session_id=session_id,
-            gesture_type="all gestures",
-            vmin=vmin,
-            vmax=vmax,
-            title_suffix=suffix,
-        )
-
-
 def run_population_rf_grid_metrics_visualization(
     input_items: list,
     output_dir: Path,
@@ -316,11 +278,7 @@ def run_population_rf_grid_metrics_visualization(
         metric_max = float(np.nanmax(vals.values))
         global_metric_ranges[metric_name] = (metric_min, metric_max)
 
-    session_count = 0
-    prev_session_id = None
-    session_gesture_dfs: list[pd.DataFrame] = []
-    session_x_col: str = ""
-    session_y_col: str = ""
+    session_ids_seen: set[str] = set()
 
     for entry in all_session_data:
         session_id = entry["session_id"]
@@ -329,21 +287,7 @@ def run_population_rf_grid_metrics_visualization(
         y_feature_col = entry["y_feature_col"]
         gesture_type = entry["gesture_type"]
 
-        if prev_session_id is not None and session_id != prev_session_id:
-            _render_all_gestures_heatmaps(
-                session_gesture_dfs, prev_session_id,
-                session_x_col, session_y_col,
-                output_dir, global_metric_ranges,
-                metrics_to_render=metrics_to_render,
-                session_total_touches=session_total_touches[prev_session_id],
-            )
-            session_gesture_dfs = []
-            session_count += 1
-
-        prev_session_id = session_id
-        session_x_col = x_feature_col
-        session_y_col = y_feature_col
-        session_gesture_dfs.append(df)
+        session_ids_seen.add(session_id)
 
         for metric_name in metrics_to_render:
             if metric_name not in df.columns:
@@ -360,8 +304,12 @@ def run_population_rf_grid_metrics_visualization(
                 )
 
             vmin, vmax = _get_shared_range(metric_name, global_metric_ranges)
-            safe_gesture = gesture_type.replace(" ", "_")
-            output_path = output_dir / metric_name / f"{session_id}_{safe_gesture}.png"
+
+            if gesture_type == "all_gestures":
+                output_path = output_dir / metric_name / "all_gestures" / f"{session_id}.png"
+            else:
+                safe_gesture = gesture_type.replace(" ", "_")
+                output_path = output_dir / metric_name / f"{session_id}_{safe_gesture}.png"
 
             suffix = ""
             if metric_name == "touch_count":
@@ -389,15 +337,7 @@ def run_population_rf_grid_metrics_visualization(
                 center_value=center_value,
             )
 
-    if prev_session_id is not None:
-        _render_all_gestures_heatmaps(
-            session_gesture_dfs, prev_session_id,
-            session_x_col, session_y_col,
-            output_dir, global_metric_ranges,
-            metrics_to_render=metrics_to_render,
-            session_total_touches=session_total_touches[prev_session_id],
-        )
-        session_count += 1
+    session_count = len(session_ids_seen)
 
     output_dir.mkdir(parents=True, exist_ok=True)
     with open(sentinel, "w", encoding="utf-8") as fh:

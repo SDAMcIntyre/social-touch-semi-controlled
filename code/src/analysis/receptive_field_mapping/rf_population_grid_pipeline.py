@@ -426,4 +426,32 @@ def run_population_rf_grid(
                 )
                 produced.append(summary_path)
 
+            # All-gestures grid: sweep with all touches, no gesture filter.
+            rf_maps, touch_counts, touch_ids_list = _sweep_grid(
+                grid_centers,
+                feature_matrix,
+                spans,
+                rf_data.rf_vertex_indices,
+                rf_data.rf_values,
+                n_vertices,
+                config.vertex_threshold_ratio,
+                pop_data.touch_triple_keys,
+            )
+            summary_path = session_out_dir / "population_rf_grid_all_gestures_summary.json"
+            _save_grid_results(
+                output_path=session_out_dir / "population_rf_grid_all_gestures.npz",
+                summary_path=summary_path,
+                session_id=session_id,
+                grid_centers=grid_centers,
+                feature_names=feature_names,
+                feature_configs=config.features,
+                rf_maps=rf_maps,
+                touch_counts=touch_counts,
+                touch_ids_list=touch_ids_list,
+                gesture_type="all_gestures",
+                neuron_mode=config.neuron_mode,
+                vertex_threshold_ratio=config.vertex_threshold_ratio,
+            )
+            produced.append(summary_path)
+
     return produced
