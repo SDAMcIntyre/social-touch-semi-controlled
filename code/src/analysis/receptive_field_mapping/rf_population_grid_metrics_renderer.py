@@ -118,7 +118,12 @@ def render_grid_metric_heatmap(
         # Zero means no data — convert to NaN so set_bad renders it as black.
         pivoted = pivoted.where(pivoted > 0)
 
-    fig, ax = plt.subplots(figsize=(8, 6), layout="constrained")
+    n_x = len(pivoted.columns)
+    n_y = len(pivoted.index)
+    cell_size = 0.65
+    fig_w = max(6.0, n_x * cell_size + 3.0)
+    fig_h = max(4.0, n_y * cell_size + 2.0)
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h), layout="constrained")
 
     if metric_name == "touch_count":
         cmap = _TOUCH_COUNT_CMAP
