@@ -68,6 +68,9 @@ def _build_metrics_dataframe(
     rows = []
 
     for g in range(G):
+        if touch_counts[g] == 0:
+            continue
+
         if (g + 1) % 100 == 0:
             logger.info("Processing cell %d/%d", g + 1, G)
 
@@ -82,18 +85,11 @@ def _build_metrics_dataframe(
         for f_idx, fname in enumerate(feature_names):
             row[f"{fname}_center"] = float(grid_centers[g, f_idx])
 
-        if touch_counts[g] == 0:
-            metrics = compute_grid_cell_metrics(
-                np.full(rf_maps.shape[1], np.nan),
-                forearm_vertices,
-                projection_method,
-            )
-        else:
-            metrics = compute_grid_cell_metrics(
-                rf_maps[g],
-                forearm_vertices,
-                projection_method,
-            )
+        metrics = compute_grid_cell_metrics(
+            rf_maps[g],
+            forearm_vertices,
+            projection_method,
+        )
 
         row.update(metrics)
         rows.append(row)
