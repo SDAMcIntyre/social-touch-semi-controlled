@@ -6,8 +6,7 @@
 parameters:
   # List of directories containing Kinect session config files to scan.
   # Paths are relative to configs/kinect_configs/.
-  kinect_configs: [valid_configs_ST16-05, valid_configs_ST18-01, 
-      valid_configs_ST18-04]
+  kinect_configs: valid_configs_ST16-02
 
 tasks:
   # ============================================================
@@ -66,7 +65,7 @@ tasks:
   # Output: interactive GUI (no files written)
   explore_touch_population:
     category: viewer
-    enabled: false
+    enabled: true
     options:
       force_processing: false
       neuron_mode: iff
@@ -78,7 +77,7 @@ tasks:
   # Output: interactive GUI (no files written)
   explore_single_touch_rf:
     category: viewer
-    enabled: true
+    enabled: false
     options:
       force_processing: false
       neuron_mode: iff

@@ -177,6 +177,24 @@ tasks:
       force_processing: true
       extracted_features:
       - touch_count
+      - max_iff
+      - mean_iff
+      - median_iff
+      - std_iff
+      - iff_range
+      - n_active_vertices
+      - hypsometric_integral
+      - coefficient_of_variation
+      - iff_skewness
+      - iff_kurtosis
+      - gini_coefficient
+      - shannon_entropy
+      - perimeter_mm
+      - circularity
+      - eccentricity
+      - hotspot_area_mm2
+      - threshold_area_mm2
+      - convex_hull_area_mm2
     depends_on: [reduce_population_rf_grid]
 
   # Stages 3–5 (Reduction + Clustering + Evaluation): Global clustering on pooled feature CSVs.

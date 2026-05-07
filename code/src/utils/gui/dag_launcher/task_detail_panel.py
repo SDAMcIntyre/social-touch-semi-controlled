@@ -33,6 +33,32 @@ from utils.pipeline.dag_config_model import DagConfigModel
 
 _COMPLEX_FG = QColor("#336699")
 
+# Full universe of items for checklist options keyed by option name.
+# Without this, unchecking an item removes it from the YAML and it vanishes on restart.
+_CHECKLIST_UNIVERSES: dict[str, list[str]] = {
+    "extracted_features": [
+        "touch_count",
+        "max_iff",
+        "mean_iff",
+        "median_iff",
+        "std_iff",
+        "iff_range",
+        "n_active_vertices",
+        "hypsometric_integral",
+        "coefficient_of_variation",
+        "iff_skewness",
+        "iff_kurtosis",
+        "gini_coefficient",
+        "shannon_entropy",
+        "perimeter_mm",
+        "circularity",
+        "eccentricity",
+        "hotspot_area_mm2",
+        "threshold_area_mm2",
+        "convex_hull_area_mm2",
+    ],
+}
+
 # Option keys that should render as a dropdown. Values are (display_label, saved_value) pairs.
 # None as saved_value writes YAML null (~ ), meaning "use the default".
 _OPTION_ENUMS: dict[str, list[tuple[str, object]]] = {
@@ -186,6 +212,8 @@ class TaskDetailPanel(QWidget):
                 widget = self._make_camera_angle_mode_section(key, val)
             elif key == "cluster_groups" and isinstance(val, (list, CommentedSeq)):
                 widget = self._make_downstream_cluster_groups_section(key, val)
+            elif key == "extracted_features" and isinstance(val, (list, CommentedSeq)):
+                widget = self._make_checklist_section(key, val)
             elif key == "cluster_groups" and _is_cluster_groups_dict(val):
                 widget = self._make_cluster_groups_section(key, val)
             elif _is_profile_dict(val):
@@ -573,9 +601,51 @@ class TaskDetailPanel(QWidget):
 
         return box
 
+    def _make_checklist_section(self, key: str, val: list) -> QWidget:
+        """Checkbox list for a plain list-of-strings option (e.g. extracted_features)."""
+        box = QGroupBox(_option_header(key))
+        layout = QVBoxLayout(box)
+        layout.setContentsMargins(6, 4, 6, 4)
+        layout.setSpacing(2)
+
+        all_items: list[str] = _CHECKLIST_UNIVERSES.get(key, list(val))
+        selected: list[str] = list(val)
+
+        for item_name in all_items:
+            cb = QCheckBox(item_name.replace("_", " "))
+            cb.setChecked(item_name in selected)
+            cb.stateChanged.connect(
+                self._make_checklist_handler(key, item_name, cb, all_items, selected)
+            )
+            layout.addWidget(cb)
+
+        return box
+
     # ------------------------------------------------------------------
     # Handler factories
     # ------------------------------------------------------------------
+
+    def _make_checklist_handler(
+        self,
+        opt_key: str,
+        item_name: str,
+        cb: QCheckBox,
+        all_items: list,
+        selected: list,
+    ):
+        def _handler(_state: int) -> None:
+            if self._model is None or self._task_name is None:
+                return
+            if cb.isChecked():
+                if item_name not in selected:
+                    selected.append(item_name)
+            else:
+                if item_name in selected:
+                    selected.remove(item_name)
+            ordered = [g for g in all_items if g in selected]
+            self._model.set_task_option(self._task_name, opt_key, ordered)
+            self.task_changed.emit()
+        return _handler
 
     def _make_enum_handler(self, key: str, entries: list, combo: QComboBox):
         def _handler(index: int) -> None:
