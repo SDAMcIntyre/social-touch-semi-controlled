@@ -287,6 +287,7 @@ def reduce_population_rf_grid_flow(
 def visualize_population_rf_grid_metrics_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
+    extracted_features: list = None,
 ) -> None:
     """Render per-metric heatmap PNGs from population RF grid metrics CSVs.
 
@@ -310,6 +311,7 @@ def visualize_population_rf_grid_metrics_flow(
         input_items=resolved_items,
         output_dir=output_dir,
         force=force_processing,
+        extracted_features=extracted_features,
     )
 
 
@@ -1083,6 +1085,8 @@ def run_batch_analysis(
                         kwargs["disjoint_mask_distance_mm"] = float(options["disjoint_mask_distance_mm"])
                     if "gallery_viewer" in options:
                         kwargs["gallery_viewer"] = bool(options["gallery_viewer"])
+                    if "extracted_features" in options:
+                        kwargs["extracted_features"] = list(options["extracted_features"])
                     flow_func(**kwargs)
                 except Exception as e:
                     executor.error_msg = f"Batch analysis failed: {str(e)}"

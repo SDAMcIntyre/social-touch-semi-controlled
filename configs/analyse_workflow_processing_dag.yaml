@@ -151,10 +151,10 @@ tasks:
           step: 5
           span: 10
         pressure_mean_during_iff:
-          min: 0
-          max: 10
-          step: 0.25
-          span: 0.50
+          min: 0.002
+          max: 0.22
+          step: 0.02
+          span: 0.04
     depends_on: [map_single_touch_rf, touch_feature_extraction]
 
   # Reduces per-gesture-type population RF grid NPZ files to scalar metric CSVs.
@@ -173,7 +173,9 @@ tasks:
     category: processing
     enabled: true
     options:
-      force_processing: false
+      force_processing: true
+      extracted_features:
+      - touch_count
     depends_on: [reduce_population_rf_grid]
 
   # Stages 3–5 (Reduction + Clustering + Evaluation): Global clustering on pooled feature CSVs.
