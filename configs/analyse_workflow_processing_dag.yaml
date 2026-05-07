@@ -9,7 +9,8 @@ parameters:
       valid_configs_ST13-03, valid_configs_ST14-01, valid_configs_ST14-02, 
       valid_configs_ST14-03, valid_configs_ST14-04, valid_configs_ST15-01, 
       valid_configs_ST15-02, valid_configs_ST16-02, valid_configs_ST16-03, 
-      valid_configs_ST16-04]
+      valid_configs_ST16-04, valid_configs_ST16-05, valid_configs_ST18-01, 
+      valid_configs_ST18-04]
 
 tasks:
   # ============================================================
@@ -59,7 +60,7 @@ tasks:
     category: processing
     enabled: true
     options:
-      force_processing: true
+      force_processing: false
       neuron_mode: iff
     depends_on: [touch_preparation]
 
@@ -131,6 +132,70 @@ tasks:
           enabled: true
           pre_iff_window_ms: 250
     depends_on: [touch_series_transforms]
+
+  # Population RF grid: sweep N-D feature space, average single-touch RFs per cell.
+  # Depends on: map_single_touch_rf (RF maps), touch_feature_extraction (feature CSVs).
+  # Output: 4_analysed/population_rf_grid/<session_id>/
+  map_population_rf_grid:
+    category: processing
+    enabled: true
+    options:
+      force_processing: false
+      neuron_mode: iff
+      per_gesture_type: true
+      vertex_threshold_ratio: 0.25
+      compute_baseline: true
+      features:
+        hand_velocity_amplitude_mean_during_iff:
+          min: 0
+          max: 500
+          step: 5
+          span: 10
+        pressure_mean_during_iff:
+          min: 0.002
+          max: 0.22
+          step: 0.02
+          span: 0.04
+    depends_on: [map_single_touch_rf, touch_feature_extraction]
+
+  # Reduces per-gesture-type population RF grid NPZ files to scalar metric CSVs.
+  # Output: 4_analysed/population_rf_grid_metrics/<session_id>/
+  reduce_population_rf_grid:
+    category: processing
+    enabled: true
+    options:
+      force_processing: false
+      projection_method: tangent_plane
+    depends_on: [map_population_rf_grid]
+
+  # Renders per-IFF-metric heatmap PNGs from population RF grid metrics CSVs.
+  # Output: 4_analysed/population_rf_grid_metrics_heatmaps/<metric>/
+  visualize_population_rf_grid_metrics:
+    category: processing
+    enabled: true
+    options:
+      force_processing: true
+      extracted_features:
+      - touch_count
+      - max_iff
+      - mean_iff
+      - median_iff
+      - std_iff
+      - iff_range
+      - n_active_vertices
+      - hypsometric_integral
+      - coefficient_of_variation
+      - iff_skewness
+      - iff_kurtosis
+      - gini_coefficient
+      - shannon_entropy
+      - perimeter_mm
+      - circularity
+      - eccentricity
+      - hotspot_area_mm2
+      - threshold_area_mm2
+      - convex_hull_area_mm2
+    depends_on: [reduce_population_rf_grid]
 
   # Stages 3–5 (Reduction + Clustering + Evaluation): Global clustering on pooled feature CSVs.
   # Each cluster_group defines which data types / aggregations to use and its own clustering_methods.

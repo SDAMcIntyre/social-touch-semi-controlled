@@ -42,6 +42,11 @@ from analysis.receptive_field_mapping import (
     run_cluster_rf_visualization,
     run_simple_rf_mapping,
     run_single_touch_rf_mapping,
+    run_population_rf_grid,
+    PopulationRFGridConfig,
+    run_population_rf_grid_metrics,
+    PopulationRFGridMetricsConfig,
+    run_population_rf_grid_metrics_visualization,
     pick_rf_camera_angle_batch,
     precompute_explorer_caches,
     launch_feature_space_explorer,
@@ -50,6 +55,7 @@ from analysis.receptive_field_mapping import (
     launch_touch_population_explorer,
     launch_gallery_viewer,
 )
+from analysis.receptive_field_mapping.rf_data_loader import resolve_forearm_ply
 from analysis.touch_analytics.pipeline_shared import session_id_from_path
 from analysis.touch_analytics.gui import launch_preparation_viewer
 
@@ -140,6 +146,174 @@ def map_single_touch_rf_flow(
         force=force_processing,
         neuron_mode=neuron_mode,
         preparation_dir=preparation_dir,
+    )
+
+
+@flow(name="map_population_rf_grid")
+def map_population_rf_grid_flow(
+    input_items: List[Tuple[Path, Path]],
+    force_processing: bool = False,
+    neuron_mode: str = "iff",
+    per_gesture_type: bool = True,
+    vertex_threshold_ratio: float = 0.25,
+    features: dict = None,
+    compute_baseline: bool = True,
+) -> List[Path]:
+    """Systematic RF population mapping via feature-space grid sweep.
+
+    For each session, builds an N-dimensional grid over configured touch features,
+    filters touches per cell, averages their single-touch RF maps, and saves
+    one NPZ per cell grid (or per gesture type if configured).
+    Output: ``4_analysed/population_rf_grid/<session_id>/``
+    """
+    print(f"[Batch Analysis] Running population RF grid for {len(input_items)} item(s)...")
+    if not input_items:
+        return []
+
+    if features is None:
+        raise ValueError(
+            "map_population_rf_grid_flow: 'features' config is required — "
+            "define at least one feature in the DAG config."
+        )
+
+    database_path = input_items[0][1]
+    output_dir = database_path / '4_analysed'
+    touch_features_dir = database_path / '4_analysed' / 'touch_features'
+
+    resolved_items = []
+    for csv_path, db_path in input_items:
+        session_id = session_id_from_path(csv_path)
+        series_csv_path = (
+            db_path / '4_analysed' / 'series_transforms'
+            / f'{session_id}_series_augmented.csv'
+        )
+        if not series_csv_path.exists():
+            raise ValueError(
+                f"map_population_rf_grid_flow: series-augmented CSV not found for "
+                f"session '{session_id}': {series_csv_path}"
+            )
+        forearm_ply_path = resolve_forearm_ply(csv_path.parent, session_id)
+        if forearm_ply_path is None:
+            raise ValueError(
+                f"map_population_rf_grid_flow: forearm PLY not found for "
+                f"session '{session_id}' in {csv_path.parent}"
+            )
+        npz_path = (
+            db_path / '4_analysed' / 'single_touch_rf_maps'
+            / session_id / 'single_touch_rf_maps.npz'
+        )
+        if not npz_path.exists():
+            raise ValueError(
+                f"map_population_rf_grid_flow: single_touch_rf_maps.npz not found for "
+                f"session '{session_id}': {npz_path}. Run map_single_touch_rf first."
+            )
+        resolved_items.append({
+            "series_csv_path": series_csv_path,
+            "npz_path": npz_path,
+            "forearm_ply_path": forearm_ply_path,
+            "session_id": session_id,
+            "touch_features_dir": touch_features_dir if touch_features_dir.exists() else None,
+        })
+
+    config = PopulationRFGridConfig(
+        features=features,
+        neuron_mode=neuron_mode,
+        vertex_threshold_ratio=vertex_threshold_ratio,
+        per_gesture_type=per_gesture_type,
+        compute_baseline=compute_baseline,
+    )
+    return run_population_rf_grid(
+        input_items=resolved_items,
+        output_dir=output_dir,
+        config=config,
+        force=force_processing,
+    )
+
+
+@flow(name="reduce_population_rf_grid")
+def reduce_population_rf_grid_flow(
+    input_items: List[Tuple[Path, Path]],
+    force_processing: bool = False,
+    projection_method: str = "tangent_plane",
+) -> List[Path]:
+    """Reduce per-gesture-type population RF grid NPZ files to scalar metric CSVs.
+
+    Reads NPZ files produced by ``map_population_rf_grid`` and computes per-cell
+    scalar descriptors (IFF intensity, topographic, distributional, shape metrics).
+    Output: ``4_analysed/population_rf_grid_metrics/<session_id>/``
+    """
+    print(f"[Batch Analysis] Running population RF grid metrics for {len(input_items)} item(s)...")
+    if not input_items:
+        return []
+
+    database_path = input_items[0][1]
+    output_dir = database_path / '4_analysed'
+
+    resolved_items = []
+    for csv_path, db_path in input_items:
+        session_id = session_id_from_path(csv_path)
+        forearm_ply_path = resolve_forearm_ply(csv_path.parent, session_id)
+        if forearm_ply_path is None:
+            raise ValueError(
+                f"reduce_population_rf_grid_flow: forearm PLY not found for "
+                f"session '{session_id}' in {csv_path.parent}"
+            )
+        grid_dir = db_path / '4_analysed' / 'population_rf_grid' / session_id
+        if not grid_dir.exists():
+            raise ValueError(
+                f"reduce_population_rf_grid_flow: population_rf_grid directory not found "
+                f"for session '{session_id}': {grid_dir}. Run map_population_rf_grid first."
+            )
+        npz_files = list(grid_dir.glob("population_rf_grid_*.npz"))
+        if not npz_files:
+            raise ValueError(
+                f"reduce_population_rf_grid_flow: no NPZ files found for session "
+                f"'{session_id}' in {grid_dir}. Run map_population_rf_grid first."
+            )
+        resolved_items.append({
+            "forearm_ply_path": forearm_ply_path,
+            "grid_dir": grid_dir,
+            "session_id": session_id,
+        })
+
+    config = PopulationRFGridMetricsConfig(projection_method=projection_method)
+    return run_population_rf_grid_metrics(
+        input_items=resolved_items,
+        output_dir=output_dir,
+        config=config,
+        force=force_processing,
+    )
+
+
+@flow(name="visualize_population_rf_grid_metrics")
+def visualize_population_rf_grid_metrics_flow(
+    input_items: List[Tuple[Path, Path]],
+    force_processing: bool = False,
+    extracted_features: list = None,
+) -> None:
+    """Render per-metric heatmap PNGs from population RF grid metrics CSVs.
+
+    Reads CSVs produced by ``reduce_population_rf_grid`` and renders one PNG
+    per IFF metric per session+gesture type into a metric-organized folder.
+    Output: ``4_analysed/population_rf_grid_metrics_heatmaps/<metric>/``
+    """
+    print(f"[Batch Analysis] Visualizing population RF grid metrics for {len(input_items)} item(s)...")
+    if not input_items:
+        return
+
+    database_path = input_items[0][1]
+    output_dir = database_path / '4_analysed' / 'population_rf_grid_metrics_heatmaps'
+
+    resolved_items = []
+    for csv_path, db_path in input_items:
+        session_id = session_id_from_path(csv_path)
+        resolved_items.append({"session_id": session_id})
+
+    run_population_rf_grid_metrics_visualization(
+        input_items=resolved_items,
+        output_dir=output_dir,
+        force=force_processing,
+        extracted_features=extracted_features,
     )
 
 
@@ -736,6 +910,9 @@ def run_batch_analysis(
         ("map_single_touch_rf", map_single_touch_rf_flow),
         ("touch_series_transforms", touch_series_transforms_flow),
         ("touch_feature_extraction", touch_feature_extraction_flow),
+        ("map_population_rf_grid", map_population_rf_grid_flow),
+        ("reduce_population_rf_grid", reduce_population_rf_grid_flow),
+        ("visualize_population_rf_grid_metrics", visualize_population_rf_grid_metrics_flow),
         ("touch_clustering", touch_clustering_flow),
         ("touch_comparing", touch_comparing_flow),
         ("analyse_ap_efficacy", analyse_ap_efficacy_flow),
@@ -840,6 +1017,15 @@ def run_batch_analysis(
                             kwargs["neuron_mode"] = options["neuron_mode"]
                         if preparation_dir is not None:
                             kwargs["preparation_dir"] = preparation_dir
+                    if task_name == "map_population_rf_grid":
+                        if "neuron_mode" in options:
+                            kwargs["neuron_mode"] = options["neuron_mode"]
+                        if "per_gesture_type" in options:
+                            kwargs["per_gesture_type"] = bool(options["per_gesture_type"])
+                        if "vertex_threshold_ratio" in options:
+                            kwargs["vertex_threshold_ratio"] = float(options["vertex_threshold_ratio"])
+                        if "compute_baseline" in options:
+                            kwargs["compute_baseline"] = bool(options["compute_baseline"])
                     if task_name == "explore_single_touch_rf":
                         if "neuron_mode" in options:
                             kwargs["neuron_mode"] = options["neuron_mode"]
@@ -903,6 +1089,8 @@ def run_batch_analysis(
                         kwargs["disjoint_mask_distance_mm"] = float(options["disjoint_mask_distance_mm"])
                     if "gallery_viewer" in options:
                         kwargs["gallery_viewer"] = bool(options["gallery_viewer"])
+                    if "extracted_features" in options:
+                        kwargs["extracted_features"] = list(options["extracted_features"])
                     flow_func(**kwargs)
                 except Exception as e:
                     executor.error_msg = f"Batch analysis failed: {str(e)}"

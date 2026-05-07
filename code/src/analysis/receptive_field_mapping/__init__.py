@@ -20,6 +20,10 @@ from .rf_metrics import RFMetrics, compute_rf_metrics
 from .rf_projection import project_to_2d
 from .rf_simple_pipeline import run_simple_rf_mapping
 from .rf_single_touch_pipeline import run_single_touch_rf_mapping
+from .rf_population_grid_pipeline import run_population_rf_grid, PopulationRFGridConfig
+from .rf_population_grid_metrics_pipeline import run_population_rf_grid_metrics, PopulationRFGridMetricsConfig
+from .rf_population_grid_metrics_renderer import run_population_rf_grid_metrics_visualization
+from .rf_baseline_deviation import BaselineDeviationMetrics, compute_baseline_deviation
 
 __all__ = [
     "project_to_2d",
@@ -38,4 +42,11 @@ __all__ = [
     "compute_rf_metrics",
     "run_simple_rf_mapping",
     "run_single_touch_rf_mapping",
+    "run_population_rf_grid",
+    "PopulationRFGridConfig",
+    "run_population_rf_grid_metrics",
+    "PopulationRFGridMetricsConfig",
+    "run_population_rf_grid_metrics_visualization",
+    "BaselineDeviationMetrics",
+    "compute_baseline_deviation",
 ]
