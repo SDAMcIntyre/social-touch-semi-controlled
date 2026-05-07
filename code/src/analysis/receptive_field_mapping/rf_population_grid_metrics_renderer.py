@@ -3,6 +3,7 @@ import logging
 from pathlib import Path
 
 import matplotlib
+import matplotlib.colors
 import matplotlib.pyplot as plt
 from matplotlib.colors import BoundaryNorm, ListedColormap
 import numpy as np
@@ -35,6 +36,33 @@ IFF_METRICS = [
     "threshold_area_mm2",
     "convex_hull_area_mm2",
 ]
+
+DEVIATION_METRICS = [
+    "deviation_area_ratio",
+    "deviation_hotspot_area_ratio",
+    "deviation_mean_iff_ratio",
+    "deviation_peak_iff_ratio",
+    "deviation_centroid_shift_mm",
+    "deviation_centroid_shift_normalized",
+    "deviation_vertex_overlap_jaccard",
+    "deviation_vertex_containment",
+]
+
+_DEVIATION_COLORMAP_CONFIG: dict[str, tuple[str, float | None]] = {
+    "deviation_area_ratio": ("RdBu_r", 1.0),
+    "deviation_hotspot_area_ratio": ("RdBu_r", 1.0),
+    "deviation_mean_iff_ratio": ("RdBu_r", 1.0),
+    "deviation_peak_iff_ratio": ("RdBu_r", 1.0),
+    "deviation_centroid_shift_mm": ("Reds", None),
+    "deviation_centroid_shift_normalized": ("Reds", None),
+    "deviation_vertex_overlap_jaccard": ("RdYlGn", None),
+    "deviation_vertex_containment": ("RdYlGn", None),
+}
+
+_DEVIATION_FIXED_RANGE: dict[str, tuple[float, float]] = {
+    "deviation_vertex_overlap_jaccard": (0.0, 1.0),
+    "deviation_vertex_containment": (0.0, 1.0),
+}
 
 _SHARED_SCALE: dict[str, bool] = {
     "touch_count": False,
@@ -81,6 +109,8 @@ def render_grid_metric_heatmap(
     vmin: float | None = None,
     vmax: float | None = None,
     title_suffix: str = "",
+    colormap_name: str | None = None,
+    center_value: float | None = None,
 ) -> None:
     pivoted = df.pivot(index=y_feature_col, columns=x_feature_col, values=metric_name)
 
@@ -93,8 +123,26 @@ def render_grid_metric_heatmap(
     if metric_name == "touch_count":
         cmap = _TOUCH_COUNT_CMAP
         mesh_kwargs: dict = {"norm": _TOUCH_COUNT_NORM}
+    elif center_value is not None:
+        cmap = plt.get_cmap(colormap_name or "RdBu_r").copy()
+        finite_vals = pivoted.values[np.isfinite(pivoted.values)]
+        if len(finite_vals) == 0:
+            mesh_kwargs = {"vmin": vmin, "vmax": vmax}
+        else:
+            data_vmin = float(vmin) if vmin is not None else float(np.nanmin(finite_vals))
+            data_vmax = float(vmax) if vmax is not None else float(np.nanmax(finite_vals))
+            _eps = 1e-9
+            if data_vmin >= center_value:
+                data_vmin = center_value - _eps
+            if data_vmax <= center_value:
+                data_vmax = center_value + _eps
+            mesh_kwargs = {
+                "norm": matplotlib.colors.TwoSlopeNorm(
+                    vcenter=center_value, vmin=data_vmin, vmax=data_vmax
+                )
+            }
     else:
-        cmap = plt.get_cmap("viridis").copy()
+        cmap = plt.get_cmap(colormap_name or "viridis").copy()
         mesh_kwargs = {"vmin": vmin, "vmax": vmax}
 
     cmap.set_bad(color="black")
@@ -135,11 +183,13 @@ def _render_all_gestures_heatmaps(
     metrics_to_render: list[str],
     session_total_touches: int = 0,
 ) -> None:
+    summable_metrics = [m for m in metrics_to_render if m not in DEVIATION_METRICS]
+
     grid_cols = [x_feature_col, y_feature_col]
     stacked = pd.concat(gesture_dfs, ignore_index=True)
-    combined = stacked.groupby(grid_cols, sort=False)[list(metrics_to_render)].sum().reset_index()
+    combined = stacked.groupby(grid_cols, sort=False)[summable_metrics].sum().reset_index()
 
-    for metric_name in metrics_to_render:
+    for metric_name in summable_metrics:
         vmin, vmax = _get_shared_range(metric_name, global_metric_ranges)
         output_path = output_dir / metric_name / "all_gestures" / f"{session_id}.png"
 
@@ -190,7 +240,7 @@ def run_population_rf_grid_metrics_visualization(
     ):
         return
 
-    metrics_to_render = extracted_features if extracted_features else IFF_METRICS
+    metrics_to_render = list(extracted_features) if extracted_features else list(IFF_METRICS)
 
     all_session_data: list[dict] = []
     for item in input_items:
@@ -231,6 +281,15 @@ def run_population_rf_grid_metrics_visualization(
                 "gesture_type": str(gesture_types[0]),
             })
 
+    has_deviation_columns = any(
+        any(col.startswith("deviation_") for col in entry["df"].columns)
+        for entry in all_session_data
+    )
+    if has_deviation_columns:
+        for m in DEVIATION_METRICS:
+            if m not in metrics_to_render:
+                metrics_to_render.append(m)
+
     session_total_touches: dict[str, int] = {}
     for entry in all_session_data:
         sid = entry["session_id"]
@@ -241,8 +300,16 @@ def run_population_rf_grid_metrics_visualization(
 
     global_metric_ranges: dict[str, tuple[float, float]] = {}
     for metric_name in metrics_to_render:
+        if metric_name in _DEVIATION_FIXED_RANGE:
+            global_metric_ranges[metric_name] = _DEVIATION_FIXED_RANGE[metric_name]
+            continue
+        all_entries_with_col = [
+            entry for entry in all_session_data if metric_name in entry["df"].columns
+        ]
+        if not all_entries_with_col:
+            continue
         vals = pd.concat(
-            [entry["df"][metric_name] for entry in all_session_data],
+            [entry["df"][metric_name] for entry in all_entries_with_col],
             ignore_index=True,
         )
         metric_min = float(np.nanmin(vals.values))
@@ -280,6 +347,12 @@ def run_population_rf_grid_metrics_visualization(
 
         for metric_name in metrics_to_render:
             if metric_name not in df.columns:
+                if metric_name in DEVIATION_METRICS:
+                    logger.debug(
+                        "Skipping deviation metric '%s' — not present in %s",
+                        metric_name, session_id,
+                    )
+                    continue
                 raise ValueError(
                     f"run_population_rf_grid_metrics_visualization: metric "
                     f"'{metric_name}' not found. "
@@ -294,6 +367,13 @@ def run_population_rf_grid_metrics_visualization(
             if metric_name == "touch_count":
                 suffix = f"session total: {session_total_touches[session_id]}"
 
+            colormap_name: str | None = None
+            center_value: float | None = None
+            if metric_name in _DEVIATION_COLORMAP_CONFIG:
+                colormap_name, center_value = _DEVIATION_COLORMAP_CONFIG[metric_name]
+            if metric_name in _DEVIATION_FIXED_RANGE:
+                vmin, vmax = _DEVIATION_FIXED_RANGE[metric_name]
+
             render_grid_metric_heatmap(
                 df=df,
                 metric_name=metric_name,
@@ -305,6 +385,8 @@ def run_population_rf_grid_metrics_visualization(
                 vmin=vmin,
                 vmax=vmax,
                 title_suffix=suffix,
+                colormap_name=colormap_name,
+                center_value=center_value,
             )
 
     if prev_session_id is not None:

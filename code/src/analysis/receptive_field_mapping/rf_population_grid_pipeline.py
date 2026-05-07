@@ -25,6 +25,7 @@ class PopulationRFGridConfig:
     neuron_mode: str
     vertex_threshold_ratio: float
     per_gesture_type: bool
+    compute_baseline: bool = True
 
 
 def build_feature_grid(config: PopulationRFGridConfig) -> np.ndarray:
@@ -187,6 +188,54 @@ def _sweep_grid(
     return rf_maps, touch_counts, touch_ids_list
 
 
+def _compute_and_save_baseline(
+    touch_mask: np.ndarray,
+    rf_vertex_indices: list,
+    rf_values: list,
+    n_vertices: int,
+    config: PopulationRFGridConfig,
+    output_dir: Path,
+    baseline_type: str,
+    session_id: str,
+) -> None:
+    """Compute a baseline RF map for a given touch mask and save it as a single-map NPZ.
+
+    Saves to ``output_dir / f"population_rf_grid_baseline_{safe_type}.npz"``.
+    Skips saving when touch_count == 0 (no touches for this baseline type).
+    """
+    touch_count = int(touch_mask.sum())
+    if touch_count == 0:
+        logger.info(
+            "_compute_and_save_baseline: no touches for baseline_type=%r in session %r — skipping",
+            baseline_type,
+            session_id,
+        )
+        return
+
+    rf_map = compute_cell_rf(
+        rf_vertex_indices,
+        rf_values,
+        touch_mask,
+        n_vertices,
+        config.vertex_threshold_ratio,
+    )
+
+    safe_type = baseline_type.replace(" ", "_").lower()
+    filename = f"population_rf_grid_baseline_{safe_type}.npz"
+    output_path = output_dir / filename
+
+    np.savez(
+        output_path,
+        rf_map=rf_map,
+        touch_count=np.int64(touch_count),
+        neuron_mode=np.array(config.neuron_mode, dtype=object),
+        vertex_threshold_ratio=np.float64(config.vertex_threshold_ratio),
+        baseline_type=np.array(baseline_type, dtype=object),
+        session_id=np.array(session_id, dtype=object),
+    )
+    logger.info("Saved baseline RF NPZ (%s): %s", baseline_type, output_path)
+
+
 def run_population_rf_grid(
     input_items: list,
     output_dir: Path,
@@ -233,16 +282,19 @@ def run_population_rf_grid(
 
         session_out_dir = output_dir / "population_rf_grid" / session_id
 
-        if not config.per_gesture_type:
-            sentinel = session_out_dir / "population_rf_grid_summary.json"
-            if not should_process_task(
-                input_paths=[series_csv_path, npz_path],
-                output_paths=[sentinel],
-                force=force,
-            ):
-                print(f"[Population RF Grid] {session_id}: up-to-date, skipping.")
-                produced.append(sentinel)
-                continue
+        if config.per_gesture_type:
+            sentinel_paths = sorted(session_out_dir.glob("population_rf_grid_*_summary.json"))
+        else:
+            sentinel_paths = [session_out_dir / "population_rf_grid_summary.json"]
+
+        if sentinel_paths and not should_process_task(
+            input_paths=[series_csv_path, npz_path],
+            output_paths=sentinel_paths,
+            force=force,
+        ):
+            print(f"[Population RF Grid] {session_id}: up-to-date, skipping.")
+            produced.extend(sentinel_paths)
+            continue
 
         logger.info("Processing session: %s", session_id)
 
@@ -271,6 +323,36 @@ def run_population_rf_grid(
         feature_matrix = np.column_stack(feature_matrix_cols)
 
         session_out_dir.mkdir(parents=True, exist_ok=True)
+
+        if config.compute_baseline:
+            # Global baseline: all touches pooled
+            global_mask = np.ones(len(pop_data.touch_triple_keys), dtype=bool)
+            _compute_and_save_baseline(
+                touch_mask=global_mask,
+                rf_vertex_indices=rf_data.rf_vertex_indices,
+                rf_values=rf_data.rf_values,
+                n_vertices=n_vertices,
+                config=config,
+                output_dir=session_out_dir,
+                baseline_type="global",
+                session_id=session_id,
+            )
+
+            # Per-gesture-type baselines
+            unique_gesture_types = np.unique(pop_data.gesture_types)
+            for gtype in unique_gesture_types:
+                gtype_str = str(gtype)
+                gtype_mask = pop_data.gesture_types == gtype
+                _compute_and_save_baseline(
+                    touch_mask=gtype_mask,
+                    rf_vertex_indices=rf_data.rf_vertex_indices,
+                    rf_values=rf_data.rf_values,
+                    n_vertices=n_vertices,
+                    config=config,
+                    output_dir=session_out_dir,
+                    baseline_type=gtype_str,
+                    session_id=session_id,
+                )
 
         if not config.per_gesture_type:
             rf_maps, touch_counts, touch_ids_list = _sweep_grid(

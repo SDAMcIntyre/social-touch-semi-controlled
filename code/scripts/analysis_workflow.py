@@ -157,6 +157,7 @@ def map_population_rf_grid_flow(
     per_gesture_type: bool = True,
     vertex_threshold_ratio: float = 0.25,
     features: dict = None,
+    compute_baseline: bool = True,
 ) -> List[Path]:
     """Systematic RF population mapping via feature-space grid sweep.
 
@@ -219,6 +220,7 @@ def map_population_rf_grid_flow(
         neuron_mode=neuron_mode,
         vertex_threshold_ratio=vertex_threshold_ratio,
         per_gesture_type=per_gesture_type,
+        compute_baseline=compute_baseline,
     )
     return run_population_rf_grid(
         input_items=resolved_items,
@@ -1022,6 +1024,8 @@ def run_batch_analysis(
                             kwargs["per_gesture_type"] = bool(options["per_gesture_type"])
                         if "vertex_threshold_ratio" in options:
                             kwargs["vertex_threshold_ratio"] = float(options["vertex_threshold_ratio"])
+                        if "compute_baseline" in options:
+                            kwargs["compute_baseline"] = bool(options["compute_baseline"])
                     if task_name == "explore_single_touch_rf":
                         if "neuron_mode" in options:
                             kwargs["neuron_mode"] = options["neuron_mode"]

@@ -144,6 +144,7 @@ tasks:
       neuron_mode: iff
       per_gesture_type: true
       vertex_threshold_ratio: 0.25
+      compute_baseline: true
       features:
         hand_velocity_amplitude_mean_during_iff:
           min: 0
