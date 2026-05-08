@@ -8,6 +8,7 @@ import pandas as pd
 
 from analysis.receptive_field_mapping.rf_baseline_deviation import compute_baseline_deviation
 from analysis.receptive_field_mapping.rf_data_loader import load_forearm_vertices
+from analysis.receptive_field_mapping.rf_extraction_io import load_rf_camera_rotation
 from analysis.receptive_field_mapping.rf_grid_cell_metrics import compute_grid_cell_metrics
 from utils.should_process_task import should_process_task
 
@@ -91,8 +92,9 @@ def _compute_baseline_metrics(
     rf_map: np.ndarray,
     forearm_vertices: np.ndarray,
     projection_method: str,
+    rotation_matrix: np.ndarray = None,
 ) -> dict:
-    return compute_grid_cell_metrics(rf_map, forearm_vertices, projection_method)
+    return compute_grid_cell_metrics(rf_map, forearm_vertices, projection_method, rotation_matrix=rotation_matrix)
 
 
 def _build_metrics_dataframe(
@@ -107,6 +109,7 @@ def _build_metrics_dataframe(
     projection_method: str,
     baseline_metrics: dict | None = None,
     baseline_rf_map: np.ndarray | None = None,
+    rotation_matrix: np.ndarray = None,
 ) -> pd.DataFrame:
     G = rf_maps.shape[0]
     rows = []
@@ -133,6 +136,7 @@ def _build_metrics_dataframe(
             rf_maps[g],
             forearm_vertices,
             projection_method,
+            rotation_matrix=rotation_matrix,
         )
 
         row.update(metrics)
@@ -225,6 +229,8 @@ def run_population_rf_grid_metrics(
                 f"from {forearm_ply_path}"
             )
 
+        session_R = load_rf_camera_rotation(output_dir / 'rf_camera_settings', session_id)
+
         baseline_npz_paths = sorted(grid_dir.glob("population_rf_grid_baseline_*.npz"))
         has_baseline = len(baseline_npz_paths) > 0
 
@@ -245,6 +251,7 @@ def run_population_rf_grid_metrics(
                 global_baseline["rf_map"],
                 forearm_vertices,
                 config.projection_method,
+                rotation_matrix=session_R,
             )
 
             for npz_path in baseline_npz_paths:
@@ -258,6 +265,7 @@ def run_population_rf_grid_metrics(
                     gesture_baselines[gtype]["rf_map"],
                     forearm_vertices,
                     config.projection_method,
+                    rotation_matrix=session_R,
                 )
         else:
             logging.warning(
@@ -296,6 +304,7 @@ def run_population_rf_grid_metrics(
                 projection_method=config.projection_method,
                 baseline_metrics=b_metrics,
                 baseline_rf_map=b_rf_map,
+                rotation_matrix=session_R,
             )
 
             csv_name = f"population_rf_grid_metrics_{gesture_type_str}.csv"

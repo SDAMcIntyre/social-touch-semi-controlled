@@ -432,6 +432,61 @@ def _format_generation_params(gen: dict, desc: dict, separator: str) -> str:
     return header
 
 
+# ---------------------------------------------------------------------------
+# RF camera settings (pipeline authoritative rotation source, per session)
+# ---------------------------------------------------------------------------
+
+RF_CAMERA_SETTINGS_FILENAME = "rf_camera_settings.json"
+
+
+def load_rf_camera_settings(output_dir: Path) -> Dict[str, dict]:
+    """Load per-session RF camera settings from the pipeline settings file.
+
+    Returns an empty dict when the file does not exist (first launch).
+    Raises ValueError on malformed JSON.
+    """
+    path = output_dir / RF_CAMERA_SETTINGS_FILENAME
+    if not path.exists():
+        return {}
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except Exception as exc:
+        raise ValueError(
+            f"load_rf_camera_settings: corrupt {RF_CAMERA_SETTINGS_FILENAME}: {path}"
+        ) from exc
+
+
+def save_rf_camera_settings(output_dir: Path, cameras: Dict[str, dict]) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    with open(output_dir / RF_CAMERA_SETTINGS_FILENAME, "w") as f:
+        json.dump(cameras, f, indent=2)
+
+
+def load_rf_camera_rotation(output_dir: Path, session_id: str) -> np.ndarray:
+    """Load the rotation matrix for a single session from saved camera settings.
+
+    Raises ValueError when the settings file is absent or the session key is missing.
+    The caller must run set_rf_camera_settings first.
+    """
+    from analysis.receptive_field_mapping.tangent_plane_alignment import (
+        camera_settings_to_rotation,
+    )
+
+    cameras = load_rf_camera_settings(output_dir)
+    if not cameras:
+        raise ValueError(
+            f"load_rf_camera_rotation: no camera settings found at {output_dir / RF_CAMERA_SETTINGS_FILENAME}. "
+            "Run 'set_rf_camera_settings' first."
+        )
+    if session_id not in cameras:
+        raise ValueError(
+            f"load_rf_camera_rotation: session '{session_id}' not found in camera settings. "
+            f"Available sessions: {sorted(cameras)}. Run 'set_rf_camera_settings' first."
+        )
+    return camera_settings_to_rotation(cameras[session_id])
+
+
 def _format_legacy_ranges(desc: dict, separator: str) -> str:
     parts: list[str] = []
     if 'feature_ranges' in desc:

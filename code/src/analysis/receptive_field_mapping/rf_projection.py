@@ -13,7 +13,7 @@ import logging
 import numpy as np
 from scipy.spatial import KDTree
 
-from .tangent_plane_alignment import align_points, compute_tangent_plane_rotation
+from .tangent_plane_alignment import align_points
 
 logger = logging.getLogger(__name__)
 
@@ -22,21 +22,16 @@ def project_tangent_plane(
     points_3d: np.ndarray,
     forearm_vertices: np.ndarray,
     contact_centroid: np.ndarray,
+    rotation_matrix: np.ndarray = None,
     **kwargs,
 ) -> np.ndarray:
-    """Project 3D points onto the local tangent plane and return 2D (u, v) coords.
-
-    Wraps compute_tangent_plane_rotation() + align_points() + drop-Z slice.
-    Falls back to raw XY if rotation cannot be computed.
-    """
-    if forearm_vertices is not None and contact_centroid is not None:
-        R = compute_tangent_plane_rotation(forearm_vertices, contact_centroid)
-        if R is not None:
-            rotated = align_points(points_3d, R)
-            return rotated[:, :2]
-
-    logger.warning("project_tangent_plane: falling back to raw XY (no forearm vertices or centroid).")
-    return points_3d[:, :2]
+    if rotation_matrix is None:
+        raise ValueError(
+            "project_tangent_plane: rotation_matrix is required. "
+            "Run 'set_rf_camera_settings' before any downstream RF task."
+        )
+    rotated = align_points(points_3d, rotation_matrix)
+    return rotated[:, :2]
 
 
 def fit_cylinder_axis(
@@ -161,6 +156,7 @@ def project_to_2d(
     forearm_vertices: np.ndarray,
     contact_centroid: np.ndarray,
     method: str = "tangent_plane",
+    rotation_matrix: np.ndarray = None,
     **kwargs,
 ) -> np.ndarray:
     """Dispatch to the requested 2D projection method.
@@ -185,4 +181,7 @@ def project_to_2d(
             f"Unknown projection method '{method}'. "
             f"Available: {list(PROJECTION_METHODS.keys())}"
         )
-    return PROJECTION_METHODS[method](points_3d, forearm_vertices, contact_centroid, **kwargs)
+    return PROJECTION_METHODS[method](
+        points_3d, forearm_vertices, contact_centroid,
+        rotation_matrix=rotation_matrix, **kwargs
+    )

@@ -24,11 +24,7 @@ from .rf_2d_renderer import render_2d_heatmap
 from .rf_data_loader import load_forearm_vertices
 from .rf_projection import project_to_2d
 from .rf_surface_utils import apply_rotation_to_mesh, load_or_build_forearm_mesh, map_scalars_to_mesh
-from .tangent_plane_alignment import (  # noqa: F401
-    _compute_surface_normal,
-    align_points,
-    compute_tangent_plane_rotation,
-)
+from .tangent_plane_alignment import align_points
 
 logger = logging.getLogger(__name__)
 
@@ -127,25 +123,6 @@ def _draw_hull_3d(ax, points_3d: np.ndarray, color: str, label: str) -> None:
             )
 
 
-def _normal_to_view_angles(normal: np.ndarray) -> tuple:
-    """Convert a surface normal to matplotlib 3D view_init angles.
-
-    Parameters
-    ----------
-    normal:
-        Unit 3-vector pointing away from the surface.
-
-    Returns
-    -------
-    (elev, azim) in degrees, suitable for ``ax.view_init()``.
-    """
-    # Elevation = arcsin of the y-component (assumed up-axis in camera coords)
-    elev = float(np.degrees(np.arcsin(np.clip(normal[1], -1.0, 1.0))))
-    # Azimuth = atan2 of x and z
-    azim = float(np.degrees(np.arctan2(normal[0], normal[2])))
-    return elev, azim
-
-
 def render_forearm_heatmap(
     forearm_ply_path: Path,
     spike_counts_df: pd.DataFrame,
@@ -158,6 +135,7 @@ def render_forearm_heatmap(
     display_metric: str = "spike_count",
     render_context: 'RFRenderContext' = None,
     disjoint_mask_distance_mm: float = 8.0,
+    rotation_matrix: np.ndarray = None,
 ) -> None:
     """Render a 3D forearm heatmap of spike-count contact points and save as PNG.
 
@@ -242,12 +220,12 @@ def render_forearm_heatmap(
             except Exception:
                 logger.warning("Could not load forearm PLY for 2D projection: %s", forearm_ply_path, exc_info=True)
 
-        uv_points = project_to_2d(spike_xyz, forearm_vertices, projection_centroid, method=projection_method)
+        uv_points = project_to_2d(spike_xyz, forearm_vertices, projection_centroid, method=projection_method, rotation_matrix=rotation_matrix)
 
         forearm_uv = None
         if forearm_vertices is not None:
             try:
-                forearm_uv = project_to_2d(forearm_vertices, forearm_vertices, projection_centroid, method=projection_method)
+                forearm_uv = project_to_2d(forearm_vertices, forearm_vertices, projection_centroid, method=projection_method, rotation_matrix=rotation_matrix)
             except Exception:
                 logger.debug("Could not project forearm vertices to 2D for background.", exc_info=True)
 
@@ -269,6 +247,7 @@ def render_forearm_heatmap(
                     forearm_vertices,
                     projection_centroid,
                     method=projection_method,
+                    rotation_matrix=rotation_matrix,
                 )
             except Exception:
                 logger.debug(
@@ -281,6 +260,7 @@ def render_forearm_heatmap(
                     forearm_vertices,
                     projection_centroid,
                     method=projection_method,
+                    rotation_matrix=rotation_matrix,
                 )
             except Exception:
                 logger.debug(
@@ -341,7 +321,7 @@ def render_forearm_heatmap(
             if pts is not None and pts.size > 0:
                 forearm_vertices = pts
 
-                R = compute_tangent_plane_rotation(forearm_vertices, projection_centroid)
+                R = rotation_matrix
 
                 forearm_mesh = load_or_build_forearm_mesh(forearm_ply_path)
 
@@ -521,15 +501,7 @@ def render_forearm_heatmap(
         )
 
     # --- Camera orientation ---
-    if R is not None:
-        ax.view_init(elev=90, azim=-90)
-    else:
-        elev, azim = 30.0, 45.0  # sensible default
-        if forearm_vertices is not None:
-            normal = _compute_surface_normal(forearm_vertices, projection_centroid)
-            if normal is not None:
-                elev, azim = _normal_to_view_angles(normal)
-        ax.view_init(elev=elev, azim=azim)
+    ax.view_init(elev=90, azim=-90)
 
     # --- Labels and title ---
     ax.set_xlabel('X (mm)', color='white')

@@ -29,6 +29,18 @@ tasks:
   # Viewer Tasks — launch interactive PyQt5 GUIs
   # ============================================================
 
+  # RF Camera Settings: interactively set camera orientation per session.
+  # Required before running any downstream RF rendering or projection tasks
+  # (visualize_receptive_fields_clustered, reduce_population_rf_grid, etc.).
+  # Saves camera settings to 4_analysed/rf_camera_settings/rf_camera_settings.json.
+  # Output: interactive GUI + rf_camera_settings.json
+  set_rf_camera_settings:
+    category: viewer
+    enabled: false
+    options:
+      force_processing: false
+    depends_on: []
+
   # Touch Preparation Viewer: visual inspection of preparation pipeline output.
   # Displays per-touch time-series (contact_depth, area, location, neural data)
   # and a 3D forearm view with contact centroid per frame.
@@ -59,18 +71,6 @@ tasks:
       force_processing: false
     depends_on: []
 
-  # Touch Population Explorer: per-touch scatter (configurable feature axes) + 3D forearm heatmap.
-  # One dot per single touch; draggable rectangle + gesture checkboxes filter the heatmap in real time.
-  # Three heatmap modes: spike density, mean IFF, cumulative IFF.
-  # Output: interactive GUI (no files written)
-  explore_touch_population:
-    category: viewer
-    enabled: true
-    options:
-      force_processing: false
-      neuron_mode: iff
-    depends_on: []
-
   # Single-Touch RF Explorer: per-touch RF heatmap viewer on the 3D forearm model.
   # Cascading Session / Block / Trial / Touch dropdowns render the pre-computed
   # per-touch RF map from single_touch_rf_maps.npz (produced by map_single_touch_rf).
@@ -78,6 +78,18 @@ tasks:
   explore_single_touch_rf:
     category: viewer
     enabled: false
+    options:
+      force_processing: false
+      neuron_mode: iff
+    depends_on: []
+
+  # Touch Population Explorer: per-touch scatter (configurable feature axes) + 3D forearm heatmap.
+  # One dot per single touch; draggable rectangle + gesture checkboxes filter the heatmap in real time.
+  # Three heatmap modes: spike density, mean IFF, cumulative IFF.
+  # Output: interactive GUI (no files written)
+  explore_touch_population:
+    category: viewer
+    enabled: true
     options:
       force_processing: false
       neuron_mode: iff
