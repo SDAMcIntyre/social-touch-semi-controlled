@@ -54,7 +54,14 @@ from preprocessing.forearm_extraction import (
     get_forearms_with_fallback,
 )
 
-from postprocessing.gui import PostprocessedSceneViewer, BeforeAfterStepViewer, ForearmStageInspector
+from postprocessing.gui import (
+    PostprocessedSceneViewer,
+    BeforeAfterStepViewer,
+    ForearmStageInspector,
+    PostprocessingStageViewer,
+    StagePaths,
+    STAGE_LABELS,
+)
 from postprocessing.gui.forearm_stage_inspector import resolve_all_session_stage_paths
 from postprocessing.xyz_reference_from_gestures.calibration_pca_engine import CalibrationResult
 
@@ -67,7 +74,7 @@ def resolve_postprocessed_paths(config: KinectConfig) -> Dict[str, Optional[Path
     """Derive all paths required by PostprocessedSceneViewer from a KinectConfig.
 
     Expected pipeline outputs:
-      - contact_projected_csv : session_merged_output_dir/blocks_contact_projected/{merged_csv_name}
+      - contact_projected_csv : session_merged_output_dir/blocks_pca_calibrated/{merged_csv_name}
       - forearm_pca_ply       : session_merged_output_dir/forearm_pca_calibrated/{session_id}_forearm.ply
       - pca_calib_json        : session_merged_output_dir/blocks_pca_calibrated/pca-xyz_transformation-matrices.json
       - hand_motion_path      : video_processed_output_dir/kinematics_analysis/{stem}_handmodel_motion.npz
@@ -83,7 +90,7 @@ def resolve_postprocessed_paths(config: KinectConfig) -> Dict[str, Optional[Path
     pca_calib_json: Optional[Path] = None
     if config.session_merged_output_dir:
         contact_projected_csv = (
-            config.session_merged_output_dir / "blocks_contact_projected" / merged_name
+            config.session_merged_output_dir / "blocks_pca_calibrated" / merged_name
         )
         forearm_pca_ply = (
             config.session_merged_output_dir
@@ -151,6 +158,16 @@ def _load_unified_forearm(config: KinectConfig) -> Optional[Path]:
         return plies[0]
     return None
 
+def _resolve_deduped_forearm(config: KinectConfig) -> Optional[Path]:
+    """Return the path to the deduplicated unified forearm PLY, or None."""
+    if config.session_merged_output_dir is None:
+        return None
+    deduped_dir = config.session_merged_output_dir / "forearm_deduped"
+    if not deduped_dir.exists():
+        return None
+    plies = sorted(deduped_dir.glob("*.ply"))
+    return plies[0] if plies else None
+
 
 def resolve_before_after_paths(config: KinectConfig) -> List[Dict]:
     """Return a list of step descriptors for the 4 postprocessing steps.
@@ -181,36 +198,123 @@ def resolve_before_after_paths(config: KinectConfig) -> List[Dict]:
     # Forearms for steps 1 and 2 require loading from the preprocessing outputs.
     per_video_forearm = _load_per_video_forearm(config)   # Open3D PointCloud or None
     unified_forearm_ply = _load_unified_forearm(config)   # Path or None
+    deduped_forearm = _resolve_deduped_forearm(config)    # Path or None
 
     return [
         {
-            "step_label": "Step 1: ICP Registration",
+            "step_label": "Step 0: ICP Registration",
             "before_csv": base / "blocks_merged" / raw_name,
             "after_csv": base / "blocks_registered" / raw_name,
             "before_forearm": per_video_forearm,
             "after_forearm": unified_forearm_ply,
         },
         {
-            "step_label": "Step 2: PCA Calibration",
+            "step_label": "Step 1: XY Deduplication",
             "before_csv": base / "blocks_registered" / raw_name,
-            "after_csv": base / "blocks_pca_calibrated" / pca_name,
+            "after_csv": base / "blocks_deduped" / raw_name,
             "before_forearm": unified_forearm_ply,
-            "after_forearm": forearm_pca_dir / forearm_ply_name,
+            "after_forearm": deduped_forearm or unified_forearm_ply,
         },
         {
-            "step_label": "Step 3: Forearm Projection",
-            "before_csv": base / "blocks_pca_calibrated" / pca_name,
-            "after_csv": base / "blocks_contact_projected" / pca_name,
-            "before_forearm": forearm_pca_dir / forearm_ply_name,
+            "step_label": "Step 2: Contact Projection",
+            "before_csv": base / "blocks_deduped" / raw_name,
+            "after_csv": base / "blocks_projected" / raw_name,
+            "before_forearm": deduped_forearm or unified_forearm_ply,
+            "after_forearm": deduped_forearm or unified_forearm_ply,
+        },
+        {
+            "step_label": "Step 3: PCA Calibration",
+            "before_csv": base / "blocks_projected" / raw_name,
+            "after_csv": base / "blocks_pca_calibrated" / pca_name,
+            "before_forearm": deduped_forearm or unified_forearm_ply,
             "after_forearm": forearm_pca_dir / forearm_ply_name,
         },
         {
             "step_label": "Step 4: RF Centering",
-            "before_csv": base / "blocks_contact_projected" / pca_name,
+            "before_csv": base / "blocks_pca_calibrated" / pca_name,
             "after_csv": base / "blocks_rf_centered" / pca_name,
             "before_forearm": forearm_pca_dir / forearm_ply_name,
             "after_forearm": forearm_rf_dir / forearm_ply_name,
         },
+    ]
+
+
+def _resolve_source_forearm(config: KinectConfig) -> Optional[Path]:
+    """Return the path to the fetched source forearm PLY from forearm_source/, or None."""
+    if config.session_merged_output_dir is None:
+        return None
+    source_ply = (
+        config.session_merged_output_dir
+        / "forearm_source"
+        / f"{config.session_id}_forearm.ply"
+    )
+    return source_ply if source_ply.exists() else None
+
+
+def resolve_stage_paths(config: KinectConfig) -> List[StagePaths]:
+    """Return one StagePaths instance per postprocessing stage.
+
+    Always returns a list of exactly 6 entries (one per label in STAGE_LABELS).
+    CSV paths are set to None when config.session_merged_output_dir is None;
+    otherwise the path is set regardless of whether the file exists yet —
+    the viewer handles missing files gracefully.
+    """
+    base = config.session_merged_output_dir
+    session_id = config.session_id
+    block_id = config.block_id
+
+    raw_name = f"{session_id}_semicontrolled_{block_id}_merged_data.csv"
+    pca_name = f"{session_id}_semicontrolled_{block_id}_merged_data_pca-xyz.csv"
+
+    per_video_forearm = _load_per_video_forearm(config)
+    source_forearm_ply = _resolve_source_forearm(config)
+    unified_forearm_ply = source_forearm_ply or _load_unified_forearm(config)
+    deduped_forearm = _resolve_deduped_forearm(config)
+
+    if base is not None:
+        forearm_pca_ply = base / "forearm_pca_calibrated" / f"{session_id}_forearm.ply"
+        forearm_rf_ply = base / "forearm_rf_centered" / f"{session_id}_forearm.ply"
+    else:
+        forearm_pca_ply = None
+        forearm_rf_ply = None
+
+    return [
+        StagePaths(
+            stage_label=STAGE_LABELS[0],
+            csv_path=base / "blocks_merged" / raw_name if base is not None else None,
+            forearm=per_video_forearm,
+            coordinate_frame="camera",
+        ),
+        StagePaths(
+            stage_label=STAGE_LABELS[1],
+            csv_path=base / "blocks_registered" / raw_name if base is not None else None,
+            forearm=unified_forearm_ply,
+            coordinate_frame="camera",
+        ),
+        StagePaths(
+            stage_label=STAGE_LABELS[2],
+            csv_path=base / "blocks_deduped" / raw_name if base is not None else None,
+            forearm=deduped_forearm or unified_forearm_ply,
+            coordinate_frame="camera",
+        ),
+        StagePaths(
+            stage_label=STAGE_LABELS[3],
+            csv_path=base / "blocks_projected" / raw_name if base is not None else None,
+            forearm=deduped_forearm or unified_forearm_ply,
+            coordinate_frame="camera",
+        ),
+        StagePaths(
+            stage_label=STAGE_LABELS[4],
+            csv_path=base / "blocks_pca_calibrated" / pca_name if base is not None else None,
+            forearm=forearm_pca_ply,
+            coordinate_frame="pca",
+        ),
+        StagePaths(
+            stage_label=STAGE_LABELS[5],
+            csv_path=base / "blocks_rf_centered" / pca_name if base is not None else None,
+            forearm=forearm_rf_ply,
+            coordinate_frame="pca",
+        ),
     ]
 
 
@@ -424,6 +528,32 @@ def run_single_session_pipeline_before_after(
     dag_handler.mark_completed(task_name)
 
 
+def run_single_session_pipeline_stage_viewer(
+    config: KinectConfig,
+    dag_handler: DagConfigHandler,
+) -> None:
+    """Launch PostprocessingStageViewer for one block."""
+    task_name = "view_postprocessing_stages"
+    block_name = config.source_video.name
+    print(f"[{block_name}] ==> Checking task: {task_name}")
+    if not dag_handler.can_run(task_name):
+        print(f"[{block_name}] Task disabled — skipping.")
+        return
+    stage_paths = resolve_stage_paths(config)
+    available = [sp for sp in stage_paths if sp.csv_path is not None and sp.csv_path.exists()]
+    if not available:
+        print(f"[{block_name}] No stage CSV files found — skipping.")
+        return
+    recording_name = config.source_video.stem
+    print(f"[{block_name}] Launching PostprocessingStageViewer ({len(available)}/6 stages with data)...")
+    app = QApplication.instance() or QApplication(sys.argv)
+    viewer = PostprocessingStageViewer(stage_paths, recording_name=recording_name)
+    viewer.show()
+    app.exec_()
+    QCoreApplication.processEvents()
+    dag_handler.mark_completed(task_name)
+
+
 # ---------------------------------------------------------------------------
 # Session-level viewers
 # ---------------------------------------------------------------------------
@@ -493,6 +623,7 @@ def run_batch_sequentially(
         run_single_session_pipeline(config, dag_handler_instance)
         run_single_session_pipeline_advanced(config, dag_handler_instance)
         run_single_session_pipeline_before_after(config, dag_handler_instance)
+        run_single_session_pipeline_stage_viewer(config, dag_handler_instance)
 
     print("All postprocessed viewer sessions completed.")
 

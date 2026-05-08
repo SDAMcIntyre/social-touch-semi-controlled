@@ -44,7 +44,7 @@ import pandas as pd
 import pyvista as pv
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
-from PyQt5.QtCore import Qt, QEvent, QTimer
+from PyQt5.QtCore import Qt, QEvent, QTimer, pyqtSignal
 from PyQt5.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -137,6 +137,39 @@ def _parse_contact_points_cell(cell) -> Optional[np.ndarray]:
             except ValueError:
                 pass
     return np.array(points, dtype=np.float64) if points else None
+
+
+def extract_touch_boundaries(touch_ids: np.ndarray) -> List[tuple]:
+    """
+    Extract contiguous non-zero blocks from *touch_ids* and return them as a
+    list of ``(start_idx, end_idx, touch_id)`` tuples.
+
+    *start_idx* is inclusive; *end_idx* is exclusive (suitable for axvspan).
+    Blocks of zero are ignored (gaps between touches).
+
+    Parameters
+    ----------
+    touch_ids:
+        1-D integer array of ``single_touch_id`` values (0 = no touch).
+
+    Returns
+    -------
+    list of (int, int, int)
+        One tuple per contiguous non-zero run: (start_idx, end_idx, touch_id).
+    """
+    if len(touch_ids) == 0:
+        return []
+
+    change_points = np.where(np.diff(touch_ids) != 0)[0] + 1
+    run_starts = np.concatenate(([0], change_points))
+    run_ends   = np.concatenate((change_points, [len(touch_ids)]))
+    run_values = touch_ids[run_starts]
+
+    return [
+        (int(s), int(e), int(v))
+        for s, e, v in zip(run_starts, run_ends, run_values)
+        if v != 0
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -305,6 +338,8 @@ class NeuralDataPanel(QWidget):
     half the full recording length.
     """
 
+    frame_requested = pyqtSignal(int)
+
     def __init__(
         self,
         merged_df: pd.DataFrame,
@@ -337,6 +372,14 @@ class NeuralDataPanel(QWidget):
         btn_layout.setContentsMargins(4, 1, 4, 1)
         btn_layout.addStretch()
 
+        self._touch_bands_checkbox = QCheckBox("Touch bands")
+        self._touch_bands_checkbox.setChecked(True)
+        self._touch_bands_checkbox.setStyleSheet("font-size: 8pt;")
+        self._touch_bands_checkbox.stateChanged.connect(
+            lambda state: self._on_touch_bands_toggled(state == Qt.Checked)
+        )
+        btn_layout.addWidget(self._touch_bands_checkbox)
+
         btn_layout.addWidget(QLabel("\u00b1"))
         self._window_spinbox = QDoubleSpinBox()
         self._window_spinbox.setMinimum(0.5)
@@ -354,10 +397,25 @@ class NeuralDataPanel(QWidget):
         layout.addWidget(btn_row)
 
         self.canvas.installEventFilter(self)
+        self.canvas.mpl_connect('button_press_event', self._on_canvas_click)
         layout.addWidget(self.canvas)
         self.setFixedHeight(220)
 
         self._setup_axes(merged_df)
+
+        # Extract touch boundaries from single_touch_id column if present
+        self._touch_spans: List = []
+        if 'single_touch_id' in merged_df.columns:
+            touch_ids = merged_df['single_touch_id'].ffill().to_numpy(dtype=np.int64, na_value=0)
+            self._touch_boundaries: List[tuple] = extract_touch_boundaries(touch_ids)
+        else:
+            self._touch_boundaries = []
+
+        # Hide the checkbox when there are no touch boundaries to show
+        if not self._touch_boundaries:
+            self._touch_bands_checkbox.hide()
+
+        self._draw_touch_bands()
 
     def _setup_axes(self, merged_df: pd.DataFrame) -> None:
         axes = self.fig.subplots(3, 1, sharex=True)
@@ -384,6 +442,36 @@ class NeuralDataPanel(QWidget):
 
         self.canvas.draw()
 
+    def _draw_touch_bands(self) -> None:
+        """
+        Draw alternating red/green semi-transparent background bands for each
+        contiguous non-zero ``single_touch_id`` block on all three axes.
+
+        Band colour alternates by touch order (index % 2), not by ID value:
+        even-indexed touches → ``'#44ff44'`` (green), odd-indexed → ``'#ff4444'`` (red).
+        Each span is extended by 33 samples past the last touch row to match the
+        neural signal tail.
+        All span artists are stored in ``self._touch_spans`` so they can be
+        toggled via ``_on_touch_bands_toggled()``.
+
+        No-op when ``self._touch_boundaries`` is empty.
+        """
+        axes = [self.ax_freq, self.ax_depth, self.ax_area]
+        for idx, (start, end, _touch_id) in enumerate(self._touch_boundaries):
+            color = '#44ff44' if idx % 2 == 0 else '#ff4444'
+            for ax in axes:
+                span = ax.axvspan(start, end + 33, color=color, alpha=0.12, zorder=0)
+                self._touch_spans.append(span)
+
+        if self._touch_spans:
+            self.canvas.draw_idle()
+
+    def _on_touch_bands_toggled(self, checked: bool) -> None:
+        """Show or hide all touch-band span artists and refresh the canvas."""
+        for artist in self._touch_spans:
+            artist.set_visible(checked)
+        self.canvas.draw_idle()
+
     def update_cursor(self, frame_idx: int, scale_factor: float) -> None:
         """
         Move the red vertical cursor to the position corresponding to
@@ -409,6 +497,18 @@ class NeuralDataPanel(QWidget):
         hi = min(self._total_samples - 1, self._current_sample + self._zoom_half_window)
         self.ax_freq.set_xlim(lo, hi)
         self.canvas.draw_idle()
+
+    def _on_canvas_click(self, event) -> None:
+        """Convert a matplotlib left-click to a kinect frame and emit frame_requested."""
+        if event.inaxes is None or event.button != 1:
+            return
+        sample_idx = event.xdata
+        if sample_idx is None:
+            return
+        scale = self._total_samples / self._total_kinect_frames
+        frame = int(round(sample_idx / scale))
+        frame = max(0, min(frame, self._total_kinect_frames - 1))
+        self.frame_requested.emit(frame)
 
     def eventFilter(self, obj, event) -> bool:
         """Intercept mouse-wheel events on the canvas for continuous zoom."""
@@ -785,6 +885,7 @@ class NeuralKinectViewer(QMainWindow):
         self.neural_panel: Optional[NeuralDataPanel] = None
         if self.merged_df is not None:
             self.neural_panel = NeuralDataPanel(self.merged_df, self._total_frames)
+            self.neural_panel.frame_requested.connect(self.frame_slider.setValue)
             outer.addWidget(self.neural_panel)
 
     def _build_right_panel_controls(self) -> None:

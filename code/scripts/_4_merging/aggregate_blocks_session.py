@@ -30,8 +30,11 @@ def aggregate_session_blocks(
         # Return expected path, even if aggregation didn't happen
         return output_path
 
+    # Derive session_id from output CSV name (pattern: {session_id}_semicontrolled_aggregated_session.csv)
+    _csv_stem = output_path.stem  # e.g. "ST13-03_semicontrolled_aggregated_session"
+    _session_id = _csv_stem.replace("_semicontrolled_aggregated_session", "")
     forearm_ply_dest = (
-        output_path.parent / forearm_ply_path.name
+        output_path.parent / f"{_session_id}_forearm.ply"
         if forearm_ply_path is not None else None
     )
 

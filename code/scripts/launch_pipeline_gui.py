@@ -14,10 +14,17 @@ try:
 except Exception:
     pass
 
+from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QApplication
 
 from utils.gui.dag_launcher.launcher_config import parse_launcher_config
 from utils.gui.dag_launcher.launcher_window import LauncherWindow
+
+# High-DPI awareness — must be set BEFORE QApplication is constructed, otherwise
+# showMaximized() on Windows with display scaling renders a ~half-screen window
+# with a title bar drawn at the unscaled size.
+QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
+QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
 
 
 def main() -> None:
@@ -37,7 +44,7 @@ def main() -> None:
     configs_dir = project_root / "configs"
     app = QApplication(sys.argv)
     window = LauncherWindow(entries, configs_dir)
-    window.showMaximized()
+    window.show()
     sys.exit(app.exec_())
 
 

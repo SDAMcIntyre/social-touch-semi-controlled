@@ -106,22 +106,25 @@ alter spatial values.
 apply_icp_registration          [Space 1 -> 2]
         |
         v
+deduplicate_xy                  [Space 2, filtering only]
+        |
+        v
+project_contacts_onto_forearm   [Space 2, snap to deduped forearm]
+        |
+        v
 set_xyz_reference_from_gestures [Space 2 -> 3]
         |
         v
 export_forearm_pca_calibrated   [PLY: Space 2 -> 3]
         |
         v
-project_contacts_onto_forearm   [Space 3 -> 4]  (depends on both above)
+center_on_receptive_field       [Space 3 -> 4]
         |
         v
-center_on_receptive_field       [Space 4 -> 5]
-        |
-        v
-aggregate_session               [Space 5, concatenation only]
+aggregate_session               [Space 4, concatenation only]
 ```
 
-### C1. apply_icp_registration (Space 1 -> 2)
+### C0. apply_icp_registration (Space 1 -> 2)
 
 **Script**: `code/scripts/_5_postprocessing/apply_icp_registration.py`
 
@@ -137,18 +140,35 @@ Transform key resolution (`csv_spatial_transformer.py`):
 
 Single-forearm sessions: no transforms JSON; files copied unchanged.
 
-### C2. set_xyz_reference_from_gestures (Space 2 -> 3)
+### C1. deduplicate_xy (Space 2, filtering only)
+
+- **Input**: `blocks_registered/*.csv` + `{session_id}_unified_registered.ply`
+- **Output**: `blocks_registered_deduped/*.csv` + `forearm_deduped/{session_id}_unified_registered.ply`
+- **Transform**: Remove duplicate (x,y) points keeping lowest z (DBSCAN clustering)
+- **Forearm**: Single `_unified_registered.ply` deduplicated once for entire session
+
+### C2. project_contacts_onto_forearm (Space 2, snap to surface)
+
+**Script**: `code/scripts/_5_postprocessing/project_contacts_onto_forearm.py`
+
+- **Input**: `blocks_registered_deduped/*.csv` + `forearm_deduped/{session_id}_unified_registered.ply`
+- **Output**: `blocks_registered_projected/*.csv` + `projection_stats.csv`
+- **Transform**: KD-tree nearest-neighbor snap to forearm vertex (XY distance)
+- **Columns**: `contact_points` (snapped) + `contact_location_x/y/z` (recomputed mean)
+- **Stats**: mean/median/p95/max displacement in mm
+
+### C3. set_xyz_reference_from_gestures (Space 2 -> 3)
 
 **Script**: `code/scripts/_5_postprocessing/set_xyz_reference_from_gestures.py`
 
-- **Input**: `blocks_registered/*.csv`
+- **Input**: `blocks_registered_projected/*.csv`
 - **Output**: `blocks_pca_calibrated/*.csv` + `pca-xyz_transformation-matrices.json`
 
 PCA calibration (`PCACalibrationEngine`):
 1. Tapping gestures -> Z-axis (normal to skin)
 2. Stroking gestures (post step-1 rotation) -> X-axis (along forearm)
 
-### C3. export_forearm_pca_calibrated (PLY: Space 2 -> 3)
+### C4. export_forearm_pca_calibrated (PLY: Space 2 -> 3)
 
 **Script**: `code/scripts/_5_postprocessing/export_forearm_pca_calibrated.py`
 
@@ -156,21 +176,11 @@ PCA calibration (`PCACalibrationEngine`):
 - **Output**: `forearm_pca_calibrated/{session_id}_forearm.ply`
 - **Fallback**: If no `_unified_registered.ply`, uses any single PLY in `forearm_pointclouds/`
 
-### C4. project_contacts_onto_forearm (Space 3 -> 4)
-
-**Script**: `code/scripts/_5_postprocessing/project_contacts_onto_forearm.py`
-
-- **Input**: `blocks_pca_calibrated/*.csv` + `forearm_pca_calibrated/{session_id}_forearm.ply`
-- **Output**: `blocks_projected/*.csv` + `projection_stats.csv`
-- **Transform**: KD-tree nearest-neighbor snap to forearm vertex
-- **Columns**: `contact_points` (snapped) + `contact_location_x/y/z` (recomputed mean)
-- **Stats**: mean/median/p95/max displacement in mm
-
-### C5. center_on_receptive_field (Space 4 -> 5)
+### C5. center_on_receptive_field (Space 3 -> 4)
 
 **Script**: `code/scripts/_5_postprocessing/center_on_receptive_field.py`
 
-- **Input**: `blocks_projected/*.csv` + `forearm_pca_calibrated/{session_id}_forearm.ply`
+- **Input**: `blocks_pca_calibrated/*.csv` + `forearm_pca_calibrated/{session_id}_forearm.ply`
 - **Output**: `blocks_rf_centered/*.csv` + `forearm_rf_centered/{session_id}_forearm.ply` + `rf_center_origin.json`
 - **Transform**: Pure translation `T[:3,3] = -rf_center`
 
@@ -230,16 +240,18 @@ PHASE B (Merging)
   blocks_merged/*.csv                                      [Space 1 + Nerve_spike]
 
 PHASE C (Postprocessing)
-  C1: blocks_registered/*.csv                              [Space 2]
-  C2: blocks_pca_calibrated/*.csv                          [Space 3]
-      pca-xyz_transformation-matrices.json
-  C3: forearm_pca_calibrated/{session}_forearm.ply         [Space 3]
-  C4: blocks_projected/*.csv                               [Space 4]
+  C0: blocks_registered/*.csv                              [Space 2]
+  C1: blocks_registered_deduped/*.csv                      [Space 2, filtered]
+      forearm_deduped/{session}_unified_registered.ply
+  C2: blocks_registered_projected/*.csv                    [Space 2, on-surface]
       projection_stats.csv
-  C5: blocks_rf_centered/*.csv                             [Space 5]
-      forearm_rf_centered/{session}_forearm.ply             [Space 5]
+  C3: blocks_pca_calibrated/*.csv                          [Space 3]
+      pca-xyz_transformation-matrices.json
+  C4: forearm_pca_calibrated/{session}_forearm.ply         [Space 3]
+  C5: blocks_rf_centered/*.csv                             [Space 4]
+      forearm_rf_centered/{session}_forearm.ply             [Space 4]
       rf_center_origin.json
-  C6: {session}_semicontrolled_aggregated_session.csv      [Space 5]
+  C6: {session}_semicontrolled_aggregated_session.csv      [Space 4]
 
 PHASE D (Analysis)
   spike_positions.csv                                      [Space 5]

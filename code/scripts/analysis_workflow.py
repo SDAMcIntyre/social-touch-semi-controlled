@@ -36,20 +36,38 @@ from analysis.touch_analytics.series_pipeline import run_series_transforms
 from analysis.touch_analytics.extraction_pipeline import run_feature_extraction
 from analysis.touch_analytics.clustering_pipeline import run_clustering
 from analysis.touch_analytics.comparing_pipeline import run_comparing
-def _rf_mapping():
-    # Deferred import: analysis.receptive_field_mapping chains through
-    # preprocessing.forearm_extraction → pyk4a (Windows-only hardware lib).
-    # Importing at module level breaks macOS runs of non-RF tasks.
-    # rf_camera_angle_task is excluded from the package __init__ for the same
-    # reason — import it separately via _rf_camera_angle() only where needed.
-    from analysis.receptive_field_mapping import (
-        run_cluster_rf_extraction,
-        run_cluster_rf_mapping,
-        run_cluster_rf_visualization,
-        run_simple_rf_mapping,
-        precompute_explorer_caches,
-        launch_feature_space_explorer,
+from analysis.receptive_field_mapping import (
+    run_cluster_rf_extraction,
+    run_cluster_rf_mapping,
+    run_cluster_rf_visualization,
+    run_simple_rf_mapping,
+    run_single_touch_rf_mapping,
+    run_population_rf_grid,
+    PopulationRFGridConfig,
+    run_population_rf_grid_metrics,
+    PopulationRFGridMetricsConfig,
+    run_population_rf_grid_metrics_visualization,
+    precompute_explorer_caches,
+    launch_feature_space_explorer,
+    launch_single_touch_rf_explorer,
+    launch_touch_playback_explorer,
+    launch_touch_population_explorer,
+    launch_gallery_viewer,
+)
+from analysis.receptive_field_mapping.rf_data_loader import resolve_forearm_ply
+
+
+def _rf_camera_angle():
+    # rf_camera_angle_task chains through preprocessing.forearm_extraction → pyk4a
+    # (Windows-only). Deferred so macOS runs of non-clustered-RF tasks are unaffected.
+    from analysis.receptive_field_mapping.rf_camera_angle_task import (
+        pick_rf_camera_angle_batch,
     )
+    return pick_rf_camera_angle_batch
+
+
+def _rf_mapping():
+    # Thin wrapper kept for existing callers that use positional tuple unpacking.
     return (
         run_cluster_rf_extraction,
         run_cluster_rf_mapping,
@@ -58,17 +76,8 @@ def _rf_mapping():
         precompute_explorer_caches,
         launch_feature_space_explorer,
     )
-
-
-def _rf_camera_angle():
-    # Separate deferred import for the camera-angle picker.
-    # rf_camera_angle_task imports preprocessing.forearm_extraction which pulls
-    # in pyk4a (Windows-only). Only clustered-RF flows need this function.
-    from analysis.receptive_field_mapping.rf_camera_angle_task import (
-        pick_rf_camera_angle_batch,
-    )
-    return pick_rf_camera_angle_batch
 from analysis.touch_analytics.pipeline_shared import session_id_from_path
+from analysis.touch_analytics.gui import launch_preparation_viewer
 
 # --- Analysis Flows ---
 
@@ -131,6 +140,201 @@ def map_receptive_fields_simple_flow(
         force=force_processing,
         show_interactive=show_interactive,
         projection_method=projection_method,
+    )
+
+
+@flow(name="map_single_touch_rf")
+def map_single_touch_rf_flow(
+    input_items: List[Tuple[Path, Path]],
+    force_processing: bool = False,
+    neuron_mode: str = "iff",
+    preparation_dir: Optional[Path] = None,
+) -> List[Path]:
+    """Per-touch RF mapping: accumulate per-vertex neuron values for every single touch.
+
+    Reads the prepared CSV produced by ``touch_preparation`` via
+    ``load_playback_data()``, accumulates IFF or spike values per forearm vertex
+    for each touch event, and saves results as a sparse ``.npz`` file.
+    Output: ``4_analysed/single_touch_rf_maps/<session_id>/``
+    """
+    print(f"[Batch Analysis] Running single-touch RF mapping for {len(input_items)} item(s)...")
+    if not input_items:
+        return []
+    output_dir = input_items[0][1] / '4_analysed' / 'single_touch_rf_maps'
+    return run_single_touch_rf_mapping(
+        input_items=input_items,
+        output_dir=output_dir,
+        force=force_processing,
+        neuron_mode=neuron_mode,
+        preparation_dir=preparation_dir,
+    )
+
+
+@flow(name="map_population_rf_grid")
+def map_population_rf_grid_flow(
+    input_items: List[Tuple[Path, Path]],
+    force_processing: bool = False,
+    neuron_mode: str = "iff",
+    per_gesture_type: bool = True,
+    vertex_threshold_ratio: float = 0.25,
+    features: dict = None,
+    compute_baseline: bool = True,
+) -> List[Path]:
+    """Systematic RF population mapping via feature-space grid sweep.
+
+    For each session, builds an N-dimensional grid over configured touch features,
+    filters touches per cell, averages their single-touch RF maps, and saves
+    one NPZ per cell grid (or per gesture type if configured).
+    Output: ``4_analysed/population_rf_grid/<session_id>/``
+    """
+    print(f"[Batch Analysis] Running population RF grid for {len(input_items)} item(s)...")
+    if not input_items:
+        return []
+
+    if features is None:
+        raise ValueError(
+            "map_population_rf_grid_flow: 'features' config is required — "
+            "define at least one feature in the DAG config."
+        )
+
+    database_path = input_items[0][1]
+    output_dir = database_path / '4_analysed'
+    touch_features_dir = database_path / '4_analysed' / 'touch_features'
+
+    resolved_items = []
+    for csv_path, db_path in input_items:
+        session_id = session_id_from_path(csv_path)
+        series_csv_path = (
+            db_path / '4_analysed' / 'series_transforms'
+            / f'{session_id}_series_augmented.csv'
+        )
+        if not series_csv_path.exists():
+            raise ValueError(
+                f"map_population_rf_grid_flow: series-augmented CSV not found for "
+                f"session '{session_id}': {series_csv_path}"
+            )
+        forearm_ply_path = resolve_forearm_ply(csv_path.parent, session_id)
+        if forearm_ply_path is None:
+            raise ValueError(
+                f"map_population_rf_grid_flow: forearm PLY not found for "
+                f"session '{session_id}' in {csv_path.parent}"
+            )
+        npz_path = (
+            db_path / '4_analysed' / 'single_touch_rf_maps'
+            / session_id / 'single_touch_rf_maps.npz'
+        )
+        if not npz_path.exists():
+            raise ValueError(
+                f"map_population_rf_grid_flow: single_touch_rf_maps.npz not found for "
+                f"session '{session_id}': {npz_path}. Run map_single_touch_rf first."
+            )
+        resolved_items.append({
+            "series_csv_path": series_csv_path,
+            "npz_path": npz_path,
+            "forearm_ply_path": forearm_ply_path,
+            "session_id": session_id,
+            "touch_features_dir": touch_features_dir if touch_features_dir.exists() else None,
+        })
+
+    config = PopulationRFGridConfig(
+        features=features,
+        neuron_mode=neuron_mode,
+        vertex_threshold_ratio=vertex_threshold_ratio,
+        per_gesture_type=per_gesture_type,
+        compute_baseline=compute_baseline,
+    )
+    return run_population_rf_grid(
+        input_items=resolved_items,
+        output_dir=output_dir,
+        config=config,
+        force=force_processing,
+    )
+
+
+@flow(name="reduce_population_rf_grid")
+def reduce_population_rf_grid_flow(
+    input_items: List[Tuple[Path, Path]],
+    force_processing: bool = False,
+    projection_method: str = "tangent_plane",
+) -> List[Path]:
+    """Reduce per-gesture-type population RF grid NPZ files to scalar metric CSVs.
+
+    Reads NPZ files produced by ``map_population_rf_grid`` and computes per-cell
+    scalar descriptors (IFF intensity, topographic, distributional, shape metrics).
+    Output: ``4_analysed/population_rf_grid_metrics/<session_id>/``
+    """
+    print(f"[Batch Analysis] Running population RF grid metrics for {len(input_items)} item(s)...")
+    if not input_items:
+        return []
+
+    database_path = input_items[0][1]
+    output_dir = database_path / '4_analysed'
+
+    resolved_items = []
+    for csv_path, db_path in input_items:
+        session_id = session_id_from_path(csv_path)
+        forearm_ply_path = resolve_forearm_ply(csv_path.parent, session_id)
+        if forearm_ply_path is None:
+            raise ValueError(
+                f"reduce_population_rf_grid_flow: forearm PLY not found for "
+                f"session '{session_id}' in {csv_path.parent}"
+            )
+        grid_dir = db_path / '4_analysed' / 'population_rf_grid' / session_id
+        if not grid_dir.exists():
+            raise ValueError(
+                f"reduce_population_rf_grid_flow: population_rf_grid directory not found "
+                f"for session '{session_id}': {grid_dir}. Run map_population_rf_grid first."
+            )
+        npz_files = list(grid_dir.glob("population_rf_grid_*.npz"))
+        if not npz_files:
+            raise ValueError(
+                f"reduce_population_rf_grid_flow: no NPZ files found for session "
+                f"'{session_id}' in {grid_dir}. Run map_population_rf_grid first."
+            )
+        resolved_items.append({
+            "forearm_ply_path": forearm_ply_path,
+            "grid_dir": grid_dir,
+            "session_id": session_id,
+        })
+
+    config = PopulationRFGridMetricsConfig(projection_method=projection_method)
+    return run_population_rf_grid_metrics(
+        input_items=resolved_items,
+        output_dir=output_dir,
+        config=config,
+        force=force_processing,
+    )
+
+
+@flow(name="visualize_population_rf_grid_metrics")
+def visualize_population_rf_grid_metrics_flow(
+    input_items: List[Tuple[Path, Path]],
+    force_processing: bool = False,
+    extracted_features: list = None,
+) -> None:
+    """Render per-metric heatmap PNGs from population RF grid metrics CSVs.
+
+    Reads CSVs produced by ``reduce_population_rf_grid`` and renders one PNG
+    per IFF metric per session+gesture type into a metric-organized folder.
+    Output: ``4_analysed/population_rf_grid_metrics_heatmaps/<metric>/``
+    """
+    print(f"[Batch Analysis] Visualizing population RF grid metrics for {len(input_items)} item(s)...")
+    if not input_items:
+        return
+
+    database_path = input_items[0][1]
+    output_dir = database_path / '4_analysed' / 'population_rf_grid_metrics_heatmaps'
+
+    resolved_items = []
+    for csv_path, db_path in input_items:
+        session_id = session_id_from_path(csv_path)
+        resolved_items.append({"session_id": session_id})
+
+    run_population_rf_grid_metrics_visualization(
+        input_items=resolved_items,
+        output_dir=output_dir,
+        force=force_processing,
+        extracted_features=extracted_features,
     )
 
 
@@ -508,6 +712,138 @@ def explore_rf_feature_space_flow(
     launch_feature_space_explorer(input_items)
 
 
+@flow(name="explore_touch_playback")
+def explore_touch_playback_flow(
+    input_items: List[Tuple[Path, Path]],
+    force_processing: bool = False,
+) -> None:
+    """
+    Launch the Touch Playback Explorer GUI for the given sessions.
+    Reads series-augmented CSVs produced by ``touch_series_transforms`` — no
+    dependency on RF clustering or visualization.
+    ``force_processing`` is accepted for interface consistency but is a no-op:
+    the GUI is stateless and always launches fresh.
+    """
+    print(f"[Batch Analysis] Launching Touch Playback Explorer for {len(input_items)} item(s)...")
+    if not input_items:
+        return
+
+    launch_touch_playback_explorer(input_items)
+
+
+@flow(name="explore_touch_population")
+def explore_touch_population_flow(
+    input_items: List[Tuple[Path, Path]],
+    force_processing: bool = False,
+    neuron_mode: str = "iff",
+) -> None:
+    """
+    Launch the Touch Population Explorer GUI for the given sessions.
+    Reads series-augmented CSVs produced by ``touch_series_transforms`` — no
+    dependency on RF clustering or visualization.
+    ``force_processing`` is accepted for interface consistency but is a no-op:
+    the GUI is stateless and always launches fresh.
+
+    ``neuron_mode`` is forwarded to ``launch_touch_population_explorer`` to
+    determine which pre-computed RF maps to load (``"iff"`` or ``"spike"``).
+    """
+    print(f"[Batch Analysis] Launching Touch Population Explorer for {len(input_items)} item(s)...")
+    if not input_items:
+        return
+
+    launch_touch_population_explorer(input_items, neuron_mode=neuron_mode)
+
+
+@flow(name="explore_single_touch_rf")
+def explore_single_touch_rf_flow(
+    input_items: List[Tuple[Path, Path]],
+    force_processing: bool = False,
+    neuron_mode: str = "iff",
+) -> None:
+    """
+    Launch the Single-Touch RF Explorer GUI for the given sessions.
+    Reads per-touch RF maps produced by ``map_single_touch_rf`` — no dependency
+    on clustering or visualization.
+    ``force_processing`` is accepted for interface consistency but is a no-op:
+    the GUI is stateless and always launches fresh.
+    """
+    print(f"[Batch Analysis] Launching Single-Touch RF Explorer for {len(input_items)} item(s)...")
+    if not input_items:
+        return
+
+    launch_single_touch_rf_explorer(input_items, neuron_mode=neuron_mode)
+
+
+@flow(name="explore_rf_gallery")
+def explore_rf_gallery_flow(
+    input_items: List[Tuple[Path, Path]],
+    force_processing: bool = False,
+    cluster_groups: list = None,
+    cluster_group_defs: dict = None,
+) -> None:
+    """
+    Launch the RF Cluster Gallery Viewer for each enabled cluster group / clusterer pair.
+
+    Reads extraction artifacts produced by ``visualize_receptive_fields_clustered`` — one
+    interactive PyQt5 window per combo/clusterer pair, opened sequentially.
+    ``force_processing`` is accepted for interface consistency but is a no-op:
+    the viewer is stateless and always launches fresh.
+    """
+    print(f"[Batch Analysis] Launching RF Gallery Viewer for {len(input_items)} item(s)...")
+    if not input_items:
+        return
+
+    if cluster_groups is None or cluster_group_defs is None:
+        raise ValueError(
+            "explore_rf_gallery_flow: 'cluster_groups' and 'cluster_group_defs' are required."
+        )
+
+    database_path = input_items[0][1]
+    output_dir = database_path / '4_analysed' / 'receptive_field_maps_clustered'
+
+    for combo_name in cluster_groups:
+        if combo_name not in cluster_group_defs:
+            raise ValueError(
+                f"explore_rf_gallery_flow: group '{combo_name}' not found in cluster_group_defs."
+            )
+        group_spec = cluster_group_defs[combo_name]
+        per_type = group_spec.get('per_type_clustering', False)
+        clustering_methods = group_spec.get('clustering_methods', {})
+        for clusterer_name, clusterer_cfg in clustering_methods.items():
+            if not clusterer_cfg.get('enabled', True):
+                continue
+            if per_type:
+                from analysis.touch_analytics.clustering_pipeline import GESTURE_TYPES
+                for gesture_type in GESTURE_TYPES:
+                    print(
+                        f"[RF Gallery] Launching viewer for "
+                        f"{combo_name}/{clusterer_name}/{gesture_type}..."
+                    )
+                    launch_gallery_viewer(output_dir, combo_name, clusterer_name, gesture_type)
+            else:
+                print(f"[RF Gallery] Launching viewer for {combo_name}/{clusterer_name}...")
+                launch_gallery_viewer(output_dir, combo_name, clusterer_name)
+
+
+@flow(name="explore_preparation")
+def explore_preparation_flow(
+    input_items: List[Tuple[Path, Path]],
+    force_processing: bool = False,
+) -> None:
+    """
+    Launch the Touch Preparation Viewer GUI for the given sessions.
+    Reads prepared CSVs produced by ``touch_preparation`` — no dependency on
+    series transforms or feature extraction.
+    ``force_processing`` is accepted for interface consistency but is a no-op:
+    the GUI is stateless and always launches fresh.
+    """
+    print(f"[Batch Analysis] Launching Touch Preparation Viewer for {len(input_items)} item(s)...")
+    if not input_items:
+        return
+
+    launch_preparation_viewer(input_items)
+
+
 def _collect_unified_files(input_items: List[Tuple[Path, Path]]) -> List[Path]:
     """
     Reconstruct expected paths of touch-summary CSVs written by touch_feature_extraction.
@@ -573,12 +909,35 @@ def collect_unique_session_dirs(
 
     return session_dir_map
 
+_PROCESSING_CATEGORIES: Set[str] = {"processing"}
+_VIEWER_CATEGORIES: Set[str] = {"viewer", "viewer_support"}
+
+
+def _category_allowed(category: Optional[str], mode: str) -> bool:
+    """Return True if a task with the given category should run under ``mode``.
+
+    ``mode`` is one of ``"all"``, ``"processing"``, or ``"viewers"``.
+    When ``mode`` is ``"all"`` every category is allowed.
+    When ``mode`` is ``"processing"`` only tasks in ``_PROCESSING_CATEGORIES`` run.
+    When ``mode`` is ``"viewers"`` only tasks in ``_VIEWER_CATEGORIES`` run.
+    A missing or unknown category is never allowed in filtered modes.
+    """
+    if mode == "all":
+        return True
+    if mode == "processing":
+        return category in _PROCESSING_CATEGORIES
+    if mode == "viewers":
+        return category in _VIEWER_CATEGORIES
+    raise ValueError(f"Unknown mode: {mode!r}. Expected 'all', 'processing', or 'viewers'.")
+
+
 def run_batch_analysis(
     block_files: List[Path],
     project_data_root: Path,
     dag_handler: DagConfigHandler,
     report_file_path: Path,
     task_filter: Optional[List[str]] = None,
+    mode: str = "all",
 ):
     session_map = collect_unique_session_dirs(block_files, project_data_root)
 
@@ -587,19 +946,32 @@ def run_batch_analysis(
         return
 
     available_tasks = [
+        # --- Processing Tasks (produce files, run unattended) ---
         ("summarize_session_blocks", summarize_session_blocks_flow),
         ("map_receptive_fields_simple", map_receptive_fields_simple_flow),
         ("touch_preparation", touch_preparation_flow),
+        ("map_single_touch_rf", map_single_touch_rf_flow),
         ("touch_series_transforms", touch_series_transforms_flow),
         ("touch_feature_extraction", touch_feature_extraction_flow),
+        ("map_population_rf_grid", map_population_rf_grid_flow),
+        ("reduce_population_rf_grid", reduce_population_rf_grid_flow),
+        ("visualize_population_rf_grid_metrics", visualize_population_rf_grid_metrics_flow),
         ("touch_clustering", touch_clustering_flow),
         ("touch_comparing", touch_comparing_flow),
         ("analyse_ap_efficacy", analyse_ap_efficacy_flow),
-        ("map_receptive_fields_clustered", map_receptive_fields_clustered_flow),
         ("extract_receptive_fields_clustered", extract_receptive_fields_clustered_flow),
         ("visualize_receptive_fields_clustered", visualize_receptive_fields_clustered_flow),
+        # --- Legacy / Deprecated ---
+        ("map_receptive_fields_clustered", map_receptive_fields_clustered_flow),
+        # --- Viewer Support (utility for viewer tasks) ---
         ("precompute_explorer_caches", precompute_explorer_caches_flow),
+        # --- Viewer Tasks (launch interactive PyQt5 GUIs) ---
+        ("explore_preparation", explore_preparation_flow),
         ("explore_rf_feature_space", explore_rf_feature_space_flow),
+        ("explore_touch_playback", explore_touch_playback_flow),
+        ("explore_touch_population", explore_touch_population_flow),
+        ("explore_single_touch_rf", explore_single_touch_rf_flow),
+        ("explore_rf_gallery", explore_rf_gallery_flow),
     ]
     
     task_names = [t[0] for t in available_tasks]
@@ -650,6 +1022,13 @@ def run_batch_analysis(
             logging.info(f"Task '{task_name}' is disabled in DAG. Skipping.")
             continue
 
+        task_category: Optional[str] = dag_handler.tasks[task_name].get("category")
+        if not _category_allowed(task_category, mode):
+            logging.info(
+                f"Skipping task '{task_name}' (category '{task_category}' not included in --mode {mode})"
+            )
+            continue
+
         options = dag_handler.get_task_options(task_name)
         batch_id = f"batch_run_{task_name}"
         
@@ -679,6 +1058,25 @@ def run_batch_analysis(
                             kwargs["series_dir"] = series_dir
                         if preparation_dir is not None:
                             kwargs["preparation_dir"] = preparation_dir
+                    if task_name == "map_single_touch_rf":
+                        if "neuron_mode" in options:
+                            kwargs["neuron_mode"] = options["neuron_mode"]
+                        if preparation_dir is not None:
+                            kwargs["preparation_dir"] = preparation_dir
+                    if task_name == "map_population_rf_grid":
+                        if "neuron_mode" in options:
+                            kwargs["neuron_mode"] = options["neuron_mode"]
+                        if "per_gesture_type" in options:
+                            kwargs["per_gesture_type"] = bool(options["per_gesture_type"])
+                        if "vertex_threshold_ratio" in options:
+                            kwargs["vertex_threshold_ratio"] = float(options["vertex_threshold_ratio"])
+                        if "compute_baseline" in options:
+                            kwargs["compute_baseline"] = bool(options["compute_baseline"])
+                    if task_name == "explore_single_touch_rf":
+                        if "neuron_mode" in options:
+                            kwargs["neuron_mode"] = options["neuron_mode"]
+                    if task_name == "explore_touch_population":
+                        kwargs["neuron_mode"] = options.get("neuron_mode", "iff")
                     if "cluster_groups" in options:
                         kwargs["cluster_groups"] = options["cluster_groups"]
                     if task_name in (
@@ -686,6 +1084,7 @@ def run_batch_analysis(
                         "map_receptive_fields_clustered",
                         "extract_receptive_fields_clustered",
                         "visualize_receptive_fields_clustered",
+                        "explore_rf_gallery",
                     ):
                         if _cluster_group_defs:
                             kwargs["cluster_group_defs"] = _cluster_group_defs
@@ -736,6 +1135,8 @@ def run_batch_analysis(
                         kwargs["disjoint_mask_distance_mm"] = float(options["disjoint_mask_distance_mm"])
                     if "gallery_viewer" in options:
                         kwargs["gallery_viewer"] = bool(options["gallery_viewer"])
+                    if "extracted_features" in options:
+                        kwargs["extracted_features"] = list(options["extracted_features"])
                     flow_func(**kwargs)
                 except Exception as e:
                     executor.error_msg = f"Batch analysis failed: {str(e)}"
@@ -750,6 +1151,17 @@ def main():
     parser.add_argument(
         "--tasks", nargs="+", default=None,
         help="Run only these task keys (space-separated). Skips all others regardless of DAG enabled flag.",
+    )
+    parser.add_argument(
+        "--mode",
+        choices=["all", "processing", "viewers"],
+        default="all",
+        help=(
+            "Task execution mode. "
+            "'all' (default): run all enabled tasks. "
+            "'processing': run only tasks with category 'processing'. "
+            "'viewers': run only tasks with category 'viewer' or 'viewer_support'."
+        ),
     )
     args = parser.parse_args()
     dag_config_path = args.dag_config
@@ -780,6 +1192,7 @@ def main():
         dag_handler=dag_handler,
         report_file_path=report_file_path,
         task_filter=args.tasks,
+        mode=args.mode,
     )
 
 if __name__ == "__main__":

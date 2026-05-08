@@ -23,6 +23,8 @@ These are developer-facing documents, not usage guides.
 | [Azure Kinect RGB ↔ Depth Parallax (near range)](note-azure-kinect-rgb-depth-parallax.md) | Per-pixel correspondence between color frame and `transformed_depth` is offset by ~10 px median / 25 px worst at 500–800 mm; downstream consumers that index `point_cloud[v_rgb, u_rgb]` inherit the error. | `xyz_extractor_centroid.py`, `xyz_extractor_ellipse_depth.py`, `kinect_pointcloud_wrapper.py`, `kinect_rgb_depth_viewer.py` |
 | [Kinect depth access — single path](note-kinect-depth-access-single-path.md) | The parallax correction inside `KinectFrame` is only effective if every depth read flows through `KinectFrame` / `KinectMKV` / `KinectPointCloudView`; direct `pyk4a` imports outside `data_access/` silently bypass it. Enforced via an allowlist + grep audit. | `kinect_mkv_manager.py`, `kinect_pointcloud_wrapper.py`, `kinect_rgb_depth_viewer.py`, and the `pyk4a` allowlist |
 | [3D-to-2D Surface Projection Algorithms for RF Heatmaps](note-3d-to-2d-surface-projection-algorithms.md) | Algorithm catalogue (tangent-plane, exponential map, geodesic MDS, LSCM/ARAP, cylindrical unwrap) for projecting forearm point clouds to 2D `(u, v)` coordinates. Includes distortion analysis, implementation sketches, and pipeline architecture vision. | `tangent_plane_alignment.py`, `define_forearm_mesh.py`, `rf_cluster_visualizer.py` |
+| [RF Cluster Gallery Viewer — GUI Component Reference](note-rf-cluster-gallery-gui-components.md) | Catalogue of every visual component in the interactive PyQt5 + PyVista gallery viewer: layout, widgets, settings, 3D scene layers, caching, persistence, and data model. | `gui/rf_cluster_gallery_viewer.py`, `rf_gallery_data.py` |
+| [RF Feature-Space Explorer — GUI Component Reference](note-rf-feature-space-explorer-gui-components.md) | Catalogue of visual components in the interactive scatter + 3D heatmap explorer: layout, widgets, filter rectangle, gesture checkboxes, session switching, and data model. | `gui/rf_feature_space_explorer.py`, `rf_explorer_data.py` |
 
 ### Bug reports (`bug-*`)
 
@@ -31,6 +33,7 @@ These are developer-facing documents, not usage guides.
 | [bug-cupy-bool8-import-order.md](bug-cupy-bool8-import-order.md) | `bool8` TypeError caused by CuPy import order | [note-cupy-import-order.md](note-cupy-import-order.md) |
 | [bug-neural-kinect-viewer-initial-render.md](bug-neural-kinect-viewer-initial-render.md) | Neural Kinect Viewer initial render issue | — |
 | [bug-hue-circle-drag-not-working.md](bug-hue-circle-drag-not-working.md) | Hue circle drag interaction not working | — |
+| [bug-rf-explorer-nearest-vertex-distance.md](bug-rf-explorer-nearest-vertex-distance.md) | RF Explorer crashes: contact frames >15mm from forearm mesh vertices | — |
 
 ---
 

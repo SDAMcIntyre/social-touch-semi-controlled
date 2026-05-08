@@ -1,6 +1,6 @@
-"""Postprocessing step 1: Apply ICP registration transforms to merged CSVs.
+"""Postprocessing step 0: Apply ICP registration transforms to merged CSVs.
 
-Reads per-block merged CSVs from ``blocks_merged/``, applies the pre-computed
+Reads per-block CSVs from ``blocks_merged/``, applies the pre-computed
 4x4 ICP registration transform to the spatial columns (overwriting originals),
 and writes the results to ``blocks_registered/``.
 
@@ -39,7 +39,7 @@ def apply_icp_registration(
     transforms file) have their files copied to *output_dir* unchanged.
 
     Args:
-        input_files: Per-block merged CSVs from ``blocks_merged/``.
+        input_files: Per-block merged CSVs (from ``blocks_merged/``).
         session_configs: KinectConfig objects (one per block, same session).
         output_dir: Destination directory (``blocks_registered/``).
         force_processing: Re-run even if outputs are up-to-date.

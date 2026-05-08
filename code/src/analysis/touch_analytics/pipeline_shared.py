@@ -51,7 +51,6 @@ DEFAULT_COMPARING_OPTIONS: dict = {
 
 DEFAULT_PREPARATION_OPTIONS: dict = {
     'force_processing': False,
-    'interpolation_method': 'cubic',
 }
 
 

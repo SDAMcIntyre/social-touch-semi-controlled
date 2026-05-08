@@ -10,10 +10,19 @@ from .rf_cluster_pipeline import (
     run_cluster_rf_visualization,
     precompute_explorer_caches,
     launch_feature_space_explorer,
+    launch_single_touch_rf_explorer,
+    launch_touch_playback_explorer,
+    launch_touch_population_explorer,
+    launch_gallery_viewer,
 )
 from .rf_metrics import RFMetrics, compute_rf_metrics
 from .rf_projection import project_to_2d
 from .rf_simple_pipeline import run_simple_rf_mapping
+from .rf_single_touch_pipeline import run_single_touch_rf_mapping
+from .rf_population_grid_pipeline import run_population_rf_grid, PopulationRFGridConfig
+from .rf_population_grid_metrics_pipeline import run_population_rf_grid_metrics, PopulationRFGridMetricsConfig
+from .rf_population_grid_metrics_renderer import run_population_rf_grid_metrics_visualization
+from .rf_baseline_deviation import BaselineDeviationMetrics, compute_baseline_deviation
 
 # rf_camera_angle_task is intentionally NOT imported here.
 # It chains through preprocessing.forearm_extraction → pyk4a (Windows-only),
@@ -27,7 +36,19 @@ __all__ = [
     "run_cluster_rf_visualization",
     "precompute_explorer_caches",
     "launch_feature_space_explorer",
+    "launch_single_touch_rf_explorer",
+    "launch_touch_playback_explorer",
+    "launch_touch_population_explorer",
+    "launch_gallery_viewer",
     "RFMetrics",
     "compute_rf_metrics",
     "run_simple_rf_mapping",
+    "run_single_touch_rf_mapping",
+    "run_population_rf_grid",
+    "PopulationRFGridConfig",
+    "run_population_rf_grid_metrics",
+    "PopulationRFGridMetricsConfig",
+    "run_population_rf_grid_metrics_visualization",
+    "BaselineDeviationMetrics",
+    "compute_baseline_deviation",
 ]
