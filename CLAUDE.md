@@ -52,24 +52,30 @@ python code/scripts/launch_pipeline_gui.py
 
 ### Key source files
 - `code/scripts/analysis_workflow.py` — main entry point; one `@flow` per stage; dispatches via `run_batch_analysis()`
-- `code/src/analysis/touch_analytics/preparation_pipeline.py` — Stage 0: load → block-ID synthesis → cubic interpolation → gesture type → drop columns
+- `code/src/analysis/touch_analytics/preparation_pipeline.py` — Stage 0: load → block-ID synthesis → linear interpolation → gesture type → drop columns
 - `code/src/utils/pipeline/session_config_resolver.py` — resolves kinect config entries to file paths
 - `code/src/primary_processing/models/kinect_config.py` — Pydantic model; `session_merged_output_dir` is the key field for analysis
 
 ### Stage status
 
-Last checked: 2026-05-05. Status applies to session `2022-06-17_ST16-05`.
+Last checked: 2026-05-08. Status applies to session `2022-06-17_ST16-05`.
 
-**Next session priority:** Before running Stage 2a, spend time understanding the Stage 1
-output (`_series_augmented.csv`) and the Stage 2b heatmap. Review what each derived column
-means scientifically and what the RF map tells us about this SAI unit before proceeding.
+**Re-runs needed after dev merge (2026-05-08):** Stages 0 and 1 must be re-run. The dev
+merge changed Stage 0 in two ways that affect output: (1) interpolation switched from cubic
+to linear across all 14 Kinect-sampled columns; (2) stroke direction classification switched
+from endpoint delta to affine linear fit (`np.polyfit` slope) — some `gesture_type` labels
+may change. Stage 1 reads Stage 0 output so must follow. Stage 2b is optional: spike data
+is unchanged but the heatmap will render with an improved projection centroid if re-run.
+
+**Next session priority:** Re-run stages 0 and 1, then review the updated Stage 1 output
+(`_series_augmented.csv`) and optionally the Stage 2b heatmap before proceeding to Stage 2a.
 
 | Stage | Task key | Output path | Status |
 |---|---|---|---|
-| 0 | `touch_preparation` | `4_analysed/preparation/<session>_prepared.csv` | ✅ complete |
-| 1 | `touch_series_transforms` | `4_analysed/series_transforms/<session>_series_augmented.csv` | ✅ complete |
+| 0 | `touch_preparation` | `4_analysed/preparation/<session>_prepared.csv` | ⚠️ needs re-run |
+| 1 | `touch_series_transforms` | `4_analysed/series_transforms/<session>_series_augmented.csv` | ⚠️ needs re-run |
 | 2a | `touch_feature_extraction` | `4_analysed/touch_features/<agg>/<session>_touch_summary.csv` | not started |
-| 2b | `map_receptive_fields_simple` | `4_analysed/receptive_field_maps_simple/<session>/` | ✅ complete |
+| 2b | `map_receptive_fields_simple` | `4_analysed/receptive_field_maps_simple/<session>/` | ✅ complete (optional re-run for better heatmap) |
 | 3 | `touch_clustering` | `4_analysed/touch_clusters/<group>/<clusterer>/` | not started |
 | 4 | `extract_receptive_fields_clustered` | `4_analysed/receptive_field_extraction/<combo>/<clusterer>/` | not started |
 | 5 | `visualize_receptive_fields_clustered` | same dir, adds heatmaps + rf_metrics.json | not started |
@@ -109,20 +115,19 @@ When asked to post or update a GitHub issue:
   repo. `analysis_workflow.py` falls back to scanning `3_merged/` directly when they are absent,
   so the analysis pipeline still runs.
 
-- **macOS: `pyk4a` import error — `map_receptive_fields_simple` broken**: `pyk4a` is
-  Windows-only. `_rf_mapping()` in `analysis_workflow.py` defers the import, which protects
-  non-RF tasks. But `receptive_field_mapping/__init__.py` eagerly imports `rf_camera_angle_task`,
-  which chains through `preprocessing.forearm_extraction` → `pyk4a`. `rf_simple_pipeline.py`
-  itself has no `pyk4a` dependency; the fix is to move `rf_camera_angle_task` out of the package
-  `__init__.py` into a separate deferred import used only by clustered RF flows. The batch runner
-  also masks this failure — it reports SUCCESS even when the Prefect flow raises an exception.
-  See `docs/development/knowledge-base/bug-pyk4a-blocks-rf-simple-pipeline-macos.md`.
+- **macOS: `pyk4a` import error — fixed on this branch**: `pyk4a` is Windows-only.
+  `receptive_field_mapping/__init__.py` previously imported `rf_camera_angle_task`, which
+  chains through `preprocessing.forearm_extraction` → `pyk4a`, breaking all macOS runs.
+  Fixed here by removing `rf_camera_angle_task` from `__init__.py` and keeping it as a
+  deferred import (`_rf_camera_angle()`) in `analysis_workflow.py`. The same fix is needed
+  on `dev` — see GitHub issue #70. The batch runner also masks this failure: it reports
+  SUCCESS even when the Prefect flow raises an exception.
 
-- **`render_forearm_heatmap` requires `render_context` — fixed on this branch, not in dev**:
-  The function had an unconditional guard requiring `RFRenderContext`. `rf_simple_pipeline.py`
-  does not supply one. Fixed in `rf_cluster_visualizer.py`: centroid now falls back to
-  `spike_counts_df` mean; 2D projection hull accesses guarded with `render_context is not None`.
-  These changes are on `sarah_sandbox` only — need implementing in `dev`. See GitHub issue #70.
+- **`render_forearm_heatmap` / `render_context` — fixed on this branch**: `rf_simple_pipeline.py`
+  now constructs a proper `RFRenderContext` (using all contact points as the neuron cloud) and
+  passes it to `render_forearm_heatmap`. The unconditional guard in `rf_cluster_visualizer.py`
+  is also relaxed to fall back to `spike_counts_df` centroid when no context is supplied.
+  Both fixes are on `sarah_sandbox` only — see GitHub issue #70.
 
 - **`clustering` import error**: `CLUSTERER_REGISTRY` and `get_clusterer` fail to import in
   the current branch. This breaks `test_gmm_clusterer.py`, `test_parallax_correction.py`, and
@@ -131,7 +136,7 @@ When asked to post or update a GitHub issue:
 - **vtk version**: conda has vtk 9.6.1; requirements.txt pins 9.4.2. The conda version is
   correct to keep. Never `pip install vtk` in this environment.
 
-- **NaNs survive cubic interpolation at touch group boundaries**: cubic interpolation only fills
+- **NaNs survive linear interpolation at touch group boundaries**: linear interpolation only fills
   interior NaNs (requires valid samples on both sides). The Kinect often drops out before the
   touch group boundary ends, so the last rows of a touch group commonly remain NaN in the prepared
   CSV. Confirmed: 100% of stroke groups had a NaN at their final row (pre-interpolation), and these
