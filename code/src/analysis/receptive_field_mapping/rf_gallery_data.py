@@ -19,10 +19,10 @@ from .rf_extraction_io import (
     load_neuron_cluster_touches,
     load_neuron_contacts,
     load_neuron_touches,
+    load_rf_camera_rotation,
     load_sessions_metadata,
 )
 from .rf_data_loader import load_forearm_vertex_colors, load_forearm_vertices
-from .tangent_plane_alignment import compute_tangent_plane_rotation
 
 logger = logging.getLogger(__name__)
 
@@ -243,12 +243,10 @@ def load_gallery_data(
             if session_id in session_tangent_rotations:
                 tangent_rotation = session_tangent_rotations[session_id]
             else:
-                tangent_rotation: Optional[np.ndarray] = None
-                if forearm_vertices is not None and len(neuron_contacts_xyz) > 0:
-                    contact_centroid = neuron_contacts_xyz.mean(axis=0)
-                    tangent_rotation = compute_tangent_plane_rotation(
-                        forearm_vertices, contact_centroid
-                    )
+                tangent_rotation = load_rf_camera_rotation(
+                    output_dir.parent / 'rf_camera_settings',
+                    session_id,
+                )
                 session_tangent_rotations[session_id] = tangent_rotation
 
             cell = GalleryCell(

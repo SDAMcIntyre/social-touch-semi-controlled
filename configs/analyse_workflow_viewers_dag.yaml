@@ -59,18 +59,6 @@ tasks:
       force_processing: false
     depends_on: []
 
-  # Touch Population Explorer: per-touch scatter (configurable feature axes) + 3D forearm heatmap.
-  # One dot per single touch; draggable rectangle + gesture checkboxes filter the heatmap in real time.
-  # Three heatmap modes: spike density, mean IFF, cumulative IFF.
-  # Output: interactive GUI (no files written)
-  explore_touch_population:
-    category: viewer
-    enabled: true
-    options:
-      force_processing: false
-      neuron_mode: iff
-    depends_on: []
-
   # Single-Touch RF Explorer: per-touch RF heatmap viewer on the 3D forearm model.
   # Cascading Session / Block / Trial / Touch dropdowns render the pre-computed
   # per-touch RF map from single_touch_rf_maps.npz (produced by map_single_touch_rf).
@@ -78,6 +66,18 @@ tasks:
   explore_single_touch_rf:
     category: viewer
     enabled: false
+    options:
+      force_processing: false
+      neuron_mode: iff
+    depends_on: []
+
+  # Touch Population Explorer: per-touch scatter (configurable feature axes) + 3D forearm heatmap.
+  # One dot per single touch; draggable rectangle + gesture checkboxes filter the heatmap in real time.
+  # Three heatmap modes: spike density, mean IFF, cumulative IFF.
+  # Output: interactive GUI (no files written)
+  explore_touch_population:
+    category: viewer
+    enabled: true
     options:
       force_processing: false
       neuron_mode: iff

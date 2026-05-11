@@ -24,6 +24,7 @@ from analysis.receptive_field_mapping.rf_data_loader import (
     resolve_forearm_ply,
 )
 from analysis.receptive_field_mapping.rf_extraction_io import (
+    RF_CAMERA_SETTINGS_FILENAME,
     description_summary_line,
     load_cluster_session_data,
     load_extraction_summary,
@@ -31,6 +32,7 @@ from analysis.receptive_field_mapping.rf_extraction_io import (
     load_neuron_cluster_touches,
     load_neuron_contacts,
     load_neuron_touches,
+    load_rf_camera_rotation,
     load_sessions_metadata,
     save_cluster_session_data,
     save_extraction_summary,
@@ -1130,6 +1132,8 @@ def run_cluster_rf_visualization(
             "use the standalone 'explore_rf_gallery' DAG task instead."
         )
 
+    camera_settings_dir = output_dir.parent / 'rf_camera_settings'
+
     pairs = _build_pairs(
         cluster_groups, cluster_group_defs, feature_combinations, clustering_profiles,
         caller="run_cluster_rf_visualization",
@@ -1159,7 +1163,8 @@ def run_cluster_rf_visualization(
                 )
 
             if visualization_is_up_to_date(
-                base_output, projection_method, disjoint_mask_distance_mm, force=force
+                base_output, projection_method, disjoint_mask_distance_mm, force=force,
+                camera_settings_path=camera_settings_dir / RF_CAMERA_SETTINGS_FILENAME,
             ):
                 print(f"  Visualization up-to-date, skipping.")
                 for cluster_dir in sorted(base_output.glob('cluster_*')):
@@ -1222,18 +1227,25 @@ def run_cluster_rf_visualization(
                     neuron_cluster_touches = {}
 
                 # RF metrics: use forearm vertices from extraction artifact (first available session)
+                metrics_sid = None
                 metrics_forearm_vertices = None
                 for sid in neuron_touches:
                     try:
                         metrics_forearm_vertices = load_forearm_vertices_artifact(base_output, sid)
+                        metrics_sid = sid
                         break
                     except ValueError:
                         pass
+
+                metrics_rotation = None
+                if metrics_sid is not None:
+                    metrics_rotation = load_rf_camera_rotation(camera_settings_dir, metrics_sid)
 
                 metrics = compute_rf_metrics(
                     pooled_df,
                     metrics_forearm_vertices,
                     projection_method=projection_method or "tangent_plane",
+                    rotation_matrix=metrics_rotation,
                 )
                 metrics_json_path = cluster_dir / 'rf_metrics.json'
                 with open(metrics_json_path, 'w') as _f:
@@ -1261,6 +1273,7 @@ def run_cluster_rf_visualization(
                     continue
                 for session_subdir in sorted(sessions_dir.iterdir()):
                     session_id = session_subdir.name
+                    session_R = load_rf_camera_rotation(camera_settings_dir, session_id)
                     try:
                         session_spike_df, cluster_contacts_xyz = load_cluster_session_data(
                             cluster_dir, session_id
@@ -1317,6 +1330,7 @@ def run_cluster_rf_visualization(
                             display_metric="spike_count",
                             render_context=render_context,
                             disjoint_mask_distance_mm=disjoint_mask_distance_mm,
+                            rotation_matrix=session_R,
                         )
                         produced.append(count_png)
                     except Exception:
@@ -1340,6 +1354,7 @@ def run_cluster_rf_visualization(
                                 display_metric="spike_ratio",
                                 render_context=render_context,
                                 disjoint_mask_distance_mm=disjoint_mask_distance_mm,
+                                rotation_matrix=session_R,
                             )
                             produced.append(ratio_png)
                         except Exception:
@@ -1357,8 +1372,10 @@ def run_cluster_rf_visualization(
                 metrics_summary_csv = base_output / 'rf_metrics_summary.csv'
                 pd.DataFrame(metrics_rows).to_csv(metrics_summary_csv, index=False)
 
+            camera_settings_json = camera_settings_dir / RF_CAMERA_SETTINGS_FILENAME
             save_visualization_summary(
-                base_output, projection_method, disjoint_mask_distance_mm, extraction_mtime
+                base_output, projection_method, disjoint_mask_distance_mm, extraction_mtime,
+                camera_settings_mtime=camera_settings_json.stat().st_mtime if camera_settings_json.exists() else None,
             )
 
             print(f"[RF Visualization] {combo_name}/{clusterer_name}{_type_label}: done.")
@@ -1415,4 +1432,43 @@ def run_cluster_rf_mapping(
         force=force,
     )
     return result
+
+
+def launch_rf_camera_settings_viewer(
+    input_items: List[Tuple[Path, Path]],
+) -> None:
+    """Launch the RF Camera Settings GUI for all sessions in input_items.
+
+    Loads PopulationData for each session in a thread pool, then opens
+    the RFCameraSettingsViewer window. Blocks until the user closes the window.
+    Camera settings are saved to 4_analysed/rf_camera_settings/rf_camera_settings.json.
+    """
+    from .touch_population_data import load_population_data
+    from .gui.rf_camera_settings_viewer import RFCameraSettingsViewer
+
+    session_specs = _resolve_explorer_session_paths(input_items)
+    n = len(session_specs)
+    if n == 0:
+        raise ValueError("launch_rf_camera_settings_viewer: no sessions to display.")
+
+    print(f"[RF Camera Settings] Loading {n} session(s)...")
+
+    def _load_one(spec: Tuple[str, Path, Path]) -> Tuple[str, object]:
+        session_id, series_csv, forearm_ply = spec
+        touch_features_dir = series_csv.parent.parent / 'touch_features'
+        return session_id, load_population_data(series_csv, forearm_ply, touch_features_dir=touch_features_dir)
+
+    with ThreadPoolExecutor(max_workers=min(4, n)) as executor:
+        sessions: List[Tuple[str, object]] = list(executor.map(_load_one, session_specs))
+
+    database_path = input_items[0][1]
+    output_dir = database_path / '4_analysed' / 'rf_camera_settings'
+
+    app = QApplication.instance() or QApplication(sys.argv)
+    viewer = RFCameraSettingsViewer(
+        sessions=sessions,
+        output_dir=output_dir,
+    )
+    viewer.show()
+    app.exec_()
 

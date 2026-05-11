@@ -26,6 +26,10 @@ from analysis.receptive_field_mapping.rf_data_loader import (
     parse_contact_points,
     resolve_forearm_ply,
 )
+from analysis.receptive_field_mapping.rf_extraction_io import (
+    RF_CAMERA_SETTINGS_FILENAME,
+    load_rf_camera_rotation,
+)
 from analysis.touch_analytics.pipeline_shared import session_id_from_path
 from utils.should_process_task import should_process_task
 
@@ -148,14 +152,18 @@ def run_simple_rf_mapping(
     List of paths to produced spike_positions.csv files.
     """
     produced: List[Path] = []
+    camera_settings_dir = output_dir.parent / 'rf_camera_settings'
 
     for csv_path, _ in input_items:
         session_id = session_id_from_path(csv_path)
         session_out = output_dir / session_id
         sentinel = session_out / 'rf_simple_summary.json'
 
+        camera_settings_json = camera_settings_dir / RF_CAMERA_SETTINGS_FILENAME
+        extra_inputs = [camera_settings_json] if camera_settings_json.exists() else []
+
         if not should_process_task(
-            input_paths=[csv_path],
+            input_paths=[csv_path] + extra_inputs,
             output_paths=[sentinel],
             force=force,
         ):
@@ -241,6 +249,7 @@ def run_simple_rf_mapping(
                 feature_ranges={},
             )
 
+            session_R = load_rf_camera_rotation(camera_settings_dir, session_id)
             suffix = f'_{projection_method}' if projection_method else ''
             png_path = session_out / f'{session_id}_rf_simple{suffix}.png'
             try:
@@ -253,6 +262,7 @@ def run_simple_rf_mapping(
                     interactive=show_interactive,
                     projection_method=projection_method,
                     render_context=render_context,
+                    rotation_matrix=session_R,
                 )
                 print(f"[RF Simple] {session_id}: heatmap saved -> {png_path.name}")
             except Exception:

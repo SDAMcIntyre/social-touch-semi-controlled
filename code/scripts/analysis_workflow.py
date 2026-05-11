@@ -47,15 +47,16 @@ from analysis.receptive_field_mapping import (
     run_population_rf_grid_metrics,
     PopulationRFGridMetricsConfig,
     run_population_rf_grid_metrics_visualization,
-    pick_rf_camera_angle_batch,
     precompute_explorer_caches,
     launch_feature_space_explorer,
     launch_single_touch_rf_explorer,
     launch_touch_playback_explorer,
     launch_touch_population_explorer,
     launch_gallery_viewer,
+    launch_rf_camera_settings_viewer,
 )
 from analysis.receptive_field_mapping.rf_data_loader import resolve_forearm_ply
+from analysis.receptive_field_mapping.rf_extraction_io import load_rf_camera_settings
 from analysis.touch_analytics.pipeline_shared import session_id_from_path
 from analysis.touch_analytics.gui import launch_preparation_viewer
 
@@ -509,7 +510,6 @@ def map_receptive_fields_clustered_flow(
     cluster_group_defs: dict = None,
     feature_combinations: dict = None,
     clustering_profiles: dict = None,
-    camera_angle_mode: bool = False,
     projection_method: str = None,
     disjoint_mask_distance_mm: float = 8.0,
 ) -> List[Path]:
@@ -518,9 +518,6 @@ def map_receptive_fields_clustered_flow(
     Reads pooled_touch_summary_clustered.csv, forward-fills contact_points (30Hz->1kHz),
     counts spikes per (x,y,z) point, and renders 3D forearm heatmap PNGs.
     Output: ``4_analysed/receptive_field_maps_clustered/<group>/<clusterer>/``
-
-    After mapping, assigns camera angles per session automatically when
-    ``camera_angle_mode`` is ``True``.
     """
     print(f"[Batch Analysis] Running cluster-based RF mapping for {len(input_items)} item(s)...")
     if not input_items:
@@ -541,16 +538,6 @@ def map_receptive_fields_clustered_flow(
         force=force_processing,
         projection_method=projection_method,
         disjoint_mask_distance_mm=disjoint_mask_distance_mm,
-    )
-
-    session_output_dirs = {
-        session_id_from_path(csv_path): csv_path.parent
-        for csv_path, _ in input_items
-    }
-    pick_rf_camera_angle_batch(
-        session_output_dirs,
-        force_processing=force_processing,
-        enabled=camera_angle_mode,
     )
 
     return result
@@ -598,7 +585,6 @@ def visualize_receptive_fields_clustered_flow(
     cluster_group_defs: dict = None,
     feature_combinations: dict = None,
     clustering_profiles: dict = None,
-    camera_angle_mode: bool = False,
     projection_method: str = None,
     disjoint_mask_distance_mm: float = 8.0,
     gallery_viewer: bool = False,
@@ -607,9 +593,6 @@ def visualize_receptive_fields_clustered_flow(
     Visualization-only step: load extraction artifacts, compute RF metrics,
     and render per-session heatmap PNGs.
     Output: ``4_analysed/receptive_field_maps_clustered/<group>/<clusterer>/``
-
-    After rendering, assigns camera angles per session automatically when
-    ``camera_angle_mode`` is ``True``.
     """
     print(f"[Batch Analysis] Running RF visualization for {len(input_items)} item(s)...")
     if not input_items:
@@ -629,16 +612,6 @@ def visualize_receptive_fields_clustered_flow(
         force=force_processing,
         gallery_viewer=gallery_viewer,
         input_items=input_items,
-    )
-
-    session_output_dirs = {
-        session_id_from_path(csv_path): csv_path.parent
-        for csv_path, _ in input_items
-    }
-    pick_rf_camera_angle_batch(
-        session_output_dirs,
-        force_processing=force_processing,
-        enabled=camera_angle_mode,
     )
 
     return result
@@ -816,6 +789,47 @@ def explore_preparation_flow(
     launch_preparation_viewer(input_items)
 
 
+@flow(name="set_rf_camera_settings")
+def set_rf_camera_settings_flow(
+    input_items: List[Tuple[Path, Path]],
+    force_processing: bool = False,
+) -> None:
+    """
+    Launch the RF Camera Settings GUI for the given sessions.
+    Reads series-augmented CSVs produced by ``touch_series_transforms``.
+    Allows the researcher to interactively set the camera orientation per
+    session and save it. Settings are consumed by all downstream RF rendering
+    and projection tasks.
+
+    Skipped when all sessions already have saved camera settings and
+    ``force_processing`` is False.
+    """
+    if not input_items:
+        return
+
+    database_path = input_items[0][1]
+    camera_settings_dir = database_path / '4_analysed' / 'rf_camera_settings'
+    session_ids = [session_id_from_path(csv_path) for csv_path, _ in input_items]
+
+    if not force_processing:
+        existing = load_rf_camera_settings(camera_settings_dir)
+        missing = [sid for sid in session_ids if sid not in existing]
+        if not missing:
+            print(
+                f"[RF Camera Settings] All {len(session_ids)} session(s) already have "
+                "saved camera settings — skipping. Set force_processing=true to re-open."
+            )
+            return
+        print(
+            f"[RF Camera Settings] {len(missing)}/{len(session_ids)} session(s) missing "
+            "camera settings — launching viewer."
+        )
+    else:
+        print(f"[RF Camera Settings] Launching viewer for {len(session_ids)} session(s) (force).")
+
+    launch_rf_camera_settings_viewer(input_items)
+
+
 def _collect_unified_files(input_items: List[Tuple[Path, Path]]) -> List[Path]:
     """
     Reconstruct expected paths of touch-summary CSVs written by touch_feature_extraction.
@@ -867,7 +881,7 @@ def collect_unique_session_dirs(
 
     return session_dir_map
 
-_PROCESSING_CATEGORIES: Set[str] = {"processing"}
+_PROCESSING_CATEGORIES: Set[str] = {"processing", "viewer_required"}
 _VIEWER_CATEGORIES: Set[str] = {"viewer", "viewer_support"}
 
 
@@ -909,6 +923,7 @@ def run_batch_analysis(
         ("touch_preparation", touch_preparation_flow),
         ("map_single_touch_rf", map_single_touch_rf_flow),
         ("touch_series_transforms", touch_series_transforms_flow),
+        ("set_rf_camera_settings", set_rf_camera_settings_flow),
         ("touch_feature_extraction", touch_feature_extraction_flow),
         ("map_population_rf_grid", map_population_rf_grid_flow),
         ("reduce_population_rf_grid", reduce_population_rf_grid_flow),
@@ -926,8 +941,8 @@ def run_batch_analysis(
         ("explore_preparation", explore_preparation_flow),
         ("explore_rf_feature_space", explore_rf_feature_space_flow),
         ("explore_touch_playback", explore_touch_playback_flow),
-        ("explore_touch_population", explore_touch_population_flow),
         ("explore_single_touch_rf", explore_single_touch_rf_flow),
+        ("explore_touch_population", explore_touch_population_flow),
         ("explore_rf_gallery", explore_rf_gallery_flow),
     ]
     
@@ -1060,25 +1075,6 @@ def run_batch_analysis(
                         kwargs["min_instances_per_sensor"] = options["min_instances_per_sensor"]
                     if "min_sensor_types" in options:
                         kwargs["min_sensor_types"] = options["min_sensor_types"]
-                    if "camera_angle_mode" in options:
-                        mode_cfg = options["camera_angle_mode"]
-                        if not isinstance(mode_cfg, dict):
-                            raise ValueError(
-                                f"[{task_name}] 'camera_angle_mode' must be a mapping with "
-                                f"an 'enabled' key, got: {mode_cfg!r}"
-                            )
-                        if "auto" in mode_cfg:
-                            raise ValueError(
-                                f"[{task_name}] Legacy 'camera_angle_mode.auto.enabled' "
-                                "shape is no longer supported. "
-                                "Use 'camera_angle_mode: {enabled: true|false}' instead."
-                            )
-                        if "enabled" not in mode_cfg:
-                            raise ValueError(
-                                f"[{task_name}] 'camera_angle_mode' must contain an 'enabled' "
-                                f"key, got keys: {list(mode_cfg.keys())!r}"
-                            )
-                        kwargs["camera_angle_mode"] = bool(mode_cfg["enabled"])
                     if "max_workers" in options:
                         kwargs["max_workers"] = int(options["max_workers"])
                     if "show_interactive" in options:

@@ -390,6 +390,7 @@ def compute_rf_metrics(
     spike_counts_df,
     forearm_vertices: Optional[np.ndarray],
     projection_method: str = "tangent_plane",
+    rotation_matrix: np.ndarray = None,
 ) -> RFMetrics:
     """Compute all RF metrics from a spike_counts DataFrame.
 
@@ -446,6 +447,7 @@ def compute_rf_metrics(
             forearm_vertices,
             centroid_3d,
             method=projection_method,
+            rotation_matrix=rotation_matrix,
         )
 
     # Weighted 2D centroid
