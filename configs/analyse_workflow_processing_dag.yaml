@@ -5,12 +5,7 @@
 parameters:
   # List of directories containing Kinect session config files to scan.
   # Paths are relative to configs/kinect_configs/.
-  kinect_configs: [valid_configs_ST13-01, valid_configs_ST13-02, 
-      valid_configs_ST13-03, valid_configs_ST14-01, valid_configs_ST14-02, 
-      valid_configs_ST14-03, valid_configs_ST14-04, valid_configs_ST15-01, 
-      valid_configs_ST15-02, valid_configs_ST16-02, valid_configs_ST16-03, 
-      valid_configs_ST16-04, valid_configs_ST16-05, valid_configs_ST18-01, 
-      valid_configs_ST18-04]
+  kinect_configs: valid_configs_ST14-04
 
 tasks:
   # ============================================================
@@ -23,20 +18,6 @@ tasks:
     enabled: true
     options:
       force_processing: false
-    depends_on: []
-
-  # Simple RF mapping: raw spike-position CSV + forearm heatmap per session.
-  # Runs before feature extraction — no dependency on clustering or extraction.
-  # Output: 4_analysed/receptive_field_maps_simple/<session_id>/
-  map_receptive_fields_simple:
-    category: processing
-    enabled: true
-    options:
-      force_processing: false
-      # Debugging toggle: when true, opens an interactive matplotlib window mid-run.
-      # Must be false for unattended / batch processing.
-      show_interactive: false
-      projection_method: cylindrical_unwrap
     depends_on: []
 
   # Stage 1 (Preparation): Per-session block-ID synthesis and NaN-gap interpolation.
@@ -112,11 +93,27 @@ tasks:
       force_processing: false
     depends_on: [touch_series_transforms]
 
+  # Simple RF mapping: raw spike-position CSV + forearm heatmap per session.
+  # No dependency on clustering or extraction, but requires camera settings
+  # for rendering (load_rf_camera_rotation raises if absent).
+  # Output: 4_analysed/receptive_field_maps_simple/<session_id>/
+  map_receptive_fields_simple:
+    category: processing
+    enabled: true
+    options:
+      force_processing: true
+      # Debugging toggle: when true, opens an interactive matplotlib window mid-run.
+      # Must be false for unattended / batch processing.
+      show_interactive: true
+      projection_method: cylindrical_unwrap
+      save_diagnostics: true
+    depends_on: [set_rf_camera_settings]
+
   # Stage 2b (Feature Extraction): Per-session feature extraction. Each enabled feature extracts to its own folder.
   # Output: 4_analysed/touch_features/<feature>/<session>_touch_summary.csv
   touch_feature_extraction:
     category: processing
-    enabled: true
+    enabled: false
     options:
       force_processing: false
       # Each key is an aggregation family. StatisticalExtractor auto-discovers all numeric
@@ -178,7 +175,7 @@ tasks:
     options:
       force_processing: false
       projection_method: tangent_plane
-    depends_on: [map_population_rf_grid]
+    depends_on: [map_population_rf_grid, set_rf_camera_settings]
 
   # Renders per-IFF-metric heatmap PNGs from population RF grid metrics CSVs.
   # Output: 4_analysed/population_rf_grid_metrics_heatmaps/<metric>/
@@ -451,7 +448,7 @@ tasks:
       # enabled: false → skip camera assignment.
       camera_angle_mode:
         enabled: false
-    depends_on: [extract_receptive_fields_clustered]
+    depends_on: [extract_receptive_fields_clustered, set_rf_camera_settings]
 
   # ============================================================
   # Legacy / Deprecated
@@ -471,4 +468,4 @@ tasks:
       cluster_groups: [kinematics_simple_mean, pressure_velocity_mean]
       projection_method: cylindrical_unwrap
       disjoint_mask_distance_mm: 8.0
-    depends_on: [touch_clustering]
+    depends_on: [touch_clustering, set_rf_camera_settings]

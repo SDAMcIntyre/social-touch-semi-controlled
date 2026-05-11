@@ -104,6 +104,7 @@ def map_receptive_fields_simple_flow(
     force_processing: bool = False,
     show_interactive: bool = False,
     projection_method: str = None,
+    save_diagnostics: bool = False,
 ) -> List[Path]:
     """
     Simple RF mapping: raw spike-position CSV + forearm heatmap per session.
@@ -120,6 +121,7 @@ def map_receptive_fields_simple_flow(
         force=force_processing,
         show_interactive=show_interactive,
         projection_method=projection_method,
+        save_diagnostics=save_diagnostics,
     )
 
 
@@ -919,11 +921,11 @@ def run_batch_analysis(
     available_tasks = [
         # --- Processing Tasks (produce files, run unattended) ---
         ("summarize_session_blocks", summarize_session_blocks_flow),
-        ("map_receptive_fields_simple", map_receptive_fields_simple_flow),
         ("touch_preparation", touch_preparation_flow),
         ("map_single_touch_rf", map_single_touch_rf_flow),
         ("touch_series_transforms", touch_series_transforms_flow),
         ("set_rf_camera_settings", set_rf_camera_settings_flow),
+        ("map_receptive_fields_simple", map_receptive_fields_simple_flow),
         ("touch_feature_extraction", touch_feature_extraction_flow),
         ("map_population_rf_grid", map_population_rf_grid_flow),
         ("reduce_population_rf_grid", reduce_population_rf_grid_flow),
@@ -1079,6 +1081,8 @@ def run_batch_analysis(
                         kwargs["max_workers"] = int(options["max_workers"])
                     if "show_interactive" in options:
                         kwargs["show_interactive"] = options["show_interactive"]
+                    if "save_diagnostics" in options:
+                        kwargs["save_diagnostics"] = bool(options["save_diagnostics"])
                     if options.get("projection_method"):
                         kwargs["projection_method"] = options["projection_method"]
                     if "disjoint_mask_distance_mm" in options:
