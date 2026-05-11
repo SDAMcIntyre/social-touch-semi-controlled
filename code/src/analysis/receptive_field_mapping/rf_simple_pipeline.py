@@ -28,7 +28,7 @@ from analysis.receptive_field_mapping.rf_data_loader import (
 )
 from analysis.receptive_field_mapping.rf_extraction_io import (
     RF_CAMERA_SETTINGS_FILENAME,
-    load_rf_camera_rotation,
+    load_rf_camera_settings,
 )
 from analysis.touch_analytics.pipeline_shared import session_id_from_path
 from utils.should_process_task import should_process_task
@@ -249,7 +249,13 @@ def run_simple_rf_mapping(
                 feature_ranges={},
             )
 
-            session_R = load_rf_camera_rotation(camera_settings_dir, session_id)
+            cameras = load_rf_camera_settings(camera_settings_dir)
+            if session_id not in cameras:
+                raise ValueError(
+                    f"[RF Simple] {session_id}: no camera settings found. "
+                    "Run 'set_rf_camera_settings' first."
+                )
+            session_cam = cameras[session_id]
             suffix = f'_{projection_method}' if projection_method else ''
             png_path = session_out / f'{session_id}_rf_simple{suffix}.png'
             try:
@@ -262,7 +268,7 @@ def run_simple_rf_mapping(
                     interactive=show_interactive,
                     projection_method=projection_method,
                     render_context=render_context,
-                    rotation_matrix=session_R,
+                    camera_settings=session_cam,
                 )
                 print(f"[RF Simple] {session_id}: heatmap saved -> {png_path.name}")
             except Exception:

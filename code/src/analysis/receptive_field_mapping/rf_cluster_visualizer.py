@@ -1,30 +1,24 @@
 """3D forearm heatmap rendering for cluster-based RF mapping.
 
-Renders the forearm point cloud (PLY) as a subtle grey background with
-spike-count contact points overlaid as a coloured heatmap. Camera is oriented
-normal to the contact surface when possible, with a sensible default fallback.
+Renders the forearm surface mesh as a coloured heatmap using PyVista offscreen
+rendering. Camera is set directly from saved camera settings, guaranteeing
+orientation fidelity with the RF Camera Settings Viewer.
 """
 
 import logging
 from dataclasses import dataclass
 from pathlib import Path
 
-import matplotlib
-import matplotlib.cm as cm
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from matplotlib.cm import ScalarMappable
-from matplotlib.colors import LogNorm, Normalize
-from matplotlib.widgets import Slider
-from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 — registers 3d projection
-from scipy.spatial import ConvexHull, KDTree, QhullError
+import pyvista as pv
+from scipy.spatial import ConvexHull, QhullError
 
 from .rf_2d_renderer import render_2d_heatmap
 from .rf_data_loader import load_forearm_vertices
 from .rf_projection import project_to_2d
-from .rf_surface_utils import apply_rotation_to_mesh, load_or_build_forearm_mesh, map_scalars_to_mesh
-from .tangent_plane_alignment import align_points
+from .rf_surface_utils import load_or_build_forearm_mesh, map_scalars_to_mesh, mesh_to_pyvista
+from .tangent_plane_alignment import camera_settings_to_rotation
 
 logger = logging.getLogger(__name__)
 
@@ -73,54 +67,24 @@ def _format_metadata_overlay(context: RFRenderContext) -> str:
     return f"Touches: {nct} / {nt} (—%)"
 
 
-def _draw_hull_3d(ax, points_3d: np.ndarray, color: str, label: str) -> None:
-    """Draw convex hull edges as 3D polylines on a 3D axes.
+def _pyvista_hull_mesh(points: np.ndarray) -> pv.PolyData | None:
+    """Build a PyVista PolyData wireframe from the convex hull of the given points.
 
-    Skips gracefully (with a log info) if fewer than 3 points are provided or
-    if scipy raises QhullError.
-
-    Parameters
-    ----------
-    ax:
-        Matplotlib 3D axes object.
-    points_3d:
-        (N, 3) array of 3D points.
-    color:
-        Line colour string.
-    label:
-        Legend label — applied to the first plotted simplex only to avoid
-        duplicate legend entries.
+    Returns None if points are too few or the hull computation fails.
     """
-    if points_3d is None or len(points_3d) < 3:
-        logger.info(
-            "_draw_hull_3d: too few points (%d) for hull '%s' — skipping.",
-            len(points_3d) if points_3d is not None else 0,
-            label,
-        )
-        return
-
+    if points is None or len(points) < 4:
+        return None
     try:
-        hull = ConvexHull(points_3d)
+        hull = ConvexHull(points)
     except QhullError:
-        logger.info("_draw_hull_3d: QhullError for hull '%s' — skipping.", label)
-        return
-
-    first = True
+        return None
+    lines = []
     for simplex in hull.simplices:
-        # Each simplex is a triangle: draw all three edges
         for i in range(len(simplex)):
-            p1 = points_3d[simplex[i]]
-            p2 = points_3d[simplex[(i + 1) % len(simplex)]]
-            kwargs = dict(color=color, linewidth=0.8, linestyle='--', alpha=0.7)
-            if first:
-                kwargs['label'] = label
-                first = False
-            ax.plot3D(
-                [p1[0], p2[0]],
-                [p1[1], p2[1]],
-                [p1[2], p2[2]],
-                **kwargs,
-            )
+            lines.extend([2, simplex[i], simplex[(i + 1) % len(simplex)]])
+    mesh = pv.PolyData(points)
+    mesh.lines = np.array(lines, dtype=np.int64)
+    return mesh
 
 
 def render_forearm_heatmap(
@@ -135,16 +99,12 @@ def render_forearm_heatmap(
     display_metric: str = "spike_count",
     render_context: 'RFRenderContext' = None,
     disjoint_mask_distance_mm: float = 8.0,
-    rotation_matrix: np.ndarray = None,
+    camera_settings: dict = None,
 ) -> None:
     """Render a 3D forearm heatmap of spike-count contact points and save as PNG.
 
-    Plots the forearm point cloud as a subtle grey scatter, then overlays
-    contact points coloured by spike_count using the YlOrRd colormap. Camera
-    is oriented normal to the contact surface when possible; falls back to
-    (30°, 45°) if PLY is unavailable or normal computation fails.
-
-    All coordinate axes are labelled in mm (Kinect SDK native units).
+    Uses PyVista offscreen rendering for the 3D path. Camera is oriented directly
+    from saved camera_settings, guaranteeing fidelity with the RF Camera Settings Viewer.
 
     Parameters
     ----------
@@ -159,14 +119,12 @@ def render_forearm_heatmap(
     cluster_label:
         Used in the figure title.
     interactive:
-        If True, display an interactive 3D window (blocking) in addition to
-        saving the PNG. Skips the Agg backend so the window is navigable.
-        If False (default), uses the Agg backend for offscreen PNG-only rendering.
+        If True, display an interactive 3D window (blocking). If False (default),
+        renders offscreen and saves PNG.
     projection_method:
         If set, projects spike points to 2D using the named method and renders
-        a 2D scatter + heatmap figure instead of the 3D plot. The output filename
-        should include the method name (caller's responsibility via output_path).
-        Pass None (default) for the original 3D rendering path.
+        a 2D scatter + heatmap figure instead of the 3D plot. Pass None (default)
+        for the 3D rendering path.
     display_metric:
         ``"spike_count"`` (default) uses raw spike counts as the colour driver.
         ``"spike_ratio"`` uses unique_touch_spike_count / neuron_cluster_touches
@@ -178,6 +136,10 @@ def render_forearm_heatmap(
     disjoint_mask_distance_mm:
         In the 2D projection path, grid cells further than this distance (mm)
         from the nearest sample point are masked to NaN. Default 8.0 mm.
+    camera_settings:
+        Dict with keys ``camera_position``, ``focal_point``, ``up_vector``,
+        ``view_angle`` as saved by the RF Camera Settings Viewer. Applied directly
+        to the PyVista camera. When None, falls back to isometric view.
     """
     _VALID_METRICS = {"spike_count", "spike_ratio"}
     if display_metric not in _VALID_METRICS:
@@ -210,6 +172,10 @@ def render_forearm_heatmap(
 
     # --- 2D projection path (early return) ---
     if projection_method is not None:
+        rotation_matrix = None
+        if camera_settings is not None:
+            rotation_matrix = camera_settings_to_rotation(camera_settings)
+
         spike_xyz = spike_counts_df[['x', 'y', 'z']].to_numpy()
         counts = spike_counts_df['spike_count'].to_numpy()
 
@@ -286,274 +252,136 @@ def render_forearm_heatmap(
         )
         return
 
-    if not interactive:
-        matplotlib.use('Agg')  # Non-interactive backend for offscreen rendering
+    # --- 3D PyVista rendering path ---
+    plotter = pv.Plotter(off_screen=not interactive, window_size=[2000, 1600])
+    plotter.set_background("black")
 
-    fig = plt.figure(figsize=(10, 8), facecolor='black')
-    ax = fig.add_subplot(111, projection='3d')
-    ax.set_facecolor('black')
-    ax.xaxis.pane.fill = False
-    ax.yaxis.pane.fill = False
-    ax.zaxis.pane.fill = False
-    ax.xaxis.pane.set_edgecolor('black')
-    ax.yaxis.pane.set_edgecolor('black')
-    ax.zaxis.pane.set_edgecolor('black')
+    spike_xyz = spike_counts_df[['x', 'y', 'z']].to_numpy()
 
-    # --- Load spike coordinates for 3D scatter ---
-    xs = spike_counts_df['x'].to_numpy()
-    ys = spike_counts_df['y'].to_numpy()
-    zs = spike_counts_df['z'].to_numpy()
+    if display_metric == "spike_ratio":
+        scalar_values = (
+            spike_counts_df['unique_touch_spike_count'].to_numpy()
+            / render_context.neuron_cluster_touches
+        ).astype(float)
+        clim = [0.0, 1.0]
+        cbar_label = "Spike ratio"
+        scalar_bar_args = {"title": cbar_label, "color": "white"}
+        use_log = False
+    else:
+        scalar_values = spike_counts_df['spike_count'].to_numpy().astype(float)
+        cbar_label = "Spike count"
+        scalar_bar_args = {"title": cbar_label, "color": "white"}
+        use_log = True
 
-    # --- Plot forearm point cloud ---
-    forearm_vertices = None
-    sc_forearm = None
-    R = None
-    sc = None
-    cbar_created = False
-
+    forearm_mesh = None
     if forearm_ply_path is None:
         logger.warning("No forearm PLY resolved for session %s", session_id)
     elif not forearm_ply_path.exists():
         logger.warning("Forearm PLY not found: %s", forearm_ply_path)
     else:
         try:
-            pts = load_forearm_vertices(forearm_ply_path)
-            if pts is not None and pts.size > 0:
-                forearm_vertices = pts
-
-                R = rotation_matrix
-                if R is not None:
-                    # Negate the view-direction row so depth sorts correctly at elev=90:
-                    # matplotlib's virtual camera at elev=90 looks along -Z, but R defines
-                    # +Z as camera→focal, so front surfaces have smaller Z and are occluded.
-                    # Negating R[2] locally makes front surfaces have larger Z = closer. Display only.
-                    R = R.copy()
-                    R[2] *= -1
-
-                forearm_mesh = load_or_build_forearm_mesh(forearm_ply_path)
-
-                if forearm_mesh is not None:
-                    if R is not None:
-                        forearm_mesh = apply_rotation_to_mesh(forearm_mesh, R)
-
-                    verts = forearm_mesh.vertices
-                    faces = forearm_mesh.faces
-
-                    ax.plot_trisurf(
-                        verts[:, 0], verts[:, 1], verts[:, 2],
-                        triangles=faces,
-                        color='lightgrey',
-                        shade=True,
-                        edgecolor='none',
-                        alpha=1.0,
-                    )
-
-                    spike_xyz = spike_counts_df[['x', 'y', 'z']].to_numpy()
-                    counts = spike_counts_df['spike_count'].to_numpy()
-                    if R is not None:
-                        spike_xyz = align_points(spike_xyz, R)
-
-                    per_vertex = map_scalars_to_mesh(forearm_mesh, spike_xyz, counts.astype(float))
-
-                    has_any = np.any(~np.isnan(per_vertex))
-                    if has_any:
-                        # Determine colour driver
-                        if display_metric == "spike_ratio":
-                            ratio_vals = (
-                                spike_counts_df['unique_touch_spike_count'].to_numpy()
-                                / render_context.neuron_cluster_touches
-                            )
-                            per_vertex_color = map_scalars_to_mesh(
-                                forearm_mesh, spike_xyz, ratio_vals.astype(float)
-                            )
-                            vmin_c = 0.0
-                            vmax_c = 1.0
-                            norm = None
-                            cbar_label = "Spike ratio"
-                        else:
-                            per_vertex_color = per_vertex
-                            vmin_c = max(1, float(np.nanmin(per_vertex[~np.isnan(per_vertex)])))
-                            vmax_c = float(np.nanmax(per_vertex[~np.isnan(per_vertex)]))
-                            norm = LogNorm(vmin=vmin_c, vmax=vmax_c) if vmin_c < vmax_c else None
-                            cbar_label = "Spike count"
-
-                        cmap_obj = cm.get_cmap('RdYlBu_r')
-                        if norm is not None:
-                            normed = norm(np.nan_to_num(per_vertex_color, nan=vmin_c))
-                        else:
-                            if vmax_c > vmin_c:
-                                normed = (np.nan_to_num(per_vertex_color, nan=vmin_c) - vmin_c) / (vmax_c - vmin_c)
-                            else:
-                                normed = np.zeros_like(per_vertex_color)
-                        vertex_rgba = cmap_obj(normed)
-                        vertex_rgba[np.isnan(per_vertex_color), 3] = 0.0
-
-                        # plot_trisurf cannot accept facecolors kwarg directly —
-                        # it passes it internally and would get duplicates. Set
-                        # per-face colors on the returned Poly3DCollection instead.
-                        face_rgba = vertex_rgba[faces].mean(axis=1)
-                        nan_mask = np.isnan(per_vertex_color)
-                        face_rgba[nan_mask[faces].all(axis=1), 3] = 0.0
-
-                        surf = ax.plot_trisurf(
-                            verts[:, 0], verts[:, 1], verts[:, 2],
-                            triangles=faces,
-                            shade=False,
-                            edgecolor='none',
-                        )
-                        surf.set_facecolor(face_rgba)
-
-                        sm_norm = norm if norm is not None else Normalize(vmin=vmin_c, vmax=vmax_c)
-                        sm = ScalarMappable(cmap='RdYlBu_r', norm=sm_norm)
-                        sm.set_array([])
-                        cbar = plt.colorbar(sm, ax=ax, label=cbar_label, shrink=0.6, pad=0.1)
-                        cbar.ax.yaxis.set_tick_params(color='white')
-                        cbar.ax.yaxis.label.set_color('white')
-                        plt.setp(cbar.ax.yaxis.get_ticklabels(), color='white')
-                        cbar_created = True
-
-                else:
-                    # Scatter fallback (forearm mesh build failed; PLY colors not available via .npy cache)
-                    stride = max(1, len(pts) // 10000)
-                    forearm_sub = pts[::stride]
-                    spike_xyz = spike_counts_df[['x', 'y', 'z']].to_numpy()
-                    if len(spike_xyz) > 0:
-                        tree = KDTree(forearm_sub[:, :3])
-                        nearby = tree.query_ball_point(spike_xyz, r=2.0)
-                        exclude = set().union(*nearby)
-                        mask = np.ones(len(forearm_sub), dtype=bool)
-                        mask[list(exclude)] = False
-                        forearm_sub = forearm_sub[mask]
-
-                    if R is not None:
-                        forearm_sub = align_points(forearm_sub, R)
-
-                    sc_forearm = ax.scatter(
-                        forearm_sub[:, 0], forearm_sub[:, 1], forearm_sub[:, 2],
-                        c='lightgrey', s=20, alpha=1.0, rasterized=True,
-                        linewidths=0, depthshade=False,
-                    )
-
+            forearm_mesh = load_or_build_forearm_mesh(forearm_ply_path)
         except Exception:
-            logger.warning("Could not load forearm PLY: %s", forearm_ply_path, exc_info=True)
+            logger.warning("Could not load forearm mesh: %s", forearm_ply_path, exc_info=True)
 
-    # --- Overlay contact points coloured by spike_count (scatter fallback path only) ---
-    counts = spike_counts_df['spike_count'].to_numpy()
+    if forearm_mesh is not None:
+        mesh_pv = mesh_to_pyvista(forearm_mesh)
+        per_vertex = map_scalars_to_mesh(forearm_mesh, spike_xyz, scalar_values)
 
-    if not cbar_created:
-        if R is not None:
-            spike_pts_rot = align_points(np.stack([xs, ys, zs], axis=1), R)
-            plot_xs, plot_ys, plot_zs = spike_pts_rot[:, 0], spike_pts_rot[:, 1], spike_pts_rot[:, 2]
+        valid = per_vertex[~np.isnan(per_vertex)]
+        if use_log and len(valid) > 0:
+            vmin = max(1.0, float(np.nanmin(valid)))
+            vmax = float(np.nanmax(valid))
+            if vmin < vmax:
+                per_vertex_plot = np.where(np.isnan(per_vertex), np.nan, np.log1p(per_vertex))
+                clim = [np.log1p(vmin), np.log1p(vmax)]
+            else:
+                per_vertex_plot = per_vertex
+                clim = [vmin, vmax]
         else:
-            plot_xs, plot_ys, plot_zs = xs, ys, zs
+            per_vertex_plot = per_vertex
 
-        if display_metric == "spike_ratio":
-            color_values = (
-                spike_counts_df['unique_touch_spike_count'].to_numpy()
-                / render_context.neuron_cluster_touches
-            )
-            vmin_s = 0.0
-            vmax_s = 1.0
-            norm = None
-            cbar_label = "Spike ratio"
-        else:
-            color_values = counts
-            vmin_s = max(1, counts.min())
-            vmax_s = counts.max()
-            norm = LogNorm(vmin=vmin_s, vmax=vmax_s) if vmin_s < vmax_s else None
-            cbar_label = "Spike count"
-
-        sc = ax.scatter(
-            plot_xs, plot_ys, plot_zs,
-            c=color_values, cmap='RdYlBu_r', s=20, alpha=0.9,
-            norm=norm, depthshade=False,
-            vmin=vmin_s if norm is None else None,
-            vmax=vmax_s if norm is None else None,
+        plotter.add_mesh(
+            mesh_pv,
+            scalars=per_vertex_plot,
+            cmap="RdYlBu_r",
+            nan_color="lightgrey",
+            smooth_shading=True,
+            clim=clim,
+            scalar_bar_args=scalar_bar_args,
         )
-        cbar = plt.colorbar(sc, ax=ax, label=cbar_label, shrink=0.6, pad=0.1)
-        cbar.ax.yaxis.set_tick_params(color='white')
-        cbar.ax.yaxis.label.set_color('white')
-        plt.setp(cbar.ax.yaxis.get_ticklabels(), color='white')
+    else:
+        # Point cloud fallback when mesh build fails
+        forearm_vertices = None
+        if forearm_ply_path is not None and forearm_ply_path.exists():
+            try:
+                forearm_vertices = load_forearm_vertices(forearm_ply_path)
+            except Exception:
+                logger.warning("Could not load forearm PLY vertices: %s", forearm_ply_path, exc_info=True)
 
-    # --- Draw convex hull perimeters (3D path) ---
+        if forearm_vertices is not None:
+            cloud = pv.PolyData(forearm_vertices)
+            plotter.add_mesh(cloud, color="lightgrey", point_size=3, render_points_as_spheres=False, name="forearm")
+
+        if use_log and len(scalar_values) > 0:
+            vmin = max(1.0, float(np.nanmin(scalar_values)))
+            vmax = float(np.nanmax(scalar_values))
+            if vmin < vmax:
+                scalar_vals_plot = np.log1p(scalar_values)
+                clim = [np.log1p(vmin), np.log1p(vmax)]
+            else:
+                scalar_vals_plot = scalar_values
+                clim = [vmin, vmax]
+        else:
+            scalar_vals_plot = scalar_values
+
+        contact_cloud = pv.PolyData(spike_xyz)
+        contact_cloud["scalars"] = scalar_vals_plot
+        plotter.add_mesh(
+            contact_cloud,
+            scalars="scalars",
+            cmap="RdYlBu_r",
+            point_size=8,
+            clim=clim,
+            scalar_bar_args=scalar_bar_args,
+        )
+
+    # --- Convex hull wireframes ---
     if render_context is not None:
-        if R is not None:
-            all_xyz_rot = (
-                align_points(render_context.neuron_contacts_xyz, R)
-                if len(render_context.neuron_contacts_xyz) > 0
-                else render_context.neuron_contacts_xyz
-            )
-            cluster_xyz_rot = (
-                align_points(render_context.neuron_cluster_contacts_xyz, R)
-                if len(render_context.neuron_cluster_contacts_xyz) > 0
-                else render_context.neuron_cluster_contacts_xyz
-            )
-        else:
-            all_xyz_rot = render_context.neuron_contacts_xyz
-            cluster_xyz_rot = render_context.neuron_cluster_contacts_xyz
+        for pts, color in [
+            (render_context.neuron_contacts_xyz, '#00aaff'),
+            (render_context.neuron_cluster_contacts_xyz, '#ffaa00'),
+        ]:
+            hull_mesh = _pyvista_hull_mesh(pts)
+            if hull_mesh is not None:
+                plotter.add_mesh(hull_mesh, color=color, style="wireframe", line_width=1.5)
 
-        _draw_hull_3d(ax, all_xyz_rot, '#00aaff', 'neuron (all clusters)')
-        _draw_hull_3d(ax, cluster_xyz_rot, '#ffaa00', 'neuron ∩ cluster')
-
+    # --- Text overlays ---
+    if render_context is not None:
         metadata_text = _format_metadata_overlay(render_context)
-        ax.text2D(
-            0.02, 0.02,
-            metadata_text,
-            transform=ax.transAxes,
-            va='bottom',
-            ha='left',
-            color='#aaaaaa',
-            fontsize=7,
-            fontfamily='monospace',
-        )
+        plotter.add_text(metadata_text, position="lower_left", font_size=10, color="#aaaaaa")
 
-    # --- Camera orientation ---
-    ax.view_init(elev=90, azim=0)
-
-    # --- Labels and title ---
-    ax.set_xlabel('X (mm)', color='white')
-    ax.set_ylabel('Y (mm)', color='white')
-    ax.set_zlabel('Z (mm)', color='white')
-    ax.set_title(
-        f'RF Heatmap — {session_id} | cluster {cluster_label}',
-        fontsize=11, color='white',
-    )
+    title_text = f"RF Heatmap — {session_id} | cluster {cluster_label}"
     if cluster_description:
-        fig.suptitle(cluster_description, color='#aaaaaa', fontsize=9, y=1.02, style='italic')
-    ax.tick_params(axis='x', colors='white')
-    ax.tick_params(axis='y', colors='white')
-    ax.tick_params(axis='z', colors='white')
+        title_text = f"{title_text}\n{cluster_description}"
+    plotter.add_text(title_text, position="upper_left", font_size=11, color="white")
 
-    # --- Point-size slider (interactive mode only) ---
+    # --- Camera ---
+    if camera_settings is not None:
+        plotter.camera.position = camera_settings["camera_position"]
+        plotter.camera.focal_point = camera_settings["focal_point"]
+        plotter.camera.up = camera_settings["up_vector"]
+        plotter.camera.view_angle = camera_settings["view_angle"]
+        plotter.renderer.ResetCameraClippingRange()
+    else:
+        plotter.view_isometric()
+        plotter.reset_camera()
+
+    # --- Output ---
     if interactive:
-        fig.subplots_adjust(bottom=0.15)
-        ax_slider = fig.add_axes([0.2, 0.04, 0.6, 0.03], facecolor='#222222')
-        slider = Slider(
-            ax=ax_slider,
-            label='Point size',
-            valmin=1,
-            valmax=100,
-            valinit=20,
-            color='#555555',
-        )
-        slider.label.set_color('white')
-        slider.valtext.set_color('white')
-
-        def _on_size_change(val: float) -> None:
-            s = [val]
-            if sc_forearm is not None:
-                sc_forearm.set_sizes(s)
-            if sc is not None:
-                sc.set_sizes(s)
-            fig.canvas.draw_idle()
-
-        slider.on_changed(_on_size_change)
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(str(output_path), dpi=200, bbox_inches='tight', facecolor=fig.get_facecolor())
-    logger.info("Saved heatmap: %s", output_path)
-
-    if interactive:
-        plt.show()  # Blocking — waits for user to close the window
-
-    plt.close(fig)
+        plotter.show()
+    else:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        plotter.screenshot(str(output_path))
+        logger.info("Saved heatmap: %s", output_path)
+    plotter.close()
