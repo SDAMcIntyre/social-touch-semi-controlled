@@ -45,3 +45,9 @@ tasks:
     enabled: true
     description: "Manually view the somatosensory assessment results."
     depends_on: []
+
+  view_hand_model_overlay:
+    enabled: false
+    description: "Open a GUI to select a session/block and export an MP4 with the
+      MANO hand mesh overlaid on the RGB video."
+    depends_on: []

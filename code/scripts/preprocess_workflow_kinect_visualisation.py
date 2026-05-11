@@ -277,6 +277,17 @@ if __name__ == "__main__":
         print(f"❌ Error: '{dag_config_path}' not found.")
         exit(1)
 
+    if main_dag_handler.can_run('view_hand_model_overlay'):
+        _overlay_configs = []
+        for _block_file in block_files:
+            _config_data = KinectConfigFileHandler.load_and_resolve_config(_block_file)
+            _overlay_configs.append(KinectConfig(config_data=_config_data, database_path=project_data_root))
+        from preprocessing.motion_analysis.hand_tracking.gui.handmesh_overlay_exporter import (
+            launch_handmesh_overlay_exporter,
+        )
+        launch_handmesh_overlay_exporter(_overlay_configs)
+        main_dag_handler.mark_completed('view_hand_model_overlay')
+
     print("🚀 Launching visualization batch processing SEQUENTIALLY.")
     run_batch_sequentially(
         block_files=block_files,
