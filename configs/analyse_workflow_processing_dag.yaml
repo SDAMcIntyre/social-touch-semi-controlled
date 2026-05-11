@@ -5,7 +5,11 @@
 parameters:
   # List of directories containing Kinect session config files to scan.
   # Paths are relative to configs/kinect_configs/.
-  kinect_configs: valid_configs_ST14-04
+  kinect_configs: [valid_configs_ST13-01, valid_configs_ST13-02, 
+      valid_configs_ST13-03, valid_configs_ST14-01, valid_configs_ST14-02, 
+      valid_configs_ST14-04, valid_configs_ST15-01, valid_configs_ST16-02, 
+      valid_configs_ST16-03, valid_configs_ST16-04, valid_configs_ST16-05, 
+      valid_configs_ST18-01, valid_configs_ST18-04]
 
 tasks:
   # ============================================================
@@ -104,7 +108,7 @@ tasks:
       force_processing: true
       # Debugging toggle: when true, opens an interactive matplotlib window mid-run.
       # Must be false for unattended / batch processing.
-      show_interactive: true
+      show_interactive: false
       projection_method: cylindrical_unwrap
       save_diagnostics: true
     depends_on: [set_rf_camera_settings]
@@ -113,7 +117,7 @@ tasks:
   # Output: 4_analysed/touch_features/<feature>/<session>_touch_summary.csv
   touch_feature_extraction:
     category: processing
-    enabled: false
+    enabled: true
     options:
       force_processing: false
       # Each key is an aggregation family. StatisticalExtractor auto-discovers all numeric
@@ -150,21 +154,24 @@ tasks:
     enabled: true
     options:
       force_processing: false
-      neuron_mode: iff
-      per_gesture_type: true
-      vertex_threshold_ratio: 0.25
-      compute_baseline: true
-      features:
-        hand_velocity_amplitude_mean_during_iff:
-          min: 0
-          max: 500
-          step: 5
-          span: 10
-        pressure_mean_during_iff:
-          min: 0.002
-          max: 0.22
-          step: 0.02
-          span: 0.04
+      grid_groups:
+        velocity_pressure_2d:
+          enabled: true
+          neuron_mode: iff
+          per_gesture_type: true
+          vertex_threshold_ratio: 0.25
+          compute_baseline: true
+          features:
+            hand_velocity_amplitude_mean_during_iff:
+              min: 0
+              max: 500
+              step: 5
+              span: 10
+            pressure_mean_during_iff:
+              min: 0.002
+              max: 0.22
+              step: 0.02
+              span: 0.04
     depends_on: [map_single_touch_rf, touch_feature_extraction]
 
   # Reduces per-gesture-type population RF grid NPZ files to scalar metric CSVs.
@@ -205,6 +212,28 @@ tasks:
       - threshold_area_mm2
       - convex_hull_area_mm2
     depends_on: [reduce_population_rf_grid]
+
+  # Cross-session comparison heatmap: 1D population RF grid + per-gesture heatmap PNGs.
+  # Renders one PNG per gesture type with sessions on Y-axis, velocity bins on X-axis,
+  # and color encoding a configurable RF metric (default: mean_iff).
+  # Output: 4_analysed/session_comparison/session_comparison_heatmaps/<metric>/
+  visualize_session_comparison:
+    category: processing
+    enabled: true
+    options:
+      force_processing: false
+      neuron_mode: iff
+      vertex_threshold_ratio: 0.25
+      metric_name: mean_iff
+      projection_method: tangent_plane
+      features:
+        hand_velocity_amplitude_mean_during_iff:
+          min: 0
+          max: 500
+          step: 25
+          span: 50
+    depends_on: [map_single_touch_rf, touch_feature_extraction, 
+        set_rf_camera_settings]
 
   # Stages 3–5 (Reduction + Clustering + Evaluation): Global clustering on pooled feature CSVs.
   # Each cluster_group defines which data types / aggregations to use and its own clustering_methods.
