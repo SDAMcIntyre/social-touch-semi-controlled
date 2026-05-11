@@ -322,6 +322,13 @@ def render_forearm_heatmap(
                 forearm_vertices = pts
 
                 R = rotation_matrix
+                if R is not None:
+                    # Negate the view-direction row so depth sorts correctly at elev=90:
+                    # matplotlib's virtual camera at elev=90 looks along -Z, but R defines
+                    # +Z as camera→focal, so front surfaces have smaller Z and are occluded.
+                    # Negating R[2] locally makes front surfaces have larger Z = closer. Display only.
+                    R = R.copy()
+                    R[2] *= -1
 
                 forearm_mesh = load_or_build_forearm_mesh(forearm_ply_path)
 
@@ -501,7 +508,7 @@ def render_forearm_heatmap(
         )
 
     # --- Camera orientation ---
-    ax.view_init(elev=90, azim=-90)
+    ax.view_init(elev=90, azim=0)
 
     # --- Labels and title ---
     ax.set_xlabel('X (mm)', color='white')
