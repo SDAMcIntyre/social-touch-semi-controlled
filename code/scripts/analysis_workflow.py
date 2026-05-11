@@ -56,6 +56,7 @@ from analysis.receptive_field_mapping import (
     launch_rf_camera_settings_viewer,
 )
 from analysis.receptive_field_mapping.rf_data_loader import resolve_forearm_ply
+from analysis.receptive_field_mapping.rf_extraction_io import load_rf_camera_settings
 from analysis.touch_analytics.pipeline_shared import session_id_from_path
 from analysis.touch_analytics.gui import launch_preparation_viewer
 
@@ -799,12 +800,32 @@ def set_rf_camera_settings_flow(
     Allows the researcher to interactively set the camera orientation per
     session and save it. Settings are consumed by all downstream RF rendering
     and projection tasks.
-    ``force_processing`` is accepted for interface consistency but is a no-op:
-    the GUI is stateless and always launches fresh.
+
+    Skipped when all sessions already have saved camera settings and
+    ``force_processing`` is False.
     """
-    print(f"[Batch Analysis] Launching RF Camera Settings for {len(input_items)} item(s)...")
     if not input_items:
         return
+
+    database_path = input_items[0][1]
+    camera_settings_dir = database_path / '4_analysed' / 'rf_camera_settings'
+    session_ids = [session_id_from_path(csv_path) for csv_path, _ in input_items]
+
+    if not force_processing:
+        existing = load_rf_camera_settings(camera_settings_dir)
+        missing = [sid for sid in session_ids if sid not in existing]
+        if not missing:
+            print(
+                f"[RF Camera Settings] All {len(session_ids)} session(s) already have "
+                "saved camera settings — skipping. Set force_processing=true to re-open."
+            )
+            return
+        print(
+            f"[RF Camera Settings] {len(missing)}/{len(session_ids)} session(s) missing "
+            "camera settings — launching viewer."
+        )
+    else:
+        print(f"[RF Camera Settings] Launching viewer for {len(session_ids)} session(s) (force).")
 
     launch_rf_camera_settings_viewer(input_items)
 
@@ -860,7 +881,7 @@ def collect_unique_session_dirs(
 
     return session_dir_map
 
-_PROCESSING_CATEGORIES: Set[str] = {"processing"}
+_PROCESSING_CATEGORIES: Set[str] = {"processing", "viewer_required"}
 _VIEWER_CATEGORIES: Set[str] = {"viewer", "viewer_support"}
 
 
@@ -902,6 +923,7 @@ def run_batch_analysis(
         ("touch_preparation", touch_preparation_flow),
         ("map_single_touch_rf", map_single_touch_rf_flow),
         ("touch_series_transforms", touch_series_transforms_flow),
+        ("set_rf_camera_settings", set_rf_camera_settings_flow),
         ("touch_feature_extraction", touch_feature_extraction_flow),
         ("map_population_rf_grid", map_population_rf_grid_flow),
         ("reduce_population_rf_grid", reduce_population_rf_grid_flow),
@@ -916,7 +938,6 @@ def run_batch_analysis(
         # --- Viewer Support (utility for viewer tasks) ---
         ("precompute_explorer_caches", precompute_explorer_caches_flow),
         # --- Viewer Tasks (launch interactive PyQt5 GUIs) ---
-        ("set_rf_camera_settings", set_rf_camera_settings_flow),
         ("explore_preparation", explore_preparation_flow),
         ("explore_rf_feature_space", explore_rf_feature_space_flow),
         ("explore_touch_playback", explore_touch_playback_flow),

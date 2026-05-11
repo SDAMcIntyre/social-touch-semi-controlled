@@ -250,6 +250,7 @@ def save_visualization_summary(
     projection_method: Optional[str],
     disjoint_mask_distance_mm: float,
     extraction_summary_mtime: float,
+    camera_settings_mtime: Optional[float] = None,
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     with open(output_dir / 'rf_visualization_summary.json', 'w') as f:
@@ -258,6 +259,7 @@ def save_visualization_summary(
                 'projection_method': projection_method,
                 'disjoint_mask_distance_mm': disjoint_mask_distance_mm,
                 'extraction_summary_mtime': extraction_summary_mtime,
+                'camera_settings_mtime': camera_settings_mtime,
             },
             f,
             indent=2,
@@ -282,6 +284,7 @@ def visualization_is_up_to_date(
     projection_method: Optional[str],
     disjoint_mask_distance_mm: float,
     force: bool = False,
+    camera_settings_path: Optional[Path] = None,
 ) -> bool:
     """Return True if visualization artifacts match the given params and are not stale."""
     if force:
@@ -297,6 +300,9 @@ def visualization_is_up_to_date(
         vis.get('projection_method') == projection_method
         and vis.get('disjoint_mask_distance_mm') == disjoint_mask_distance_mm
         and vis.get('extraction_summary_mtime') == extraction_path.stat().st_mtime
+        and vis.get('camera_settings_mtime') == (
+            camera_settings_path.stat().st_mtime if (camera_settings_path is not None and camera_settings_path.exists()) else None
+        )
     )
 
 

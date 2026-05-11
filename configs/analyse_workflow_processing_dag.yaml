@@ -100,6 +100,18 @@ tasks:
           drop_used_inputs: false
     depends_on: [touch_preparation]
 
+  # RF Camera Settings: interactively set camera orientation per session.
+  # Required before running visualize_receptive_fields_clustered,
+  # reduce_population_rf_grid, and any other downstream RF projection task.
+  # Saves to 4_analysed/rf_camera_settings/rf_camera_settings.json.
+  # Output: interactive GUI + rf_camera_settings.json
+  set_rf_camera_settings:
+    category: viewer_required
+    enabled: true
+    options:
+      force_processing: false
+    depends_on: [touch_series_transforms]
+
   # Stage 2b (Feature Extraction): Per-session feature extraction. Each enabled feature extracts to its own folder.
   # Output: 4_analysed/touch_features/<feature>/<session>_touch_summary.csv
   touch_feature_extraction:
@@ -174,7 +186,7 @@ tasks:
     category: processing
     enabled: true
     options:
-      force_processing: true
+      force_processing: false
       extracted_features:
       - touch_count
       - max_iff

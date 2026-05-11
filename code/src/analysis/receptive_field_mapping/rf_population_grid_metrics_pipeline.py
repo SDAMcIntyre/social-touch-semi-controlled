@@ -8,7 +8,10 @@ import pandas as pd
 
 from analysis.receptive_field_mapping.rf_baseline_deviation import compute_baseline_deviation
 from analysis.receptive_field_mapping.rf_data_loader import load_forearm_vertices
-from analysis.receptive_field_mapping.rf_extraction_io import load_rf_camera_rotation
+from analysis.receptive_field_mapping.rf_extraction_io import (
+    RF_CAMERA_SETTINGS_FILENAME,
+    load_rf_camera_rotation,
+)
 from analysis.receptive_field_mapping.rf_grid_cell_metrics import compute_grid_cell_metrics
 from utils.should_process_task import should_process_task
 
@@ -214,8 +217,12 @@ def run_population_rf_grid_metrics(
         output_session_dir = output_dir / "population_rf_grid_metrics" / session_id
         sentinel = output_session_dir / "population_rf_grid_metrics_summary.json"
 
+        camera_settings_dir = output_dir / 'rf_camera_settings'
+        camera_settings_json = camera_settings_dir / RF_CAMERA_SETTINGS_FILENAME
+        extra_inputs = [camera_settings_json] if camera_settings_json.exists() else []
+
         if not should_process_task(
-            input_paths=npz_paths,
+            input_paths=list(npz_paths) + extra_inputs,
             output_paths=[sentinel],
             force=force,
         ):

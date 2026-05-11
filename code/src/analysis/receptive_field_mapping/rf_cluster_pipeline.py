@@ -24,6 +24,7 @@ from analysis.receptive_field_mapping.rf_data_loader import (
     resolve_forearm_ply,
 )
 from analysis.receptive_field_mapping.rf_extraction_io import (
+    RF_CAMERA_SETTINGS_FILENAME,
     description_summary_line,
     load_cluster_session_data,
     load_extraction_summary,
@@ -1162,7 +1163,8 @@ def run_cluster_rf_visualization(
                 )
 
             if visualization_is_up_to_date(
-                base_output, projection_method, disjoint_mask_distance_mm, force=force
+                base_output, projection_method, disjoint_mask_distance_mm, force=force,
+                camera_settings_path=camera_settings_dir / RF_CAMERA_SETTINGS_FILENAME,
             ):
                 print(f"  Visualization up-to-date, skipping.")
                 for cluster_dir in sorted(base_output.glob('cluster_*')):
@@ -1370,8 +1372,10 @@ def run_cluster_rf_visualization(
                 metrics_summary_csv = base_output / 'rf_metrics_summary.csv'
                 pd.DataFrame(metrics_rows).to_csv(metrics_summary_csv, index=False)
 
+            camera_settings_json = camera_settings_dir / RF_CAMERA_SETTINGS_FILENAME
             save_visualization_summary(
-                base_output, projection_method, disjoint_mask_distance_mm, extraction_mtime
+                base_output, projection_method, disjoint_mask_distance_mm, extraction_mtime,
+                camera_settings_mtime=camera_settings_json.stat().st_mtime if camera_settings_json.exists() else None,
             )
 
             print(f"[RF Visualization] {combo_name}/{clusterer_name}{_type_label}: done.")

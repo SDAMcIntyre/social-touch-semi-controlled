@@ -14,7 +14,7 @@ import pandas as pd
 from scipy.spatial import cKDTree
 
 from .rf_data_loader import load_forearm_vertices
-from .tangent_plane_alignment import compute_tangent_plane_rotation
+from .rf_extraction_io import RF_CAMERA_SETTINGS_FILENAME, load_rf_camera_rotation
 
 logger = logging.getLogger(__name__)
 
@@ -100,12 +100,13 @@ def _save_explorer_cache(series_csv_path: Path, data: ExplorerData) -> None:
 def _load_explorer_cache(
     series_csv_path: Path,
     forearm_ply_path: Path,
+    camera_settings_json: Path,
 ) -> Optional[ExplorerData]:
     """Load the .npz sidecar cache for *series_csv_path* when it is fresh.
 
     Returns an ``ExplorerData`` on a valid cache hit, or ``None`` when:
     - the cache file does not exist,
-    - the cache is older than either source file (mtime check),
+    - the cache is older than any source file (mtime check),
     - the loaded arrays have unexpected shapes (raises ``ValueError``).
 
     A ``ValueError`` on shape mismatch propagates to the caller so that corrupt
@@ -119,8 +120,9 @@ def _load_explorer_cache(
     cache_mtime = cache_path.stat().st_mtime
     csv_mtime = series_csv_path.stat().st_mtime
     ply_mtime = forearm_ply_path.stat().st_mtime
+    cam_mtime = camera_settings_json.stat().st_mtime if camera_settings_json.exists() else 0.0
 
-    if cache_mtime < max(csv_mtime, ply_mtime):
+    if cache_mtime < max(csv_mtime, ply_mtime, cam_mtime):
         logger.debug(
             "_load_explorer_cache: stale cache for %s — recomputing", series_csv_path.name
         )
@@ -213,8 +215,12 @@ def load_explorer_data(
     series_csv_path: Path,
     forearm_ply_path: Path,
 ) -> ExplorerData:
+    session_id = series_csv_path.stem.removesuffix("_series_augmented")
+    camera_settings_dir = series_csv_path.parent.parent / "rf_camera_settings"
+    camera_settings_json = camera_settings_dir / RF_CAMERA_SETTINGS_FILENAME
+
     t_session = time.perf_counter()
-    cached = _load_explorer_cache(series_csv_path, forearm_ply_path)
+    cached = _load_explorer_cache(series_csv_path, forearm_ply_path, camera_settings_json)
     if cached is not None:
         print(f"{_ts()} | [RF Explorer] [{series_csv_path.stem}]: cache hit ({time.perf_counter() - t_session:.2f}s)", flush=True)
         return cached
@@ -328,13 +334,7 @@ def load_explorer_data(
     print(f"{_ts()} | [RF Explorer] [{tag}]   forearm mesh: {time.perf_counter() - t:.1f}s  verts={len(vertices)}", flush=True)
 
     t = time.perf_counter()
-    contact_centroid = all_pts.mean(axis=0)
-    rotation = compute_tangent_plane_rotation(vertices, contact_centroid)
-    if rotation is None:
-        raise ValueError(
-            f"load_explorer_data: compute_tangent_plane_rotation returned None "
-            f"for {forearm_ply_path}"
-        )
+    rotation = load_rf_camera_rotation(camera_settings_dir, session_id)
     rotated_vertices = (rotation @ vertices.T).T
     rotated_contacts = (rotation @ all_pts.T).T
     print(f"{_ts()} | [RF Explorer] [{tag}]   rotation: {time.perf_counter() - t:.1f}s", flush=True)

@@ -29,18 +29,6 @@ tasks:
   # Viewer Tasks — launch interactive PyQt5 GUIs
   # ============================================================
 
-  # RF Camera Settings: interactively set camera orientation per session.
-  # Required before running any downstream RF rendering or projection tasks
-  # (visualize_receptive_fields_clustered, reduce_population_rf_grid, etc.).
-  # Saves camera settings to 4_analysed/rf_camera_settings/rf_camera_settings.json.
-  # Output: interactive GUI + rf_camera_settings.json
-  set_rf_camera_settings:
-    category: viewer
-    enabled: false
-    options:
-      force_processing: false
-    depends_on: []
-
   # Touch Preparation Viewer: visual inspection of preparation pipeline output.
   # Displays per-touch time-series (contact_depth, area, location, neural data)
   # and a 3D forearm view with contact centroid per frame.
