@@ -1,9 +1,5 @@
 # Plan: Lock Hand-Mesh Scale to Session Median
 
-> **Superseded** by `docs/development/plans/pending/stabilise-handmesh-pose.md` (2026-05-12).
-> Both scale locking and rotation smoothing are merged into a single post-generation
-> pipeline step to ensure translation is always re-derived from the anchor constraint.
-
 **Created:** 2026-05-12 22:00
 **Approved:** —
 **Completed:** —
@@ -13,6 +9,8 @@
 **Branch:** `fix/lock-handmesh-scale`
 
 ---
+
+> **Superseded** by `docs/development/plans/active/stabilise-handmesh-pose.md` (2026-05-12). This plan is no longer active.
 
 ## Overview
 

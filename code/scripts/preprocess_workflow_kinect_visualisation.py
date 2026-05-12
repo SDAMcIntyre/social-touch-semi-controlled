@@ -31,6 +31,10 @@ from _3_preprocessing._4_somatosensory_quantification import (
     build_somatosensory_scene_factory,
 )
 
+from preprocessing.motion_analysis.hand_tracking.handmesh_overlay_renderer import (
+    resolve_hand_motion_npz_path,
+)
+
 
 # --- Sub-Flows (Visualization Tasks) ---
 
@@ -150,7 +154,8 @@ def build_somatosensory_factory(
         return None
 
     xyz_csv_path = sticker_dir / (rgb_video_path.stem + "_handstickers_xyz_tracked.csv")
-    hand_motion_path = kinematics_dir / (rgb_video_path.stem + "_handmodel_motion.npz")
+    raw_motion_npz_path = kinematics_dir / (rgb_video_path.stem + "_handmodel_motion.npz")
+    hand_motion_path = resolve_hand_motion_npz_path(raw_motion_npz_path)
 
     return build_somatosensory_scene_factory(
         xyz_csv_path=xyz_csv_path,

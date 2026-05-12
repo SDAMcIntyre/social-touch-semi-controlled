@@ -11,6 +11,27 @@ from preprocessing.common import VideoMP4Manager, ColorFormat
 logger = logging.getLogger(__name__)
 
 
+def resolve_hand_motion_npz_path(raw_npz_path: Path) -> Path:
+    """Return the best available hand-motion NPZ for *raw_npz_path*.
+
+    Checks for the stabilised variant (*_handmodel_motion_stabilised.npz)
+    first; falls back to the raw NPZ (*_handmodel_motion.npz).  Raises
+    FileNotFoundError if neither exists.
+    """
+    stabilised_path = raw_npz_path.with_name(
+        raw_npz_path.name.replace("_handmodel_motion.npz", "_handmodel_motion_stabilised.npz")
+    )
+    if stabilised_path.exists():
+        return stabilised_path
+    if raw_npz_path.exists():
+        return raw_npz_path
+    raise FileNotFoundError(
+        f"No hand-motion NPZ found. Checked:\n"
+        f"  stabilised: {stabilised_path}\n"
+        f"  raw:        {raw_npz_path}"
+    )
+
+
 class HandTrackingDataManager:
     def __init__(self, pkl_path: Path) -> None:
         self.pkl_path = pkl_path

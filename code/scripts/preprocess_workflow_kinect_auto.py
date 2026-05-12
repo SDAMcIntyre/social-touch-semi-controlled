@@ -51,6 +51,7 @@ from _3_preprocessing._2_hand_tracking import (
     is_hand_model_valid,
     generate_3d_hand_in_motion
 )
+from _3_preprocessing._2_hand_tracking.stabilise_hand_motion import stabilise_hand_motion
 
 from _3_preprocessing._3_forearm_extraction import (
     is_forearm_valid,
@@ -331,6 +332,29 @@ def generate_3d_hand_in_motion_flow(
 
     return out_motion_npz_path, metadata_path
 
+@flow(name="7c. Stabilise Hand Motion")
+def stabilise_hand_motion_flow(
+    hand_motion_npz_path: Path,
+    output_dir: Path,
+    *,
+    filter_method: str = "butterworth",
+    filter_params: dict | None = None,
+    force_processing: bool = False,
+) -> Path:
+    print(f"[{output_dir.name}] Stabilising hand-mesh pose stream...")
+    name_baseline = hand_motion_npz_path.stem.replace("_motion", "")
+    out_stabilised_npz_path = output_dir / (name_baseline + "_motion_stabilised.npz")
+
+    stabilise_hand_motion(
+        input_npz_path=hand_motion_npz_path,
+        output_npz_path=out_stabilised_npz_path,
+        filter_method=filter_method,
+        filter_params=filter_params,
+        force_processing=force_processing,
+    )
+
+    return out_stabilised_npz_path
+
 @flow(name="8. Generate Somatosensory Characteristics")
 def compute_somatosensory_characteristics_flow(
     hand_motion_npz_path: Path,
@@ -528,11 +552,19 @@ def run_single_session_pipeline(
                             "output_dir": config.video_processed_output_dir / "kinematics_analysis"}, 
          "outputs": ["hand_motion_npz_path", "hand_metadata_path"]},
          
-        {"name": "validate_hand_extraction", 
-         "func": validate_hand_extraction, 
-         "params": lambda: {"rgb_video_path": context.get("rgb_video_path"), 
+        {"name": "stabilise_hand_motion",
+         "func": stabilise_hand_motion_flow,
+         "params": lambda: {"hand_motion_npz_path": context.get("hand_motion_npz_path"),
+                            "output_dir": config.video_processed_output_dir / "kinematics_analysis",
+                            "filter_method": dag_handler.get_task_options("stabilise_hand_motion").get("filter_method", "butterworth"),
+                            "filter_params": dag_handler.get_task_options("stabilise_hand_motion").get("filter_params")},
+         "outputs": ["hand_motion_stabilised_npz_path"]},
+
+        {"name": "validate_hand_extraction",
+         "func": validate_hand_extraction,
+         "params": lambda: {"rgb_video_path": context.get("rgb_video_path"),
                             "hand_models_dir": config.hand_models_dir,
-                            "expected_labels": config.objects_to_track, 
+                            "expected_labels": config.objects_to_track,
                             "output_dir": config.video_processed_output_dir / "kinematics_analysis"},
          "outputs": []},
 

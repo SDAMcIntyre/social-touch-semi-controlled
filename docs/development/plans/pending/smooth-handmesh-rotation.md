@@ -1,9 +1,5 @@
 # Plan: Smooth Hand-Mesh Pose Stream
 
-> **Superseded** by `docs/development/plans/pending/stabilise-handmesh-pose.md` (2026-05-12).
-> Both rotation smoothing and scale locking are merged into a single post-generation
-> pipeline step to ensure translation is always re-derived from the anchor constraint.
-
 **Date:** 2026-05-12
 **Author:** Basil Duvernoy
 **Status:** Draft
@@ -11,6 +7,8 @@
 **Branch:** `feature/smooth-handmesh-rotation`
 
 ---
+
+> **Superseded** by `docs/development/plans/active/stabilise-handmesh-pose.md` (2026-05-12). This plan is no longer active.
 
 ## Overview
 
