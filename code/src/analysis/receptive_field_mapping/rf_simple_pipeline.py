@@ -30,6 +30,17 @@ from analysis.receptive_field_mapping.rf_extraction_io import (
     RF_CAMERA_SETTINGS_FILENAME,
     load_rf_camera_settings,
 )
+from analysis.receptive_field_mapping.rf_projection import (
+    _compute_local_radius,
+    fit_cylinder_axis,
+    project_to_2d,
+)
+from analysis.receptive_field_mapping.rf_simple_diagnostics import (
+    run_diagnostics,
+)
+from analysis.receptive_field_mapping.tangent_plane_alignment import (
+    camera_settings_to_rotation,
+)
 from analysis.receptive_field_mapping.touch_population_data import (
     load_population_data,
 )
@@ -45,6 +56,7 @@ def run_simple_rf_mapping(
     force: bool = False,
     show_interactive: bool = False,
     projection_method: Optional[str] = None,
+    save_diagnostics: bool = False,
 ) -> List[Path]:
     """Extract raw spike-associated contact positions and render forearm heatmaps.
 
@@ -140,6 +152,11 @@ def run_simple_rf_mapping(
         produced.append(positions_csv)
 
         # --- Render heatmap PNG ---
+        all_unique_vertex_indices = np.unique(pop_data.cp_vertex_idx)
+        neuron_contacts_xyz = forearm_vertices[all_unique_vertex_indices]
+        spike_counts_df = pd.DataFrame()
+        rotation_matrix = None
+
         if n_spikes > 0:
             # Build spike_counts_df: aggregate spike frame counts per vertex.
             # spike_count — total spike-frame contact-point entries per vertex.
@@ -170,11 +187,6 @@ def run_simple_rf_mapping(
                 'unique_touch_spike_count': unique_touch_counts[nonzero_indices],
             })
 
-            # Build neuron_contacts_xyz from all contact vertices (not just spikes).
-            # Use unique vertex positions across all contact points as the neuron hull.
-            all_unique_vertex_indices = np.unique(pop_data.cp_vertex_idx)
-            neuron_contacts_xyz = forearm_vertices[all_unique_vertex_indices]
-
             # neuron_touches: number of unique touches in this session.
             neuron_touches = int(pop_data.touch_triple_keys.shape[0])
 
@@ -195,6 +207,7 @@ def run_simple_rf_mapping(
                     "Run 'set_rf_camera_settings' first."
                 )
             session_cam = cameras[session_id]
+            rotation_matrix = camera_settings_to_rotation(session_cam)
             suffix = f'_{projection_method}' if projection_method else ''
             png_path = session_out / f'{session_id}_rf_simple{suffix}.png'
             try:
@@ -216,6 +229,70 @@ def run_simple_rf_mapping(
                 )
         else:
             print(f"[RF Simple] {session_id}: no spikes — skipping PNG render.")
+
+        # --- Diagnostic figures ---
+        if save_diagnostics:
+            try:
+                print(f"[RF Simple] {session_id}: computing diagnostics...")
+                spike_mask = pop_data.spike_elicited
+                proj_method = projection_method or 'cylindrical_unwrap'
+                spike_unique_vtx = (
+                    np.unique(spike_vertex_indices)
+                    if len(spike_vertex_indices) > 0
+                    else np.array([], dtype=np.intp)
+                )
+                centroid = (
+                    forearm_vertices[spike_unique_vtx].mean(axis=0)
+                    if len(spike_unique_vtx) > 0
+                    else forearm_vertices.mean(axis=0)
+                )
+                print(f"[RF Simple] {session_id}: projecting UV (spikes)...")
+                if len(spike_unique_vtx) > 0:
+                    uv_spikes = project_to_2d(
+                        forearm_vertices[spike_unique_vtx], forearm_vertices, centroid,
+                        method=proj_method, rotation_matrix=rotation_matrix,
+                    )
+                else:
+                    uv_spikes = np.empty((0, 2), dtype=np.float64)
+                if rotation_matrix is not None:
+                    axis = rotation_matrix[0]
+                    _axis_point, mean_radius = _compute_local_radius(
+                        forearm_vertices, centroid, axis
+                    )
+                    axis_direction = axis
+                else:
+                    axis, _axis_point, mean_radius = fit_cylinder_axis(
+                        forearm_vertices, centroid
+                    )
+                    axis_direction = axis
+                projection_metadata = {
+                    'centroid': centroid,
+                    'rotation_matrix': (
+                        rotation_matrix if rotation_matrix is not None else np.eye(3)
+                    ),
+                    'axis_direction': axis_direction,
+                    'mean_radius': mean_radius,
+                }
+                print(f"[RF Simple] {session_id}: generating figures...")
+                run_diagnostics(
+                    population_data=pop_data,
+                    spike_mask=spike_mask,
+                    forearm_vertices=forearm_vertices,
+                    spike_vertex_indices=spike_vertex_indices,
+                    spike_counts_df=spike_counts_df,
+                    spike_xyz=spike_xyz,
+                    neuron_contacts_xyz=neuron_contacts_xyz,
+                    uv_spikes=uv_spikes,
+                    projection_metadata=projection_metadata,
+                    output_dir=session_out,
+                    save=True,
+                    show=show_interactive,
+                )
+                print(f"[RF Simple] {session_id}: diagnostics saved.")
+            except Exception:
+                logger.warning(
+                    "Diagnostics failed for session %s", session_id, exc_info=True
+                )
 
         # --- Save sentinel ---
         with open(sentinel, 'w') as f:

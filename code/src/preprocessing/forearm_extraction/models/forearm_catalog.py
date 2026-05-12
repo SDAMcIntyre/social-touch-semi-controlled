@@ -309,6 +309,15 @@ def get_forearms_with_fallback(
                     f"from block {prev_block} as fallback."
                 )
                 forearms[0] = geometry
+                logging.warning(
+                    "No forearm snapshot found for block %d of '%s'. "
+                    "Using forearm from block %d (frame %d) as fallback. "
+                    "If the arm repositioned between blocks, capture a new PLY.",
+                    identifier.block_number,
+                    current_video_filename,
+                    prev_block,
+                    best.representative_frame_id,
+                )
                 break
 
         # 2b. No earlier block had a loadable forearm — duplicate the earliest

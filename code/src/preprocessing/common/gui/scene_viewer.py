@@ -2,7 +2,8 @@
 import bisect
 import sys
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Dict, Iterable, Optional
+from pathlib import Path
+from typing import Any, Callable, Dict, Iterable, Optional, Union
 
 # Third-party imports
 import numpy as np
@@ -98,6 +99,16 @@ class SceneObject(ABC):
         self.update_callback = update_callback
         return None
 
+    def close(self) -> None:
+        """Release any resources held by this object (e.g. open file handles).
+
+        The default is a no-op.  Subclasses that open external resources
+        (MKV files, sockets, …) must override this method and release them
+        here.  Called by ``SceneViewer.clear_objects()`` before the object is
+        removed from the scene.
+        """
+        pass
+
 # --- REFACTORED HIERARCHY START ---
 
 class FrameSequenceObject(SceneObject):
@@ -178,22 +189,101 @@ class PointCloudSequence(FrameSequenceObject):
 class LazyPointCloudSequence(PointCloudSequence):
     """
     A scene object for point clouds that loads frame data on-demand.
+
+    Accepts either a pre-opened *data_source* (any object supporting ``[]``
+    and ``len()``) **or** a *mkv_path* (``Path``) from which it opens its own
+    ``KinectMKV`` / ``KinectPointCloudView`` on first access and closes them
+    via ``close()``.
+
+    When *mkv_path* is supplied the MKV is opened lazily (on the first frame
+    access) so that constructing many ``LazyPointCloudSequence`` objects up
+    front does not consume file handles unnecessarily.
+
+    Parameters
+    ----------
+    name:
+        Scene-object name (must be unique within a viewer).
+    mkv_path:
+        Path to a ``.mkv`` Kinect recording.  Mutually exclusive with
+        *data_source*; exactly one must be provided.
+    data_source:
+        Pre-opened object supporting ``data_source[idx]`` and ``len()``.
+        Mutually exclusive with *mkv_path*.
     """
-    def __init__(self, name: str, data_source: Any, **kwargs):
+
+    def __init__(
+        self,
+        name: str,
+        mkv_path: Optional[Path] = None,
+        data_source: Optional[Any] = None,
+        **kwargs,
+    ):
         super().__init__(name, frame_data={}, **kwargs)
-        self.data_source = data_source
-        if not (hasattr(data_source, '__getitem__') and hasattr(data_source, '__len__')):
-            raise TypeError("The 'data_source' must support indexing `[]` and `len()`.")
+
+        if mkv_path is None and data_source is None:
+            raise ValueError(
+                "LazyPointCloudSequence requires either 'mkv_path' or 'data_source'."
+            )
+        if mkv_path is not None and data_source is not None:
+            raise ValueError(
+                "LazyPointCloudSequence accepts 'mkv_path' OR 'data_source', not both."
+            )
+
+        if data_source is not None:
+            if not (hasattr(data_source, '__getitem__') and hasattr(data_source, '__len__')):
+                raise TypeError("The 'data_source' must support indexing `[]` and `len()`.")
+
+        self._mkv_path: Optional[Path] = mkv_path
+        self._mkv = None          # opened lazily
+        self._data_source = data_source  # None when mkv_path is given
+
+    # ------------------------------------------------------------------
+    # Lazy-open helper
+    # ------------------------------------------------------------------
+
+    def _ensure_open(self) -> Any:
+        """Open the MKV on first call; return the ``KinectPointCloudView``."""
+        if self._data_source is not None:
+            return self._data_source
+
+        if self._mkv is None:
+            # Import here to avoid circular / heavyweight import at module level.
+            from preprocessing.common.data_access.kinect_mkv_manager import KinectMKV
+            from preprocessing.common.data_access.kinect_pointcloud_wrapper import KinectPointCloudView
+            self._mkv = KinectMKV(self._mkv_path).__enter__()
+            self._data_source = KinectPointCloudView(self._mkv)
+
+        return self._data_source
+
+    # ------------------------------------------------------------------
+    # SceneObject.close() — release the MKV handle
+    # ------------------------------------------------------------------
+
+    def close(self) -> None:
+        """Close the internally-managed MKV (no-op when *data_source* was supplied)."""
+        if self._mkv is not None:
+            try:
+                self._mkv.__exit__(None, None, None)
+            except Exception:
+                pass
+            self._mkv = None
+            self._data_source = None
+
+    # ------------------------------------------------------------------
+    # FrameSequenceObject overrides
+    # ------------------------------------------------------------------
 
     def get_max_frame(self) -> int:
         """Returns the max frame index based on the length of the data source."""
-        num_frames = len(self.data_source)
+        source = self._ensure_open()
+        num_frames = len(source)
         return num_frames - 1 if num_frames > 0 else -1
 
     def _get_frame_data(self, frame_index: int) -> Optional[PointCloudData]:
         """Retrieves data on-demand from the data source."""
+        source = self._ensure_open()
         try:
-            return self.data_source[frame_index]
+            return source[frame_index]
         except IndexError:
             return None
 
@@ -393,7 +483,7 @@ class SceneViewer(QMainWindow):
         plotter_widget = QWidget()
         plotter_layout = QVBoxLayout(plotter_widget)
         self.plotter = QtInteractor(self)
-        self.plotter.set_background('midnightblue')
+        self.plotter.set_background('black')
         plotter_layout.addWidget(self.plotter.interactor)
         top_layout.addWidget(plotter_widget, stretch=4)
 
@@ -456,6 +546,18 @@ class SceneViewer(QMainWindow):
         # Insert before the trailing stretch item
         self._right_panel_layout.insertWidget(self._right_panel_layout.count() - 1, object_groupbox)
         
+        self._update_slider_range()
+        self._update_plot()
+
+    def clear_objects(self) -> None:
+        """Call close() on each object, then remove all scene objects and their right-panel controls."""
+        for obj in self.scene_objects.values():
+            obj.close()
+        self.scene_objects.clear()
+        while self._right_panel_layout.count() > 1:
+            item = self._right_panel_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
         self._update_slider_range()
         self._update_plot()
 
