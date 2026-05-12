@@ -5,7 +5,7 @@
 **Completed:** —
 **Author:** Basil Duvernoy
 **Status:** Draft
-**Base Branch:** `fix/contact-detection-false-positives`
+**Base Branch:** `dev`
 **Branch:** `feature/stabilise-handmesh-pose`
 
 ---
