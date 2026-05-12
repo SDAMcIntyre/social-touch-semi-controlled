@@ -4,12 +4,14 @@ import logging
 from pathlib import Path
 from typing import Optional
 
+import cv2
+from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QImage, QPixmap
 from PyQt5.QtWidgets import (
     QApplication, QComboBox, QFileDialog, QHBoxLayout, QLabel,
-    QMainWindow, QMessageBox, QProgressDialog, QPushButton, QStatusBar,
-    QToolBar, QVBoxLayout, QWidget,
+    QMainWindow, QMessageBox, QProgressDialog, QPushButton,
+    QSizePolicy, QSlider, QStatusBar, QToolBar, QVBoxLayout, QWidget,
 )
-from PyQt5.QtCore import Qt
 
 from primary_processing import KinectConfig
 from preprocessing.motion_analysis.hand_tracking.handmesh_overlay_renderer import (
@@ -31,11 +33,8 @@ class HandmeshOverlayExporter(QMainWindow):
     def __init__(self, blocks: list[KinectConfig], parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Hand-Model Overlay Exporter")
-        self.resize(700, 120)
+        self.resize(960, 640)
 
-        # Build lookup indices
-        # _configs: (session_id, block_id) -> KinectConfig
-        # _session_to_blocks: session_id -> sorted list[block_id]
         self._configs: dict[tuple[str, str], KinectConfig] = {}
         self._session_to_blocks: dict[str, list[str]] = {}
         for config in blocks:
@@ -44,6 +43,8 @@ class HandmeshOverlayExporter(QMainWindow):
             self._session_to_blocks.setdefault(config.session_id, []).append(config.block_id)
         for session in self._session_to_blocks:
             self._session_to_blocks[session].sort()
+
+        self._preview_renderer: Optional[BatchVideoRenderer] = None
 
         self._build_ui()
         if self._session_combo.count() > 0:
@@ -79,11 +80,37 @@ class HandmeshOverlayExporter(QMainWindow):
 
         central = QWidget()
         self.setCentralWidget(central)
-        QVBoxLayout(central)
+        layout = QVBoxLayout(central)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(4)
+
+        self._preview_label = QLabel()
+        self._preview_label.setAlignment(Qt.AlignCenter)
+        self._preview_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self._preview_label.setStyleSheet("background-color: #111; color: #666;")
+        self._preview_label.setText("Select a block to preview")
+        layout.addWidget(self._preview_label, 1)
+
+        slider_row = QHBoxLayout()
+        slider_row.addWidget(QLabel("Frame:"))
+        self._frame_slider = QSlider(Qt.Horizontal)
+        self._frame_slider.setRange(0, 0)
+        self._frame_slider.setEnabled(False)
+        self._frame_slider.valueChanged.connect(self._on_slider_changed)
+        slider_row.addWidget(self._frame_slider)
+        self._frame_label = QLabel("— / —")
+        self._frame_label.setFixedWidth(90)
+        slider_row.addWidget(self._frame_label)
+        layout.addLayout(slider_row)
 
         self._status_bar = QStatusBar()
         self.setStatusBar(self._status_bar)
         self._status_bar.showMessage("Select a session and block-order.")
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if self._preview_renderer is not None:
+            self._update_preview_frame(self._frame_slider.value())
 
     def _on_session_changed(self, index: int) -> None:
         session_id = self._session_combo.currentText()
@@ -97,16 +124,23 @@ class HandmeshOverlayExporter(QMainWindow):
         self._on_block_changed(0)
 
     def _on_block_changed(self, index: int) -> None:
+        self._preview_renderer = None
+        self._frame_slider.setEnabled(False)
+        self._frame_slider.blockSignals(True)
+        self._frame_slider.setValue(0)
+        self._frame_slider.blockSignals(False)
+        self._frame_label.setText("— / —")
+        self._export_btn.setEnabled(False)
+        self._preview_label.setText("Select a block to preview")
+
         session_id = self._session_combo.currentText()
         block_id = self._block_combo.currentText()
         if not session_id or not block_id:
-            self._export_btn.setEnabled(False)
             self._status_bar.showMessage("No block selected.")
             return
 
         config = self._configs.get((session_id, block_id))
         if config is None:
-            self._export_btn.setEnabled(False)
             self._status_bar.showMessage("Block not found in index.")
             return
 
@@ -117,23 +151,55 @@ class HandmeshOverlayExporter(QMainWindow):
             / f"{config.source_video.stem}_handmodel_tracked_hands.pkl"
         )
 
-        rgb_ok = rgb_path.exists()
-        pkl_ok = pkl_path.exists()
-
         parts = []
-        if not rgb_ok:
+        if not rgb_path.exists():
             parts.append("RGB: missing")
-        if not pkl_ok:
+        if not pkl_path.exists():
             parts.append("Hand model: missing")
 
         if parts:
-            self._status_bar.showMessage("  |  ".join(parts))
-            self._export_btn.setEnabled(False)
-        else:
-            self._status_bar.showMessage(
-                f"RGB: {rgb_path.name}  |  Hand model: {pkl_path.name}"
+            msg = "  |  ".join(parts)
+            self._status_bar.showMessage(msg)
+            self._preview_label.setText(msg)
+            return
+
+        self._status_bar.showMessage(
+            f"RGB: {rgb_path.name}  |  Hand model: {pkl_path.name}"
+        )
+        self._preview_label.setText("Loading…")
+        QApplication.processEvents()
+
+        self._preview_renderer = BatchVideoRenderer(rgb_path, pkl_path)
+        n = self._preview_renderer.frame_count
+        self._frame_slider.blockSignals(True)
+        self._frame_slider.setRange(0, n - 1)
+        self._frame_slider.setValue(0)
+        self._frame_slider.blockSignals(False)
+        self._frame_slider.setEnabled(True)
+        self._frame_label.setText(f"0 / {n - 1}")
+        self._export_btn.setEnabled(True)
+        self._update_preview_frame(0)
+
+    def _on_slider_changed(self, value: int) -> None:
+        if self._preview_renderer is None:
+            return
+        n = self._preview_renderer.frame_count
+        self._frame_label.setText(f"{value} / {n - 1}")
+        self._update_preview_frame(value)
+
+    def _update_preview_frame(self, frame_idx: int) -> None:
+        frame_bgr = self._preview_renderer.render_frame(frame_idx)
+        frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+        h, w, ch = frame_rgb.shape
+        qimg = QImage(frame_rgb.data, w, h, ch * w, QImage.Format_RGB888)
+        pixmap = QPixmap.fromImage(qimg)
+        self._preview_label.setPixmap(
+            pixmap.scaled(
+                self._preview_label.size(),
+                Qt.KeepAspectRatio,
+                Qt.SmoothTransformation,
             )
-            self._export_btn.setEnabled(True)
+        )
 
     def _on_export_clicked(self) -> None:
         session_id = self._session_combo.currentText()
@@ -174,9 +240,6 @@ class HandmeshOverlayExporter(QMainWindow):
 
         output_path = Path(filename)
 
-        # Count frames via VideoMP4Manager to set the progress dialog max.
-        # We don't have a fast frame count without opening the video, so
-        # use a progress dialog with unknown max initially and update in the callback.
         progress = QProgressDialog("Rendering overlay video...", "Cancel", 0, 0, self)
         progress.setWindowTitle("Exporting")
         progress.setWindowModality(Qt.WindowModal)
