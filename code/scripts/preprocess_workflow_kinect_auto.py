@@ -340,6 +340,7 @@ def stabilise_hand_motion_flow(
     filter_method: str = "butterworth",
     filter_params: dict | None = None,
     smooth_anchor: bool = True,
+    anchor_filter_method: str = "one_euro",
     anchor_filter_params: dict | None = None,
     force_processing: bool = False,
 ) -> Path:
@@ -353,6 +354,7 @@ def stabilise_hand_motion_flow(
         filter_method=filter_method,
         filter_params=filter_params,
         smooth_anchor=smooth_anchor,
+        anchor_filter_method=anchor_filter_method,
         anchor_filter_params=anchor_filter_params,
         force_processing=force_processing,
     )
@@ -563,6 +565,7 @@ def run_single_session_pipeline(
                             "filter_method": dag_handler.get_task_options("stabilise_hand_motion").get("filter_method", "butterworth"),
                             "filter_params": dag_handler.get_task_options("stabilise_hand_motion").get("filter_params"),
                             "smooth_anchor": dag_handler.get_task_options("stabilise_hand_motion").get("smooth_anchor", True),
+                            "anchor_filter_method": dag_handler.get_task_options("stabilise_hand_motion").get("anchor_filter_method", "one_euro"),
                             "anchor_filter_params": dag_handler.get_task_options("stabilise_hand_motion").get("anchor_filter_params")},
          "outputs": ["hand_motion_stabilised_npz_path"]},
 

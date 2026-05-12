@@ -190,6 +190,7 @@ _FILTER_FACTORY_MODULE = f"{_MOTION_CORRECTION_PKG}.motion_filter_factory"
 _FILTER_INTERFACE_MODULE = f"{_MOTION_CORRECTION_PKG}.motion_filter_interface"
 _BUTTERWORTH_MODULE = f"{_MOTION_CORRECTION_PKG}.butterworth_filter"
 _SAVGOL_MODULE = f"{_MOTION_CORRECTION_PKG}.savgol_filter"
+_ONE_EURO_MODULE = f"{_MOTION_CORRECTION_PKG}.one_euro_filter"
 
 _MOTION_CORRECTION_DIR = (
     _SRC
@@ -246,6 +247,10 @@ _load_module_from_file(
     _MOTION_CORRECTION_DIR / "savgol_filter.py",
 )
 _load_module_from_file(
+    _ONE_EURO_MODULE,
+    _MOTION_CORRECTION_DIR / "one_euro_filter.py",
+)
+_load_module_from_file(
     _FILTER_FACTORY_MODULE,
     _MOTION_CORRECTION_DIR / "motion_filter_factory.py",
 )
@@ -262,6 +267,7 @@ _load_module_from_file(
 
 PoseStabilisation = sys.modules[_STABILISATION_MODULE].PoseStabilisation
 MotionFilterFactory = sys.modules[_FILTER_FACTORY_MODULE].MotionFilterFactory
+OneEuroFilter = sys.modules[_ONE_EURO_MODULE].OneEuroFilter
 _SCALE_MIN = sys.modules[_STABILISATION_MODULE]._SCALE_MIN
 _SCALE_MAX = sys.modules[_STABILISATION_MODULE]._SCALE_MAX
 
@@ -308,11 +314,82 @@ def _identity_session(
 # Tests
 # ---------------------------------------------------------------------------
 
+class TestOneEuroFilter:
+
+    def test_constant_signal_unchanged(self) -> None:
+        """A constant input signal returns a constant output (no smoothing artefacts on DC)."""
+        signal = np.full(50, 5.0)
+        filt = OneEuroFilter()
+        result = filt.filter(signal, sampling_rate_hz=30.0)
+        assert result == pytest.approx(signal, abs=1e-10), (
+            f"Constant signal must be preserved; max deviation = {np.abs(result - signal).max():.2e}"
+        )
+
+    def test_smooths_noisy_stationary(self) -> None:
+        """Stationary signal + white noise: output RMS error is less than input RMS error."""
+        rng = np.random.default_rng(0)
+        true_val = 3.0
+        noise = rng.normal(0, 0.5, 100)
+        signal = np.full(100, true_val) + noise
+        filt = OneEuroFilter(min_cutoff=1.0, beta=0.0)
+        result = filt.filter(signal, sampling_rate_hz=30.0)
+        rms_in = float(np.sqrt(np.mean((signal - true_val) ** 2)))
+        rms_out = float(np.sqrt(np.mean((result - true_val) ** 2)))
+        assert rms_out < rms_in, (
+            f"One-Euro must reduce noise on stationary signal; RMS in={rms_in:.4f}, out={rms_out:.4f}"
+        )
+
+    def test_preserves_fast_ramp(self) -> None:
+        """A linear ramp (high velocity) is tracked closely: < 5% peak deviation."""
+        n = 100
+        signal = np.linspace(0.0, 100.0, n)
+        filt = OneEuroFilter(min_cutoff=1.0, beta=0.007)
+        result = filt.filter(signal, sampling_rate_hz=30.0)
+        mid = slice(5, n - 5)
+        peak_deviation = float(np.max(np.abs(result[mid] - signal[mid])) / (signal[-1] - signal[0]))
+        assert peak_deviation < 0.05, (
+            f"Fast ramp should be tracked to < 5% peak deviation; got {peak_deviation:.1%}"
+        )
+
+    def test_adaptive_cutoff(self) -> None:
+        """Slow segment is smoothed more than the fast segment in the same signal.
+
+        Measured as RMS error vs the noise-free truth for each segment: the slow
+        (constant) segment should have a lower error ratio output/input than the
+        fast (ramp) segment, because the adaptive cutoff stays low at rest and
+        rises during fast motion.
+        """
+        rng = np.random.default_rng(7)
+        fps = 30.0
+        noise_amp = 0.3
+
+        slow_true = np.full(60, 1.0)
+        fast_true = np.linspace(1.0, 50.0, 60)
+        slow = slow_true + rng.normal(0, noise_amp, 60)
+        fast = fast_true + rng.normal(0, noise_amp, 60)
+        signal = np.concatenate([slow, fast])
+
+        filt = OneEuroFilter(min_cutoff=1.0, beta=0.007)
+        result = filt.filter(signal, sampling_rate_hz=fps)
+
+        rms_in_slow = float(np.sqrt(np.mean((signal[:60] - slow_true) ** 2)))
+        rms_out_slow = float(np.sqrt(np.mean((result[:60] - slow_true) ** 2)))
+        rms_in_fast = float(np.sqrt(np.mean((signal[60:] - fast_true) ** 2)))
+        rms_out_fast = float(np.sqrt(np.mean((result[60:] - fast_true) ** 2)))
+
+        ratio_slow = rms_out_slow / rms_in_slow
+        ratio_fast = rms_out_fast / rms_in_fast
+        assert ratio_slow < ratio_fast, (
+            f"Slow segment should be smoothed more (lower error ratio) than fast; "
+            f"slow ratio={ratio_slow:.4f}, fast ratio={ratio_fast:.4f}"
+        )
+
+
 class TestPoseStabilisation:
 
     def test_anchor_preserved(self) -> None:
         """After stabilisation with smooth_anchor=True (default), the anchor world
-        position matches the smoothed t0 to < 1e-5 per frame."""
+        position matches the one_euro-smoothed t0 to < 1e-5 per frame."""
         vertices, translations, rotations_xyzw, scales = _identity_session(
             scale=1.0
         )
@@ -320,8 +397,7 @@ class TestPoseStabilisation:
             rotations_xyzw
         ).apply(vertices[:, _ANCHOR_IDX, :])
 
-        anchor_filter_params = {"butterworth": {"order": 2, "cutoff_hz": 5.0}}
-        anchor_filt = MotionFilterFactory.get_filter("butterworth", anchor_filter_params)
+        anchor_filt = OneEuroFilter(min_cutoff=1.0, beta=0.007, d_cutoff=1.0)
         t0_smooth = t0_raw.copy()
         for axis in range(3):
             t0_smooth[:, axis] = anchor_filt.filter(t0_raw[:, axis], _FPS)

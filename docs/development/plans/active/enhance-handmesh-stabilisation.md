@@ -1,4 +1,4 @@
-# Plan: Enhance Hand-Mesh Pose Stabilisation — Anchor Smoothing & Filter Tuning
+# Plan: Enhance Hand-Mesh Pose Stabilisation — Adaptive Anchor Smoothing
 
 **Created:** 2026-05-12
 **Approved:** —
@@ -12,54 +12,70 @@
 
 ## Overview
 
-Adds anchor position smoothing to the existing 4-step pose stabilisation and
-tunes three filter cutoff frequencies to further reduce visible hand-mesh jitter.
-The dominant remaining noise source — translation jitter from unsmoothed sticker
-positions — is addressed by filtering the reconstructed `t0` before re-deriving
-translation. Two YAML-only cutoff changes provide additional noise reduction with
-zero code impact.
+Adds adaptive anchor position smoothing to the existing 4-step pose
+stabilisation.  The dominant remaining noise source — translation jitter from
+unsmoothed sticker positions — is addressed by filtering the reconstructed `t0`
+with a One-Euro adaptive filter before re-deriving translation.  The One-Euro
+filter smooths aggressively at rest while preserving fast motion (sticker
+velocity reaches 500 mm/s in some sessions), avoiding the fixed-cutoff trade-off
+between over-smoothing strokes and under-smoothing stationary periods.
 
 ## Problem Statement
 
 After the current stabilisation (scale locking + rotation smoothing), the formula
 `t_new = t0 - s_stable * R_smooth @ s0` causes `t_new` to inherit `t0`'s noise
 directly: `R_smooth` and `s_stable` are smooth, so translation tracks the raw
-sticker measurement almost exactly. The upstream sticker XYZ filter uses a 10 Hz
-cutoff (`configs/preprocess_workflow_kinect_auto_dag.yaml`, line 61), so
-significant noise below 10 Hz flows through Procrustes alignment into `t0`. This
-is the dominant remaining source of visible jitter in rendered handmesh overlays.
+sticker measurement almost exactly.  The upstream sticker XYZ filter uses a 10 Hz
+cutoff, so significant noise below 10 Hz flows through Procrustes alignment into
+`t0`.
 
-A secondary source is the rotation filter at 5 Hz, which passes through
-low-frequency rotational noise that could be further attenuated with a lower
-cutoff.
+A fixed low-pass on `t0` cannot satisfy both stationary and fast-motion
+requirements:
+
+| Butterworth cutoff | Attenuation at 3 Hz stroke | At 500 mm/s peak |
+|--------------------|---------------------------|-------------------|
+| 8 Hz               | ~2%                       | Fine              |
+| 5 Hz               | ~12%                      | Visible lag       |
+| 3 Hz               | ~30%                      | Unacceptable      |
+
+The One-Euro filter (Casiez et al. 2012) solves this: its cutoff adapts to
+signal speed.  At rest → low cutoff (aggressive smoothing).  During a 500 mm/s
+stroke → high cutoff (preserves motion).
+
+**Important constraint:** sticker positions feed quantitative downstream analysis
+(contact detection, somatosensory features, neural correlations).  The upstream
+sticker XYZ filter (10 Hz) and rotation filter (5 Hz) must NOT be changed.
 
 ## Goals
 
 ### In Scope
 
-1. Smooth `t0` (reconstructed sticker anchor positions) before re-deriving
-   translation, so the mesh glides instead of jittering.
-2. Make anchor smoothing configurable from the DAG YAML (`smooth_anchor` on/off
-   + separate `anchor_filter_params` with independent cutoff).
-3. Lower the rotation filter cutoff from 5 Hz to 3 Hz.
-4. Lower the upstream sticker XYZ correction cutoff from 10 Hz to 6 Hz.
+1. Implement a `OneEuroFilter` class in the existing motion-correction package,
+   conforming to `MotionFilterInterface`.
+2. Use a forward-backward (zero-phase) variant for offline batch processing.
+3. Register the new filter in `MotionFilterFactory` + `FilterChoice` enum.
+4. Add t0 anchor smoothing to `PoseStabilisation.stabilise()` using One-Euro.
+5. Make anchor smoothing configurable from the DAG YAML (`smooth_anchor` on/off
+   + `anchor_filter_method` + `anchor_filter_params`).
 
 ### Out of Scope
 
-- Per-vertex (MANO articulation) smoothing — future improvement.
-- One-Euro adaptive filter implementation.
-- Changes to the Procrustes alignment algorithm itself.
-- Rigid (no-scale) Procrustes or per-subject MANO calibration.
+- Changes to the upstream sticker XYZ correction cutoff (affects quantitative
+  downstream consumers).
+- Changes to the rotation Butterworth cutoff (adequate at 5 Hz).
+- Per-vertex MANO articulation smoothing — future improvement.
+- Using One-Euro for the rotation filter (rotvec component meaning makes
+  velocity-based adaptation less principled).
 
 ## Success Criteria
 
-- [ ] Stabilised hand mesh shows visibly less translational jitter in overlay
-      video compared to the current stabilisation.
+- [ ] `OneEuroFilter` passes the `MotionFilterInterface` contract and is
+      registered in `MotionFilterFactory`.
+- [ ] Stabilised hand mesh shows visibly less translational jitter at rest
+      **without** attenuating fast strokes.
 - [ ] Anchor smoothing is configurable: `smooth_anchor: true` (default) with
-      `anchor_filter_params` parameter in DAG YAML.
-- [ ] Rotation cutoff lowered to 3 Hz; upstream sticker cutoff lowered to 6 Hz.
-- [ ] All existing tests pass; `test_anchor_preserved` updated for smoothed
-      anchor semantics.
+      `anchor_filter_method` and `anchor_filter_params` in DAG YAML.
+- [ ] All existing tests pass; new tests cover One-Euro and anchor smoothing.
 - [ ] Raw NPZ remains byte-for-byte unchanged.
 
 ---
@@ -68,207 +84,263 @@ cutoff.
 
 ### Approach
 
-Three independent changes, all building on existing `MotionFilterFactory`
-infrastructure:
+**One-Euro adaptive filter** — the cutoff frequency adapts per-sample based on
+the signal's instantaneous speed:
 
-**Change 1 — Smooth t0 in `PoseStabilisation.stabilise()`:**
+```
+fc(t) = min_cutoff + beta * |dx_smooth(t)|
+```
 
-Insert anchor position filtering between Step 1 (reconstruct t0) and Step 4
-(re-derive translation). A separate filter instance is constructed with its own
-cutoff parameter to allow independent tuning of anchor vs rotation smoothing.
+- `min_cutoff` (Hz): cutoff at rest — controls maximum smoothing.
+- `beta` (Hz·s/mm): speed coefficient — how fast the cutoff rises with speed.
+- `d_cutoff` (Hz): fixed cutoff for the speed estimator.
+
+At `min_cutoff=1.0, beta=0.007`:
+- **At rest** (0 mm/s): fc = 1.0 Hz → heavy smoothing, eliminates visible jitter
+- **At 100 mm/s**: fc = 1.7 Hz → moderate smoothing
+- **At 500 mm/s**: fc = 4.5 Hz → light smoothing, preserves fast motion
+
+**Zero-phase variant for offline processing:**  The standard One-Euro is
+causal (introduces lag).  For offline batch processing, apply the filter in a
+forward-backward pass: filter the signal forward, then filter the result
+backward.  The backward pass cancels the phase delay while maintaining adaptive
+behaviour.  This mirrors the `filtfilt` principle used by `ButterworthFilter`.
+
+**Integration into PoseStabilisation — new Step 1.5:**
 
 ```python
-# New Step 1.5 — After t0 reconstruction, before translation re-derivation:
+# After Step 1 (reconstruct t0), before Step 4 (re-derive translation):
 if smooth_anchor:
-    anchor_filt = MotionFilterFactory.get_filter(filter_method, anchor_filter_params)
+    anchor_filt = MotionFilterFactory.get_filter(
+        anchor_filter_method, anchor_filter_params
+    )
     for axis in range(3):
         t0[:, axis] = anchor_filt.filter(t0[:, axis], fps)
 ```
 
-The anchor invariant changes semantics: `anchor_world == t0_smooth` instead of
-`anchor_world == t0_raw`. This is a deliberate trade-off — the smoothed position
-is closer to the true physical position than the noisy raw measurement.
-
-**Change 2 — Lower rotation cutoff (YAML only):**
-
-`stabilise_hand_motion.filter_params.butterworth.cutoff_hz`: `5.0` → `3.0`.
-At 30 fps, 3 Hz retains most voluntary hand rotation while further attenuating
-depth-sensor noise. Combined with zero-phase `filtfilt`, the group delay is
-negligible.
-
-**Change 3 — Lower upstream sticker cutoff (YAML only):**
-
-`correct_xyz_stickers_motion.filter_params.butterworth.cutoff_hz`: `10.0` → `6.0`.
-At 30 fps (Nyquist 15 Hz), 6 Hz retains voluntary hand-speed motion (~1–4 Hz)
-while removing most depth-sensor noise. This is the `ButterworthFilter` class
-default.
+The anchor invariant changes: `anchor_world == t0_smooth` instead of
+`anchor_world == t0_raw`.  The smoothed position tracks the true physical
+position more closely than the noisy raw measurement, especially at rest.
 
 ### Alternatives Considered
 
 | Approach | Pros | Cons | Decision |
 |----------|------|------|----------|
-| Smooth t0 with same filter as rotation | Minimal code | Can't tune anchor independently of rotation | Rejected |
-| Smooth t0 with separate filter + cutoff | Independent tuning, ~10 lines | Slight API growth | **Chosen** |
-| Skip t0 smoothing, only lower cutoffs | Zero code changes | Misses the biggest noise source | Rejected |
-| One-Euro adaptive filter for t0 | Better fast-motion preservation | No existing infrastructure; designed for real-time, not offline batch | Deferred |
-| Per-vertex MANO articulation smoothing | Addresses finger jitter | Larger scope; return type change | Deferred to separate plan |
+| Fixed Butterworth on t0 | Reuses existing filter; zero-phase via `filtfilt` | Fixed cutoff: either over-smooths fast strokes or under-smooths rest | Rejected — 500 mm/s strokes need adaptive behaviour |
+| One-Euro on t0 (forward-backward) | Adaptive: aggressive at rest, preserves fast motion; fits `MotionFilterInterface` | New filter class (~60 lines); 3 parameters to tune | **Chosen** |
+| Lower upstream sticker cutoff | Reduces noise at source | Affects quantitative downstream consumers (contact features, neural correlations) | Rejected — scope too broad |
+| Lower rotation Butterworth cutoff | Reduces rotation noise | 3 Hz cutoff attenuates 30% of a 3 Hz stroke; adaptive less principled on rotvec | Rejected — 5 Hz is adequate |
+| Segment-based adaptive Butterworth | Reuses Butterworth; per-segment cutoffs | Boundary artefacts; complex to tune | Rejected |
 
 ### Architecture Changes
 
-**Modified files only — no new files:**
-
+**New file:**
 ```
+code/src/preprocessing/stickers_analysis/xyz/motion_correction/
+└── one_euro_filter.py     — OneEuroFilter (MotionFilterInterface)
+```
+
+**Modified files:**
+```
+code/src/preprocessing/stickers_analysis/xyz/motion_correction/
+└── motion_filter_factory.py   — add ONE_EURO to FilterChoice + dispatch
+
 code/src/preprocessing/motion_analysis/hand_tracking/
-└── pose_stabilisation.py          — add Step 1.5 (t0 smoothing) + new params
+└── pose_stabilisation.py      — add Step 1.5 (t0 smoothing) + new params
 
 code/scripts/_3_preprocessing/_2_hand_tracking/
-└── stabilise_hand_motion.py       — forward new params from DAG config
+└── stabilise_hand_motion.py   — forward anchor params from DAG config
 
 code/scripts/
 └── preprocess_workflow_kinect_auto.py  — read + forward new DAG options
 
 configs/
-└── preprocess_workflow_kinect_auto_dag.yaml  — tune 3 cutoff values + add anchor params
+└── preprocess_workflow_kinect_auto_dag.yaml  — add anchor smoothing config
 
 code/tests/
-└── test_hand_motion_manager.py    — update anchor test + add smooth_anchor=False test
+└── test_hand_motion_manager.py — anchor test updates + One-Euro tests
 ```
 
 **Reused infrastructure:**
-- `MotionFilterFactory.get_filter()` — `code/src/preprocessing/stickers_analysis/xyz/motion_correction/motion_filter_factory.py`
-- `ButterworthFilter` — same package (`butterworth_filter.py`)
-- Existing `_min_frames_required()` logic in `PoseStabilisation`
+- `MotionFilterInterface` — `motion_filter_interface.py` (the abstract base)
+- `MotionFilterFactory` — `motion_filter_factory.py` (factory + enum)
+- `PoseStabilisation.stabilise()` — existing 4-step correction
+- `should_process_task()` — idempotency guard in pipeline script
 
 ---
 
 ## Implementation Plan
 
-### Phase 1: Add anchor smoothing to PoseStabilisation
+### Phase 1: One-Euro filter class
 
-**Goal:** Filter the reconstructed t0 positions before re-deriving translation.
+**Goal:** Implement `OneEuroFilter` conforming to `MotionFilterInterface` with
+forward-backward zero-phase processing.
 **Started:** 2026-05-12
 **Completed:** 2026-05-12
 
-- [x] Add `smooth_anchor: bool = True` and `anchor_filter_params: dict | None = None`
-      parameters to `PoseStabilisation.stabilise()`.
-- [x] Default `anchor_filter_params` to `{"butterworth": {"order": 2, "cutoff_hz": 5.0}}`
-      when `None` and `smooth_anchor` is `True`.
-- [x] Between Step 1 (reconstruct t0) and Step 4 (re-derive translation), construct
-      a second filter instance via `MotionFilterFactory.get_filter(filter_method, anchor_filter_params)`
-      and filter each of the 3 t0 components.
-- [x] Update the docstring to document the new parameters and the changed anchor
-      invariant.
+- [x] Create `one_euro_filter.py` with class `OneEuroFilter`:
+  - Constructor: `__init__(self, min_cutoff=1.0, beta=0.007, d_cutoff=1.0)`
+  - Private `_smoothing_factor(cutoff, dt)`: compute alpha = 1 / (1 + tau/dt)
+    where tau = 1 / (2*pi*cutoff).
+  - Private `_one_euro_pass(signal, dt)`: single causal pass — iterate frames,
+    estimate derivative, smooth derivative with d_cutoff, compute adaptive
+    cutoff, apply first-order low-pass.
+  - Public `filter(signal, sampling_rate_hz)`: forward-backward pass — run
+    `_one_euro_pass` forward on the signal, then backward on the forward
+    result (reversed), return the reversed backward result.
+  - Public `name()`: return `"One-Euro (min_fc={min_cutoff}, β={beta})"`.
+- [x] Register in `motion_filter_factory.py`:
+  - Add `ONE_EURO = "one_euro"` to `FilterChoice` enum.
+  - Add dispatch branch in `get_filter()`:
+    `kwargs = filter_params.get("one_euro", {}); return OneEuroFilter(**kwargs)`.
+  - Add import for `OneEuroFilter`.
 
 **Files Modified:**
-- `code/src/preprocessing/motion_analysis/hand_tracking/pose_stabilisation.py` — add ~10 lines
+- `code/src/preprocessing/stickers_analysis/xyz/motion_correction/one_euro_filter.py` — new (~60 lines)
+- `code/src/preprocessing/stickers_analysis/xyz/motion_correction/motion_filter_factory.py` — add enum + dispatch
 
 **Dependencies:** None
 
-### Phase 2: Forward parameters and tune DAG YAML
+### Phase 2: Anchor smoothing in PoseStabilisation
 
-**Goal:** Wire the new anchor params through the pipeline script and tune all
-three cutoff frequencies.
+**Goal:** Add t0 smoothing between Step 1 and Step 4 using configurable filter.
 **Started:** 2026-05-12
 **Completed:** 2026-05-12
 
-- [x] In `stabilise_hand_motion.py`: add `smooth_anchor` and `anchor_filter_params`
-      keyword arguments, forward them to `PoseStabilisation.stabilise()`.
-- [x] In `preprocess_workflow_kinect_auto.py`: read `smooth_anchor` and
-      `anchor_filter_params` from the DAG task options and forward them to the
-      flow/script.
+- [x] Add parameters to `PoseStabilisation.stabilise()`:
+  - `smooth_anchor: bool = True`
+  - `anchor_filter_method: str | Any = "one_euro"`
+  - `anchor_filter_params: dict | None = None`
+- [x] Default `anchor_filter_params` to
+  `{"one_euro": {"min_cutoff": 1.0, "beta": 0.007, "d_cutoff": 1.0}}` when
+  `None` and `smooth_anchor` is `True`.
+- [x] Insert Step 1.5 between Step 1 and Step 4: construct filter via
+  `MotionFilterFactory.get_filter(anchor_filter_method, anchor_filter_params)`,
+  filter each of the 3 t0 components.
+- [x] Update `_min_frames_required()` to handle `"one_euro"` (minimum 2 frames).
+- [x] Update docstring for new parameters and changed anchor semantics.
+
+**Files Modified:**
+- `code/src/preprocessing/motion_analysis/hand_tracking/pose_stabilisation.py` — ~15 lines
+
+**Dependencies:** Phase 1
+
+### Phase 3: Pipeline wiring + DAG config
+
+**Goal:** Forward anchor params through the pipeline and configure defaults.
+**Started:** 2026-05-12
+**Completed:** 2026-05-12
+
+- [x] In `stabilise_hand_motion.py`: add `smooth_anchor`, `anchor_filter_method`,
+  and `anchor_filter_params` keyword arguments; forward to
+  `PoseStabilisation.stabilise()`.
+- [x] In `preprocess_workflow_kinect_auto.py`: read `smooth_anchor`,
+  `anchor_filter_method`, and `anchor_filter_params` from DAG task options;
+  forward to the flow/script.
 - [x] In `preprocess_workflow_kinect_auto_dag.yaml`, update `stabilise_hand_motion`:
-      ```yaml
-      stabilise_hand_motion:
-        enabled: true
-        options:
-          force_processing: true
-          filter_method: butterworth
-          smooth_anchor: true
-          filter_params:
-            butterworth:
-              order: 2
-              cutoff_hz: 3.0
-          anchor_filter_params:
-            butterworth:
-              order: 2
-              cutoff_hz: 5.0
-        depends_on: [generate_3d_hand_in_motion]
-      ```
-- [x] In the same YAML, update `correct_xyz_stickers_motion.filter_params.butterworth.cutoff_hz`
-      from `10.0` to `6.0`.
+  ```yaml
+  stabilise_hand_motion:
+    enabled: true
+    options:
+      force_processing: true
+      filter_method: butterworth
+      smooth_anchor: true
+      anchor_filter_method: one_euro
+      anchor_filter_params:
+        one_euro:
+          min_cutoff: 1.0
+          beta: 0.007
+          d_cutoff: 1.0
+      filter_params:
+        butterworth:
+          order: 2
+          cutoff_hz: 5.0
+    depends_on: [generate_3d_hand_in_motion]
+  ```
 
 **Files Modified:**
 - `code/scripts/_3_preprocessing/_2_hand_tracking/stabilise_hand_motion.py` — forward new params
 - `code/scripts/preprocess_workflow_kinect_auto.py` — read + forward new DAG options
-- `configs/preprocess_workflow_kinect_auto_dag.yaml` — tune cutoffs + add anchor params
+- `configs/preprocess_workflow_kinect_auto_dag.yaml` — add anchor config (rotation cutoff unchanged at 5 Hz)
 
-**Dependencies:** Phase 1
+**Dependencies:** Phase 2
 
-### Phase 3: Update tests
+### Phase 4: Tests
 
-**Goal:** Update the anchor invariant test for smoothed t0 semantics.
+**Goal:** Test One-Euro filter and anchor smoothing.
 **Started:** 2026-05-12
 **Completed:** 2026-05-12
 
-- [x] Update `test_anchor_preserved` to verify anchor world position matches the
-      *smoothed* t0 (apply the same filter to t0 in the test, then compare).
-- [x] Add `test_anchor_smoothing_disabled` — pass `smooth_anchor=False`, verify
-      original invariant `anchor_world == t0_raw` still holds.
-- [x] Verify all existing tests pass with the new parameter defaults.
+- [x] Add `TestOneEuroFilter` to test file:
+  - `test_constant_signal_unchanged` — constant input returns constant output.
+  - `test_smooths_noisy_stationary` — stationary signal + white noise:
+    output RMS error < input RMS error.
+  - `test_preserves_fast_ramp` — linear ramp (high velocity): output tracks
+    input closely (< 5% peak deviation).
+  - `test_adaptive_cutoff` — slow segment is smoothed more than fast segment
+    in the same signal.
+- [x] Update `test_anchor_preserved` to verify anchor world position matches
+  the *smoothed* t0 (apply One-Euro to t0 in the test, then compare).
+- [x] Add `test_anchor_smoothing_disabled` — `smooth_anchor=False` preserves
+  raw t0 exactly.
+- [x] Verify all existing tests pass with unchanged defaults.
 
 **Files Modified:**
-- `code/tests/test_hand_motion_manager.py` — update + add tests
+- `code/tests/test_hand_motion_manager.py` — update + add tests (~50 lines)
 
-**Dependencies:** Phase 1
+**Dependencies:** Phase 1, Phase 2
 
 ---
 
 ## Testing Plan
 
-### Unit Tests
+### Unit Tests — One-Euro Filter
 
-- [ ] `test_anchor_preserved` (updated) — anchor world position matches smoothed
-      t0 to < 1e-5 per frame.
-- [ ] `test_anchor_smoothing_disabled` (new) — `smooth_anchor=False` preserves
-      raw t0 exactly (original invariant).
+- [ ] `test_constant_signal_unchanged` — no smoothing artefacts on DC input
+- [ ] `test_smooths_noisy_stationary` — noise reduction on stationary signal
+- [ ] `test_preserves_fast_ramp` — < 5% deviation on high-velocity ramp
+- [ ] `test_adaptive_cutoff` — slow segments smoothed more than fast segments
+
+### Unit Tests — Anchor Smoothing
+
+- [ ] `test_anchor_preserved` (updated) — anchor matches smoothed t0 to < 1e-5
+- [ ] `test_anchor_smoothing_disabled` — `smooth_anchor=False` preserves raw t0
 - [ ] All existing tests pass unchanged (scale locking, rotation smoothing,
-      sign-fixup, short session, no valid scales, NaN quaternions).
+      sign-fixup, edge cases)
 
 ### Manual Verification
 
-- [ ] Regenerate stabilised NPZ for a real session with the new parameters.
-- [ ] Render handmesh overlay video — compare translational jitter with and
-      without anchor smoothing.
-- [ ] Use `view_hand_mesh_comparison.py` to verify the smoothed mesh tracks
-      the hand correctly without visible lag.
-- [ ] Verify raw NPZ is byte-for-byte unchanged after re-running.
+- [ ] Regenerate stabilised NPZ for a real session with One-Euro anchor smoothing.
+- [ ] Render handmesh overlay — verify reduced jitter at rest without lag during
+      fast strokes.
+- [ ] Compare side-by-side using `view_hand_mesh_comparison.py`.
+- [ ] Verify raw NPZ is byte-for-byte unchanged.
 
 ### Edge Cases
 
-- [ ] Session with very few frames (near `_min_frames_required`): anchor filter
-      uses the same minimum as rotation filter — verify both are checked.
-- [ ] `smooth_anchor=False` with lowered rotation cutoff: translation still
-      inherits raw t0 noise but rotation is smoother — verify no regression.
+- [ ] Very short session (2-3 frames): One-Euro forward-backward should not crash.
+- [ ] Session with sustained high velocity: anchor cutoff stays high, minimal smoothing.
+- [ ] Session with sustained rest: anchor cutoff drops to `min_cutoff`, heavy smoothing.
 
 ---
 
 ## Documentation Plan
 
-- [ ] No CLAUDE.md or README changes — internal parameter tuning and small code change.
-- [ ] Inline comment on the t0 smoothing rationale (why smoothed anchor is preferred
-      over raw measurement fidelity).
+- [ ] No CLAUDE.md or README changes — internal pipeline enhancement.
+- [ ] Inline comment in `one_euro_filter.py` referencing Casiez et al. 2012 and
+      explaining the forward-backward zero-phase variant.
 
 ---
 
 ## Rollback Plan
 
-1. Set `smooth_anchor: false` in DAG YAML to disable anchor smoothing without
+1. Set `smooth_anchor: false` in DAG YAML — disables anchor smoothing without
    reverting code.
-2. Restore cutoff values (`cutoff_hz: 5.0` for rotation, `10.0` for upstream
-   sticker) in the DAG YAML.
-3. Re-run the pipeline to regenerate the stabilised NPZ with original parameters.
+2. Re-run the pipeline to regenerate stabilised NPZ with original parameters.
+3. The One-Euro filter class remains available but unused — no harm in keeping it.
 
-No schema changes, no new files, no downstream format changes.
+No schema changes, no downstream format changes.  Rotation and upstream sticker
+filters are unchanged.
 
 ---
 
@@ -276,10 +348,10 @@ No schema changes, no new files, no downstream format changes.
 
 | Risk | Likelihood | Impact | Mitigation |
 |------|-----------|--------|------------|
-| Anchor smoothing causes visible lag during fast hand translations | Low | Med | 5 Hz cutoff with zero-phase `filtfilt` gives negligible lag; tunable via `anchor_filter_params` |
-| Lowering upstream sticker cutoff to 6 Hz over-smooths fast stroking | Low | Med | 6 Hz is the `ButterworthFilter` default; review sticker trajectories visually before committing |
-| Lowering rotation cutoff to 3 Hz over-smooths rapid wrist rotation | Med | Med | Verify on sessions with fast repositioning; can raise to 4 Hz if needed |
-| Downstream consumers expect raw sticker-level anchor precision | Very Low | Low | `smooth_anchor` is configurable; no other consumer reads the stabilised NPZ |
+| One-Euro `beta` parameter needs per-dataset tuning | Med | Med | Default `beta=0.007` is standard for hand tracking; expose in DAG YAML for per-session override |
+| Forward-backward One-Euro over-smooths (backward pass sees already-smoothed velocity) | Low | Low | Acceptable for mesh visualisation; `min_cutoff` sets a floor on the minimum cutoff |
+| One-Euro first-order rolloff is gentler than Butterworth order 2 | Low | Low | Adaptive cutoff compensates: at rest, even 1 Hz first-order provides strong attenuation of > 3 Hz noise |
+| Anchor smoothing causes mesh to drift from physical sticker position | Very Low | Low | Drift only during rest-period jitter (which is noise anyway); fast motion tracked faithfully |
 
 ---
 
@@ -287,17 +359,19 @@ No schema changes, no new files, no downstream format changes.
 
 | Phase | Estimated Effort | Dependencies |
 |-------|-----------------|--------------|
-| Phase 1 — Anchor smoothing | ~10 lines | None |
-| Phase 2 — Parameter wiring + YAML tuning | ~15 lines + YAML edits | Phase 1 |
-| Phase 3 — Test updates | ~30 lines | Phase 1 |
+| Phase 1 — One-Euro filter class | ~60 lines | None |
+| Phase 2 — Anchor smoothing | ~15 lines | Phase 1 |
+| Phase 3 — Pipeline wiring + YAML | ~15 lines + YAML edits | Phase 2 |
+| Phase 4 — Tests | ~50 lines | Phase 1, Phase 2 |
 
 ---
 
 ## References
 
+- Casiez, G., Roussel, N., & Vogel, D. (2012). 1€ Filter: A Simple Speed-based
+  Low-pass Filter for Noisy Input in Interactive Systems. CHI '12.
 - Parent plan: `docs/development/plans/active/stabilise-handmesh-pose.md`
 - `PoseStabilisation`: `code/src/preprocessing/motion_analysis/hand_tracking/pose_stabilisation.py`
 - Pipeline script: `code/scripts/_3_preprocessing/_2_hand_tracking/stabilise_hand_motion.py`
-- Pipeline flow: `code/scripts/preprocess_workflow_kinect_auto.py`
 - Filter infrastructure: `code/src/preprocessing/stickers_analysis/xyz/motion_correction/`
-- DAG config: `configs/preprocess_workflow_kinect_auto_dag.yaml` (lines 52–71 upstream sticker, 110–119 stabilisation)
+- DAG config: `configs/preprocess_workflow_kinect_auto_dag.yaml` (lines 110–119 for stabilisation)

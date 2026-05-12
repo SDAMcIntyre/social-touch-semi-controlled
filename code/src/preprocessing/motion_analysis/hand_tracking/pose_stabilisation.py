@@ -34,6 +34,7 @@ class PoseStabilisation:
         filter_method: Union[str, Any] = "butterworth",
         filter_params: Optional[Dict[str, Any]] = None,
         smooth_anchor: bool = True,
+        anchor_filter_method: Union[str, Any] = "one_euro",
         anchor_filter_params: Optional[Dict[str, Any]] = None,
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Apply the 4-step pose correction to a full session.
@@ -54,9 +55,12 @@ class PoseStabilisation:
                            ``t0`` are filtered before translation is re-derived. The
                            anchor invariant then becomes ``anchor_world == t0_smooth``
                            rather than ``anchor_world == t0_raw``.
+            anchor_filter_method: Filter name for the anchor smoothing step. Defaults to
+                                  ``"one_euro"``. Any filter registered in
+                                  :class:`MotionFilterFactory` is accepted.
             anchor_filter_params: Filter params for the anchor smoothing step, in the
                                   same format as ``filter_params``. Defaults to
-                                  ``{"butterworth": {"order": 2, "cutoff_hz": 5.0}}``
+                                  ``{"one_euro": {"min_cutoff": 1.0, "beta": 0.007, "d_cutoff": 1.0}}``
                                   when ``None`` and ``smooth_anchor`` is ``True``.
 
         Returns:
@@ -102,8 +106,8 @@ class PoseStabilisation:
         # noise propagates unchanged into the final translation.
         if smooth_anchor:
             if anchor_filter_params is None:
-                anchor_filter_params = {"butterworth": {"order": 2, "cutoff_hz": 5.0}}
-            anchor_filt = MotionFilterFactory.get_filter(filter_method, anchor_filter_params)
+                anchor_filter_params = {"one_euro": {"min_cutoff": 1.0, "beta": 0.007, "d_cutoff": 1.0}}
+            anchor_filt = MotionFilterFactory.get_filter(anchor_filter_method, anchor_filter_params)
             for axis in range(3):
                 t0[:, axis] = anchor_filt.filter(t0[:, axis], fps)
 
@@ -181,5 +185,8 @@ class PoseStabilisation:
         if method == "savgol":
             sg_params = filter_params.get("savgol", {})
             return sg_params.get("window_length", 11)
+
+        if method == "one_euro":
+            return 2
 
         return 1
