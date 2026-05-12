@@ -16,6 +16,7 @@ from .gui.frame_roi_square import FrameROISquare
 from .gui.frame_roi_rotatable import FrameROIRotatable
 from .gui.scene_viewer import (
     define_custom_colors,
+    ContactPointsSequence,
     LazyPointCloudSequence,
     PersistentOpen3DPointCloudSequence,
     PersistentPointCloudSequence,
@@ -50,6 +51,7 @@ __all__ = [
     "VideoFramesSelector",
 
     # Scene Viewer Data Structures
+    "ContactPointsSequence",
     "LazyPointCloudSequence",
     "PersistentOpen3DPointCloudSequence",
     "PersistentPointCloudSequence",

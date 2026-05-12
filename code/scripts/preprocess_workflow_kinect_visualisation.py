@@ -31,9 +31,17 @@ from _3_preprocessing._4_somatosensory_quantification import (
     build_somatosensory_scene_factory,
 )
 
+from _3_preprocessing._2_hand_tracking.view_hand_mesh_comparison import (
+    build_hand_mesh_comparison_factory,
+)
+
 from preprocessing.motion_analysis.hand_tracking.handmesh_overlay_renderer import (
     resolve_hand_motion_npz_path,
 )
+
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 # --- Sub-Flows (Visualization Tasks) ---
@@ -167,6 +175,61 @@ def build_somatosensory_factory(
     )
 
 
+def build_hand_mesh_comparison(
+    source_video: Path,
+    sticker_dir: Path,
+    rgb_video_path: Path,
+    kinematics_dir: Path,
+    session_common_dir: Path,
+    session_id: str,
+    block_id: str,
+    session_merged_output_dir: Optional[Path] = None,
+) -> Optional[Callable[[], List]]:
+    """
+    Build and return a scene-object factory for one hand-mesh comparison block.
+
+    Returns ``None`` when forearm data is invalid or the stabilised NPZ does
+    not exist (no comparison possible).
+    """
+    forearm_pointcloud_dir = session_common_dir / "forearm_pointclouds"
+    forearm_metadata_path = forearm_pointcloud_dir / (session_id + "_arm_roi_metadata.json")
+
+    if not is_forearm_valid(forearm_pointcloud_dir):
+        logger.info("[%s/%s] Forearm data invalid — skipping.", session_id, block_id)
+        return None
+
+    raw_npz_path = kinematics_dir / (rgb_video_path.stem + "_handmodel_motion.npz")
+    stabilised_npz_path = kinematics_dir / (
+        rgb_video_path.stem + "_handmodel_motion_stabilised.npz"
+    )
+
+    if not raw_npz_path.exists():
+        logger.info("[%s/%s] Raw NPZ not found — skipping.", session_id, block_id)
+        return None
+    if not stabilised_npz_path.exists():
+        logger.info("[%s/%s] Stabilised NPZ not found — skipping.", session_id, block_id)
+        return None
+
+    xyz_csv_path = sticker_dir / (rgb_video_path.stem + "_handstickers_xyz_tracked.csv")
+
+    merged_csv_path: Optional[Path] = None
+    if session_merged_output_dir is not None:
+        merged_name = f"{session_id}_semicontrolled_{block_id}_merged_data.csv"
+        candidate = session_merged_output_dir / "blocks_merged" / merged_name
+        merged_csv_path = candidate if candidate.exists() else None
+
+    return build_hand_mesh_comparison_factory(
+        raw_npz_path=raw_npz_path,
+        stabilised_npz_path=stabilised_npz_path,
+        kinect_video_path=source_video,
+        forearm_pointcloud_dir=forearm_pointcloud_dir,
+        forearm_metadata_path=forearm_metadata_path,
+        rgb_video_path=rgb_video_path.name,
+        xyz_csv_path=xyz_csv_path,
+        merged_csv_path=merged_csv_path,
+    )
+
+
 # --- The "Worker" Flow ---
 @flow(name="Run Single Session Visualization")
 def run_single_session_visualization(
@@ -282,55 +345,100 @@ def run_batch_sequentially(block_files: list[Path], project_data_root: Path, dag
     # -----------------------------------------------------------------------
     # Pass 2 — collect somatosensory factories, open ONE viewer for all blocks
     # -----------------------------------------------------------------------
-    if not dag_handler_template.can_run('view_somatosensory_assessement'):
-        print("All sequential visualization runs have completed.")
-        return
+    if dag_handler_template.can_run('view_somatosensory_assessement'):
+        session_blocks: Dict[Tuple[str, str], Callable[[], List]] = {}
 
-    session_blocks: Dict[Tuple[str, str], Callable[[], List]] = {}
+        for block_file in block_files:
+            try:
+                config_data = KinectConfigFileHandler.load_and_resolve_config(block_file)
+                config = KinectConfig(config_data=config_data, database_path=project_data_root)
 
-    for block_file in block_files:
-        try:
-            config_data = KinectConfigFileHandler.load_and_resolve_config(block_file)
-            config = KinectConfig(config_data=config_data, database_path=project_data_root)
+                rgb_video_path = config.video_primary_output_dir / f"{config.source_video.stem}.mp4"
+                if not rgb_video_path.exists():
+                    print(f"[{block_file.name}] RGB video not found — skipping somatosensory task.")
+                    continue
 
-            rgb_video_path = config.video_primary_output_dir / f"{config.source_video.stem}.mp4"
-            if not rgb_video_path.exists():
-                print(f"[{block_file.name}] RGB video not found — skipping somatosensory task.")
+                stickers_dir = config.video_processed_output_dir / "handstickers"
+                kin_dir = config.video_processed_output_dir / "kinematics_analysis"
+
+                factory = build_somatosensory_factory(
+                    source_video=config.source_video,
+                    sticker_dir=stickers_dir,
+                    rgb_video_path=rgb_video_path,
+                    kinematics_dir=kin_dir,
+                    session_common_dir=config.session_processed_output_dir,
+                    session_id=config.session_id,
+                    block_id=config.block_id,
+                )
+                if factory is not None:
+                    session_blocks[(config.session_id, config.block_id)] = factory
+                    print(f"[{block_file.name}] Somatosensory factory built for ({config.session_id}, {config.block_id}).")
+            except Exception as e:
+                print(f"Failed to build somatosensory factory for {block_file.name}. Error: {e}")
                 continue
 
-            stickers_dir = config.video_processed_output_dir / "handstickers"
-            kin_dir = config.video_processed_output_dir / "kinematics_analysis"
+        if session_blocks:
+            from PyQt5.QtWidgets import QApplication
+            from preprocessing.common import SceneViewerVideoMaker
 
-            factory = build_somatosensory_factory(
-                source_video=config.source_video,
-                sticker_dir=stickers_dir,
-                rgb_video_path=rgb_video_path,
-                kinematics_dir=kin_dir,
-                session_common_dir=config.session_processed_output_dir,
-                session_id=config.session_id,
-                block_id=config.block_id,
-            )
-            if factory is not None:
-                session_blocks[(config.session_id, config.block_id)] = factory
-                print(f"[{block_file.name}] Somatosensory factory built for ({config.session_id}, {config.block_id}).")
-        except Exception as e:
-            print(f"Failed to build somatosensory factory for {block_file.name}. Error: {e}")
-            continue
+            app = QApplication.instance() or QApplication(sys.argv)
+            viewer = SceneViewerVideoMaker(session_blocks=session_blocks)
+            viewer.show()
+            app.exec_()
 
-    if session_blocks:
-        from PyQt5.QtWidgets import QApplication
-        from preprocessing.common import SceneViewerVideoMaker
+            dag_handler_template.mark_completed('view_somatosensory_assessement')
+            print("Somatosensory viewer closed.")
+        else:
+            print("No valid somatosensory blocks found — skipping viewer.")
 
-        app = QApplication.instance() or QApplication(sys.argv)
-        viewer = SceneViewerVideoMaker(session_blocks=session_blocks)
-        viewer.show()
-        app.exec_()
+    # -----------------------------------------------------------------------
+    # Pass 3 — hand mesh comparison (raw vs stabilised)
+    # -----------------------------------------------------------------------
+    if dag_handler_template.can_run('view_hand_mesh_comparison'):
+        comparison_blocks: Dict[Tuple[str, str], Callable[[], List]] = {}
 
-        # Mark completed for all blocks after the viewer closes
-        dag_handler_template.mark_completed('view_somatosensory_assessement')
-        print("Somatosensory viewer closed.")
-    else:
-        print("No valid somatosensory blocks found — skipping viewer.")
+        for block_file in block_files:
+            try:
+                config_data = KinectConfigFileHandler.load_and_resolve_config(block_file)
+                config = KinectConfig(config_data=config_data, database_path=project_data_root)
+
+                rgb_video_path = config.video_primary_output_dir / f"{config.source_video.stem}.mp4"
+                if not rgb_video_path.exists():
+                    continue
+
+                stickers_dir = config.video_processed_output_dir / "handstickers"
+                kin_dir = config.video_processed_output_dir / "kinematics_analysis"
+
+                factory = build_hand_mesh_comparison(
+                    source_video=config.source_video,
+                    sticker_dir=stickers_dir,
+                    rgb_video_path=rgb_video_path,
+                    kinematics_dir=kin_dir,
+                    session_common_dir=config.session_processed_output_dir,
+                    session_id=config.session_id,
+                    block_id=config.block_id,
+                    session_merged_output_dir=config.session_merged_output_dir,
+                )
+                if factory is not None:
+                    comparison_blocks[(config.session_id, config.block_id)] = factory
+                    print(f"[{block_file.name}] Hand mesh comparison factory built.")
+            except Exception as e:
+                print(f"Failed to build hand mesh comparison for {block_file.name}. Error: {e}")
+                continue
+
+        if comparison_blocks:
+            from PyQt5.QtWidgets import QApplication
+            from preprocessing.common import SceneViewerVideoMaker
+
+            app = QApplication.instance() or QApplication(sys.argv)
+            viewer = SceneViewerVideoMaker(session_blocks=comparison_blocks)
+            viewer.show()
+            app.exec_()
+
+            dag_handler_template.mark_completed('view_hand_mesh_comparison')
+            print("Hand mesh comparison viewer closed.")
+        else:
+            print("No blocks with both raw and stabilised NPZs — skipping comparison viewer.")
 
     print("All sequential visualization runs have completed.")
 

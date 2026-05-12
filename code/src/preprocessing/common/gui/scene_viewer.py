@@ -392,6 +392,41 @@ class PersistentOpen3DTriangleMeshSequence(Open3DTriangleMeshSequence):
         key_to_use = self._sorted_keys[insertion_point - 1]
         return self.frame_data.get(key_to_use)
 
+class ContactPointsSequence(PointCloudSequence):
+    """Contact-point cloud indexed by kinect frame number.
+
+    Non-persistent: renders nothing for frames that have no contact data,
+    matching the NeuralKinectViewer behaviour (no hold-last-frame bleed-over).
+    """
+
+    def __init__(
+        self,
+        name: str,
+        frame_data: Dict[int, Optional[np.ndarray]],
+        color: str = 'red',
+        **kwargs,
+    ):
+        self.color = color
+        kwargs.setdefault('render_points_as_spheres', True)
+        kwargs.setdefault('point_size', 15.0)
+        pc_frame_data: Dict[int, PointCloudData] = {
+            idx: PointCloudData(points=pts.astype(np.float32))
+            for idx, pts in frame_data.items()
+            if pts is not None and len(pts) > 0
+        }
+        super().__init__(name, pc_frame_data, **kwargs)
+
+    def add_to_plotter(self, plotter: pv.Plotter, frame_index: int) -> None:
+        if not self.visible:
+            return
+        pc_data = self._get_frame_data(frame_index)
+        if pc_data is None or pc_data.points is None or pc_data.points.shape[0] == 0:
+            return
+        cloud = pv.PolyData(pc_data.points)
+        render_color = self.override_color if self.color_override_active else self.color
+        plotter.add_mesh(cloud, color=render_color, name=self.name, **self.actor_settings)
+
+
 class Trajectory(SceneObject):
     """A scene object representing a moving point (sphere) over time."""
     def __init__(self, name: str, frame_data: Dict[int, np.ndarray], color: Any = 'gray', radius: float = 2.0, **kwargs):
