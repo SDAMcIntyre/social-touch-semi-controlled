@@ -1,5 +1,6 @@
 import numpy as np
 import os
+import logging
 import trimesh
 import open3d as o3d
 from typing import Optional, List, Tuple, Union
@@ -311,9 +312,27 @@ class HandMotionManager:
         
         numerator = np.sum(P_rotated * Q)
         denominator = np.sum(P * P)
-        
+
         scale = numerator / (denominator + 1e-8)
-        
+
+        _SCALE_MIN, _SCALE_MAX = 0.3, 5.0
+        if scale <= 0:
+            logging.warning(
+                "Procrustes produced non-positive scale=%.4f at frame %d; "
+                "using previous frame scale.", scale, len(self.scales)
+            )
+            scale = self.scales[-1] if self.scales else None
+            if scale is None:
+                raise ValueError(
+                    "First frame has non-positive scale from procrustes alignment. "
+                    "Check sticker coordinates."
+                )
+        elif not (_SCALE_MIN <= scale <= _SCALE_MAX):
+            logging.warning(
+                "Procrustes scale=%.4f out of plausible range [%.1f, %.1f] "
+                "at frame %d.", scale, _SCALE_MIN, _SCALE_MAX, len(self.scales)
+            )
+
         # 4. Compute Translation
         # t = T0 - s * R * S0
         translation_vec = t0 - (scale * (R @ s0))
