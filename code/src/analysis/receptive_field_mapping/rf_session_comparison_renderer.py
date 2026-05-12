@@ -6,8 +6,10 @@ from pathlib import Path
 import matplotlib
 import numpy as np
 import pandas as pd
+from scipy.cluster.hierarchy import dendrogram, leaves_list, linkage
 
 matplotlib.use('Agg')
+import matplotlib.gridspec as gridspec
 import matplotlib.pyplot as plt
 
 from analysis.receptive_field_mapping.rf_population_grid_pipeline import (
@@ -43,6 +45,42 @@ def _build_session_feature_matrix(
     return matrix
 
 
+def _nan_safe_correlation_distance(matrix: np.ndarray) -> np.ndarray:
+    n = matrix.shape[0]
+    distances = []
+    for i in range(n):
+        for j in range(i + 1, n):
+            mask = np.isfinite(matrix[i]) & np.isfinite(matrix[j])
+            if mask.sum() < 2:
+                distances.append(1.0)
+                continue
+            a = matrix[i][mask]
+            b = matrix[j][mask]
+            if a.std() == 0.0 or b.std() == 0.0:
+                distances.append(1.0)
+                continue
+            r = np.corrcoef(a, b)[0, 1]
+            distances.append(float(np.clip(1.0 - r, 0.0, 2.0)))
+    return np.array(distances, dtype=float)
+
+
+def _cluster_session_rows(
+    matrix: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray | None]:
+    all_nan_mask = np.all(~np.isfinite(matrix), axis=1)
+    clusterable = matrix[~all_nan_mask]
+    nan_rows = matrix[all_nan_mask]
+
+    if clusterable.shape[0] < 3:
+        return matrix, None
+
+    dist = _nan_safe_correlation_distance(clusterable)
+    Z = linkage(dist, method='average', optimal_ordering=True)
+    order = leaves_list(Z)
+    reordered = np.concatenate([clusterable[order], nan_rows], axis=0)
+    return reordered, Z
+
+
 def render_session_comparison_heatmap(
     matrix: pd.DataFrame,
     metric_name: str,
@@ -51,6 +89,7 @@ def render_session_comparison_heatmap(
     output_path: Path,
     vmin: float | None,
     vmax: float | None,
+    linkage_matrix: np.ndarray | None = None,
 ) -> None:
     n_sessions = len(matrix.index)
     n_bins = len(matrix.columns)
@@ -58,10 +97,28 @@ def render_session_comparison_heatmap(
     fig_h = max(4.0, 0.6 * n_sessions + 1.5)
     fig_w = max(8.0, n_bins * 0.4 + 3.0)
 
-    fig, ax = plt.subplots(figsize=(fig_w, fig_h), layout="constrained")
-
     cmap = plt.get_cmap("viridis").copy()
     cmap.set_bad(color="black")
+
+    if linkage_matrix is not None:
+        fig_w += 1.5
+        fig = plt.figure(figsize=(fig_w, fig_h), layout="constrained")
+        gs = gridspec.GridSpec(1, 2, width_ratios=[1, 5], figure=fig)
+        ax_dendro = fig.add_subplot(gs[0])
+        ax = fig.add_subplot(gs[1])
+
+        dendrogram(
+            linkage_matrix,
+            orientation='left',
+            color_threshold=0,
+            above_threshold_color='#444444',
+            no_labels=True,
+            ax=ax_dendro,
+        )
+        ax_dendro.set_axis_off()
+        ax_dendro.set_ylim(0, n_sessions * 10)
+    else:
+        fig, ax = plt.subplots(figsize=(fig_w, fig_h), layout="constrained")
 
     im = ax.pcolormesh(
         matrix.columns.values,
@@ -75,6 +132,7 @@ def render_session_comparison_heatmap(
 
     ax.set_yticks(np.arange(n_sessions) + 0.5)
     ax.set_yticklabels(list(matrix.index))
+    ax.set_ylim(0, n_sessions)
 
     ax.set_xlabel(feature_name.replace("_", " "))
     ax.set_title(f"{gesture_type} / {metric_name}")
@@ -225,6 +283,21 @@ def run_session_comparison_visualization(
             continue
 
         matrix = _build_session_feature_matrix(gesture_sessions, metric_name)
+        arr = matrix.values
+        all_nan_mask = np.all(~np.isfinite(arr), axis=1)
+        clusterable_idx = np.where(~all_nan_mask)[0]
+        nan_idx = np.where(all_nan_mask)[0]
+        reordered_values, linkage_matrix = _cluster_session_rows(arr)
+        if linkage_matrix is not None:
+            order = leaves_list(linkage_matrix)
+            row_order = np.concatenate([clusterable_idx[order], nan_idx])
+        else:
+            row_order = np.arange(len(matrix.index))
+        matrix = pd.DataFrame(
+            reordered_values,
+            columns=matrix.columns,
+            index=matrix.index[row_order],
+        )
         output_path = output_heatmaps / f"{gesture_type}.png"
 
         render_session_comparison_heatmap(
@@ -235,6 +308,7 @@ def run_session_comparison_visualization(
             output_path=output_path,
             vmin=global_vmin,
             vmax=global_vmax,
+            linkage_matrix=linkage_matrix,
         )
         rendered_gesture_types.append(gesture_type)
 
