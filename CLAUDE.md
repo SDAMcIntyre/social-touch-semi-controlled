@@ -58,22 +58,12 @@ python code/scripts/launch_pipeline_gui.py
 
 ### Stage status
 
-Last checked: 2026-05-08. Status applies to session `2022-06-17_ST16-05`.
-
-**Re-runs needed after dev merge (2026-05-08):** Stages 0 and 1 must be re-run. The dev
-merge changed Stage 0 in two ways that affect output: (1) interpolation switched from cubic
-to linear across all 14 Kinect-sampled columns; (2) stroke direction classification switched
-from endpoint delta to affine linear fit (`np.polyfit` slope) — some `gesture_type` labels
-may change. Stage 1 reads Stage 0 output so must follow. Stage 2b is optional: spike data
-is unchanged but the heatmap will render with an improved projection centroid if re-run.
-
-**Next session priority:** Re-run stages 0 and 1, then review the updated Stage 1 output
-(`_series_augmented.csv`) and optionally the Stage 2b heatmap before proceeding to Stage 2a.
+Last checked: 2026-05-11. Status applies to session `2022-06-17_ST16-05`.
 
 | Stage | Task key | Output path | Status |
 |---|---|---|---|
-| 0 | `touch_preparation` | `4_analysed/preparation/<session>_prepared.csv` | ⚠️ needs re-run |
-| 1 | `touch_series_transforms` | `4_analysed/series_transforms/<session>_series_augmented.csv` | ⚠️ needs re-run |
+| 0 | `touch_preparation` | `4_analysed/preparation/<session>_prepared.csv` | ✅ complete (re-run 2026-05-11) |
+| 1 | `touch_series_transforms` | `4_analysed/series_transforms/<session>_series_augmented.csv` | ✅ complete (re-run 2026-05-11) |
 | 2a | `touch_feature_extraction` | `4_analysed/touch_features/<agg>/<session>_touch_summary.csv` | not started |
 | 2b | `map_receptive_fields_simple` | `4_analysed/receptive_field_maps_simple/<session>/` | ✅ complete (optional re-run for better heatmap) |
 | 3 | `touch_clustering` | `4_analysed/touch_clusters/<group>/<clusterer>/` | not started |
@@ -110,6 +100,13 @@ When asked to post or update a GitHub issue:
 ---
 
 ## Common Gotchas
+
+- **`--tasks` with a downstream stage silently does nothing**: `can_run()` checks that all
+  `depends_on` entries are in `completed_tasks`. When using `--tasks touch_series_transforms`
+  alone, `touch_preparation` is never executed and never marked completed, so stage 1 exits
+  with code 0 and no output. Fix: always pass the full chain —
+  `--tasks touch_preparation touch_series_transforms`. Stage 0 has a skip-if-up-to-date guard
+  and completes in seconds if its output is current.
 
 - **`configs/kinect_configs/` missing**: Per-session preprocessing config YAMLs are not in the
   repo. `analysis_workflow.py` falls back to scanning `3_merged/` directly when they are absent,
