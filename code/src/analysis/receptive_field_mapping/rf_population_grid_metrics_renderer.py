@@ -183,6 +183,7 @@ def run_population_rf_grid_metrics_visualization(
     output_dir: Path,
     force: bool = False,
     extracted_features: list | None = None,
+    metrics_base_dir: Path | None = None,
 ) -> None:
     if not input_items:
         raise ValueError(
@@ -191,7 +192,8 @@ def run_population_rf_grid_metrics_visualization(
 
     sentinel = output_dir / "heatmaps_summary.json"
 
-    metrics_base_dir = output_dir.parent / "population_rf_grid_metrics"
+    if metrics_base_dir is None:
+        metrics_base_dir = output_dir.parent / "population_rf_grid_metrics"
 
     csv_paths = []
     for item in input_items:

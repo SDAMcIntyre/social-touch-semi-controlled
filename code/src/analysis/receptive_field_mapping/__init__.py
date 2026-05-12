@@ -23,6 +23,7 @@ from .rf_single_touch_pipeline import run_single_touch_rf_mapping
 from .rf_population_grid_pipeline import run_population_rf_grid, PopulationRFGridConfig
 from .rf_population_grid_metrics_pipeline import run_population_rf_grid_metrics, PopulationRFGridMetricsConfig
 from .rf_population_grid_metrics_renderer import run_population_rf_grid_metrics_visualization
+from .rf_session_comparison_renderer import run_session_comparison_visualization
 from .rf_baseline_deviation import BaselineDeviationMetrics, compute_baseline_deviation
 
 __all__ = [
@@ -46,6 +47,7 @@ __all__ = [
     "run_population_rf_grid_metrics",
     "PopulationRFGridMetricsConfig",
     "run_population_rf_grid_metrics_visualization",
+    "run_session_comparison_visualization",
     "BaselineDeviationMetrics",
     "compute_baseline_deviation",
 ]

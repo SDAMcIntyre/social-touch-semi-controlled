@@ -11,7 +11,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import NamedTuple, Optional
 
 import numpy as np
 import pandas as pd
@@ -85,6 +85,12 @@ class PopulationData:
         )
 
 
+class ViewerSessionData(NamedTuple):
+    """Lightweight data for the RF Camera Settings viewer."""
+    forearm_vertices: np.ndarray
+    vertex_contact_count: Optional[np.ndarray]
+
+
 # ------------------------------------------------------------------
 # Sidecar cache helpers
 # ------------------------------------------------------------------
@@ -120,6 +126,9 @@ def _save_population_cache(series_csv_path: Path, data: PopulationData) -> None:
             cp_touch_idx=data.cp_touch_idx,
             cp_iff=data.cp_iff,
             cp_spike=data.cp_spike,
+            vertex_contact_count=np.bincount(
+                data.cp_vertex_idx, minlength=len(data.forearm_vertices),
+            ).astype(np.float64),
         )
     except Exception as exc:
         logger.warning(
@@ -251,6 +260,71 @@ def _load_population_cache(
         cp_iff=cp_iff.astype(np.float64),
         cp_spike=cp_spike.astype(bool),
     )
+
+
+def load_viewer_session_data(
+    series_csv_path: Path,
+    forearm_ply_path: Path,
+) -> ViewerSessionData:
+    """Load only the data needed by RFCameraSettingsViewer.
+
+    Loads forearm_vertices (~240 KB) and a per-vertex contact-count heatmap
+    (~80 KB).  Never loads the full cp_* arrays unless falling back from a
+    cache that lacks the precomputed vertex_contact_count.
+    """
+    vertices = load_forearm_vertices(forearm_ply_path)
+    if vertices is None:
+        raise ValueError(
+            f"load_viewer_session_data: could not load forearm from {forearm_ply_path}"
+        )
+    V = len(vertices)
+
+    cache_path = _population_cache_path(series_csv_path)
+    if not cache_path.exists():
+        logger.warning(
+            "load_viewer_session_data: no cache for %s — showing mesh without heatmap",
+            series_csv_path.name,
+        )
+        return ViewerSessionData(forearm_vertices=vertices, vertex_contact_count=None)
+
+    npz = np.load(cache_path, allow_pickle=True)
+
+    if "cache_schema_version" not in npz or int(npz["cache_schema_version"]) != _CACHE_SCHEMA_VERSION:
+        logger.warning(
+            "load_viewer_session_data: schema mismatch for %s — showing mesh without heatmap",
+            series_csv_path.name,
+        )
+        return ViewerSessionData(forearm_vertices=vertices, vertex_contact_count=None)
+
+    if "vertex_contact_count" in npz:
+        vcc = npz["vertex_contact_count"].astype(np.float64)
+        if vcc.shape != (V,):
+            raise ValueError(
+                f"load_viewer_session_data: 'vertex_contact_count' shape {vcc.shape} "
+                f"!= ({V},) in {cache_path}"
+            )
+        return ViewerSessionData(forearm_vertices=vertices, vertex_contact_count=vcc)
+
+    if "cp_vertex_idx" in npz:
+        try:
+            cp_vertex_idx = npz["cp_vertex_idx"].astype(np.int64)
+            vcc = np.bincount(cp_vertex_idx, minlength=V).astype(np.float64)
+            del cp_vertex_idx
+            return ViewerSessionData(forearm_vertices=vertices, vertex_contact_count=vcc)
+        except MemoryError:
+            logger.warning(
+                "load_viewer_session_data: MemoryError loading cp_vertex_idx for %s "
+                "— showing mesh without heatmap",
+                series_csv_path.name,
+            )
+            return ViewerSessionData(forearm_vertices=vertices, vertex_contact_count=None)
+
+    logger.warning(
+        "load_viewer_session_data: cache has neither vertex_contact_count nor "
+        "cp_vertex_idx for %s — showing mesh without heatmap",
+        series_csv_path.name,
+    )
+    return ViewerSessionData(forearm_vertices=vertices, vertex_contact_count=None)
 
 
 # ------------------------------------------------------------------

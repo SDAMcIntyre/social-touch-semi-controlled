@@ -233,19 +233,21 @@ def run_simple_rf_mapping(
         # --- Diagnostic figures ---
         if save_diagnostics:
             try:
+                print(f"[RF Simple] {session_id}: computing diagnostics...")
                 spike_mask = pop_data.spike_elicited
+                proj_method = projection_method or 'cylindrical_unwrap'
+                spike_unique_vtx = (
+                    np.unique(spike_vertex_indices)
+                    if len(spike_vertex_indices) > 0
+                    else np.array([], dtype=np.intp)
+                )
                 centroid = (
-                    neuron_contacts_xyz.mean(axis=0)
-                    if len(neuron_contacts_xyz) > 0
+                    forearm_vertices[spike_unique_vtx].mean(axis=0)
+                    if len(spike_unique_vtx) > 0
                     else forearm_vertices.mean(axis=0)
                 )
-                proj_method = projection_method or 'cylindrical_unwrap'
-                uv_all = project_to_2d(
-                    forearm_vertices, forearm_vertices, centroid,
-                    method=proj_method, rotation_matrix=rotation_matrix,
-                )
-                if len(spike_vertex_indices) > 0:
-                    spike_unique_vtx = np.unique(spike_vertex_indices)
+                print(f"[RF Simple] {session_id}: projecting UV (spikes)...")
+                if len(spike_unique_vtx) > 0:
                     uv_spikes = project_to_2d(
                         forearm_vertices[spike_unique_vtx], forearm_vertices, centroid,
                         method=proj_method, rotation_matrix=rotation_matrix,
@@ -271,6 +273,7 @@ def run_simple_rf_mapping(
                     'axis_direction': axis_direction,
                     'mean_radius': mean_radius,
                 }
+                print(f"[RF Simple] {session_id}: generating figures...")
                 run_diagnostics(
                     population_data=pop_data,
                     spike_mask=spike_mask,
@@ -279,13 +282,13 @@ def run_simple_rf_mapping(
                     spike_counts_df=spike_counts_df,
                     spike_xyz=spike_xyz,
                     neuron_contacts_xyz=neuron_contacts_xyz,
-                    uv_all=uv_all,
                     uv_spikes=uv_spikes,
                     projection_metadata=projection_metadata,
                     output_dir=session_out,
                     save=True,
                     show=show_interactive,
                 )
+                print(f"[RF Simple] {session_id}: diagnostics saved.")
             except Exception:
                 logger.warning(
                     "Diagnostics failed for session %s", session_id, exc_info=True
