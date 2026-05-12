@@ -200,6 +200,7 @@ def run_population_rf_grid_metrics(
     output_dir: Path,
     config: PopulationRFGridMetricsConfig,
     force: bool = False,
+    group_name: str | None = None,
 ) -> list:
     produced = []
 
@@ -214,7 +215,10 @@ def run_population_rf_grid_metrics(
                 f"run_population_rf_grid_metrics: no NPZ files found in {grid_dir}"
             )
 
-        output_session_dir = output_dir / "population_rf_grid_metrics" / session_id
+        if group_name is not None:
+            output_session_dir = output_dir / "population_rf_grid_metrics" / group_name / session_id
+        else:
+            output_session_dir = output_dir / "population_rf_grid_metrics" / session_id
         sentinel = output_session_dir / "population_rf_grid_metrics_summary.json"
 
         camera_settings_dir = output_dir / 'rf_camera_settings'

@@ -23,6 +23,27 @@ recording overlays.  Key design invariants:
   full-resolution frame is rendered on pause / slider release.
 - All merged-CSV features (NeuralDataPanel, StickerVelocityCompass) are
   optional and skipped entirely when merged_csv_path=None.
+
+Hot-swap navigation
+~~~~~~~~~~~~~~~~~~~
+``NeuralKinectViewer`` now accepts an *all_blocks* dict
+``{(session_id, block_id): NeuralKinectBlockSpec}`` rather than per-block
+constructor arguments.  Two toolbar dropdowns let the user switch between
+sessions and blocks without closing the window:
+
+    viewer = NeuralKinectViewer(
+        all_blocks={
+            ("ST14-01", "block-order-01"): spec_01,
+            ("ST14-01", "block-order-02"): spec_02,
+        },
+        initial_session_id="ST14-01",
+        initial_block_id="block-order-01",
+    )
+
+On dropdown change ``_teardown_current_block()`` closes the old MKV and stops
+the old preloader; then ``_load_block()`` loads the new spec.  The PyVista
+plotter is kept alive (no ``plotter.clear()``); named actors are re-seeded via
+``_init_actors()`` so the camera survives the swap.
 """
 
 # ---------------------------------------------------------------------------
@@ -33,8 +54,9 @@ import collections
 import queue
 import re
 import threading
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 # ---------------------------------------------------------------------------
 # Third-party
@@ -48,6 +70,7 @@ from PyQt5.QtCore import Qt, QEvent, QTimer, pyqtSignal
 from PyQt5.QtWidgets import (
     QApplication,
     QCheckBox,
+    QComboBox,
     QDoubleSpinBox,
     QGroupBox,
     QHBoxLayout,
@@ -57,6 +80,7 @@ from PyQt5.QtWidgets import (
     QScrollArea,
     QSlider,
     QSpinBox,
+    QToolBar,
     QVBoxLayout,
     QWidget,
 )
@@ -102,6 +126,56 @@ from preprocessing.stickers_analysis import XYZDataFileHandler
 
 from .sticker_velocity_compass import StickerVelocityCompass
 
+
+# ---------------------------------------------------------------------------
+# NeuralKinectBlockSpec
+# ---------------------------------------------------------------------------
+
+@dataclass
+class NeuralKinectBlockSpec:
+    """
+    All paths and metadata needed to display one session block in
+    ``NeuralKinectViewer``.
+
+    Attributes
+    ----------
+    xyz_csv_path:
+        Path to the ``*_handstickers_xyz_tracked.csv`` file.
+    kinect_mkv_path:
+        Path to the raw ``.mkv`` Kinect recording.
+    forearm_pointcloud_dir:
+        Directory that contains the forearm ``.ply`` point-cloud files.
+    forearm_metadata_path:
+        Path to the ``*_arm_roi_metadata.json`` file.
+    rgb_video_path:
+        Filename used as the ``ForearmCatalog`` lookup key, e.g.
+        ``Path("2022-06-15_ST14-01_semicontrolled_block-order07_kinect.mp4")``.
+        Only the filename part is used; the full path is not required.
+    hand_motion_path:
+        Path to the ``*_handmodel_motion.npz`` file.
+    recording_name:
+        Human-readable label shown in the window title and as a 3D actor.
+    merged_csv_path:
+        Optional path to the ``*_merged_data.csv`` file.  ``None`` → pure-3D
+        mode (no neural panel, no compass widgets).
+    registration_transforms_by_forearm_key:
+        Optional mapping ``{forearm_key: 4×4 transform}`` for registered-frame
+        display.  ``None`` → identity (no registration applied).
+    """
+    xyz_csv_path: Path
+    kinect_mkv_path: Path
+    forearm_pointcloud_dir: Path
+    forearm_metadata_path: Path
+    rgb_video_path: Path
+    hand_motion_path: Path
+    recording_name: str
+    merged_csv_path: Optional[Path]
+    registration_transforms_by_forearm_key: Optional[Dict[int, np.ndarray]] = field(default=None)
+
+
+# ---------------------------------------------------------------------------
+# Helper functions
+# ---------------------------------------------------------------------------
 
 def _parse_contact_points_cell(cell) -> Optional[np.ndarray]:
     """
@@ -380,7 +454,7 @@ class NeuralDataPanel(QWidget):
         )
         btn_layout.addWidget(self._touch_bands_checkbox)
 
-        btn_layout.addWidget(QLabel("\u00b1"))
+        btn_layout.addWidget(QLabel("±"))
         self._window_spinbox = QDoubleSpinBox()
         self._window_spinbox.setMinimum(0.5)
         _max_secs = min(self._total_samples / self._neural_fps / 2.0, 3600.0)
@@ -542,53 +616,45 @@ class NeuralKinectViewer(QMainWindow):
     """
     High-performance standalone viewer for merged neural + Kinect recordings.
 
+    Accepts an *all_blocks* dict ``{(session_id, block_id): NeuralKinectBlockSpec}``
+    so that the user can navigate between blocks via toolbar dropdowns without
+    closing the window (hot-swap).
+
     Architecture highlights
     ~~~~~~~~~~~~~~~~~~~~~~~
     - Named PyVista actors are updated in-place; ``plotter.clear()`` is never
       called, preserving camera state across frame changes.
-    - A background ``FramePreloader`` thread maintains an 8-frame ring buffer
+    - A background ``FramePreloader`` thread maintains a 512-frame ring buffer
       of decoded ``PointCloudData`` objects to eliminate MKV seek latency.
     - ``HandMotionManager[i]`` is called lazily per frame (no eager pre-build).
     - CuPy AABB cropping reduces the rendered Kinect cloud by 8-16x.
     - The ``NeuralDataPanel`` and ``StickerVelocityCompass`` widgets are
       created only when *merged_csv_path* is provided.
+    - Hot-swap: ``_teardown_current_block()`` → ``_load_block()`` swaps data
+      without closing the plotter; named actors are re-seeded by
+      ``_init_actors()`` after the swap.
 
     Parameters
     ----------
-    xyz_csv_path:
-        Path to the ``*_handstickers_xyz_tracked.csv`` file.
-    kinect_mkv_path:
-        Path to the raw ``.mkv`` Kinect recording.
-    forearm_pointcloud_dir:
-        Directory that contains the forearm ``.ply`` point-cloud files.
-    forearm_metadata_path:
-        Path to the ``*_arm_roi_metadata.json`` file.
-    rgb_video_path:
-        Filename (str or Path) used as the catalog lookup key, e.g.
-        ``"2022-06-15_ST14-01_semicontrolled_block-order07_kinect.mp4"``.
-    hand_motion_path:
-        Path to the ``*_handmodel_motion.npz`` file.
-    recording_name:
-        Human-readable label shown in the window title and as a 3D actor.
-    merged_csv_path:
-        Optional path to the ``*_merged_data.csv`` file.  When ``None`` the
-        viewer runs in pure-3D mode (no neural panel, no compass widgets).
+    all_blocks:
+        Mapping ``{(session_id, block_id): NeuralKinectBlockSpec}`` for every
+        block the viewer should be able to display.
+    initial_session_id:
+        Session dropdown value to display on first open.
+    initial_block_id:
+        Block dropdown value to display on first open.
     crop_half_size_mm:
         Half-width of the AABB crop box centred on the contact centroid (mm).
+    parent:
+        Optional Qt parent widget.
     """
 
     def __init__(
         self,
-        xyz_csv_path: Path,
-        kinect_mkv_path: Path,
-        forearm_pointcloud_dir: Path,
-        forearm_metadata_path: Path,
-        rgb_video_path: Path,
-        hand_motion_path: Path,
-        recording_name: str,
-        merged_csv_path: Optional[Path] = None,
+        all_blocks: Dict[Tuple[str, str], "NeuralKinectBlockSpec"],
+        initial_session_id: str,
+        initial_block_id: str,
         crop_half_size_mm: float = 400.0,
-        registration_transforms_by_forearm_key: Optional[Dict[int, np.ndarray]] = None,
         parent=None,
     ):
         super().__init__(parent)
@@ -600,25 +666,114 @@ class NeuralKinectViewer(QMainWindow):
         pv.global_theme.allow_empty_mesh = True
 
         # ------------------------------------------------------------------
-        # Basic state
+        # Basic immutable state
         # ------------------------------------------------------------------
-        self.setWindowTitle(f"Neural-Kinect Viewer | {recording_name}")
-        self._recording_name: str = recording_name
+        self._all_blocks: Dict[Tuple[str, str], NeuralKinectBlockSpec] = all_blocks
         self._crop_half_size: float = crop_half_size_mm
         self._cupy_available: bool = _CUPY_AVAILABLE
-        self.current_index: int = 0
+        self._preloader_buf_size: int = 512
+
+        # Build session → [block_id, …] index (sorted for deterministic order)
+        self._session_to_blocks: Dict[str, List[str]] = {}
+        for (session_id, block_id) in all_blocks:
+            self._session_to_blocks.setdefault(session_id, []).append(block_id)
+        for session in self._session_to_blocks:
+            self._session_to_blocks[session].sort()
 
         # ------------------------------------------------------------------
-        # Transformed-mode state
+        # Per-block mutable state — populated by _load_block()
         # ------------------------------------------------------------------
-        self._transforms_by_forearm_key: Optional[Dict[int, np.ndarray]] = (
-            registration_transforms_by_forearm_key or None
-        )
+        # These are set to sentinel values so that _teardown_current_block()
+        # is safe to call before _load_block() has ever run.
+        self._mkv = None
+        self._preloader: Optional[FramePreloader] = None
+
+        # ------------------------------------------------------------------
+        # Build the Qt UI (plotter + static right panel + frame controls)
+        # ------------------------------------------------------------------
+        self._build_ui()
+
+        # ------------------------------------------------------------------
+        # Timers (created once; re-used across hot-swaps)
+        # ------------------------------------------------------------------
+        self._play_timer = QTimer(self)
+        self._play_timer.timeout.connect(self._play_advance)
+
+        # Throttle timer for live frame updates during slider drag.
+        # Fires every 80 ms (~12 fps) while the user holds the slider.
+        self._drag_timer = QTimer(self)
+        self._drag_timer.timeout.connect(self._on_drag_timer_fired)
+        self._drag_timer.setInterval(80)
+        self._pending_drag_frame: Optional[int] = None
+
+        # Polling timer: fires every 50 ms after a cache-miss.
+        self._exact_frame_timer = QTimer(self)
+        self._exact_frame_timer.setInterval(50)
+        self._exact_frame_timer.timeout.connect(self._on_exact_frame_poll)
+
+        # Guard: first render is deferred to showEvent.
+        self._initial_render_done: bool = False
+
+        # ------------------------------------------------------------------
+        # Load the initial block by driving the toolbar dropdowns.
+        #
+        # Setting the session combo index triggers _on_session_changed, which
+        # populates the block combo and calls _on_block_changed, which calls
+        # _load_block.  This ensures the dropdowns are in sync with the
+        # displayed data from the very first open.
+        # ------------------------------------------------------------------
+        sorted_sessions = sorted(self._session_to_blocks)
+        initial_session_index = sorted_sessions.index(initial_session_id) if initial_session_id in sorted_sessions else 0
+        # Block signals during setup so we control exactly when _load_block fires.
+        self._session_combo.blockSignals(True)
+        self._block_combo.blockSignals(True)
+        self._session_combo.setCurrentIndex(initial_session_index)
+        self._block_combo.clear()
+        for block_id in self._session_to_blocks.get(initial_session_id, []):
+            self._block_combo.addItem(block_id)
+        blocks_for_session = self._session_to_blocks.get(initial_session_id, [])
+        initial_block_index = blocks_for_session.index(initial_block_id) if initial_block_id in blocks_for_session else 0
+        self._block_combo.setCurrentIndex(initial_block_index)
+        self._session_combo.blockSignals(False)
+        self._block_combo.blockSignals(False)
+        # Now load explicitly — signals are unblocked so future user interactions work.
+        self._load_block(initial_session_id, initial_block_id)
+
+    # ======================================================================
+    # Block lifecycle — teardown + load
+    # ======================================================================
+
+    def _teardown_current_block(self) -> None:
+        """Stop timers, preloader, and close the current MKV handle."""
+        self._play_timer.stop()
+        self._drag_timer.stop()
+        self._exact_frame_timer.stop()
+
+        if self._preloader is not None:
+            self._preloader.stop()
+            self._preloader.join(timeout=2.0)
+            self._preloader = None
+
+        if self._mkv is not None:
+            try:
+                self._mkv.__exit__(None, None, None)
+            except Exception:
+                pass
+            self._mkv = None
+
+    def _load_block(self, session_id: str, block_id: str) -> None:
+        """
+        Load all data for the given block and reinitialise the viewer state.
+
+        Raises ``KeyError`` immediately if ``(session_id, block_id)`` is not
+        present in ``self._all_blocks`` (fail-fast).
+        """
+        spec: NeuralKinectBlockSpec = self._all_blocks[(session_id, block_id)]
 
         # ------------------------------------------------------------------
         # 1. Load stickers
         # ------------------------------------------------------------------
-        stickers_df_dict = XYZDataFileHandler.load(xyz_csv_path)
+        stickers_df_dict = XYZDataFileHandler.load(spec.xyz_csv_path)
         self._custom_colors: Dict[str, str] = define_custom_colors(stickers_df_dict.keys())
         self._stickers_xyz_dict: Dict[str, np.ndarray] = {
             k: df[['x_mm', 'y_mm', 'z_mm']].to_numpy()
@@ -628,9 +783,9 @@ class NeuralKinectViewer(QMainWindow):
         # ------------------------------------------------------------------
         # 2. Load forearm
         # ------------------------------------------------------------------
-        forearm_params = ForearmFrameParametersFileHandler.load(forearm_metadata_path)
-        catalog = ForearmCatalog(forearm_params, forearm_pointcloud_dir)
-        self._forearms_dict = get_forearms_with_fallback(catalog, str(rgb_video_path))
+        forearm_params = ForearmFrameParametersFileHandler.load(spec.forearm_metadata_path)
+        catalog = ForearmCatalog(forearm_params, spec.forearm_pointcloud_dir)
+        self._forearms_dict = get_forearms_with_fallback(catalog, str(spec.rgb_video_path))
         self._sorted_forearm_keys: List[int] = sorted(self._forearms_dict.keys())
 
         # ------------------------------------------------------------------
@@ -638,31 +793,23 @@ class NeuralKinectViewer(QMainWindow):
         # ------------------------------------------------------------------
         try:
             self._hand_manager = HandMotionManager()
-            self._hand_manager.load(str(hand_motion_path))
+            self._hand_manager.load(str(spec.hand_motion_path))
         except Exception as exc:
             print(f"Warning: Could not load hand motion data ({exc}). Hand mesh disabled.")
             self._hand_manager = None
         self._last_hand_frame: int = -1
         self._last_hand_mesh = None
-        # Tracks face count of the last hand mesh written into self._mesh_hand.
-        # When the count is unchanged, only vertex positions need updating
-        # (mesh.points = verts + Modified()), avoiding a full DeepCopy.
         self._last_hand_tri_count: int = -1
 
         # ------------------------------------------------------------------
         # 4. Optional merged CSV
         # ------------------------------------------------------------------
         self.merged_df: Optional[pd.DataFrame] = (
-            pd.read_csv(merged_csv_path) if merged_csv_path is not None else None
+            pd.read_csv(spec.merged_csv_path) if spec.merged_csv_path is not None else None
         )
 
         # ------------------------------------------------------------------
-        # 4b. Pre-extract contact points indexed by kinect frame.
-        #
-        # merged_df rows are at neural sampling rate (~1 kHz).  contact_points
-        # is only valid for rows where time_kinect is not NaN — those rows
-        # correspond 1-to-1 with kinect frames and can be indexed directly by
-        # self.current_index without any scale-factor remapping.
+        # 4b. Pre-extract contact points indexed by kinect frame
         # ------------------------------------------------------------------
         self._contact_pts_by_frame: Optional[List[Optional[np.ndarray]]] = None
         if (
@@ -671,10 +818,6 @@ class NeuralKinectViewer(QMainWindow):
             and 'time_kinect' in self.merged_df.columns
         ):
             kinect_rows = self.merged_df.dropna(subset=['time_kinect'])
-            # Always load raw contact_points; transformation is applied at
-            # render time (section 5 of _update_frame) using the per-snapshot
-            # transform T so that contact points stay consistent with the
-            # kinect cloud and stickers.
             self._contact_pts_by_frame = [
                 _parse_contact_points_cell(cell)
                 for cell in kinect_rows['contact_points']
@@ -683,11 +826,11 @@ class NeuralKinectViewer(QMainWindow):
         # ------------------------------------------------------------------
         # 5. Contact centroid (used for GPU crop centre)
         # ------------------------------------------------------------------
+        self._transforms_by_forearm_key: Optional[Dict[int, np.ndarray]] = (
+            spec.registration_transforms_by_forearm_key or None
+        )
         self.contact_centroid: np.ndarray = self._compute_contact_centroid()
 
-        # In transformed mode, camera focal point uses the registered frame
-        # centroid.  For crop, contact_centroid stays in the original camera
-        # frame (the MKV cloud is cropped before the transform is applied).
         _T0: Optional[np.ndarray] = None
         if self._transforms_by_forearm_key:
             _T0 = self._transforms_by_forearm_key.get(
@@ -701,159 +844,119 @@ class NeuralKinectViewer(QMainWindow):
         else:
             self._camera_focal_point = self.contact_centroid
 
+        # Invalidate the CuPy crop-centre cache so it is re-uploaded for the
+        # new block (the centroid changes between blocks).
+        self._c_gpu = None
+
         # ------------------------------------------------------------------
-        # 6. Open MKV (manual context management — closed in closeEvent)
+        # 6. Open MKV (manual context management — closed in _teardown)
         # ------------------------------------------------------------------
-        self._mkv = KinectMKV(kinect_mkv_path)
-        self._mkv.__enter__()
+        self._mkv = KinectMKV(spec.kinect_mkv_path).__enter__()
         self._point_cloud_view = KinectPointCloudView(self._mkv)
         self._total_frames: int = len(self._point_cloud_view)
 
         # ------------------------------------------------------------------
         # 7. Background preloader (512-frame ring buffer)
         # ------------------------------------------------------------------
-        self._preloader_buf_size = 512
         self._preloader = FramePreloader(self._point_cloud_view, buffer_size=self._preloader_buf_size)
         self._preloader.seek(0)
         self._preloader.start()
 
-        # Tracks whether the user is actively dragging the frame slider so
-        # that intermediate drag ticks skip the expensive full frame render.
+        # ------------------------------------------------------------------
+        # 8. Reset per-block interaction state
+        # ------------------------------------------------------------------
+        self.current_index: int = 0
         self._slider_dragging: bool = False
-
-        # LOD stride — Kinect cloud is subsampled by this factor during
-        # interactive motion (slider drag or playback).  Set to False on
-        # pause / slider release so one full-resolution frame is rendered.
         self._interactive_stride: int = 4
         self._is_interactive: bool = False
-
-        # Persistent CuPy array for the crop centre; initialised lazily on
-        # the first _crop_pointcloud_gpu() call and reused every frame to
-        # avoid a cp.asarray() upload overhead per frame.
-        self._c_gpu = None  # type: ignore[assignment]
-
-        # Frame index awaiting an exact-frame re-render after a cache-miss
-        # returned an approximate (nearest-cached) frame.
         self._exact_frame_pending: Optional[int] = None
+        self._recording_name: str = spec.recording_name
 
         # ------------------------------------------------------------------
-        # 8. Build Qt UI
+        # 9. Update frame slider range + window title
         # ------------------------------------------------------------------
-        self._build_ui()
+        self.frame_slider.setRange(0, max(self._total_frames - 1, 0))
+        self.frame_slider.setValue(0)
+        self.frame_label.setText(f"1 / {self._total_frames}")
+        self._buffer_label.setText(f"Buf: 0/{self._preloader_buf_size}")
+        self.crop_spinbox.setValue(int(self._crop_half_size))
+        self.lod_spinbox.setValue(self._interactive_stride)
+        self.setWindowTitle(f"Neural-Kinect Viewer | {spec.recording_name}")
 
         # ------------------------------------------------------------------
-        # 9. Initialise named VTK actors (empty meshes = reserved slots)
+        # 10. Rebuild data-dependent right-panel widgets
+        #     (clear indices 1+ to keep the camera monitor at index 0)
+        # ------------------------------------------------------------------
+        while self._right_panel_layout.count() > 1:
+            item = self._right_panel_layout.takeAt(1)
+            if item.widget():
+                item.widget().deleteLater()
+        self._build_right_panel_data()
+
+        # ------------------------------------------------------------------
+        # 11. Replace neural panel
+        # ------------------------------------------------------------------
+        if hasattr(self, 'neural_panel') and self.neural_panel is not None:
+            self._outer_layout.removeWidget(self.neural_panel)
+            self.neural_panel.deleteLater()
+            self.neural_panel = None
+
+        if self.merged_df is not None:
+            self.neural_panel = NeuralDataPanel(self.merged_df, self._total_frames)
+            self.neural_panel.frame_requested.connect(self.frame_slider.setValue)
+            self._outer_layout.addWidget(self.neural_panel)
+        else:
+            self.neural_panel = None
+
+        # ------------------------------------------------------------------
+        # 12. Reset named VTK actor slots
         # ------------------------------------------------------------------
         self._init_actors()
 
         # ------------------------------------------------------------------
-        # 10. Play timer
+        # 13. Deferred render (if already shown)
         # ------------------------------------------------------------------
-        self._play_timer = QTimer(self)
-        self._play_timer.timeout.connect(self._play_advance)
+        if self._initial_render_done:
+            QTimer.singleShot(0, lambda: self._update_frame(0))
 
-        # Throttle timer for live frame updates during slider drag.
-        # Fires every 80 ms (~12 fps) while the user holds the slider,
-        # preventing a full 3-D render on every tiny slider tick.
-        self._drag_timer = QTimer(self)
-        self._drag_timer.timeout.connect(self._on_drag_timer_fired)
-        self._drag_timer.setInterval(80)
-        self._pending_drag_frame: Optional[int] = None
-
-        # Polling timer: fires every 50 ms after a cache-miss delivered an
-        # approximate frame, re-renders once the exact frame is buffered.
-        self._exact_frame_timer = QTimer(self)
-        self._exact_frame_timer.setInterval(50)
-        self._exact_frame_timer.timeout.connect(self._on_exact_frame_poll)
-
-        # Guard: first render is deferred to showEvent, not __init__, so that
-        # the VTK render window has valid pixel dimensions when Render() fires.
-        self._initial_render_done: bool = False
-
-        # ------------------------------------------------------------------
-        # 12. Initial frame render
-        # ------------------------------------------------------------------
-        # _build_frame_controls() calls setValue(0) before valueChanged is
-        # connected, so _update_frame is never triggered during __init__.
-        # Deferred to showEvent (see showEvent override below): that fires
-        # once the window manager has assigned real geometry to the window,
-        # guaranteeing VTK's render window has valid pixel dimensions.
-        # QTimer.singleShot(0, ...) from here fired before the first
-        # resizeEvent/paintEvent reached the QtInteractor, causing VTK to
-        # silently discard the Render() call (render window size was (0, 0)).
-
-    def _deferred_start(self) -> None:
-        """Initialize the VTK interactor, then render frame 0."""
-        # ------------------------------------------------------------------
-        # 11. Neural scale factor — must be set BEFORE _update_frame is
-        #     called, because _update_frame step 6 accesses self._neural_scale.
-        # ------------------------------------------------------------------
-        self._neural_scale: float = (
-            len(self.merged_df) / self._total_frames
-            if self.merged_df is not None and self._total_frames > 0
-            else 1.0
-        )
-
-        try:
-            self.plotter.interactor.Initialize()
-        except Exception:
-            pass
-
-        # Sync VTK render-window size with the actual Qt widget size.
-        # QtInteractor may not have pushed its geometry to VTK yet at this
-        # point; if VTK still thinks the size is (0, 0), Render() is a no-op.
-        sz = self.plotter.interactor.size()
-        if sz.width() > 0 and sz.height() > 0:
-            self.plotter.render_window.SetSize(sz.width(), sz.height())
-
-        self._update_frame(0)
-
-    def showEvent(self, event) -> None:  # noqa: N802
-        """Trigger the first render once the window has real geometry."""
-        super().showEvent(event)
-        if not self._initial_render_done:
-            self._initial_render_done = True
-            # Move to primary screen (index 0) before maximising so the window
-            # always lands on the main display even on multi-monitor setups.
-            primary = QApplication.primaryScreen()
-            if primary is not None:
-                self.move(primary.geometry().topLeft())
-            self.showMaximized()
-            # Defer by one tick so Qt finishes processing the show event and
-            # child widgets have their final pixel dimensions before VTK reads
-            # the render-window size.
-            QTimer.singleShot(0, self._deferred_start)
-
-    # ------------------------------------------------------------------
-    # Contact centroid
-    # ------------------------------------------------------------------
-
-    def _compute_contact_centroid(self) -> np.ndarray:
-        """
-        Return the mean XYZ of all forearm contact points from the merged CSV,
-        or the global sticker mean when no merged CSV is available.
-        """
-        if self.merged_df is not None:
-            all_contact_pts: List[np.ndarray] = []
-            for cell in self.merged_df['contact_points']:
-                pts = _parse_contact_points_cell(cell)
-                if pts is not None:
-                    all_contact_pts.append(pts)
-            if all_contact_pts:
-                return np.nanmean(np.vstack(all_contact_pts), axis=0)
-
-        # Fallback for pure-3D mode (no merged CSV)
-        all_xyz = np.concatenate(list(self._stickers_xyz_dict.values()), axis=0)
-        return np.nanmean(all_xyz, axis=0)
-
-    # ------------------------------------------------------------------
+    # ======================================================================
     # UI construction
-    # ------------------------------------------------------------------
+    # ======================================================================
 
     def _build_ui(self) -> None:
+        """
+        Build the Qt widget hierarchy once.
+
+        Static part: toolbar (session + block dropdowns), plotter, camera
+        monitor, frame controls.  Data-dependent right-panel widgets are
+        added later by ``_build_right_panel_data()`` inside ``_load_block()``.
+        """
+        # --- Toolbar with session / block dropdowns ---
+        toolbar = QToolBar("Session controls")
+        toolbar.setMovable(False)
+
+        toolbar.addWidget(QLabel("Session:"))
+        self._session_combo = QComboBox()
+        self._session_combo.setMinimumWidth(200)
+        for session_id in sorted(self._session_to_blocks):
+            self._session_combo.addItem(session_id)
+        self._session_combo.currentIndexChanged.connect(self._on_session_changed)
+        toolbar.addWidget(self._session_combo)
+
+        toolbar.addSeparator()
+
+        toolbar.addWidget(QLabel("Block-order:"))
+        self._block_combo = QComboBox()
+        self._block_combo.setMinimumWidth(160)
+        self._block_combo.currentIndexChanged.connect(self._on_block_changed)
+        toolbar.addWidget(self._block_combo)
+
+        self.addToolBar(toolbar)
+
+        # --- Central widget ---
         central = QWidget()
         self.setCentralWidget(central)
-        outer = QVBoxLayout(central)
+        self._outer_layout = QVBoxLayout(central)
 
         # --- Top row: 3D plotter + right panel ---
         top_widget = QWidget()
@@ -869,34 +972,33 @@ class NeuralKinectViewer(QMainWindow):
         # Right panel (scrollable, fixed 220 px)
         self._right_panel = QWidget()
         self._right_panel_layout = QVBoxLayout(self._right_panel)
-        self._build_right_panel_controls()
+        self._build_right_panel_static()  # camera monitor only (index 0)
         scroll = QScrollArea()
         scroll.setWidget(self._right_panel)
         scroll.setWidgetResizable(True)
         scroll.setFixedWidth(220)
         top_layout.addWidget(scroll, stretch=1)
 
-        outer.addWidget(top_widget, stretch=4)
+        self._outer_layout.addWidget(top_widget, stretch=4)
 
         # --- Middle row: frame controls ---
-        outer.addWidget(self._build_frame_controls())
+        self._outer_layout.addWidget(self._build_frame_controls())
 
-        # --- Bottom row: neural panel (only when merged CSV provided) ---
+        # neural_panel placeholder — will be set by _load_block()
         self.neural_panel: Optional[NeuralDataPanel] = None
-        if self.merged_df is not None:
-            self.neural_panel = NeuralDataPanel(self.merged_df, self._total_frames)
-            self.neural_panel.frame_requested.connect(self.frame_slider.setValue)
-            outer.addWidget(self.neural_panel)
 
-    def _build_right_panel_controls(self) -> None:
+    def _build_right_panel_static(self) -> None:
         """
-        Populate the scrollable right panel with:
-        - A small camera-position readout at the top.
-        - A visibility checkbox (+ point-size slider where applicable) for
-          each scene object.
-        - A StickerVelocityCompass per sticker (only when merged CSV present).
+        Add the static camera-position readout (index 0 in the right panel).
+
+        Called once from ``_build_ui()``.  All subsequent items (visibility
+        checkboxes, sticker controls, compasses) are added by
+        ``_build_right_panel_data()`` and cleared/rebuilt on each hot-swap.
+
+        Note: no trailing stretch is added here.  ``_build_right_panel_data()``
+        adds the stretch at the end of the data items so it is naturally
+        removed and re-added on each hot-swap.
         """
-        # --- Camera monitor (position + orientation) ---
         cam_box = QGroupBox("Camera")
         cam_layout = QVBoxLayout(cam_box)
         self._cam_pos_label = QLabel(
@@ -908,6 +1010,20 @@ class NeuralKinectViewer(QMainWindow):
         cam_layout.addWidget(self._cam_pos_label)
         self._right_panel_layout.addWidget(cam_box)
 
+    def _build_right_panel_data(self) -> None:
+        """
+        Populate the data-dependent portion of the right panel.
+
+        Called from ``_load_block()`` after clearing indices 1+ (the camera
+        monitor at index 0 is preserved).  Adds visibility checkboxes, point-
+        size sliders, and ``StickerVelocityCompass`` widgets for the current
+        block.
+
+        A trailing stretch is appended at the very end so the widgets stay
+        top-aligned.  On each hot-swap, ``_load_block()`` removes all items
+        from index 1 onward (including the previous stretch), then this method
+        re-adds the new items + a fresh stretch.
+        """
         # Init state dicts
         self._visibility: Dict[str, bool] = {
             name: True
@@ -970,6 +1086,8 @@ class NeuralKinectViewer(QMainWindow):
                 compass_layout.addWidget(compass)
                 self._right_panel_layout.addWidget(compass_box)
 
+        # Trailing stretch — keeps widgets top-aligned.  Removed with the rest
+        # of the data items on hot-swap and re-added by the next call to this method.
         self._right_panel_layout.addStretch()
 
     def _build_frame_controls(self) -> QWidget:
@@ -981,14 +1099,14 @@ class NeuralKinectViewer(QMainWindow):
 
         self.frame_slider = QSlider(Qt.Horizontal)
         self.frame_slider.setMinimum(0)
-        self.frame_slider.setMaximum(max(self._total_frames - 1, 0))
+        self.frame_slider.setMaximum(0)
         self.frame_slider.setValue(0)
         self.frame_slider.valueChanged.connect(self._on_slider_change)
         self.frame_slider.sliderPressed.connect(self._on_slider_pressed)
         self.frame_slider.sliderReleased.connect(self._on_slider_released)
         layout.addWidget(self.frame_slider)
 
-        self.frame_label = QLabel(f"1 / {self._total_frames}")
+        self.frame_label = QLabel("1 / 0")
         self.frame_label.setFixedWidth(100)
         layout.addWidget(self.frame_label)
 
@@ -1018,7 +1136,7 @@ class NeuralKinectViewer(QMainWindow):
         self.lod_spinbox = QSpinBox()
         self.lod_spinbox.setMinimum(1)
         self.lod_spinbox.setMaximum(8)
-        self.lod_spinbox.setValue(self._interactive_stride)
+        self.lod_spinbox.setValue(4)
         self.lod_spinbox.setToolTip(
             "Point-cloud stride during interaction (1 = full resolution, "
             "higher = faster but sparser)"
@@ -1028,9 +1146,9 @@ class NeuralKinectViewer(QMainWindow):
 
         return widget
 
-    # ------------------------------------------------------------------
+    # ======================================================================
     # Actor initialisation
-    # ------------------------------------------------------------------
+    # ======================================================================
 
     def _init_actors(self) -> None:
         """
@@ -1038,20 +1156,10 @@ class NeuralKinectViewer(QMainWindow):
         the persistent ``PolyData`` objects update the scene without touching
         the camera.
 
-        Persistent mesh references (``self._mesh_*``) are mutated by
-        ``_update_frame()`` instead of calling ``plotter.add_mesh()`` each
-        frame.
+        Called from ``_load_block()`` on each hot-swap.  Named actors are
+        replaced in-place by PyVista when the same ``name=`` is reused, so the
+        camera is preserved across block transitions.
         """
-
-        # ------------------------------------------------------------------
-        # Persistent PolyData objects for dynamic actors.
-        # Each is registered once with plotter.add_mesh(); _update_frame()
-        # mutates .points / scalar arrays in-place and calls .Modified().
-        # ------------------------------------------------------------------
-        # Seed with one dummy black point so VTK's PointData registers the
-        # 'colors' array before plotter.add_mesh() validates scalars='colors'.
-        # pv.PolyData with 0 points does not store scalar arrays reliably;
-        # the single point is immediately overwritten by the first _update_frame().
         _seed = np.zeros((1, 3), dtype=np.float32)
         _seed_col = np.zeros((1, 3), dtype=np.uint8)
         self._mesh_kinect = pv.PolyData(_seed.copy())
@@ -1086,9 +1194,7 @@ class NeuralKinectViewer(QMainWindow):
             pickable=False,
         )
 
-        # Dynamic actors — registered once, mutated in-place by _update_frame().
-        # Actor references are stored so _on_point_size_changed() can call
-        # actor.GetProperty().SetPointSize() without re-running add_mesh().
+        # Dynamic actors — registered once (or replaced by name), mutated in-place.
         self._actor_kinect = self.plotter.add_mesh(
             self._mesh_kinect,
             scalars='colors',
@@ -1114,9 +1220,7 @@ class NeuralKinectViewer(QMainWindow):
             point_size=self._point_sizes['contact_points'],
         )
 
-        # Register ALL stickers (not only coloured ones) and cache actor refs.
-        # Sphere geometry stays at origin; _update_frame() translates via
-        # actor.SetPosition() instead of recreating the sphere each frame.
+        # Register ALL stickers and cache actor refs.
         self._sticker_actors: Dict[str, Any] = {}
         for name in self._stickers_xyz_dict:
             color = self._custom_colors.get(name, 'magenta')
@@ -1124,36 +1228,14 @@ class NeuralKinectViewer(QMainWindow):
             actor = self.plotter.add_mesh(sphere, color=color, name=f'sticker_{name}')
             self._sticker_actors[name] = actor
 
-        # ------------------------------------------------------------------
-        # Default camera — edit these three lines to change the startup view.
-        #
-        # focal_point  where the camera looks at (contact centroid is a
-        #              sensible default; keep it unless you want to look
-        #              somewhere else entirely).
-        #
-        # position     where the camera sits in 3-D space (mm).
-        #              Offset from focal_point along any axis:
-        #                -Y  →  in front of the forearm (typical)
-        #                +Z  →  looking down from above
-        #              Example: centroid + (0, -800, +400) gives a
-        #              slightly-elevated front view.
-        #
-        # up           the "up" axis of the image plane (unit vector).
-        #              Common choices:
-        #                (0,  0,  1)  →  Z is up   (default VTK / PyVista)
-        #                (0, -1,  0)  →  -Y is up  (image-coords style)
-        #                (0,  1,  0)  →  +Y is up
-        # ------------------------------------------------------------------
+        # Default camera
         cx, cy, cz = self._camera_focal_point.tolist()
         self.plotter.camera.focal_point = [cx, cy, cz]
         self.plotter.camera.position    = [cx, cy, cz - 400.0]
         self.plotter.camera.up          = [0.375, -0.904, -0.201]
-
         self.plotter.camera_set = True
 
-        # Invisible bounding proxy — gives VTK a plausible clipping range
-        # even when early frames (0, 1, …) have all-empty actor data.
-        # Removed by _update_frame on the first frame that has real geometry.
+        # Invisible bounding proxy
         self._bounds_proxy_active = True
         _bounds_proxy = pv.Box(bounds=(
             cx - self._crop_half_size, cx + self._crop_half_size,
@@ -1172,9 +1254,22 @@ class NeuralKinectViewer(QMainWindow):
         except Exception:
             pass
 
-    # ------------------------------------------------------------------
+        # Also reset the last-forearm-key sentinel so the forearm is redrawn
+        self._last_forearm_key: Any = object()
+
+        # Neural scale: ratio of merged-CSV rows to kinect frames.
+        # Must be set here (not only in _deferred_start) so that hot-swap
+        # renders triggered by _load_block use the correct scale for the
+        # new block.
+        self._neural_scale: float = (
+            len(self.merged_df) / self._total_frames
+            if self.merged_df is not None and self._total_frames > 0
+            else 1.0
+        )
+
+    # ======================================================================
     # Frame update — the hot path
-    # ------------------------------------------------------------------
+    # ======================================================================
 
     def _update_frame(self, frame_idx: int) -> None:
         """
@@ -1196,8 +1291,7 @@ class NeuralKinectViewer(QMainWindow):
         """
         self.current_index = frame_idx
 
-        # Remove the invisible bounding proxy once a real kinect frame is
-        # available, so it no longer inflates the scene bounds unnecessarily.
+        # Remove the invisible bounding proxy once a real kinect frame is available.
         if self._bounds_proxy_active:
             pc_data, _ = self._preloader.get_frame(frame_idx)
             if (
@@ -1212,8 +1306,6 @@ class NeuralKinectViewer(QMainWindow):
                     pass
 
         # Resolve active forearm snapshot and its transform for this frame.
-        # This must happen before section 1 (kinect cloud) so that T is
-        # available for all geometry transforms below.
         forearm_key = self._bisect_forearm(frame_idx)
         T: Optional[np.ndarray] = (
             self._transforms_by_forearm_key.get(forearm_key)
@@ -1221,12 +1313,9 @@ class NeuralKinectViewer(QMainWindow):
             else None
         )
 
-        # 1. Kinect point cloud (GPU-cropped AABB) ----------------------
-        # In-place update via DeepCopy() — avoids VTK mapper/actor recreation.
-        # DeepCopy updates points + cells + scalars on the same dataset object
-        # that the registered mapper references.
-        _kcloud: Optional[pv.PolyData] = None  # built below; None → use empty
-        _got_exact: bool = True  # False when a nearest-frame fallback was used
+        # 1. Kinect point cloud (GPU-cropped AABB) --------------------------
+        _kcloud: Optional[pv.PolyData] = None
+        _got_exact: bool = True
         if self._visibility.get('kinect_point_cloud', True):
             pc_data, _got_exact = self._preloader.get_frame(frame_idx)
             if (
@@ -1242,9 +1331,6 @@ class NeuralKinectViewer(QMainWindow):
                     pts = apply_rigid_transform(
                         pts.astype(np.float64), T
                     ).astype(pts.dtype)
-                # During interactive motion (drag / playback) subsample the
-                # cloud by _interactive_stride to cut VTK render time.  A
-                # full-resolution frame is rendered on pause / slider release.
                 if self._is_interactive and self._interactive_stride > 1:
                     s = self._interactive_stride
                     pts = pts[::s]
@@ -1260,10 +1346,7 @@ class NeuralKinectViewer(QMainWindow):
             _kcloud = pv.PolyData(np.empty((0, 3), dtype=np.float32))
         self._mesh_kinect.DeepCopy(_kcloud)
 
-        # 2. Forearm (updated only when the bisect key changes) ----------
-        # In transformed mode the forearm points are mapped into the registered
-        # frame by T (same transform as the kinect cloud) so that both stay
-        # spatially consistent.
+        # 2. Forearm (updated only when the bisect key changes) -------------
         if not self._visibility.get('forearms', True):
             _fa_empty = pv.PolyData(np.empty((0, 3), dtype=np.float32))
             self._mesh_forearm.DeepCopy(_fa_empty)
@@ -1291,11 +1374,7 @@ class NeuralKinectViewer(QMainWindow):
                 _fa_cloud = pv.PolyData(np.empty((0, 3), dtype=np.float32))
             self._mesh_forearm.DeepCopy(_fa_cloud)
 
-        # 3. Hand mesh (lazy per-frame transform) ------------------------
-        # In-place update: when the triangle count is unchanged (common for
-        # MANO's fixed 778-vertex topology), only vertex positions are written
-        # (mesh.points = verts + Modified()), avoiding a full DeepCopy.
-        # When topology changes or the mesh becomes unavailable, DeepCopy().
+        # 3. Hand mesh (lazy per-frame transform) ---------------------------
         if not self._visibility.get('hand_meshes', True):
             if self._last_hand_tri_count != 0:
                 self._mesh_hand.DeepCopy(pv.PolyData(np.empty((0, 3), dtype=np.float32)))
@@ -1311,11 +1390,9 @@ class NeuralKinectViewer(QMainWindow):
                 tris = np.asarray(o3d_mesh.triangles)
                 n_tris = len(tris)
                 if n_tris == self._last_hand_tri_count:
-                    # Same topology — update only vertex positions in-place
                     self._mesh_hand.points = verts
                     self._mesh_hand.Modified()
                 else:
-                    # Topology changed — rebuild faces and overwrite
                     faces = np.hstack([
                         np.full((n_tris, 1), 3, dtype=tris.dtype), tris
                     ])
@@ -1328,10 +1405,7 @@ class NeuralKinectViewer(QMainWindow):
                     )
                     self._last_hand_tri_count = 0
 
-        # 4. Stickers + compass widgets ----------------------------------
-        # Actor references were captured in _init_actors(); sphere geometry
-        # stays at origin and is translated via SetPosition() each frame,
-        # eliminating per-frame pv.Sphere() creation and plotter.add_mesh().
+        # 4. Stickers + compass widgets -------------------------------------
         for name, positions in self._stickers_xyz_dict.items():
             pos = positions[frame_idx] if frame_idx < len(positions) else None
             if (
@@ -1352,7 +1426,6 @@ class NeuralKinectViewer(QMainWindow):
                 else:
                     actor.VisibilityOff()
 
-            # Compass update
             if name in self._compass_widgets and frame_idx > 0:
                 prev_pos = positions[frame_idx - 1]
                 if (
@@ -1366,7 +1439,7 @@ class NeuralKinectViewer(QMainWindow):
                 if not np.any(np.isnan(prev_pos)) and pos is not None and not np.any(np.isnan(pos)):
                     self._compass_widgets[name].update_velocity(pos - prev_pos)
 
-        # 5. Contact points (kinect-frame-aligned, pre-parsed at init) ----
+        # 5. Contact points (kinect-frame-aligned, pre-parsed at load) ------
         if self._contact_pts_by_frame is not None:
             _cpts: Optional[np.ndarray] = None
             if self._visibility.get('contact_points', True):
@@ -1386,40 +1459,48 @@ class NeuralKinectViewer(QMainWindow):
                     pv.PolyData(np.empty((0, 3), dtype=np.float32))
                 )
 
-        # 6. Single render call -----------------------------------------
-        # Recalculate near/far clipping planes from current actor bounds.
-        # VTK only does this automatically on camera-interaction events; a
-        # programmatic render() call does not trigger it.  Without this,
-        # geometry added after the initial empty-actor setup (which produces
-        # a degenerate bounding box) is silently clipped to invisibility.
+        # 6. Single render call ---------------------------------------------
         self.plotter.renderer.ResetCameraClippingRange()
         self.plotter.render()
         self._refresh_cam_pos_label()
 
-        # 7. Neural panel cursor ----------------------------------------
+        # 7. Neural panel cursor --------------------------------------------
         if self.neural_panel is not None:
             self.neural_panel.update_cursor(frame_idx, self._neural_scale)
 
-        # 8. Frame label + buffer fill indicator ------------------------
+        # 8. Frame label + buffer fill indicator ----------------------------
         self.frame_label.setText(f"{frame_idx + 1} / {self._total_frames}")
         buf_n = self._preloader.buffer_count()
         buf_max = self._preloader._buffer_size
         self._buffer_label.setText(f"Buf: {buf_n}/{buf_max}")
 
-        # 9. Signal preloader to look ahead -----------------------------
+        # 9. Signal preloader to look ahead ---------------------------------
         self._preloader.seek(frame_idx + 1)
 
-        # 10. Schedule a re-render if we displayed an approximate frame --
-        # When get_frame() returned a nearest-cached neighbour instead of the
-        # exact frame, queue a 50-ms poll that re-renders once the buffer
-        # catches up.  Skipped during interactive motion (playback / drag)
-        # because the next advance will supersede the approximate frame anyway.
+        # 10. Schedule a re-render if we displayed an approximate frame -----
         if not _got_exact:
             self._schedule_exact_frame(frame_idx)
 
-    # ------------------------------------------------------------------
+    # ======================================================================
     # Supporting methods
-    # ------------------------------------------------------------------
+    # ======================================================================
+
+    def _compute_contact_centroid(self) -> np.ndarray:
+        """
+        Return the mean XYZ of all forearm contact points from the merged CSV,
+        or the global sticker mean when no merged CSV is available.
+        """
+        if self.merged_df is not None:
+            all_contact_pts: List[np.ndarray] = []
+            for cell in self.merged_df['contact_points']:
+                pts = _parse_contact_points_cell(cell)
+                if pts is not None:
+                    all_contact_pts.append(pts)
+            if all_contact_pts:
+                return np.nanmean(np.vstack(all_contact_pts), axis=0)
+
+        all_xyz = np.concatenate(list(self._stickers_xyz_dict.values()), axis=0)
+        return np.nanmean(all_xyz, axis=0)
 
     def _crop_pointcloud_gpu(
         self,
@@ -1438,8 +1519,6 @@ class NeuralKinectViewer(QMainWindow):
             try:
                 import cupy as cp
                 xyz_gpu = cp.asarray(xyz.astype(np.float32))
-                # Lazy-init: upload centre once; contact_centroid is fixed for
-                # the lifetime of the viewer so no invalidation is needed.
                 if self._c_gpu is None:
                     self._c_gpu = cp.asarray(center.astype(np.float32))
                 c_gpu = self._c_gpu
@@ -1454,7 +1533,6 @@ class NeuralKinectViewer(QMainWindow):
             except Exception:
                 pass  # fall through to CPU path
 
-        # CPU path (NumPy)
         mask = (
             (np.abs(xyz - center) <= half_size).all(axis=1)
             & (xyz[:, 2] > 0)
@@ -1491,9 +1569,39 @@ class NeuralKinectViewer(QMainWindow):
         except Exception:
             return None
 
-    # ------------------------------------------------------------------
-    # Slot handlers
-    # ------------------------------------------------------------------
+    # ======================================================================
+    # Slot handlers — dropdowns
+    # ======================================================================
+
+    def _on_session_changed(self, index: int) -> None:
+        """Repopulate the block combo for the newly-selected session."""
+        if not hasattr(self, '_all_blocks'):
+            return
+        session_id = self._session_combo.currentText()
+        self._block_combo.blockSignals(True)
+        self._block_combo.clear()
+        for block_id in self._session_to_blocks.get(session_id, []):
+            self._block_combo.addItem(block_id)
+        self._block_combo.blockSignals(False)
+        self._block_combo.setCurrentIndex(0)
+        self._on_block_changed(0)
+
+    def _on_block_changed(self, index: int) -> None:
+        """Tear down the current block and load the newly-selected one."""
+        if not hasattr(self, '_all_blocks'):
+            return
+        session_id = self._session_combo.currentText()
+        block_id = self._block_combo.currentText()
+        if not session_id or not block_id:
+            return
+        self._teardown_current_block()
+        self._load_block(session_id, block_id)
+        # Trigger a deferred render now that _initial_render_done is True
+        # (_load_block does this itself; this call is a belt-and-suspenders guard).
+
+    # ======================================================================
+    # Slot handlers — frame controls
+    # ======================================================================
 
     def _on_slider_pressed(self) -> None:
         """Mark the start of a user drag and start the throttle timer."""
@@ -1519,26 +1627,18 @@ class NeuralKinectViewer(QMainWindow):
 
     def _on_slider_change(self, value: int) -> None:
         if self._slider_dragging:
-            # During drag: update label and preloader immediately, but let
-            # _drag_timer throttle the expensive MKV decode + 3-D render.
             self.frame_label.setText(f"{value + 1} / {self._total_frames}")
             self._preloader.seek(value)
             self._pending_drag_frame = value
         else:
-            # Used by playback (setValue) and single click — full render.
             self._update_frame(value)
 
     def _on_visibility_changed(self, key: str, state: int) -> None:
         self._visibility[key] = state == Qt.Checked
-        # Redraw current frame to reflect new visibility
         self._update_frame(self.current_index)
 
     def _on_point_size_changed(self, key: str, value: int) -> None:
         self._point_sizes[key] = float(value)
-        # Apply directly to the stored actor (avoids a full _update_frame() call).
-        # Phase 1 replaced per-frame add_mesh() with in-place overwrite(), so
-        # point_size is no longer re-applied on every frame; storing the actor
-        # reference and calling SetPointSize() here restores slider behaviour.
         actor_map = {
             'kinect_point_cloud': getattr(self, '_actor_kinect', None),
             'forearms':           getattr(self, '_actor_forearm', None),
@@ -1553,6 +1653,9 @@ class NeuralKinectViewer(QMainWindow):
 
     def _on_crop_changed(self, value: int) -> None:
         self._crop_half_size = float(value)
+        # Invalidate the CuPy crop-centre so it is not re-used with a stale half_size.
+        # (centre doesn't change, but the crop box size does — GPU path rechecks both)
+        self._c_gpu = None
 
     def _on_lod_changed(self, value: int) -> None:
         self._interactive_stride = value
@@ -1561,9 +1664,6 @@ class NeuralKinectViewer(QMainWindow):
         """
         Start polling the preloader buffer until *frame_idx* is cached
         exactly, then re-render it at full resolution.
-
-        Skipped during active interaction (slider drag, playback) because
-        the next advance will supersede the approximate frame immediately.
         """
         if self._is_interactive:
             return
@@ -1582,7 +1682,6 @@ class NeuralKinectViewer(QMainWindow):
         if is_exact:
             self._exact_frame_timer.stop()
             self._exact_frame_pending = None
-            # Re-render only if the user is still on the same frame
             if self.current_index == frame_idx:
                 self._update_frame(frame_idx)
 
@@ -1607,15 +1706,14 @@ class NeuralKinectViewer(QMainWindow):
         if self._play_timer.isActive():
             self._play_timer.stop()
             self.play_button.setText("▶ Play")
-            # Restore full-resolution on pause
             self._is_interactive = False
             self._update_frame(self.current_index)
         else:
-            # Engage LOD stride for playback
             self._is_interactive = True
             fps = 30
             if (
-                self._mkv._reader is not None
+                self._mkv is not None
+                and self._mkv._reader is not None
                 and hasattr(self._mkv._reader, 'fps')
             ):
                 fps = self._mkv._reader.fps
@@ -1624,20 +1722,54 @@ class NeuralKinectViewer(QMainWindow):
 
     def _play_advance(self) -> None:
         nxt = (self.current_index + 1) % self._total_frames
-        self.frame_slider.setValue(nxt)  # triggers _on_slider_change → _update_frame
+        self.frame_slider.setValue(nxt)
 
-    # ------------------------------------------------------------------
-    # Cleanup
-    # ------------------------------------------------------------------
+    # ======================================================================
+    # Show / close
+    # ======================================================================
+
+    def _deferred_start(self) -> None:
+        """Initialize the VTK interactor (once), then render frame 0.
+
+        ``_neural_scale`` is already set by ``_load_block()`` so it does not
+        need to be recomputed here.  The VTK interactor initialisation is
+        guarded so it only runs once even when this method is called on the
+        first show.
+        """
+        if not getattr(self, '_vtk_interactor_initialized', False):
+            try:
+                self.plotter.interactor.Initialize()
+                self._vtk_interactor_initialized = True
+            except Exception:
+                pass
+
+        sz = self.plotter.interactor.size()
+        if sz.width() > 0 and sz.height() > 0:
+            self.plotter.render_window.SetSize(sz.width(), sz.height())
+
+        self._update_frame(0)
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        """Trigger the first render once the window has real geometry."""
+        super().showEvent(event)
+        if not self._initial_render_done:
+            self._initial_render_done = True
+            primary = QApplication.primaryScreen()
+            if primary is not None:
+                self.move(primary.geometry().topLeft())
+            self.showMaximized()
+            QTimer.singleShot(0, self._deferred_start)
 
     def closeEvent(self, event) -> None:  # noqa: N802
         self._play_timer.stop()
         self._drag_timer.stop()
         self._exact_frame_timer.stop()
-        self._preloader.stop()
-        self._preloader.join(timeout=2.0)
+        if self._preloader is not None:
+            self._preloader.stop()
+            self._preloader.join(timeout=2.0)
         try:
-            self._mkv.__exit__(None, None, None)
+            if self._mkv is not None:
+                self._mkv.__exit__(None, None, None)
         except Exception:
             pass
         # Explicitly finalize the VTK render window so its OpenGL context is

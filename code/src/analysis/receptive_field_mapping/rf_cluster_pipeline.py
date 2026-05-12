@@ -33,6 +33,7 @@ from analysis.receptive_field_mapping.rf_extraction_io import (
     load_neuron_contacts,
     load_neuron_touches,
     load_rf_camera_rotation,
+    load_rf_camera_settings,
     load_sessions_metadata,
     save_cluster_session_data,
     save_extraction_summary,
@@ -1271,9 +1272,15 @@ def run_cluster_rf_visualization(
                 sessions_dir = cluster_dir / 'sessions'
                 if not sessions_dir.exists():
                     continue
+                all_cameras = load_rf_camera_settings(camera_settings_dir)
                 for session_subdir in sorted(sessions_dir.iterdir()):
                     session_id = session_subdir.name
-                    session_R = load_rf_camera_rotation(camera_settings_dir, session_id)
+                    if session_id not in all_cameras:
+                        raise ValueError(
+                            f"run_cluster_rf_visualization: session '{session_id}' not found in camera settings. "
+                            "Run 'set_rf_camera_settings' first."
+                        )
+                    session_cam = all_cameras[session_id]
                     try:
                         session_spike_df, cluster_contacts_xyz = load_cluster_session_data(
                             cluster_dir, session_id
@@ -1330,7 +1337,7 @@ def run_cluster_rf_visualization(
                             display_metric="spike_count",
                             render_context=render_context,
                             disjoint_mask_distance_mm=disjoint_mask_distance_mm,
-                            rotation_matrix=session_R,
+                            camera_settings=session_cam,
                         )
                         produced.append(count_png)
                     except Exception:
@@ -1354,7 +1361,7 @@ def run_cluster_rf_visualization(
                                 display_metric="spike_ratio",
                                 render_context=render_context,
                                 disjoint_mask_distance_mm=disjoint_mask_distance_mm,
-                                rotation_matrix=session_R,
+                                camera_settings=session_cam,
                             )
                             produced.append(ratio_png)
                         except Exception:
@@ -1439,11 +1446,10 @@ def launch_rf_camera_settings_viewer(
 ) -> None:
     """Launch the RF Camera Settings GUI for all sessions in input_items.
 
-    Loads PopulationData for each session in a thread pool, then opens
-    the RFCameraSettingsViewer window. Blocks until the user closes the window.
+    Passes session paths to the viewer which loads data on-demand per session.
+    Blocks until the user closes the window.
     Camera settings are saved to 4_analysed/rf_camera_settings/rf_camera_settings.json.
     """
-    from .touch_population_data import load_population_data
     from .gui.rf_camera_settings_viewer import RFCameraSettingsViewer
 
     session_specs = _resolve_explorer_session_paths(input_items)
@@ -1451,22 +1457,14 @@ def launch_rf_camera_settings_viewer(
     if n == 0:
         raise ValueError("launch_rf_camera_settings_viewer: no sessions to display.")
 
-    print(f"[RF Camera Settings] Loading {n} session(s)...")
-
-    def _load_one(spec: Tuple[str, Path, Path]) -> Tuple[str, object]:
-        session_id, series_csv, forearm_ply = spec
-        touch_features_dir = series_csv.parent.parent / 'touch_features'
-        return session_id, load_population_data(series_csv, forearm_ply, touch_features_dir=touch_features_dir)
-
-    with ThreadPoolExecutor(max_workers=min(4, n)) as executor:
-        sessions: List[Tuple[str, object]] = list(executor.map(_load_one, session_specs))
+    print(f"[RF Camera Settings] Launching viewer for {n} session(s)...")
 
     database_path = input_items[0][1]
     output_dir = database_path / '4_analysed' / 'rf_camera_settings'
 
     app = QApplication.instance() or QApplication(sys.argv)
     viewer = RFCameraSettingsViewer(
-        sessions=sessions,
+        sessions=session_specs,
         output_dir=output_dir,
     )
     viewer.show()
