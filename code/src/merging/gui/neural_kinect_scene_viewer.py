@@ -689,6 +689,18 @@ class NeuralKinectViewer(QMainWindow):
         self._preloader: Optional[FramePreloader] = None
 
         # ------------------------------------------------------------------
+        # Persistent panel state — seeded once; survive session/block switches
+        # ------------------------------------------------------------------
+        self._visibility: Dict[str, bool] = {}
+        self._point_sizes: Dict[str, float] = {
+            'kinect_point_cloud': 2.0,
+            'forearms': 8.0,
+            'contact_points': 15.0,
+        }
+        self._interactive_stride: int = 4
+        self._is_interactive: bool = False
+
+        # ------------------------------------------------------------------
         # Build the Qt UI (plotter + static right panel + frame controls)
         # ------------------------------------------------------------------
         self._build_ui()
@@ -861,14 +873,14 @@ class NeuralKinectViewer(QMainWindow):
         self._preloader = FramePreloader(self._point_cloud_view, buffer_size=self._preloader_buf_size)
         self._preloader.seek(0)
         self._preloader.start()
+        if not self._visibility.get('kinect_point_cloud', True):
+            self._preloader.pause()
 
         # ------------------------------------------------------------------
         # 8. Reset per-block interaction state
         # ------------------------------------------------------------------
         self.current_index: int = 0
         self._slider_dragging: bool = False
-        self._interactive_stride: int = 4
-        self._is_interactive: bool = False
         self._exact_frame_pending: Optional[int] = None
         self._recording_name: str = spec.recording_name
 
@@ -879,8 +891,12 @@ class NeuralKinectViewer(QMainWindow):
         self.frame_slider.setValue(0)
         self.frame_label.setText(f"1 / {self._total_frames}")
         self._buffer_label.setText(f"Buf: 0/{self._preloader_buf_size}")
+        self.crop_spinbox.blockSignals(True)
         self.crop_spinbox.setValue(int(self._crop_half_size))
+        self.crop_spinbox.blockSignals(False)
+        self.lod_spinbox.blockSignals(True)
         self.lod_spinbox.setValue(self._interactive_stride)
+        self.lod_spinbox.blockSignals(False)
         self.setWindowTitle(f"Neural-Kinect Viewer | {spec.recording_name}")
 
         # ------------------------------------------------------------------
@@ -1024,19 +1040,17 @@ class NeuralKinectViewer(QMainWindow):
         from index 1 onward (including the previous stretch), then this method
         re-adds the new items + a fresh stretch.
         """
-        # Init state dicts
-        self._visibility: Dict[str, bool] = {
-            name: True
-            for name in (
-                ['kinect_point_cloud', 'forearms', 'hand_meshes', 'contact_points']
-                + list(self._stickers_xyz_dict.keys())
-            )
-        }
-        self._point_sizes: Dict[str, float] = {
-            'kinect_point_cloud': 2.0,
-            'forearms': 8.0,
-            'contact_points': 15.0,
-        }
+        # Register any keys not yet in the persisted dicts (new block/session
+        # may introduce sticker names that weren't seen before).
+        _canonical_keys = (
+            ['kinect_point_cloud', 'forearms', 'hand_meshes', 'contact_points']
+            + list(self._stickers_xyz_dict.keys())
+        )
+        for _key in _canonical_keys:
+            self._visibility.setdefault(_key, True)
+        self._point_sizes.setdefault('kinect_point_cloud', 2.0)
+        self._point_sizes.setdefault('forearms', 8.0)
+        self._point_sizes.setdefault('contact_points', 15.0)
         self._compass_widgets: Dict[str, StickerVelocityCompass] = {}
 
         def _add_object_group(label: str, key: str, has_slider: bool = False, point_size: int = 3):
@@ -1044,7 +1058,7 @@ class NeuralKinectViewer(QMainWindow):
             box_layout = QVBoxLayout(box)
 
             cb = QCheckBox("Visible")
-            cb.setChecked(True)
+            cb.setChecked(self._visibility.get(key, True))
             cb.stateChanged.connect(
                 lambda state, k=key: self._on_visibility_changed(k, state)
             )
@@ -1292,7 +1306,7 @@ class NeuralKinectViewer(QMainWindow):
         self.current_index = frame_idx
 
         # Remove the invisible bounding proxy once a real kinect frame is available.
-        if self._bounds_proxy_active:
+        if self._bounds_proxy_active and self._visibility.get('kinect_point_cloud', True):
             pc_data, _ = self._preloader.get_frame(frame_idx)
             if (
                 pc_data is not None
@@ -1474,10 +1488,13 @@ class NeuralKinectViewer(QMainWindow):
         buf_max = self._preloader._buffer_size
         self._buffer_label.setText(f"Buf: {buf_n}/{buf_max}")
 
-        # 9. Signal preloader to look ahead ---------------------------------
-        self._preloader.seek(frame_idx + 1)
+        # 9. Signal preloader to look ahead (skip when cloud is paused) -----
+        if self._visibility.get('kinect_point_cloud', True):
+            self._preloader.seek(frame_idx + 1)
 
         # 10. Schedule a re-render if we displayed an approximate frame -----
+        # When the cloud is hidden _got_exact stays True (default line above),
+        # so this branch is naturally skipped — no extra guard needed.
         if not _got_exact:
             self._schedule_exact_frame(frame_idx)
 
@@ -1635,6 +1652,12 @@ class NeuralKinectViewer(QMainWindow):
 
     def _on_visibility_changed(self, key: str, state: int) -> None:
         self._visibility[key] = state == Qt.Checked
+        if key == 'kinect_point_cloud' and self._preloader is not None:
+            if self._visibility[key]:
+                self._preloader.seek(self.current_index)
+                self._preloader.resume()
+            else:
+                self._preloader.pause()
         self._update_frame(self.current_index)
 
     def _on_point_size_changed(self, key: str, value: int) -> None:
