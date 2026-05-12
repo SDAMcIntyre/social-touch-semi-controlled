@@ -31,7 +31,10 @@ from analysis.receptive_field_mapping.rf_extraction_io import (
     load_rf_camera_settings,
     save_rf_camera_settings,
 )
-from analysis.receptive_field_mapping.touch_population_data import PopulationData
+from analysis.receptive_field_mapping.touch_population_data import (
+    ViewerSessionData,
+    load_viewer_session_data,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +42,7 @@ logger = logging.getLogger(__name__)
 class RFCameraSettingsViewer(QMainWindow):
     def __init__(
         self,
-        sessions: List[Tuple[str, PopulationData]],
+        sessions: List[Tuple[str, Path, Path]],
         output_dir: Path,
         title: str = "RF Camera Settings",
         parent=None,
@@ -47,17 +50,18 @@ class RFCameraSettingsViewer(QMainWindow):
         super().__init__(parent)
         self.setWindowTitle(title)
 
-        self._sessions = sessions
+        self._session_specs = sessions
         self._output_dir = output_dir
         self._session_cameras: dict = {}
         self._current_session_id: Optional[str] = None
+        self._loaded_data: Optional[ViewerSessionData] = None
         self._initialized = False
 
         toolbar = QToolBar()
         toolbar.setMovable(False)
         toolbar.addWidget(QLabel("Session:"))
         self._session_combo = QComboBox()
-        for session_id, _ in sessions:
+        for session_id, _, _ in sessions:
             self._session_combo.addItem(session_id)
         toolbar.addWidget(self._session_combo)
         self.addToolBar(toolbar)
@@ -144,12 +148,18 @@ class RFCameraSettingsViewer(QMainWindow):
     def _on_session_changed(self, index: int) -> None:
         if self._current_session_id is not None:
             self._session_cameras[self._current_session_id] = self._capture_camera()
+        self._loaded_data = None
         self._load_session(index)
 
     def _load_session(self, index: int) -> None:
-        session_id, pop_data = self._sessions[index]
+        session_id, series_csv, forearm_ply = self._session_specs[index]
         self._current_session_id = session_id
-        self._build_scene(pop_data, session_id)
+
+        self._status_label.setText(f"Loading {session_id}...")
+        QApplication.processEvents()
+
+        self._loaded_data = load_viewer_session_data(series_csv, forearm_ply)
+        self._build_scene(self._loaded_data)
 
         if session_id in self._session_cameras:
             self._restore_camera(self._session_cameras[session_id])
@@ -163,10 +173,14 @@ class RFCameraSettingsViewer(QMainWindow):
 
         self._status_label.setText("")
 
-    def _build_scene(self, pop_data: PopulationData, session_id: str) -> None:
-        vertices = pop_data.forearm_vertices
-        heatmap = np.bincount(pop_data.cp_vertex_idx, minlength=len(vertices)).astype(float)
-        heatmap[heatmap == 0] = np.nan
+    def _build_scene(self, data: ViewerSessionData) -> None:
+        vertices = data.forearm_vertices
+        if data.vertex_contact_count is not None:
+            heatmap = data.vertex_contact_count.copy()
+            heatmap[heatmap == 0] = np.nan
+        else:
+            heatmap = np.full(len(vertices), np.nan)
+
         cloud = pv.PolyData(vertices)
         cloud["contact_count"] = heatmap
         self._plotter.clear()
