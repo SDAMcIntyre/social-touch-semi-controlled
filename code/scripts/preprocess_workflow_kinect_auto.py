@@ -339,6 +339,8 @@ def stabilise_hand_motion_flow(
     *,
     filter_method: str = "butterworth",
     filter_params: dict | None = None,
+    smooth_anchor: bool = True,
+    anchor_filter_params: dict | None = None,
     force_processing: bool = False,
 ) -> Path:
     print(f"[{output_dir.name}] Stabilising hand-mesh pose stream...")
@@ -350,6 +352,8 @@ def stabilise_hand_motion_flow(
         output_npz_path=out_stabilised_npz_path,
         filter_method=filter_method,
         filter_params=filter_params,
+        smooth_anchor=smooth_anchor,
+        anchor_filter_params=anchor_filter_params,
         force_processing=force_processing,
     )
 
@@ -557,7 +561,9 @@ def run_single_session_pipeline(
          "params": lambda: {"hand_motion_npz_path": context.get("hand_motion_npz_path"),
                             "output_dir": config.video_processed_output_dir / "kinematics_analysis",
                             "filter_method": dag_handler.get_task_options("stabilise_hand_motion").get("filter_method", "butterworth"),
-                            "filter_params": dag_handler.get_task_options("stabilise_hand_motion").get("filter_params")},
+                            "filter_params": dag_handler.get_task_options("stabilise_hand_motion").get("filter_params"),
+                            "smooth_anchor": dag_handler.get_task_options("stabilise_hand_motion").get("smooth_anchor", True),
+                            "anchor_filter_params": dag_handler.get_task_options("stabilise_hand_motion").get("anchor_filter_params")},
          "outputs": ["hand_motion_stabilised_npz_path"]},
 
         {"name": "validate_hand_extraction",

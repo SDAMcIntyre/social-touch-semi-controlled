@@ -33,6 +33,8 @@ class PoseStabilisation:
         fps: float,
         filter_method: Union[str, Any] = "butterworth",
         filter_params: Optional[Dict[str, Any]] = None,
+        smooth_anchor: bool = True,
+        anchor_filter_params: Optional[Dict[str, Any]] = None,
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Apply the 4-step pose correction to a full session.
 
@@ -46,7 +48,16 @@ class PoseStabilisation:
             fps: Recording frame rate in Hz.
             filter_method: Filter name accepted by :class:`MotionFilterFactory`
                            (``"butterworth"`` or ``"savgol"``).
-            filter_params: Forwarded to :meth:`MotionFilterFactory.get_filter`.
+            filter_params: Forwarded to :meth:`MotionFilterFactory.get_filter` for the
+                           rotation (and scale) filter.
+            smooth_anchor: When ``True`` (default), the reconstructed anchor positions
+                           ``t0`` are filtered before translation is re-derived. The
+                           anchor invariant then becomes ``anchor_world == t0_smooth``
+                           rather than ``anchor_world == t0_raw``.
+            anchor_filter_params: Filter params for the anchor smoothing step, in the
+                                  same format as ``filter_params``. Defaults to
+                                  ``{"butterworth": {"order": 2, "cutoff_hz": 5.0}}``
+                                  when ``None`` and ``smooth_anchor`` is ``True``.
 
         Returns:
             Tuple ``(translations_new, rotations_new, scales_new)`` where:
@@ -83,6 +94,18 @@ class PoseStabilisation:
         R_orig = Rotation.from_quat(rotations_xyzw)
         s0 = vertices[:, anchor_idx, :]  # (N, 3) — anchor vertex per frame
         t0 = translations + scales[:, np.newaxis] * R_orig.apply(s0)  # (N, 3)
+
+        # --- Step 1.5: Smooth anchor positions (t0) ---
+        # Filtering t0 before translation re-derivation removes the dominant
+        # noise source: raw sticker measurements feed directly into t_new via
+        # t_new = t0 - s_stable * R_smooth @ s0. With smooth R and s, any t0
+        # noise propagates unchanged into the final translation.
+        if smooth_anchor:
+            if anchor_filter_params is None:
+                anchor_filter_params = {"butterworth": {"order": 2, "cutoff_hz": 5.0}}
+            anchor_filt = MotionFilterFactory.get_filter(filter_method, anchor_filter_params)
+            for axis in range(3):
+                t0[:, axis] = anchor_filt.filter(t0[:, axis], fps)
 
         # --- Step 2: Smooth rotations ---
         # Quaternions live on a double-cover of SO(3): q and -q represent the same

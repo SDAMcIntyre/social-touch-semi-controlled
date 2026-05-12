@@ -46,7 +46,7 @@ tasks:
   generate_xyz_stickers:
     enabled: true
     options:
-      force_processing: true
+      force_processing: false
     depends_on: [refine_sticker_features]
 
   correct_xyz_stickers_motion:
@@ -58,7 +58,7 @@ tasks:
       filter_params:
         butterworth:
           order: 2
-          cutoff_hz: 10.0
+          cutoff_hz: 6.0
         savgol:
           window_length: 7
           polyorder: 5
@@ -102,7 +102,7 @@ tasks:
   generate_3d_hand_in_motion:
     enabled: true
     options:
-      force_processing: false
+      force_processing: true
     # Requires base tracking (stickers XYZ), trial context (trial ID), and tracked hands
     depends_on: [generate_xyz_stickers, correct_xyz_stickers_motion, 
         define_trial_id, track_hands_model]
@@ -110,9 +110,14 @@ tasks:
   stabilise_hand_motion:
     enabled: true
     options:
-      force_processing: false
+      force_processing: true
       filter_method: butterworth
+      smooth_anchor: true
       filter_params:
+        butterworth:
+          order: 2
+          cutoff_hz: 3.0
+      anchor_filter_params:
         butterworth:
           order: 2
           cutoff_hz: 5.0

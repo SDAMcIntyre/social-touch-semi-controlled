@@ -261,6 +261,7 @@ _load_module_from_file(
 )
 
 PoseStabilisation = sys.modules[_STABILISATION_MODULE].PoseStabilisation
+MotionFilterFactory = sys.modules[_FILTER_FACTORY_MODULE].MotionFilterFactory
 _SCALE_MIN = sys.modules[_STABILISATION_MODULE]._SCALE_MIN
 _SCALE_MAX = sys.modules[_STABILISATION_MODULE]._SCALE_MAX
 
@@ -310,13 +311,20 @@ def _identity_session(
 class TestPoseStabilisation:
 
     def test_anchor_preserved(self) -> None:
-        """After stabilisation, the anchor invariant holds to < 1e-5 per frame."""
+        """After stabilisation with smooth_anchor=True (default), the anchor world
+        position matches the smoothed t0 to < 1e-5 per frame."""
         vertices, translations, rotations_xyzw, scales = _identity_session(
             scale=1.0
         )
-        t0 = translations + scales[:, np.newaxis] * Rotation.from_quat(
+        t0_raw = translations + scales[:, np.newaxis] * Rotation.from_quat(
             rotations_xyzw
         ).apply(vertices[:, _ANCHOR_IDX, :])
+
+        anchor_filter_params = {"butterworth": {"order": 2, "cutoff_hz": 5.0}}
+        anchor_filt = MotionFilterFactory.get_filter("butterworth", anchor_filter_params)
+        t0_smooth = t0_raw.copy()
+        for axis in range(3):
+            t0_smooth[:, axis] = anchor_filt.filter(t0_raw[:, axis], _FPS)
 
         translations_new, rotations_new, scales_new = PoseStabilisation.stabilise(
             vertices=vertices,
@@ -332,9 +340,39 @@ class TestPoseStabilisation:
         anchor_reconstructed = (
             scales_new[:, np.newaxis] * R_smooth.apply(s0) + translations_new
         )
-        err = np.linalg.norm(anchor_reconstructed - t0, axis=1)
+        err = np.linalg.norm(anchor_reconstructed - t0_smooth, axis=1)
         assert np.all(err < 1e-5), (
             f"Anchor invariant violated; max error = {err.max():.2e}"
+        )
+
+    def test_anchor_smoothing_disabled(self) -> None:
+        """With smooth_anchor=False, the anchor world position matches the raw t0
+        (original invariant) to < 1e-5 per frame."""
+        vertices, translations, rotations_xyzw, scales = _identity_session(
+            scale=1.0
+        )
+        t0_raw = translations + scales[:, np.newaxis] * Rotation.from_quat(
+            rotations_xyzw
+        ).apply(vertices[:, _ANCHOR_IDX, :])
+
+        translations_new, rotations_new, scales_new = PoseStabilisation.stabilise(
+            vertices=vertices,
+            translations=translations,
+            rotations_xyzw=rotations_xyzw,
+            scales=scales,
+            anchor_idx=_ANCHOR_IDX,
+            fps=_FPS,
+            smooth_anchor=False,
+        )
+
+        R_smooth = Rotation.from_quat(rotations_new.astype(np.float64))
+        s0 = vertices[:, _ANCHOR_IDX, :]
+        anchor_reconstructed = (
+            scales_new[:, np.newaxis] * R_smooth.apply(s0) + translations_new
+        )
+        err = np.linalg.norm(anchor_reconstructed - t0_raw, axis=1)
+        assert np.all(err < 1e-5), (
+            f"Anchor invariant violated with smooth_anchor=False; max error = {err.max():.2e}"
         )
 
     def test_scale_locked_to_median(self) -> None:

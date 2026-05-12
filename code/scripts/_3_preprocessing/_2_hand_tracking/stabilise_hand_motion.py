@@ -16,6 +16,8 @@ def stabilise_hand_motion(
     *,
     filter_method: Union[str, Any] = _DEFAULT_FILTER_METHOD,
     filter_params: Optional[Dict[str, Any]] = None,
+    smooth_anchor: bool = True,
+    anchor_filter_params: Optional[Dict[str, Any]] = None,
     force_processing: bool = False,
 ):
     """Load the raw hand-motion NPZ, apply pose stabilisation, and write the corrected NPZ.
@@ -30,6 +32,12 @@ def stabilise_hand_motion(
         output_npz_path: Destination path for ``*_handmodel_motion_stabilised.npz``.
         filter_method: Filter name forwarded to ``PoseStabilisation.stabilise``.
         filter_params: Filter parameters forwarded to ``PoseStabilisation.stabilise``.
+        smooth_anchor: When ``True`` (default), the reconstructed anchor position
+            (t0) is filtered before re-deriving translation.  Forwarded to
+            ``PoseStabilisation.stabilise``.
+        anchor_filter_params: Filter parameters for the anchor smoothing step.
+            Forwarded to ``PoseStabilisation.stabilise``; ``None`` uses the
+            stabilisation default (5 Hz Butterworth order-2).
         force_processing: When ``False`` (default), skip if the output already exists
             and is newer than the input.
 
@@ -80,7 +88,7 @@ def stabilise_hand_motion(
 
     print(
         f"Stabilising {len(translations)} frames "
-        f"(filter={filter_method}, anchor_idx={anchor_idx}) ..."
+        f"(filter={filter_method}, anchor_idx={anchor_idx}, smooth_anchor={smooth_anchor}) ..."
     )
     translations_new, rotations_new, scales_new = PoseStabilisation.stabilise(
         vertices=vertices,
@@ -91,6 +99,8 @@ def stabilise_hand_motion(
         fps=fps,
         filter_method=filter_method,
         filter_params=filter_params,
+        smooth_anchor=smooth_anchor,
+        anchor_filter_params=anchor_filter_params,
     )
 
     print(f"Saving stabilised NPZ to {output_npz_path.name} ...")
