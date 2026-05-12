@@ -10,7 +10,9 @@
 # ==============================================================================
 
 parameters:
-  kinect_configs: valid_configs_ST13-02
+  kinect_configs: [valid_configs_ST15-01, valid_configs_ST16-02, 
+      valid_configs_ST16-03, valid_configs_ST16-05, valid_configs_ST18-01, 
+      valid_configs_ST18-04]
 
 tasks:
   # PHASE 3: VISUALIZATION & VERIFICATION
@@ -44,4 +46,10 @@ tasks:
   view_somatosensory_assessement:
     enabled: true
     description: "Manually view the somatosensory assessment results."
+    depends_on: []
+
+  view_hand_model_overlay:
+    enabled: false
+    description: "Open a GUI to select a session/block and export an MP4 with the
+      MANO hand mesh overlaid on the RGB video."
     depends_on: []

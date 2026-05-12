@@ -12,6 +12,7 @@ counter.
 """
 
 import logging
+import os
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -23,9 +24,12 @@ from PyQt5.QtWidgets import (
     QApplication,
     QComboBox,
     QDoubleSpinBox,
+    QFileDialog,
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QMessageBox,
+    QProgressDialog,
     QPushButton,
     QSlider,
     QSplitter,
@@ -86,10 +90,10 @@ class TouchPlaybackExplorer(QMainWindow):
         self._iff_sum = np.zeros(n_verts, dtype=np.float64)
         self._contact_count = np.zeros(n_verts, dtype=np.float64)
 
-        # Heatmap mode: "spike" (default) or "iff".
-        self._heatmap_mode: str = "spike"
-        # Stable IFF upper clim for the current touch (set in _load_touch).
-        self._touch_max_iff: float = 1.0
+        # Heatmap mode: "spike" or "iff" (default).
+        self._heatmap_mode: str = "iff"
+        # Stable IFF upper clim for the entire session (set in _deferred_start / _on_session_changed).
+        self._session_max_iff: float = 1.0
 
         self._build_ui()
 
@@ -176,6 +180,17 @@ class TouchPlaybackExplorer(QMainWindow):
 
         toolbar.addSeparator()
 
+        # Heatmap mode combo
+        toolbar.addWidget(QLabel("Mode:"))
+        self._heatmap_mode_combo = QComboBox()
+        self._heatmap_mode_combo.addItem("Spike density")
+        self._heatmap_mode_combo.addItem("IFF (Hz)")
+        self._heatmap_mode_combo.setCurrentIndex(1)
+        self._heatmap_mode_combo.currentIndexChanged.connect(self._on_heatmap_mode_changed)
+        toolbar.addWidget(self._heatmap_mode_combo)
+
+        toolbar.addSeparator()
+
         # Playback buttons
         self._play_btn = QPushButton("▶ Play")
         self._play_btn.clicked.connect(self._play)
@@ -189,27 +204,21 @@ class TouchPlaybackExplorer(QMainWindow):
         self._stop_btn.clicked.connect(self._stop)
         toolbar.addWidget(self._stop_btn)
 
+        self._export_btn = QPushButton("Export Video")
+        self._export_btn.clicked.connect(self._on_export_video)
+        toolbar.addWidget(self._export_btn)
+
         toolbar.addSeparator()
 
         # Speed spinbox
         toolbar.addWidget(QLabel("Speed:"))
         self._speed_spin = QDoubleSpinBox()
-        self._speed_spin.setRange(0.1, 33.0)
+        self._speed_spin.setRange(0.1, 300.0)
         self._speed_spin.setValue(33.0)
         self._speed_spin.setSingleStep(1.0)
         self._speed_spin.setDecimals(1)
         self._speed_spin.valueChanged.connect(self._on_speed_changed)
         toolbar.addWidget(self._speed_spin)
-
-        toolbar.addSeparator()
-
-        # Heatmap mode combo
-        toolbar.addWidget(QLabel("Mode:"))
-        self._heatmap_mode_combo = QComboBox()
-        self._heatmap_mode_combo.addItem("Spike density")
-        self._heatmap_mode_combo.addItem("IFF (Hz)")
-        self._heatmap_mode_combo.currentIndexChanged.connect(self._on_heatmap_mode_changed)
-        toolbar.addWidget(self._heatmap_mode_combo)
 
         toolbar.addSeparator()
 
@@ -301,6 +310,7 @@ class TouchPlaybackExplorer(QMainWindow):
             )
         _, new_data = self._sessions[index]
         self._data = new_data
+        self._session_max_iff = self._compute_session_max_iff()
         self._populate_block_combo(new_data)
 
         if self._initialized:
@@ -385,10 +395,6 @@ class TouchPlaybackExplorer(QMainWindow):
         self._iff_sum = np.zeros(n_verts, dtype=np.float64)
         self._contact_count = np.zeros(n_verts, dtype=np.float64)
 
-        # Stable IFF upper clim: max IFF value across all frames of this touch.
-        max_iff = float(np.max(touch.frame_iff)) if len(touch.frame_iff) > 0 else 0.0
-        self._touch_max_iff = max_iff if max_iff > 0.0 else 1.0
-
     def _render_forearm(self) -> None:
         """Render the forearm point cloud on both plotters.
 
@@ -442,6 +448,7 @@ class TouchPlaybackExplorer(QMainWindow):
             clim=clim,
             nan_color=[0.3, 0.3, 0.3],
             show_scalar_bar=True,
+            scalar_bar_args={"title": "", "n_labels": 5, "color": "white", "fmt": "%.3g"},
             render_points_as_spheres=False,
             point_size=3,
             name="forearm",
@@ -465,8 +472,17 @@ class TouchPlaybackExplorer(QMainWindow):
     def _current_heatmap_clim(self) -> Tuple[float, float]:
         """Return the colour-limit pair for the active heatmap mode."""
         if self._heatmap_mode == "iff":
-            return (0.0, self._touch_max_iff)
+            return (0.0, self._session_max_iff)
         return (0.0, 1.0)
+
+    def _compute_session_max_iff(self) -> float:
+        """Return the maximum IFF value across ALL touches in the active session."""
+        max_val = 0.0
+        for touches in self._data.touches_by_block_trial.values():
+            for te in touches:
+                if len(te.frame_iff) > 0:
+                    max_val = max(max_val, float(np.max(te.frame_iff)))
+        return max_val if max_val > 0.0 else 1.0
 
     def _update_heatmap_scalars(self) -> None:
         """Write the active heatmap mode's mean values into the right-panel mesh."""
@@ -501,6 +517,7 @@ class TouchPlaybackExplorer(QMainWindow):
                 clim=clim,
                 nan_color=[0.3, 0.3, 0.3],
                 show_scalar_bar=True,
+                scalar_bar_args={"title": "", "n_labels": 5, "color": "white", "fmt": "%.3g"},
                 render_points_as_spheres=False,
                 point_size=3,
                 name="forearm",
@@ -650,6 +667,7 @@ class TouchPlaybackExplorer(QMainWindow):
                 plotter.render_window.SetSize(sz.width(), sz.height())
 
         self._populate_block_combo(self._data)
+        self._session_max_iff = self._compute_session_max_iff()
         self._render_forearm()
 
         if self._data.block_order_ids:
@@ -768,3 +786,210 @@ class TouchPlaybackExplorer(QMainWindow):
             self._touch_combo.blockSignals(True)
             self._touch_combo.setCurrentIndex(touch_idx)
             self._touch_combo.blockSignals(False)
+
+    # ------------------------------------------------------------------
+    # Video export
+    # ------------------------------------------------------------------
+
+    def _on_export_video(self) -> None:
+        """Handle the Export Video button: check deps, open file dialog, render."""
+        try:
+            import imageio_ffmpeg  # noqa: F401
+        except ImportError:
+            QMessageBox.critical(
+                self,
+                "Missing Dependency",
+                "The 'imageio-ffmpeg' library is required to export videos.\n\n"
+                "Install it via:\n"
+                "  pip install imageio-ffmpeg\n"
+                "OR\n"
+                "  conda install -c conda-forge imageio-ffmpeg",
+            )
+            return
+
+        bid = self._current_block_id()
+        tid = self._current_trial_id()
+        if bid is None or tid is None:
+            QMessageBox.warning(self, "No trial selected", "Select a block and trial first.")
+            return
+        touches = self._data.touches_by_block_trial.get((bid, tid), [])
+        if not touches:
+            QMessageBox.warning(self, "No touches", "The selected trial has no touches.")
+            return
+
+        session_label = self._session_combo.currentText().replace(" ", "_")
+        proposed = f"{session_label}_block{bid}_trial{tid}_left.mp4"
+
+        filename, selected_filter = QFileDialog.getSaveFileName(
+            self, "Save Video (left view)", proposed, "MP4 Files (*.mp4)",
+        )
+        if not filename:
+            return
+        if not filename.lower().endswith(".mp4"):
+            filename += ".mp4"
+
+        left_path = filename
+        if left_path.endswith("_left.mp4"):
+            right_path = left_path[:-len("_left.mp4")] + "_right.mp4"
+        else:
+            base = left_path[:-len(".mp4")]
+            right_path = base + "_right.mp4"
+
+        self._generate_videos(left_path, right_path, touches)
+
+    def _generate_videos(
+        self,
+        left_path: str,
+        right_path: str,
+        touches: List[TouchEvent],
+    ) -> None:
+        """Render all *touches* to two off-screen 1920x1080 MP4 files at 120 FPS."""
+        total_frames = sum(len(t.frame_spikes) for t in touches)
+        if total_frames == 0:
+            return
+
+        vertices = self._data.session_data.forearm_vertices
+        vertex_colors = self._data.session_data.forearm_vertex_colors
+        n_verts = len(vertices)
+        clim = self._current_heatmap_clim()
+        use_vertex_colors = (
+            vertex_colors is not None
+            and vertex_colors.shape == (n_verts, 3)
+        )
+
+        progress = QProgressDialog("Rendering video...", "Cancel", 0, total_frames, self)
+        progress.setWindowModality(Qt.WindowModal)
+        progress.setMinimumDuration(0)
+
+        pl_left = pv.Plotter(window_size=[1920, 1080], off_screen=True)
+        pl_right = pv.Plotter(window_size=[1920, 1080], off_screen=True)
+        pl_left.set_background("black")
+        pl_right.set_background("black")
+
+        for src, dst in [
+            (self._plotter_left, pl_left),
+            (self._plotter_right, pl_right),
+        ]:
+            dst.camera.position = src.camera.position
+            dst.camera.focal_point = src.camera.focal_point
+            dst.camera.up = src.camera.up
+            dst.camera.view_angle = src.camera.view_angle
+            dst.camera.clipping_range = src.camera.clipping_range
+
+        try:
+            pl_left.open_movie(left_path, framerate=120)
+            pl_right.open_movie(right_path, framerate=120)
+        except Exception as exc:
+            QMessageBox.critical(
+                self, "Export Error",
+                f"Failed to initialise video writer:\n{exc}",
+            )
+            pl_left.close()
+            pl_right.close()
+            progress.close()
+            return
+
+        # Static left forearm mesh.
+        cloud_left = pv.PolyData(vertices)
+        if use_vertex_colors:
+            cloud_left["rgb"] = vertex_colors
+            pl_left.add_mesh(cloud_left, scalars="rgb", rgb=True, point_size=3, name="forearm")
+        else:
+            pl_left.add_mesh(cloud_left, color=[0.3, 0.3, 0.3], point_size=3, name="forearm")
+
+        # Right heatmap mesh.
+        cloud_right = pv.PolyData(vertices)
+        heatmap = np.full(n_verts, np.nan, dtype=np.float64)
+        cloud_right["heatmap"] = heatmap
+        pl_right.add_mesh(
+            cloud_right,
+            scalars="heatmap",
+            cmap="jet",
+            clim=clim,
+            nan_color=[0.3, 0.3, 0.3],
+            show_scalar_bar=True,
+            scalar_bar_args={"title": "", "n_labels": 5, "color": "white", "fmt": "%.3g"},
+            render_points_as_spheres=False,
+            point_size=3,
+            name="forearm",
+            copy_mesh=False,
+        )
+
+        spike_sum = np.zeros(n_verts, dtype=np.float64)
+        iff_sum = np.zeros(n_verts, dtype=np.float64)
+        contact_count = np.zeros(n_verts, dtype=np.float64)
+        frame_counter = 0
+        cancelled = False
+
+        try:
+            for touch in touches:
+                spike_sum[:] = 0.0
+                iff_sum[:] = 0.0
+                contact_count[:] = 0.0
+                cloud_right["heatmap"] = np.full(n_verts, np.nan, dtype=np.float64)
+
+                n_frames = len(touch.frame_spikes)
+                for fi in range(n_frames):
+                    if progress.wasCanceled():
+                        cancelled = True
+                        break
+
+                    # Left: contact points.
+                    pts = touch.frame_contact_pts[fi]
+                    if len(pts) > 0:
+                        contact_cloud = pv.PolyData(np.asarray(pts, dtype=np.float64))
+                        pl_left.add_mesh(
+                            contact_cloud, color="red", point_size=8,
+                            render_points_as_spheres=True, name="contacts",
+                        )
+                    else:
+                        empty = pv.PolyData(np.zeros((1, 3), dtype=np.float64))
+                        pl_left.add_mesh(empty, color="red", point_size=1, name="contacts")
+
+                    # Right: accumulate heatmap.
+                    verts_fi = touch.frame_vertex_indices[fi]
+                    np.add.at(spike_sum, verts_fi, float(touch.frame_spikes[fi]))
+                    np.add.at(iff_sum, verts_fi, float(touch.frame_iff[fi]))
+                    np.add.at(contact_count, verts_fi, 1.0)
+
+                    has_contact = contact_count > 0
+                    if self._heatmap_mode == "iff":
+                        scalars = np.where(
+                            has_contact,
+                            iff_sum / np.where(has_contact, contact_count, 1.0),
+                            np.nan,
+                        )
+                    else:
+                        scalars = np.where(
+                            has_contact,
+                            spike_sum / np.where(has_contact, contact_count, 1.0),
+                            np.nan,
+                        )
+                    cloud_right["heatmap"] = scalars
+                    cloud_right.Modified()
+
+                    pl_left.write_frame()
+                    pl_right.write_frame()
+
+                    frame_counter += 1
+                    progress.setValue(frame_counter)
+                    QApplication.processEvents()
+
+                if cancelled:
+                    break
+
+        except Exception as exc:
+            QMessageBox.critical(
+                self, "Rendering Error",
+                f"An error occurred during rendering:\n{exc}",
+            )
+        finally:
+            pl_left.close()
+            pl_right.close()
+            progress.close()
+
+        if not cancelled and os.path.exists(left_path) and os.path.exists(right_path):
+            QMessageBox.information(
+                self, "Export complete",
+                f"Videos saved:\n  {left_path}\n  {right_path}",
+            )
