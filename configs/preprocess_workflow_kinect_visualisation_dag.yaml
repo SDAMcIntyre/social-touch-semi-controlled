@@ -10,7 +10,9 @@
 # ==============================================================================
 
 parameters:
-  kinect_configs: valid_configs_ST13-02
+  kinect_configs: [valid_configs_ST15-01, valid_configs_ST16-02, 
+      valid_configs_ST16-03, valid_configs_ST16-05, valid_configs_ST18-01, 
+      valid_configs_ST18-04]
 
 tasks:
   # PHASE 3: VISUALIZATION & VERIFICATION

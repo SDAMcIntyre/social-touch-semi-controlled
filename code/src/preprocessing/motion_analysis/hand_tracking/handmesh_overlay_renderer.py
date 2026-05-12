@@ -45,7 +45,7 @@ class BatchVideoRenderer:
         self,
         video_path: Path,
         data_path: Path,
-        output_path: Path,
+        output_path: Optional[Path] = None,
         target_fps: int = 30,
     ) -> None:
         self.video_path = video_path
@@ -54,6 +54,16 @@ class BatchVideoRenderer:
         self._video = VideoMP4Manager(str(video_path), color_format=ColorFormat.RGB)
         self._data = HandTrackingDataManager(data_path)
         self._total_frames = len(self._video)
+
+    @property
+    def frame_count(self) -> int:
+        return self._total_frames
+
+    def render_frame(self, frame_idx: int) -> np.ndarray:
+        """Return a single BGR frame with the hand overlay drawn."""
+        frame_rgb = self._video[frame_idx]
+        frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+        return self._draw_overlay(frame_bgr, frame_idx)
 
     def _draw_overlay(self, image: np.ndarray, frame_idx: int) -> np.ndarray:
         geometry = self._data.get_hand_geometry(frame_idx)
@@ -78,6 +88,8 @@ class BatchVideoRenderer:
         remains on disk. On any other failure the writer is released and the
         exception re-raised (fail-fast convention).
         """
+        if self.output_path is None:
+            raise ValueError("output_path must be set to call render()")
         first = self._video[0]
         h, w = first.shape[:2]
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")

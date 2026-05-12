@@ -42,9 +42,9 @@ def fit_cylinder_axis(
 
     Returns
     -------
-    (axis, center, mean_radius)
+    (axis, axis_point, mean_radius)
         axis: unit 3-vector along the cylinder long axis
-        center: centroid projected onto the axis (scalar position)
+        axis_point: (3,) point on the cylinder axis (mean of the local PCA neighborhood)
         mean_radius: mean radial distance from the axis (in mm)
     """
     # Use local neighborhood around contact centroid for more robust axis fit
@@ -53,22 +53,41 @@ def fit_cylinder_axis(
     _, idx = tree.query(contact_centroid, k=k)
     local_pts = forearm_vertices[idx]
 
-    centered = local_pts - local_pts.mean(axis=0)
+    axis_point = local_pts.mean(axis=0)
+    centered = local_pts - axis_point
     _, _, Vt = np.linalg.svd(centered, full_matrices=False)
-    # First right singular vector = direction of maximum variance = cylinder axis
     axis = Vt[0]
     axis = axis / np.linalg.norm(axis)
 
-    # Project vertices onto the axis to compute radial residuals
-    proj_len = local_pts @ axis
-    proj_pts = np.outer(proj_len, axis)
-    radial = local_pts - proj_pts
+    proj_len = centered @ axis
+    radial = centered - np.outer(proj_len, axis)
     mean_radius = float(np.mean(np.linalg.norm(radial, axis=1)))
 
-    # Center: project contact centroid onto the axis
-    center = contact_centroid @ axis  # scalar height of centroid along axis
+    return axis, axis_point, mean_radius
 
-    return axis, center, mean_radius
+
+def _compute_local_radius(
+    forearm_vertices: np.ndarray,
+    contact_centroid: np.ndarray,
+    axis: np.ndarray,
+) -> tuple:
+    """Compute mean cylinder radius from local forearm vertices.
+
+    Returns (axis_point, mean_radius) where axis_point is the centroid of the
+    local neighborhood (a point on/near the cylinder axis).
+    """
+    k = min(500, len(forearm_vertices))
+    tree = KDTree(forearm_vertices)
+    _, idx = tree.query(contact_centroid, k=k)
+    local_pts = forearm_vertices[idx]
+
+    axis_point = local_pts.mean(axis=0)
+    centered = local_pts - axis_point
+    proj_len = centered @ axis
+    radial = centered - np.outer(proj_len, axis)
+    mean_radius = float(np.mean(np.linalg.norm(radial, axis=1)))
+
+    return axis_point, mean_radius
 
 
 def project_cylindrical_unwrap(
@@ -76,20 +95,29 @@ def project_cylindrical_unwrap(
     forearm_vertices: np.ndarray,
     contact_centroid: np.ndarray,
     per_point_radius: bool = False,
+    rotation_matrix: np.ndarray = None,
     **kwargs,
 ) -> np.ndarray:
     """Unwrap 3D points from a cylinder surface to 2D (u = r*theta, v = h) coords.
 
-    The cylinder axis is fitted from the forearm vertices via PCA. The seam
-    (theta = ±pi) is placed opposite the RF contact centroid (at theta = 0),
-    so it falls in the unobserved region for finger data where the Kinect only
-    captures ~180 degrees.
+    When ``rotation_matrix`` is provided (from saved RF camera settings), the
+    camera frame defines the projection geometry entirely:
+
+    - **Cylinder axis** = R[0] (camera right) — the forearm longitudinal direction.
+    - **theta=0**      = −R[2] (camera-facing) — seam falls on the far side.
+    - **Angular up**   = R[1] (camera up).
+
+    When ``rotation_matrix`` is *None*, falls back to PCA axis fitting.
 
     Parameters
     ----------
     per_point_radius:
         If True, use the per-point radial distance from the axis instead of the
         global mean radius. Useful for tapered geometry.
+    rotation_matrix:
+        (3, 3) camera rotation from ``camera_settings_to_rotation()``.
+        When provided, the camera frame defines axis and angular reference.
+        When *None*, PCA axis fitting is used (legacy behaviour).
 
     Returns
     -------
@@ -99,35 +127,43 @@ def project_cylindrical_unwrap(
         logger.warning("project_cylindrical_unwrap: no forearm vertices — cannot fit cylinder.")
         return points_3d[:, :2]
 
-    axis, _center, mean_radius = fit_cylinder_axis(forearm_vertices, contact_centroid)
+    if rotation_matrix is not None:
+        # Camera frame defines the projection: R[0]=axis, -R[2]=theta=0, R[1]=up
+        axis = rotation_matrix[0]
+        x_rad = -rotation_matrix[2]
+        y_rad = rotation_matrix[1]
+        axis_point, mean_radius = _compute_local_radius(
+            forearm_vertices, contact_centroid, axis,
+        )
+    else:
+        axis, axis_point, mean_radius = fit_cylinder_axis(
+            forearm_vertices, contact_centroid,
+        )
+        centroid_delta = contact_centroid - axis_point
+        centroid_radial = centroid_delta - (centroid_delta @ axis) * axis
+        centroid_radial_norm = np.linalg.norm(centroid_radial)
+        if centroid_radial_norm < 1e-8:
+            x_rad = np.array([1.0, 0.0, 0.0])
+            x_rad -= np.dot(x_rad, axis) * axis
+            x_rad /= np.linalg.norm(x_rad)
+        else:
+            x_rad = centroid_radial / centroid_radial_norm
+        y_rad = np.cross(axis, x_rad)
+        y_rad /= np.linalg.norm(y_rad)
+
+    # --- Center on axis point ---
+    delta = points_3d - axis_point
 
     # --- Height (v) = projection along cylinder axis ---
-    v = points_3d @ axis
+    v = delta @ axis
 
-    # --- Radial component = residual after subtracting axis projection ---
-    proj_pts = np.outer(points_3d @ axis, axis)
-    radial = points_3d - proj_pts
-
-    # --- Build a consistent radial frame: x_rad points from axis toward centroid ---
-    centroid_proj = np.outer(np.array([contact_centroid @ axis]), axis)
-    centroid_radial = contact_centroid - centroid_proj.squeeze()
-    centroid_radial_norm = np.linalg.norm(centroid_radial)
-    if centroid_radial_norm < 1e-8:
-        x_rad = np.array([1.0, 0.0, 0.0])
-        x_rad -= np.dot(x_rad, axis) * axis
-        x_rad /= np.linalg.norm(x_rad)
-    else:
-        x_rad = centroid_radial / centroid_radial_norm
-
-    y_rad = np.cross(axis, x_rad)
-    y_rad /= np.linalg.norm(y_rad)
+    # --- Radial component ---
+    radial = delta - np.outer(v, axis)
 
     # --- theta = angle relative to x_rad, wrapped to (-pi, pi] ---
     rx = radial @ x_rad
     ry = radial @ y_rad
     theta = np.arctan2(ry, rx)
-
-    # Seam at pi, centroid at theta=0 (already satisfied by construction)
 
     # --- Arc length u = r * theta ---
     if per_point_radius:

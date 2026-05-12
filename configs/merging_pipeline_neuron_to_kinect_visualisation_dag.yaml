@@ -6,12 +6,7 @@
 # ==============================================================================
 
 parameters:
-  kinect_configs: [
-      valid_configs_ST13-02/kinect_config_2022-06-14_ST13-02_semicontrolled_block-order04.yaml,
-    valid_configs_ST13-02/kinect_config_2022-06-14_ST13-02_semicontrolled_block-order05.yaml,
-    valid_configs_ST13-02/kinect_config_2022-06-14_ST13-02_semicontrolled_block-order06.yaml,
-    valid_configs_ST13-02/kinect_config_2022-06-14_ST13-02_semicontrolled_block-order07.yaml,
-    valid_configs_ST13-02/kinect_config_2022-06-14_ST13-02_semicontrolled_block-order08.yaml]
+  kinect_configs: valid_configs_ST15-01
 tasks:
   view_neural_kinect_scene:
     enabled: false

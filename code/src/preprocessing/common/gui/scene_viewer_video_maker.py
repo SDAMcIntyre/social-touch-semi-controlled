@@ -3,16 +3,16 @@ import bisect
 import sys
 import os
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 # Third-party imports
 import numpy as np
 import open3d as o3d
 import pyvista as pv
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import (QApplication, QCheckBox, QGroupBox,
+from PyQt5.QtWidgets import (QApplication, QCheckBox, QComboBox, QGroupBox,
                              QHBoxLayout, QLabel, QMainWindow,
-                             QPushButton, QSlider, QVBoxLayout, QWidget,
+                             QPushButton, QSlider, QToolBar, QVBoxLayout, QWidget,
                              QFileDialog, QProgressDialog, QMessageBox)
 from pyvistaqt import QtInteractor
 
@@ -25,10 +25,30 @@ class SceneViewerVideoMaker(SceneViewer):
     """
     A subclass of SceneViewer that includes functionality to export the current
     sequence as a high-resolution 1920x1080 @ 30Hz video.
+
+    Optionally accepts a session_blocks mapping to enable session/block-order
+    navigation via two toolbar dropdowns.  When provided, switching the block
+    selection fully reloads the 3D scene with the corresponding objects.
     """
-    def __init__(self, parent=None):
+    def __init__(
+        self,
+        session_blocks: Optional[Dict[Tuple[str, str], Callable[[], List]]] = None,
+        parent=None,
+    ):
         super().__init__(parent)
         self.setWindowTitle("3D Scene Navigator + Video Export")
+
+        self._session_blocks: Dict[Tuple[str, str], Callable[[], List]] = session_blocks or {}
+        self._session_to_blocks: Dict[str, List[str]] = {}
+        for (session_id, block_id) in self._session_blocks:
+            self._session_to_blocks.setdefault(session_id, []).append(block_id)
+        for session in self._session_to_blocks:
+            self._session_to_blocks[session].sort()
+
+        if self._session_blocks:
+            self.addToolBar(self._build_session_toolbar())
+            if self._session_combo.count() > 0:
+                self._on_session_changed(0)
 
     def _setup_frame_controls(self) -> QWidget:
         """Overrides the control setup to add the Export Video button."""
@@ -59,6 +79,50 @@ class SceneViewerVideoMaker(SceneViewer):
 
         self._update_label()
         return row
+
+    def _build_session_toolbar(self) -> QToolBar:
+        toolbar = QToolBar("Session controls")
+        toolbar.setMovable(False)
+
+        toolbar.addWidget(QLabel("Session:"))
+        self._session_combo = QComboBox()
+        self._session_combo.setMinimumWidth(200)
+        for session_id in sorted(self._session_to_blocks):
+            self._session_combo.addItem(session_id)
+        self._session_combo.currentIndexChanged.connect(self._on_session_changed)
+        toolbar.addWidget(self._session_combo)
+
+        toolbar.addSeparator()
+
+        toolbar.addWidget(QLabel("Block-order:"))
+        self._block_combo = QComboBox()
+        self._block_combo.setMinimumWidth(160)
+        self._block_combo.currentIndexChanged.connect(self._on_block_changed)
+        toolbar.addWidget(self._block_combo)
+
+        return toolbar
+
+    def _on_session_changed(self, index: int) -> None:
+        session_id = self._session_combo.currentText()
+        self._block_combo.blockSignals(True)
+        self._block_combo.clear()
+        for block_id in self._session_to_blocks.get(session_id, []):
+            self._block_combo.addItem(block_id)
+        self._block_combo.blockSignals(False)
+        self._block_combo.setCurrentIndex(0)
+        self._on_block_changed(0)
+
+    def _on_block_changed(self, index: int) -> None:
+        session_id = self._session_combo.currentText()
+        block_id = self._block_combo.currentText()
+        if not session_id or not block_id:
+            return
+        factory = self._session_blocks.get((session_id, block_id))
+        if factory is None:
+            return
+        self.clear_objects()   # calls obj.close() on old objects
+        for obj in factory():
+            self.add_object(obj)
 
     def _on_export_video_clicked(self):
         """Handles the video export workflow."""
@@ -112,7 +176,7 @@ class SceneViewerVideoMaker(SceneViewer):
         # 1. Setup Off-screen Plotter (1920x1080)
         # Note: 'off_screen=True' creates a hidden window.
         render_plotter = pv.Plotter(window_size=[1920, 1080], off_screen=True)
-        render_plotter.set_background('midnightblue')
+        render_plotter.set_background('black')
 
         # 2. Sync Camera from Main View
         # Deep copy camera parameters to ensure exact match of the current user view
