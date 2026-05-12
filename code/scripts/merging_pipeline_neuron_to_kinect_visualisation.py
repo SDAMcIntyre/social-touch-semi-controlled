@@ -14,15 +14,17 @@ DAG config: configs/view_merged_neural_kinect_dag.yaml
 
 Features:
   - GPU-cropped point cloud (CuPy, ±crop_half_size_mm AABB around contact centroid)
-  - Background MKV pre-loading (8-frame ring buffer)
+  - Background MKV pre-loading (512-frame ring buffer)
   - Per-sticker velocity compass widgets
   - Live Nerve_freq / contact_depth / contact_area time-series panel
   - Camera centered on contact region
+  - Hot-swap block navigation: all blocks from a batch are presented in ONE
+    viewer window; the user switches between them via session / block dropdowns.
 """
 import argparse
 import sys
 from pathlib import Path
-from typing import Optional, Dict
+from typing import Dict, Optional, Tuple
 
 import numpy as np
 
@@ -58,7 +60,7 @@ from primary_processing import (
     KinectConfig,
 )
 
-from merging.gui.neural_kinect_scene_viewer import NeuralKinectViewer
+from merging.gui.neural_kinect_scene_viewer import NeuralKinectViewer, NeuralKinectBlockSpec
 from preprocessing.forearm_extraction import (
     ForearmCatalog,
     ForearmFrameParametersFileHandler,
@@ -178,42 +180,33 @@ def resolve_viewer_paths(config: KinectConfig) -> Dict[str, Optional[Path]]:
 
 
 # ---------------------------------------------------------------------------
-# Per-block viewer launch
+# Block-spec builders
 # ---------------------------------------------------------------------------
 
-def run_single_session_pipeline(
+def _build_plain_spec(
     config: KinectConfig,
-    dag_handler: DagConfigHandler,
-) -> None:
-    """Launches NeuralKinectViewer for a single block if the task is enabled."""
-    block_name = config.source_video.name
-    print(f"[{block_name}] ==> Checking task: view_neural_kinect_scene")
-
-    if not dag_handler.can_run("view_neural_kinect_scene"):
-        print(f"[{block_name}] Task disabled — skipping.")
-        return
-
-    paths = resolve_viewer_paths(config)
-
-    # Validate the minimum required inputs exist
+    paths: Dict[str, Optional[Path]],
+) -> Optional[NeuralKinectBlockSpec]:
+    """
+    Validate required paths and return a ``NeuralKinectBlockSpec`` for the
+    plain (non-transformed) viewer task.  Returns ``None`` when any required
+    file is missing (with a printed warning).
+    """
     for key in ("xyz_csv_path", "kinect_mkv_path", "forearm_metadata_path"):
         p = paths[key]
         if not p.exists():
-            print(f"[{block_name}] Missing required file '{key}': {p}  — skipping.")
-            return
-
-    options = dag_handler.get_task_options("view_neural_kinect_scene")
-    crop_half_size = float(options.get("crop_half_size_mm", 400.0))
+            print(
+                f"[{config.source_video.name}] Missing required file '{key}': {p} "
+                f"— skipping plain viewer."
+            )
+            return None
 
     if paths["merged_csv_path"] is None:
-        print(f"[{block_name}] No merged CSV found — launching in pure-3D mode.")
+        print(f"[{config.source_video.name}] No merged CSV found — pure-3D mode.")
     else:
-        print(f"[{block_name}] Merged CSV found — neural overlay enabled.")
+        print(f"[{config.source_video.name}] Merged CSV found — neural overlay enabled.")
 
-    print(f"[{block_name}] Launching NeuralKinectViewer...")
-    app = QApplication.instance() or QApplication(sys.argv)
-
-    viewer = NeuralKinectViewer(
+    return NeuralKinectBlockSpec(
         xyz_csv_path=paths["xyz_csv_path"],
         kinect_mkv_path=paths["kinect_mkv_path"],
         forearm_pointcloud_dir=paths["forearm_pointcloud_dir"],
@@ -222,50 +215,33 @@ def run_single_session_pipeline(
         hand_motion_path=paths["hand_motion_path"],
         recording_name=paths["recording_name"],
         merged_csv_path=paths["merged_csv_path"],
-        crop_half_size_mm=crop_half_size,
+        registration_transforms_by_forearm_key=None,
     )
-    viewer.show()
-    app.exec_()
-
-    # Flush any deferred Qt destruction events (widget teardown, OpenGL context
-    # release) that were posted but not yet processed when exec_() returned.
-    # Without this, the next iteration's NeuralKinectViewer may start VTK
-    # initialisation while the previous render window's context is still live,
-    # causing wglMakeCurrent to fail.
-    QCoreApplication.processEvents()
-
-    dag_handler.mark_completed("view_neural_kinect_scene")
 
 
-def run_single_session_pipeline_transformed(
+def _build_transformed_spec(
     config: KinectConfig,
-    dag_handler: DagConfigHandler,
-) -> None:
-    """Launches NeuralKinectViewer in registered-frame mode for a single block.
-
-    Skips (with a warning) when:
-    - The task is disabled in the DAG config.
-    - No unified registered forearm PLY exists (single-forearm session).
+    paths: Dict[str, Optional[Path]],
+    options: Dict,
+) -> Optional[NeuralKinectBlockSpec]:
+    """
+    Build and validate a ``NeuralKinectBlockSpec`` for the transformed-viewer
+    task.  Returns ``None`` when:
+    - Any required path is missing.
     - No registration transforms file exists.
     - No applicable transform key can be resolved for this block.
     """
-    task_name = "view_neural_kinect_scene_transformed"
     block_name = config.source_video.name
-    print(f"[{block_name}] ==> Checking task: {task_name}")
-
-    if not dag_handler.can_run(task_name):
-        print(f"[{block_name}] Task disabled — skipping.")
-        return
-
-    paths = resolve_viewer_paths(config)
 
     for key in ("xyz_csv_path", "kinect_mkv_path", "forearm_metadata_path"):
         p = paths[key]
         if not p.exists():
-            print(f"[{block_name}] Missing required file '{key}': {p}  — skipping.")
-            return
+            print(
+                f"[{block_name}] Missing required file '{key}': {p} "
+                f"— skipping transformed viewer."
+            )
+            return None
 
-    # Load registration artifacts via ForearmCatalog
     forearm_dir = paths["forearm_pointcloud_dir"]
     forearm_params = ForearmFrameParametersFileHandler.load(paths["forearm_metadata_path"])
     catalog = ForearmCatalog(forearm_params, forearm_dir)
@@ -276,7 +252,7 @@ def run_single_session_pipeline_transformed(
             f"[{block_name}] No registration transforms found "
             f"('{config.session_id}_registration_transforms.json' missing).  Skipping."
         )
-        return
+        return None
 
     transforms_by_forearm_key = _build_transforms_by_forearm_key(
         registration_transforms, config.source_video.stem
@@ -286,7 +262,7 @@ def run_single_session_pipeline_transformed(
             f"[{block_name}] Could not resolve any registration transforms for "
             f"stem '{config.source_video.stem}'.  Skipping."
         )
-        return
+        return None
 
     for fk, T in sorted(transforms_by_forearm_key.items()):
         R = T[:3, :3]
@@ -298,18 +274,12 @@ def run_single_session_pipeline_transformed(
             f"translation=({t[0]:.1f}, {t[1]:.1f}, {t[2]:.1f}) mm"
         )
 
-    options = dag_handler.get_task_options(task_name)
-    crop_half_size = float(options.get("crop_half_size_mm", 400.0))
-
     if paths["merged_csv_path"] is None:
-        print(f"[{block_name}] No merged CSV found — launching in pure-3D transformed mode.")
+        print(f"[{block_name}] No merged CSV — pure-3D transformed mode.")
     else:
         print(f"[{block_name}] Merged CSV found — neural overlay enabled (transformed mode).")
 
-    print(f"[{block_name}] Launching NeuralKinectViewer (transformed mode)...")
-    app = QApplication.instance() or QApplication(sys.argv)
-
-    viewer = NeuralKinectViewer(
+    return NeuralKinectBlockSpec(
         xyz_csv_path=paths["xyz_csv_path"],
         kinect_mkv_path=paths["kinect_mkv_path"],
         forearm_pointcloud_dir=paths["forearm_pointcloud_dir"],
@@ -318,18 +288,12 @@ def run_single_session_pipeline_transformed(
         hand_motion_path=paths["hand_motion_path"],
         recording_name=paths["recording_name"],
         merged_csv_path=paths["merged_csv_path"],
-        crop_half_size_mm=crop_half_size,
         registration_transforms_by_forearm_key=transforms_by_forearm_key,
     )
-    viewer.show()
-    app.exec_()
-
-    QCoreApplication.processEvents()
-    dag_handler.mark_completed(task_name)
 
 
 # ---------------------------------------------------------------------------
-# Batch dispatcher (sequential — one viewer at a time, matching visualisation workflow)
+# Batch dispatcher (sequential — one viewer window per task type)
 # ---------------------------------------------------------------------------
 
 @flow(name="Run Neural-Kinect Viewer Batch Sequentially", log_prints=True)
@@ -338,21 +302,92 @@ def run_batch_sequentially(
     project_data_root: Path,
     dag_config_path: Path,
 ) -> None:
-    """Runs the viewer for each block config file in block_files."""
+    """
+    Collect ``NeuralKinectBlockSpec`` objects for every enabled block, then
+    open ONE ``NeuralKinectViewer`` per task type (plain and/or transformed).
+
+    This replaces the old per-block sequential viewer approach: instead of
+    opening (and closing) a new window for each block, all blocks are
+    presented in a single window where the user navigates via dropdowns.
+    """
     dag_handler_template = DagConfigHandler(dag_config_path)
 
+    plain_task = "view_neural_kinect_scene"
+    transformed_task = "view_neural_kinect_scene_transformed"
+
+    plain_options = dag_handler_template.get_task_options(plain_task) if dag_handler_template.can_run(plain_task) else {}
+    transformed_options = dag_handler_template.get_task_options(transformed_task) if dag_handler_template.can_run(transformed_task) else {}
+
+    plain_blocks: Dict[Tuple[str, str], NeuralKinectBlockSpec] = {}
+    transformed_blocks: Dict[Tuple[str, str], NeuralKinectBlockSpec] = {}
+
     for block_file in block_files:
-        print(f"--- Opening block: {block_file.name} ---")
+        print(f"--- Loading block: {block_file.name} ---")
         try:
             config_data = KinectConfigFileHandler.load_and_resolve_config(block_file)
             config = KinectConfig(config_data=config_data, database_path=project_data_root)
-            dag_handler_instance = dag_handler_template.copy()
+            paths = resolve_viewer_paths(config)
+            key: Tuple[str, str] = (config.session_id, config.block_id)
 
-            run_single_session_pipeline(config, dag_handler_instance)
-            run_single_session_pipeline_transformed(config, dag_handler_instance)
+            if dag_handler_template.can_run(plain_task):
+                spec = _build_plain_spec(config, paths)
+                if spec is not None:
+                    plain_blocks[key] = spec
+                    print(f"[{block_file.name}] Plain spec built for {key}.")
+
+            if dag_handler_template.can_run(transformed_task):
+                spec = _build_transformed_spec(config, paths, transformed_options)
+                if spec is not None:
+                    transformed_blocks[key] = spec
+                    print(f"[{block_file.name}] Transformed spec built for {key}.")
+
         except Exception as exc:
-            print(f"Failed to initialise session {block_file.name}: {exc}")
+            print(f"Failed to build spec for {block_file.name}: {exc}")
             continue
+
+    app = QApplication.instance() or QApplication(sys.argv)
+
+    # --- Plain viewer ---
+    if plain_blocks:
+        crop_half_size = float(plain_options.get("crop_half_size_mm", 400.0))
+        first_sid, first_bid = next(iter(plain_blocks))
+        print(
+            f"Launching plain NeuralKinectViewer with {len(plain_blocks)} block(s)."
+        )
+        viewer = NeuralKinectViewer(
+            all_blocks=plain_blocks,
+            initial_session_id=first_sid,
+            initial_block_id=first_bid,
+            crop_half_size_mm=crop_half_size,
+        )
+        viewer.show()
+        app.exec_()
+        QCoreApplication.processEvents()
+        dag_handler_template.mark_completed(plain_task)
+    else:
+        if dag_handler_template.can_run(plain_task):
+            print("No valid blocks found for plain viewer — skipping.")
+
+    # --- Transformed viewer ---
+    if transformed_blocks:
+        crop_half_size = float(transformed_options.get("crop_half_size_mm", 400.0))
+        first_sid, first_bid = next(iter(transformed_blocks))
+        print(
+            f"Launching transformed NeuralKinectViewer with {len(transformed_blocks)} block(s)."
+        )
+        viewer = NeuralKinectViewer(
+            all_blocks=transformed_blocks,
+            initial_session_id=first_sid,
+            initial_block_id=first_bid,
+            crop_half_size_mm=crop_half_size,
+        )
+        viewer.show()
+        app.exec_()
+        QCoreApplication.processEvents()
+        dag_handler_template.mark_completed(transformed_task)
+    else:
+        if dag_handler_template.can_run(transformed_task):
+            print("No valid blocks found for transformed viewer — skipping.")
 
     print("All viewer sessions completed.")
 
