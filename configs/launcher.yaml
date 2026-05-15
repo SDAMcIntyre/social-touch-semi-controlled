@@ -43,6 +43,10 @@ categories:
         script: code/scripts/preprocess_workflow_kinect_visualisation.py
         dag_config: configs/preprocess_workflow_kinect_visualisation_dag.yaml
 
+      - name: Nerve [Auto]
+        script: code/scripts/preprocess_pipeline_nerve_auto.py
+        dag_config: configs/preprocess_pipeline_nerve_auto_dag.yaml
+
   - name: Merging
     workflows:
       - name: Neural and Kinect [Auto]
