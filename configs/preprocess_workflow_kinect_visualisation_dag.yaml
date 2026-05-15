@@ -10,8 +10,7 @@
 # ==============================================================================
 
 parameters:
-  kinect_configs: [valid_configs_ST15-01, valid_configs_ST16-02, 
-      valid_configs_ST16-03, valid_configs_ST16-05, valid_configs_ST18-01, 
+  kinect_configs: [valid_configs_ST16-05, valid_configs_ST18-01, 
       valid_configs_ST18-04]
 
 tasks:
@@ -46,6 +45,12 @@ tasks:
   view_somatosensory_assessement:
     enabled: true
     description: "Manually view the somatosensory assessment results."
+    depends_on: []
+
+  view_hand_mesh_comparison:
+    enabled: false
+    description: "Compare raw and stabilised hand meshes side by side in the 3D viewer
+      (cyan = raw, yellow = stabilised)."
     depends_on: []
 
   view_hand_model_overlay:

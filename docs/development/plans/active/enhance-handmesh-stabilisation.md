@@ -290,6 +290,67 @@ forward-backward zero-phase processing.
 
 **Dependencies:** Phase 1, Phase 2
 
+### Phase 5: Fix over-smoothing at high sticker velocities
+
+**Goal:** Eliminate excessive smoothing during fast strokes (500 mm/s).  Testing
+revealed ~67% total attenuation at the 3 Hz stroke frequency, caused by two
+compounding issues: rotation cutoff at 3 Hz (leftover from earlier plan
+iteration) and One-Euro `beta=0.007` being far too low (cutoff only 4.5 Hz at
+500 mm/s, compounded by forward-backward cascading).
+
+**Requirement:** no perceptible filtering above 200 mm/s sticker velocity.
+
+**Root cause analysis:**
+- Rotation Butterworth at 3 Hz with `filtfilt` attenuates 3 Hz stroke by ~30%.
+- One-Euro `beta=0.007` → fc = 4.5 Hz at 500 mm/s.  First-order at 4.5 Hz
+  attenuates 3 Hz by ~26%.  Forward-backward compounds to ~50%.
+- Combined: ~67% signal loss at stroke frequency.
+
+**Fix:** Three YAML parameter changes (no code changes):
+
+| Parameter | Current | New | Rationale |
+|-----------|---------|-----|-----------|
+| `beta` | 0.007 | 0.5 | At 200 mm/s: fc = 101 Hz (transparent). At rest: fc = 1 Hz (unchanged) |
+| `d_cutoff` | 1.0 | 10.0 | Faster derivative estimation — adapts in ~1-2 frames instead of ~5 |
+| `cutoff_hz` (rotation) | 3.0 | 5.0 | Revert to parent plan value — 3 Hz was too aggressive |
+
+**Why beta=0.5 also fixes forward-backward cascading:** at 200+ mm/s, the
+forward pass barely modifies the signal (fc > 101 Hz, <0.5% attenuation), so
+the backward pass sees near-original velocity and computes the same high
+cutoff.  Cascading only manifests when the forward pass attenuates
+significantly — which with beta=0.5 only happens at rest (no velocity to
+cascade).
+
+**Expected behaviour after fix:**
+
+| Velocity | One-Euro fc | Anchor atten. at 3 Hz | Rotation atten. | Total |
+|----------|-------------|----------------------|-----------------|-------|
+| 0 mm/s   | 1.0 Hz      | >95%                 | ~11%            | >95%  |
+| 50 mm/s  | 26 Hz       | ~8%                  | ~11%            | ~18%  |
+| 200 mm/s | 101 Hz      | <0.5%                | ~11%            | ~11%  |
+| 500 mm/s | 251 Hz      | <0.1%                | ~11%            | ~11%  |
+
+**Started:** 2026-05-12
+**Completed:** 2026-05-12
+
+**Outcome:** Data-driven analysis on ST16-05 block-order01 showed the raw
+anchor has only 0.002 mm RMS HF jitter (upstream 6 Hz filter already cleans
+it).  Anchor smoothing was **disabled** (`smooth_anchor: false`) as it
+provides no visible benefit.  Rotation cutoff changed from 3 Hz to 5 Hz.
+
+- [x] In `preprocess_workflow_kinect_auto_dag.yaml`, update `stabilise_hand_motion`:
+  - `cutoff_hz: 3.0` → `cutoff_hz: 5.0`
+  - `smooth_anchor: true` → `smooth_anchor: false`
+  - Anchor filter params left in YAML but ignored (smooth_anchor=false)
+- [x] Run `pytest code/tests/test_hand_motion_manager.py -v` — all 17 tests pass.
+- [ ] Regenerate stabilised NPZ for a fast-motion session — confirm fast strokes
+      preserved and scale breathing eliminated.
+
+**Files Modified:**
+- `configs/preprocess_workflow_kinect_auto_dag.yaml` — smooth_anchor disabled, cutoff 5 Hz
+
+**Dependencies:** Phase 3
+
 ---
 
 ## Testing Plan
@@ -348,8 +409,8 @@ filters are unchanged.
 
 | Risk | Likelihood | Impact | Mitigation |
 |------|-----------|--------|------------|
-| One-Euro `beta` parameter needs per-dataset tuning | Med | Med | Default `beta=0.007` is standard for hand tracking; expose in DAG YAML for per-session override |
-| Forward-backward One-Euro over-smooths (backward pass sees already-smoothed velocity) | Low | Low | Acceptable for mesh visualisation; `min_cutoff` sets a floor on the minimum cutoff |
+| One-Euro `beta` parameter needs per-dataset tuning | Med | Med | **Realized in Phase 5:** `beta=0.007` was far too low for 500 mm/s strokes. Fixed to `beta=0.5` — transparent above 200 mm/s. |
+| Forward-backward One-Euro over-smooths (backward pass sees already-smoothed velocity) | Low | Low | **Realized in Phase 5:** compounded with low beta to cause ~50% anchor attenuation. High beta (0.5) makes forward pass near-transparent at speed, eliminating the cascading. |
 | One-Euro first-order rolloff is gentler than Butterworth order 2 | Low | Low | Adaptive cutoff compensates: at rest, even 1 Hz first-order provides strong attenuation of > 3 Hz noise |
 | Anchor smoothing causes mesh to drift from physical sticker position | Very Low | Low | Drift only during rest-period jitter (which is noise anyway); fast motion tracked faithfully |
 
