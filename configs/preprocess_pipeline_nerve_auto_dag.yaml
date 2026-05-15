@@ -8,13 +8,35 @@ parameters:
       valid_configs_ST14-04, valid_configs_ST15-01, valid_configs_ST16-02,
       valid_configs_ST16-03, valid_configs_ST16-05, valid_configs_ST18-01,
       valid_configs_ST18-04]
+  # Path to the raw .mat nerve recording files. Relative to project_data_root.
+  nerve_mat_dir: "2_processed/nerve/0_matlab_files"
+  # Output directory for per-block CSVs from mat conversion. Relative to project_data_root.
+  nerve_csv_output_dir: "2_processed/nerve/1_csv_files"
+  # Output directory for block-order renamed CSVs. Relative to project_data_root.
+  nerve_block_order_output_dir: "2_processed/nerve/2_block-order"
+  # Quality-check spreadsheet mapping (Zoom, Zoom Block ID) → Block order. Relative to project_data_root.
+  quality_check_xlsx: "semicontrolled_data-collection_quality-check.xlsx"
   # Path to per-unit conduction velocity metadata. Relative to project_data_root.
   nerve_metadata_csv: "1_primary/nerve/semicontrol_unit-name_to_unit-type.csv"
 
 tasks:
+  convert_mat_to_csv:
+    enabled: true
+    description: "Convert .mat nerve files to CSV with in-memory date correction"
+    options:
+      force_processing: false
+    depends_on: []
+
+  rename_to_block_order:
+    enabled: true
+    description: "Rename nerve CSVs to kinect block-order naming convention"
+    options:
+      force_processing: false
+    depends_on: [convert_mat_to_csv]
+
   adjust_conduction_velocity:
     enabled: true
     description: "Shift nerve spike timing to compensate for neural conduction delay"
     options:
       force_processing: false
-    depends_on: []
+    depends_on: [rename_to_block_order]

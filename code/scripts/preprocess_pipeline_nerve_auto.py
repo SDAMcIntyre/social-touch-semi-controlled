@@ -12,8 +12,67 @@ from utils.pipeline.session_config_resolver import resolve_session_configs
 from primary_processing import KinectConfigFileHandler, KinectConfig
 
 from _3_preprocessing._8_nerve_velocity_adjustment import adjust_nerve_conduction_velocity
+from _3_preprocessing._9_nerve_data_extraction import (
+    convert_nerve_mat_to_csv,
+    rename_nerve_to_block_order,
+)
 
-# --- Session-level Flow ---
+# --- Session-level Flows ---
+
+@flow(name="Convert Mat to CSV")
+def convert_mat_to_csv_flow(
+    config: KinectConfig,
+    dag_handler: DagConfigHandler,
+    nerve_mat_dir: Path,
+    nerve_csv_output_dir: Path,
+) -> list[dict]:
+    logger = get_run_logger()
+    task_name = "convert_mat_to_csv"
+    options = dag_handler.get_task_options(task_name)
+    force = options.get("force_processing", False)
+
+    mat_files = sorted(nerve_mat_dir.glob("*.mat"))
+    if not mat_files:
+        raise FileNotFoundError(f"No .mat files found in: {nerve_mat_dir}")
+
+    session_short = config.session_id.split("_")[-1]  # e.g. "ST14-01" from "2022-06-15_ST14-01"
+    session_mat_files = [f for f in mat_files if session_short in f.stem]
+    if not session_mat_files:
+        logger.warning(f"[{config.session_id}] No .mat files matching '{session_short}' in {nerve_mat_dir}")
+        return []
+
+    all_results = []
+    for mat_path in session_mat_files:
+        logger.info(f"[{config.session_id}] Converting {mat_path.name}")
+        results = convert_nerve_mat_to_csv(mat_path, nerve_csv_output_dir, force_processing=force)
+        if results:
+            all_results.extend(results)
+    return all_results
+
+
+@flow(name="Rename to Block Order")
+def rename_to_block_order_flow(
+    config: KinectConfig,
+    dag_handler: DagConfigHandler,
+    nerve_csv_output_dir: Path,
+    nerve_block_order_output_dir: Path,
+    quality_check_xlsx: Path,
+) -> list[dict]:
+    logger = get_run_logger()
+    task_name = "rename_to_block_order"
+    options = dag_handler.get_task_options(task_name)
+    force = options.get("force_processing", False)
+
+    logger.info(f"[{config.session_id}] Renaming CSVs to block-order convention")
+    results = rename_nerve_to_block_order(
+        csv_dir=nerve_csv_output_dir,
+        output_dir=nerve_block_order_output_dir,
+        quality_check_xlsx=quality_check_xlsx,
+        session_id=config.session_id,
+        force_processing=force,
+    )
+    return results or []
+
 
 @flow(name="Adjust Conduction Velocity")
 def adjust_conduction_velocity_flow(
@@ -74,11 +133,38 @@ def run_single_session_pipeline(
     config: KinectConfig,
     dag_handler: DagConfigHandler,
     metadata_csv_path: Path,
+    nerve_mat_dir: Path,
+    nerve_csv_output_dir: Path,
+    nerve_block_order_output_dir: Path,
+    quality_check_xlsx: Path,
 ) -> dict:
     logger = get_run_logger()
     logger.info(f"Starting pipeline for session: {config.session_id}")
 
     try:
+        task_name = "convert_mat_to_csv"
+        if dag_handler.can_run(task_name):
+            logger.info(f"[{config.session_id}] ==> Running task: {task_name}")
+            convert_mat_to_csv_flow(
+                config=config,
+                dag_handler=dag_handler,
+                nerve_mat_dir=nerve_mat_dir,
+                nerve_csv_output_dir=nerve_csv_output_dir,
+            )
+            dag_handler.mark_completed(task_name)
+
+        task_name = "rename_to_block_order"
+        if dag_handler.can_run(task_name):
+            logger.info(f"[{config.session_id}] ==> Running task: {task_name}")
+            rename_to_block_order_flow(
+                config=config,
+                dag_handler=dag_handler,
+                nerve_csv_output_dir=nerve_csv_output_dir,
+                nerve_block_order_output_dir=nerve_block_order_output_dir,
+                quality_check_xlsx=quality_check_xlsx,
+            )
+            dag_handler.mark_completed(task_name)
+
         task_name = "adjust_conduction_velocity"
         if dag_handler.can_run(task_name):
             logger.info(f"[{config.session_id}] ==> Running task: {task_name}")
@@ -114,9 +200,28 @@ def run_batch_processing(
     if not metadata_csv_rel:
         raise ValueError("nerve_metadata_csv parameter is not configured in DAG YAML")
     metadata_csv_path = project_data_root / metadata_csv_rel
-
     if not metadata_csv_path.exists():
         raise FileNotFoundError(f"Metadata CSV not found: {metadata_csv_path}")
+
+    nerve_mat_dir_rel = dag_handler_template.get_parameter("nerve_mat_dir")
+    if not nerve_mat_dir_rel:
+        raise ValueError("nerve_mat_dir parameter is not configured in DAG YAML")
+    nerve_mat_dir = project_data_root / nerve_mat_dir_rel
+
+    nerve_csv_output_dir_rel = dag_handler_template.get_parameter("nerve_csv_output_dir")
+    if not nerve_csv_output_dir_rel:
+        raise ValueError("nerve_csv_output_dir parameter is not configured in DAG YAML")
+    nerve_csv_output_dir = project_data_root / nerve_csv_output_dir_rel
+
+    nerve_block_order_output_dir_rel = dag_handler_template.get_parameter("nerve_block_order_output_dir")
+    if not nerve_block_order_output_dir_rel:
+        raise ValueError("nerve_block_order_output_dir parameter is not configured in DAG YAML")
+    nerve_block_order_output_dir = project_data_root / nerve_block_order_output_dir_rel
+
+    quality_check_xlsx_rel = dag_handler_template.get_parameter("quality_check_xlsx")
+    if not quality_check_xlsx_rel:
+        raise ValueError("quality_check_xlsx parameter is not configured in DAG YAML")
+    quality_check_xlsx = project_data_root / quality_check_xlsx_rel
 
     processed_sessions: set[str] = set()
     results = []
@@ -140,6 +245,10 @@ def run_batch_processing(
             config=config,
             dag_handler=dag_handler_instance,
             metadata_csv_path=metadata_csv_path,
+            nerve_mat_dir=nerve_mat_dir,
+            nerve_csv_output_dir=nerve_csv_output_dir,
+            nerve_block_order_output_dir=nerve_block_order_output_dir,
+            quality_check_xlsx=quality_check_xlsx,
         )
         results.append(result)
 
