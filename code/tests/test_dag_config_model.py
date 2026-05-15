@@ -294,3 +294,187 @@ def test_dirty_flag(tmp_path: Path) -> None:
 
     model.reload()
     assert model.dirty is False
+
+
+# ------------------------------------------------------------------
+# Grid group spec — get / set round-trip
+# ------------------------------------------------------------------
+
+_GRID_GROUP_YAML = textwrap.dedent("""\
+    parameters:
+      kinect_configs: "test_dir"
+
+    tasks:
+      map_population_rf_grid:
+        enabled: true
+        options:
+          force_processing: false
+          grid_groups:
+            velocity_pressure_2d:
+              enabled: true
+              neuron_mode: iff
+              per_gesture_type: true
+              vertex_threshold_ratio: 0.25
+              compute_baseline: true
+              features:
+                hand_velocity_amplitude_mean_during_iff: {min: 0, max: 500, step: 5, span: 10}
+                pressure_mean_during_iff: {min: 0.002, max: 0.22, step: 0.02, span: 0.04}
+        depends_on: []
+""")
+
+
+def _grid_group_cfg(tmp_path: Path) -> Path:
+    cfg = tmp_path / "grid_group_dag.yaml"
+    cfg.write_text(_GRID_GROUP_YAML)
+    return cfg
+
+
+def test_get_grid_group_spec_returns_plain_dict(tmp_path: Path) -> None:
+    model = DagConfigModel(_grid_group_cfg(tmp_path))
+    spec = model.get_grid_group_spec(
+        "map_population_rf_grid", "grid_groups", "velocity_pressure_2d"
+    )
+    assert isinstance(spec, dict)
+    assert spec["enabled"] is True
+    assert spec["neuron_mode"] == "iff"
+    assert spec["per_gesture_type"] is True
+    assert spec["vertex_threshold_ratio"] == 0.25
+    assert spec["compute_baseline"] is True
+    feats = spec["features"]
+    assert "hand_velocity_amplitude_mean_during_iff" in feats
+    assert feats["hand_velocity_amplitude_mean_during_iff"]["min"] == 0
+    assert feats["hand_velocity_amplitude_mean_during_iff"]["max"] == 500
+
+
+def test_get_grid_group_spec_missing_task_raises(tmp_path: Path) -> None:
+    model = DagConfigModel(_grid_group_cfg(tmp_path))
+    with pytest.raises(KeyError, match="no_such_task"):
+        model.get_grid_group_spec("no_such_task", "grid_groups", "velocity_pressure_2d")
+
+
+def test_get_grid_group_spec_missing_opt_key_raises(tmp_path: Path) -> None:
+    model = DagConfigModel(_grid_group_cfg(tmp_path))
+    with pytest.raises(KeyError, match="no_such_key"):
+        model.get_grid_group_spec(
+            "map_population_rf_grid", "no_such_key", "velocity_pressure_2d"
+        )
+
+
+def test_get_grid_group_spec_missing_name_raises(tmp_path: Path) -> None:
+    model = DagConfigModel(_grid_group_cfg(tmp_path))
+    with pytest.raises(KeyError, match="no_such_group"):
+        model.get_grid_group_spec(
+            "map_population_rf_grid", "grid_groups", "no_such_group"
+        )
+
+
+def test_set_grid_group_spec_roundtrip(tmp_path: Path) -> None:
+    """set → save → reload → get produces identical scalar values."""
+    cfg = _grid_group_cfg(tmp_path)
+    model = DagConfigModel(cfg)
+    original = model.get_grid_group_spec(
+        "map_population_rf_grid", "grid_groups", "velocity_pressure_2d"
+    )
+
+    model.set_grid_group_spec(
+        "map_population_rf_grid", "grid_groups", "velocity_pressure_2d", original
+    )
+    assert model.dirty is True
+    model.save()
+
+    reloaded = DagConfigModel(cfg)
+    result = reloaded.get_grid_group_spec(
+        "map_population_rf_grid", "grid_groups", "velocity_pressure_2d"
+    )
+    assert result["neuron_mode"] == original["neuron_mode"]
+    assert result["per_gesture_type"] == original["per_gesture_type"]
+    assert result["vertex_threshold_ratio"] == original["vertex_threshold_ratio"]
+    assert result["compute_baseline"] == original["compute_baseline"]
+    assert set(result["features"].keys()) == set(original["features"].keys())
+    for feat, bounds in original["features"].items():
+        for k, v in bounds.items():
+            assert result["features"][feat][k] == v
+
+
+def test_set_grid_group_spec_features_are_flow_style(tmp_path: Path) -> None:
+    """After set_grid_group_spec, each feature bounds dict uses flow style.
+
+    Flow style means the bounds are rendered with curly braces on the same
+    line as the feature key (ruamel.yaml may wrap long lines, but the opening
+    brace always appears on the key's line).
+    """
+    cfg = _grid_group_cfg(tmp_path)
+    model = DagConfigModel(cfg)
+    spec = model.get_grid_group_spec(
+        "map_population_rf_grid", "grid_groups", "velocity_pressure_2d"
+    )
+    model.set_grid_group_spec(
+        "map_population_rf_grid", "grid_groups", "velocity_pressure_2d", spec
+    )
+    model.save()
+
+    saved_text = cfg.read_text()
+    for line in saved_text.splitlines():
+        if "hand_velocity_amplitude_mean_during_iff:" in line:
+            assert "{" in line, f"Expected flow-style opening brace on: {line!r}"
+        if "pressure_mean_during_iff:" in line:
+            assert "{" in line, f"Expected flow-style opening brace on: {line!r}"
+
+
+def test_set_grid_group_spec_new_group(tmp_path: Path) -> None:
+    """set_grid_group_spec can add a brand-new group name."""
+    cfg = _grid_group_cfg(tmp_path)
+    model = DagConfigModel(cfg)
+    new_spec = {
+        "enabled": False,
+        "neuron_mode": "sa1",
+        "per_gesture_type": False,
+        "vertex_threshold_ratio": 0.1,
+        "compute_baseline": False,
+        "features": {
+            "pressure_mean_during_iff": {"min": 0.0, "max": 1.0, "step": 0.05, "span": 0.1},
+        },
+    }
+    model.set_grid_group_spec(
+        "map_population_rf_grid", "grid_groups", "new_group", new_spec
+    )
+    model.save()
+
+    reloaded = DagConfigModel(cfg)
+    result = reloaded.get_grid_group_spec(
+        "map_population_rf_grid", "grid_groups", "new_group"
+    )
+    assert result["neuron_mode"] == "sa1"
+    assert result["features"]["pressure_mean_during_iff"]["max"] == 1.0
+
+    original_still_present = reloaded.get_grid_group_spec(
+        "map_population_rf_grid", "grid_groups", "velocity_pressure_2d"
+    )
+    assert original_still_present["neuron_mode"] == "iff"
+
+
+def test_set_grid_group_spec_against_real_config(tmp_path: Path) -> None:
+    """Round-trip get → set on the real analyse_workflow_processing_dag.yaml."""
+    real_cfg = CONFIGS_DIR / "analyse_workflow_processing_dag.yaml"
+    if not real_cfg.exists():
+        pytest.skip("analyse_workflow_processing_dag.yaml not found")
+    tmp = _copy_to_tmp(real_cfg, tmp_path)
+    model = DagConfigModel(tmp)
+
+    task_name = "map_population_rf_grid"
+    if task_name not in model.get_task_names():
+        pytest.skip(f"task '{task_name}' not in config")
+
+    groups = model.get_task_option(task_name, "grid_groups") or {}
+    if not groups:
+        pytest.skip("no grid_groups in real config")
+
+    group_name = next(iter(groups))
+    spec = model.get_grid_group_spec(task_name, "grid_groups", group_name)
+    model.set_grid_group_spec(task_name, "grid_groups", group_name, spec)
+    model.save()
+
+    reloaded = DagConfigModel(tmp)
+    result = reloaded.get_grid_group_spec(task_name, "grid_groups", group_name)
+    assert result["neuron_mode"] == spec["neuron_mode"]
+    assert set(result["features"].keys()) == set(spec["features"].keys())
