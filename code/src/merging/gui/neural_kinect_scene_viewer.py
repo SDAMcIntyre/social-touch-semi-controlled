@@ -425,14 +425,22 @@ class NeuralDataPanel(QWidget):
         self._total_kinect_frames = total_kinect_frames
         self._total_samples: int = len(merged_df)
 
-        # Zoom state — zoomed ±15 s window is the default
+        # Zoom state — zoomed ±30 s window is the default
         self._neural_fps: int = neural_fps
-        self._zoom_half_window: int = 15.0 * neural_fps  # samples; must match _window_spinbox.setValue(15.0) below
+        self._zoom_half_window: int = 30.0 * neural_fps  # samples; must match _window_spinbox.setValue(30.0) below
         self._max_half_window: int = self._total_samples // 2
         self._current_sample: int = 0
 
+        # Blit state — background snapshot for fast cursor updates
+        self._bg_full = None          # copy_from_bbox snapshot (None = needs capture)
+        self._bg_xlim: tuple = (0, 1) # xlim at which the snapshot was taken
+        # Resnap threshold: centred=25 % drift from centre; edge-pan=5 % margin
+        self._blit_threshold_frac: float = 0.25
+        self._centered_mode: bool = False   # True = centred, False = edge-pan
+        self._supports_blit: bool = True   # set False on non-blitting backends
+
         # --- Matplotlib figure ---
-        self.fig = Figure(figsize=(12, 2.2), tight_layout=True)
+        self.fig = Figure(figsize=(12, 2.2))
         self.fig.patch.set_facecolor('#1a1a2e')
         self.canvas = FigureCanvasQTAgg(self.fig)
 
@@ -454,13 +462,21 @@ class NeuralDataPanel(QWidget):
         )
         btn_layout.addWidget(self._touch_bands_checkbox)
 
+        self._centered_checkbox = QCheckBox("Centred")
+        self._centered_checkbox.setChecked(self._centered_mode)
+        self._centered_checkbox.setStyleSheet("font-size: 8pt;")
+        self._centered_checkbox.stateChanged.connect(
+            lambda state: self._on_centered_toggled(state == Qt.Checked)
+        )
+        btn_layout.addWidget(self._centered_checkbox)
+
         btn_layout.addWidget(QLabel("±"))
         self._window_spinbox = QDoubleSpinBox()
         self._window_spinbox.setMinimum(0.5)
         _max_secs = min(self._total_samples / self._neural_fps / 2.0, 3600.0)
         self._window_spinbox.setMaximum(_max_secs)
         self._window_spinbox.setSingleStep(0.5)
-        self._window_spinbox.setValue(15.0)
+        self._window_spinbox.setValue(30.0)
         self._window_spinbox.setSuffix(" s")
         self._window_spinbox.setFixedWidth(70)
         self._window_spinbox.setFixedHeight(18)
@@ -472,6 +488,7 @@ class NeuralDataPanel(QWidget):
 
         self.canvas.installEventFilter(self)
         self.canvas.mpl_connect('button_press_event', self._on_canvas_click)
+        self.canvas.mpl_connect('resize_event', self._invalidate_background)
         layout.addWidget(self.canvas)
         self.setFixedHeight(220)
 
@@ -494,6 +511,7 @@ class NeuralDataPanel(QWidget):
     def _setup_axes(self, merged_df: pd.DataFrame) -> None:
         axes = self.fig.subplots(3, 1, sharex=True)
         self.ax_freq, self.ax_depth, self.ax_area = axes
+        self.fig.subplots_adjust(left=0.06, right=0.99, top=0.97, bottom=0.10, hspace=0.10)
 
         x = np.arange(len(merged_df))
         signal_specs = [
@@ -514,7 +532,7 @@ class NeuralDataPanel(QWidget):
             line = ax.axvline(x=0, color='red', lw=1.5, alpha=0.9)
             self._cursor_lines.append(line)
 
-        self.canvas.draw()
+        self._capture_background()
 
     def _draw_touch_bands(self) -> None:
         """
@@ -538,31 +556,132 @@ class NeuralDataPanel(QWidget):
                 self._touch_spans.append(span)
 
         if self._touch_spans:
+            self._bg_full = None
             self.canvas.draw_idle()
 
     def _on_touch_bands_toggled(self, checked: bool) -> None:
         """Show or hide all touch-band span artists and refresh the canvas."""
         for artist in self._touch_spans:
             artist.set_visible(checked)
+        self._bg_full = None
         self.canvas.draw_idle()
+
+    def _on_centered_toggled(self, checked: bool) -> None:
+        """Switch between centred and edge-pan scroll modes."""
+        self._centered_mode = checked
+        self._bg_full = None  # invalidate snapshot; next update_cursor recaptures
+
+    # ------------------------------------------------------------------
+    # Blit helpers
+    # ------------------------------------------------------------------
+
+    def _capture_background(self) -> None:
+        """
+        Take a full-canvas snapshot with cursor lines hidden.
+
+        After snapshotting, the cursor lines are redrawn via the fast
+        blit path so the canvas always shows the current cursor position.
+        Records the xlim of the first axes at snapshot time in ``_bg_xlim``.
+        """
+        # Hide cursor lines
+        for line in self._cursor_lines:
+            line.set_visible(False)
+
+        # Full draw without cursors
+        self.canvas.draw()
+
+        # Snapshot
+        self._bg_full = self.canvas.copy_from_bbox(self.fig.bbox)
+        self._bg_xlim = tuple(self.ax_freq.get_xlim())
+
+        # Re-show cursor lines
+        for line in self._cursor_lines:
+            line.set_visible(True)
+
+        # Draw cursor lines via blit
+        for ax, line in zip(
+            [self.ax_freq, self.ax_depth, self.ax_area],
+            self._cursor_lines,
+        ):
+            ax.draw_artist(line)
+        self.canvas.blit(self.fig.bbox)
+
+    def _invalidate_background(self, *_) -> None:
+        """Discard the cached background snapshot (e.g. on canvas resize)."""
+        self._bg_full = None
+
+    # ------------------------------------------------------------------
+    # Cursor update — hot path
+    # ------------------------------------------------------------------
 
     def update_cursor(self, frame_idx: int, scale_factor: float) -> None:
         """
-        Move the red vertical cursor to the position corresponding to
-        *frame_idx* in the merged-CSV sample space.
+        Move the red vertical cursor to *frame_idx* in merged-CSV sample space.
 
-        The x-axis limits are shifted to keep the cursor centred in the
-        current zoom window.  Uses ``draw_idle()`` (non-blocking) to avoid
-        jank at 30 fps.
+        Fast path: restore the cached background bitmap, draw only the cursor
+        lines via ``ax.draw_artist`` + ``canvas.blit`` — ~1–3 ms per call.
+
+        Full-redraw path: triggered when the cursor drifts outside the safe
+        zone (configurable via ``_blit_threshold_frac``), when the zoom window
+        changes, or when the canvas was resized.  After a full redraw a new
+        snapshot is captured so subsequent frames hit the fast path.
+
+        Mode ``_centered_mode=True``:  resnap when cursor drifts > 25 % from
+        visible centre.
+        Mode ``_centered_mode=False`` (edge-pan): resnap when cursor reaches
+        within 5 % of the left or right edge of the current view.
         """
         sample_idx = int(frame_idx * scale_factor)
         self._current_sample = sample_idx
+
+        # Update cursor line positions
         for line in self._cursor_lines:
             line.set_xdata([sample_idx])
-        lo = max(0, sample_idx - self._zoom_half_window)
-        hi = min(self._total_samples - 1, sample_idx + self._zoom_half_window)
-        self.ax_freq.set_xlim(lo, hi)
-        self.canvas.draw_idle()
+
+        # Decide whether to shift xlim (and recapture) or use the fast path
+        needs_resnap = False
+
+        if self._bg_full is None:
+            # No snapshot yet — compute xlim then capture
+            needs_resnap = True
+        else:
+            lo_snap, hi_snap = self._bg_xlim
+            span = hi_snap - lo_snap
+            if span <= 0:
+                needs_resnap = True
+            elif self._centered_mode:
+                centre_snap = (lo_snap + hi_snap) * 0.5
+                drift_frac = abs(sample_idx - centre_snap) / (span * 0.5 + 1e-9)
+                needs_resnap = drift_frac > self._blit_threshold_frac
+            else:
+                # Edge-pan mode: resnap only when cursor leaves a 5 % margin
+                margin = 0.05 * span
+                needs_resnap = sample_idx < lo_snap + margin or sample_idx > hi_snap - margin
+
+        if needs_resnap:
+            # Shift xlim to centre around the cursor, then capture
+            lo = max(0, sample_idx - self._zoom_half_window)
+            hi = min(self._total_samples - 1, sample_idx + self._zoom_half_window)
+            self.ax_freq.set_xlim(lo, hi)
+            self._capture_background()
+            return
+
+        # Fast blit path -------------------------------------------------------
+        if not self._supports_blit:
+            self.canvas.draw_idle()
+            return
+        try:
+            self.canvas.restore_region(self._bg_full)
+            for ax, line in zip(
+                [self.ax_freq, self.ax_depth, self.ax_area],
+                self._cursor_lines,
+            ):
+                ax.draw_artist(line)
+            self.canvas.blit(self.fig.bbox)
+        except AttributeError:
+            # Backend does not support blitting — fall back permanently
+            self._supports_blit = False
+            self.canvas.draw_idle()
 
     def _on_zoom_window_changed(self, seconds: float) -> None:
         """Update the half-window size and refresh xlim."""
@@ -570,6 +689,7 @@ class NeuralDataPanel(QWidget):
         lo = max(0, self._current_sample - self._zoom_half_window)
         hi = min(self._total_samples - 1, self._current_sample + self._zoom_half_window)
         self.ax_freq.set_xlim(lo, hi)
+        self._bg_full = None
         self.canvas.draw_idle()
 
     def _on_canvas_click(self, event) -> None:
@@ -603,6 +723,7 @@ class NeuralDataPanel(QWidget):
             lo = max(0, self._current_sample - self._zoom_half_window)
             hi = min(self._total_samples - 1, self._current_sample + self._zoom_half_window)
             self.ax_freq.set_xlim(lo, hi)
+            self._bg_full = None
             self.canvas.draw_idle()
             return True   # consume event — don't let Matplotlib handle it
         return False
@@ -712,10 +833,10 @@ class NeuralKinectViewer(QMainWindow):
         self._play_timer.timeout.connect(self._play_advance)
 
         # Throttle timer for live frame updates during slider drag.
-        # Fires every 80 ms (~12 fps) while the user holds the slider.
+        # Fires every 33 ms (~30 fps) while the user holds the slider.
         self._drag_timer = QTimer(self)
         self._drag_timer.timeout.connect(self._on_drag_timer_fired)
-        self._drag_timer.setInterval(80)
+        self._drag_timer.setInterval(33)
         self._pending_drag_frame: Optional[int] = None
 
         # Polling timer: fires every 50 ms after a cache-miss.
@@ -884,6 +1005,15 @@ class NeuralKinectViewer(QMainWindow):
         self._exact_frame_pending: Optional[int] = None
         self._recording_name: str = spec.recording_name
 
+        # Cache of last-rendered sticker positions, keyed by sticker name.
+        # Used in _update_frame to detect when a position actually changes.
+        self._last_sticker_pos: Dict[str, np.ndarray] = {}
+
+        # Contact-point identity cache — skip DeepCopy when the frame's
+        # contact data is unchanged since the last render.
+        self._last_contact_frame: int = -1
+        self._last_contact_empty: bool = True
+
         # ------------------------------------------------------------------
         # 9. Update frame slider range + window title
         # ------------------------------------------------------------------
@@ -984,6 +1114,11 @@ class NeuralKinectViewer(QMainWindow):
         self.plotter.set_background('black')
         plotter_layout.addWidget(self.plotter.interactor)
         top_layout.addWidget(plotter_widget, stretch=4)
+
+        # Register once: refresh camera label whenever the user ends a rotate/pan
+        self._cam_end_observer_tag = self.plotter.iren.add_observer(
+            'EndInteractionEvent', self._refresh_cam_pos_label
+        )
 
         # Right panel (scrollable, fixed 220 px)
         self._right_panel = QWidget()
@@ -1129,13 +1264,23 @@ class NeuralKinectViewer(QMainWindow):
         self._buffer_label.setStyleSheet("font-family: monospace; font-size: 8pt; color: gray;")
         layout.addWidget(self._buffer_label)
 
-        recenter_btn = QPushButton("Recenter")
-        recenter_btn.clicked.connect(self._recenter_view)
-        layout.addWidget(recenter_btn)
-
         self.play_button = QPushButton("▶ Play")
         self.play_button.clicked.connect(self._toggle_play)
         layout.addWidget(self.play_button)
+
+        self._speed_spinbox = QDoubleSpinBox()
+        self._speed_spinbox.setRange(0.1, 10.0)
+        self._speed_spinbox.setSingleStep(0.1)
+        self._speed_spinbox.setValue(1.0)
+        self._speed_spinbox.setDecimals(1)
+        self._speed_spinbox.setPrefix("x")
+        self._speed_spinbox.setFixedWidth(65)
+        self._speed_spinbox.setToolTip("Playback speed multiplier (1.0 = native FPS)")
+        layout.addWidget(self._speed_spinbox)
+
+        recenter_btn = QPushButton("Recenter")
+        recenter_btn.clicked.connect(self._recenter_view)
+        layout.addWidget(recenter_btn)
 
         layout.addWidget(QLabel("Crop ±"))
         self.crop_spinbox = QSpinBox()
@@ -1182,6 +1327,14 @@ class NeuralKinectViewer(QMainWindow):
         self._mesh_forearm['colors'] = _seed_col.copy()
         self._mesh_hand = pv.PolyData(np.empty((0, 3), dtype=np.float32))
         self._mesh_contact = pv.PolyData(np.empty((0, 3), dtype=np.float32))
+        # Force a full DeepCopy on the next _update_frame call so the freshly
+        # created PolyData objects (no faces, no points) get populated correctly.
+        # Without this reset, an interim _update_frame fired by frame_slider.setValue(0)
+        # during _load_block sets these counters before _init_actors replaces the
+        # PolyData objects, causing the deferred render to take the no-op path.
+        self._last_hand_tri_count: int = -1
+        self._last_contact_frame: int = -1
+        self._last_contact_empty: bool = True
 
         # Static actors
         self.plotter.add_text(
@@ -1236,9 +1389,11 @@ class NeuralKinectViewer(QMainWindow):
 
         # Register ALL stickers and cache actor refs.
         self._sticker_actors: Dict[str, Any] = {}
+        _small_sticker_colors = {'blue', 'green', 'yellow'}
         for name in self._stickers_xyz_dict:
             color = self._custom_colors.get(name, 'magenta')
-            sphere = pv.Sphere(radius=4.0, center=(0.0, 0.0, 0.0))
+            radius = 4.0 / 3.0 if color in _small_sticker_colors else 4.0
+            sphere = pv.Sphere(radius=radius, center=(0.0, 0.0, 0.0))
             actor = self.plotter.add_mesh(sphere, color=color, name=f'sticker_{name}')
             self._sticker_actors[name] = actor
 
@@ -1259,14 +1414,6 @@ class NeuralKinectViewer(QMainWindow):
         self.plotter.add_mesh(
             _bounds_proxy, opacity=0.001, name='_bounds_proxy', pickable=False,
         )
-
-        # Update camera readout whenever the user rotates / pans the scene
-        try:
-            self.plotter.iren.AddObserver(
-                "EndInteractionEvent", self._refresh_cam_pos_label
-            )
-        except Exception:
-            pass
 
         # Also reset the last-forearm-key sentinel so the forearm is redrawn
         self._last_forearm_key: Any = object()
@@ -1304,6 +1451,13 @@ class NeuralKinectViewer(QMainWindow):
         ``plotter.render()`` at the end propagates all VTK Modified() flags.
         """
         self.current_index = frame_idx
+
+        # Dirty flags — set by each per-actor block when data actually changes.
+        # dirty:       at least one actor was modified → need plotter.render()
+        # bounds_dirty: geometry bounds changed (empty↔non-empty) → need
+        #               ResetCameraClippingRange() before render.
+        dirty: bool = False
+        bounds_dirty: bool = False
 
         # Remove the invisible bounding proxy once a real kinect frame is available.
         if self._bounds_proxy_active and self._visibility.get('kinect_point_cloud', True):
@@ -1358,13 +1512,20 @@ class NeuralKinectViewer(QMainWindow):
                     )
         if _kcloud is None:
             _kcloud = pv.PolyData(np.empty((0, 3), dtype=np.float32))
-        self._mesh_kinect.DeepCopy(_kcloud)
+        # Only DeepCopy (and mark dirty) when the cloud or the current mesh
+        # has real content — avoids a wasted copy of two empty PolyDatas.
+        if _kcloud.n_points > 0 or self._mesh_kinect.n_points > 0:
+            self._mesh_kinect.DeepCopy(_kcloud)
+            dirty = True
+            bounds_dirty = True
 
         # 2. Forearm (updated only when the bisect key changes) -------------
         if not self._visibility.get('forearms', True):
             _fa_empty = pv.PolyData(np.empty((0, 3), dtype=np.float32))
             self._mesh_forearm.DeepCopy(_fa_empty)
             self._last_forearm_key = object()  # force rebuild when re-enabled
+            dirty = True
+            bounds_dirty = True
         elif forearm_key != getattr(self, '_last_forearm_key', object()):
             self._last_forearm_key = forearm_key
             o3d_pc = self._forearms_dict.get(forearm_key)
@@ -1387,12 +1548,16 @@ class NeuralKinectViewer(QMainWindow):
             if _fa_cloud is None:
                 _fa_cloud = pv.PolyData(np.empty((0, 3), dtype=np.float32))
             self._mesh_forearm.DeepCopy(_fa_cloud)
+            dirty = True
+            bounds_dirty = True
 
         # 3. Hand mesh (lazy per-frame transform) ---------------------------
         if not self._visibility.get('hand_meshes', True):
             if self._last_hand_tri_count != 0:
                 self._mesh_hand.DeepCopy(pv.PolyData(np.empty((0, 3), dtype=np.float32)))
                 self._last_hand_tri_count = 0
+                dirty = True
+                bounds_dirty = True
         else:
             o3d_mesh = self._get_hand_mesh(frame_idx)
             if o3d_mesh is not None and o3d_mesh.has_triangles():
@@ -1406,18 +1571,23 @@ class NeuralKinectViewer(QMainWindow):
                 if n_tris == self._last_hand_tri_count:
                     self._mesh_hand.points = verts
                     self._mesh_hand.Modified()
+                    dirty = True
                 else:
                     faces = np.hstack([
                         np.full((n_tris, 1), 3, dtype=tris.dtype), tris
                     ])
                     self._mesh_hand.DeepCopy(pv.PolyData(verts, faces))
                     self._last_hand_tri_count = n_tris
+                    dirty = True
+                    bounds_dirty = True
             else:
                 if self._last_hand_tri_count != 0:
                     self._mesh_hand.DeepCopy(
                         pv.PolyData(np.empty((0, 3), dtype=np.float32))
                     )
                     self._last_hand_tri_count = 0
+                    dirty = True
+                    bounds_dirty = True
 
         # 4. Stickers + compass widgets -------------------------------------
         for name, positions in self._stickers_xyz_dict.items():
@@ -1434,11 +1604,26 @@ class NeuralKinectViewer(QMainWindow):
 
             if actor is not None:
                 valid_pos = pos is not None and not np.any(np.isnan(pos))
-                if valid_pos and self._visibility.get(name, True):
-                    actor.SetPosition(*pos.tolist())
-                    actor.VisibilityOn()
+                desired_visible = valid_pos and self._visibility.get(name, True)
+                was_visible = actor.GetVisibility() != 0
+
+                if desired_visible:
+                    # Compare new position against last rendered position.
+                    prev = self._last_sticker_pos.get(name)
+                    pos_changed = (
+                        prev is None
+                        or not np.allclose(prev, pos, equal_nan=True)
+                    )
+                    if pos_changed or not was_visible:
+                        actor.SetPosition(*pos.tolist())
+                        actor.VisibilityOn()
+                        self._last_sticker_pos[name] = pos.copy()
+                        dirty = True
                 else:
-                    actor.VisibilityOff()
+                    if was_visible:
+                        actor.VisibilityOff()
+                        self._last_sticker_pos.pop(name, None)
+                        dirty = True
 
             if name in self._compass_widgets and frame_idx > 0:
                 prev_pos = positions[frame_idx - 1]
@@ -1462,21 +1647,42 @@ class NeuralKinectViewer(QMainWindow):
                     if frame_idx < len(self._contact_pts_by_frame)
                     else None
                 )
-            if _cpts is not None and len(_cpts) > 0:
-                if T is not None:
-                    _cpts = apply_rigid_transform(_cpts.astype(np.float64), T).astype(np.float32)
-                self._mesh_contact.DeepCopy(
-                    pv.PolyData(_cpts.astype(np.float32))
-                )
-            else:
-                self._mesh_contact.DeepCopy(
-                    pv.PolyData(np.empty((0, 3), dtype=np.float32))
-                )
+            _contact_is_empty = _cpts is None or len(_cpts) == 0
 
-        # 6. Single render call ---------------------------------------------
-        self.plotter.renderer.ResetCameraClippingRange()
-        self.plotter.render()
-        self._refresh_cam_pos_label()
+            if frame_idx == self._last_contact_frame:
+                # Same frame revisited (e.g. exact-frame poll) — skip DeepCopy.
+                pass
+            elif _contact_is_empty and self._last_contact_empty:
+                # Transitioning empty → empty: nothing to update, no dirty set.
+                self._last_contact_frame = frame_idx
+            else:
+                # Data actually changed (or empty↔non-empty transition).
+                if not _contact_is_empty:
+                    if T is not None:
+                        _cpts = apply_rigid_transform(
+                            _cpts.astype(np.float64), T
+                        ).astype(np.float32)
+                    self._mesh_contact.DeepCopy(
+                        pv.PolyData(_cpts.astype(np.float32))
+                    )
+                else:
+                    self._mesh_contact.DeepCopy(
+                        pv.PolyData(np.empty((0, 3), dtype=np.float32))
+                    )
+                dirty = True
+                if _contact_is_empty != self._last_contact_empty:
+                    # Bounds changed: empty↔non-empty transition.
+                    bounds_dirty = True
+                self._last_contact_frame = frame_idx
+                self._last_contact_empty = _contact_is_empty
+
+        # 6. Single render call (gated on dirty flag) -----------------------
+        if dirty:
+            if bounds_dirty:
+                self.plotter.renderer.ResetCameraClippingRange()
+            self.plotter.render()
+        if not (self._is_interactive or self._play_timer.isActive()):
+            self._refresh_cam_pos_label()
 
         # 7. Neural panel cursor --------------------------------------------
         if self.neural_panel is not None:
@@ -1486,7 +1692,8 @@ class NeuralKinectViewer(QMainWindow):
         self.frame_label.setText(f"{frame_idx + 1} / {self._total_frames}")
         buf_n = self._preloader.buffer_count()
         buf_max = self._preloader._buffer_size
-        self._buffer_label.setText(f"Buf: {buf_n}/{buf_max}")
+        if not self._play_timer.isActive() or (frame_idx % 5 == 0):
+            self._buffer_label.setText(f"Buf: {buf_n}/{buf_max}")
 
         # 9. Signal preloader to look ahead (skip when cloud is paused) -----
         if self._visibility.get('kinect_point_cloud', True):
@@ -1634,9 +1841,10 @@ class NeuralKinectViewer(QMainWindow):
         self._drag_timer.stop()
         self._pending_drag_frame = None
         self._update_frame(self.frame_slider.value())
+        self._refresh_cam_pos_label()
 
     def _on_drag_timer_fired(self) -> None:
-        """Throttled render callback: fires every 80 ms while the slider is held."""
+        """Throttled render callback: fires every 33 ms while the slider is held."""
         if self._pending_drag_frame is not None:
             frame = self._pending_drag_frame
             self._pending_drag_frame = None
@@ -1731,6 +1939,7 @@ class NeuralKinectViewer(QMainWindow):
             self.play_button.setText("▶ Play")
             self._is_interactive = False
             self._update_frame(self.current_index)
+            self._refresh_cam_pos_label()
         else:
             self._is_interactive = True
             fps = 30
@@ -1740,7 +1949,7 @@ class NeuralKinectViewer(QMainWindow):
                 and hasattr(self._mkv._reader, 'fps')
             ):
                 fps = self._mkv._reader.fps
-            self._play_timer.start(int(1000 / fps))
+            self._play_timer.start(int(1000 / (fps * self._speed_spinbox.value())))
             self.play_button.setText("⏸ Pause")
 
     def _play_advance(self) -> None:

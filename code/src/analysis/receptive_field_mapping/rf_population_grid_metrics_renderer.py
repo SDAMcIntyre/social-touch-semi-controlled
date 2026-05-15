@@ -111,6 +111,9 @@ def render_grid_metric_heatmap(
     title_suffix: str = "",
     colormap_name: str | None = None,
     center_value: float | None = None,
+    norm: matplotlib.colors.Normalize | None = None,
+    xlim: tuple[float, float] | None = None,
+    ylim: tuple[float, float] | None = None,
 ) -> None:
     pivoted = df.pivot(index=y_feature_col, columns=x_feature_col, values=metric_name)
 
@@ -123,11 +126,27 @@ def render_grid_metric_heatmap(
     cell_size = 0.65
     fig_w = max(6.0, n_x * cell_size + 3.0)
     fig_h = max(4.0, n_y * cell_size + 2.0)
-    fig, ax = plt.subplots(figsize=(fig_w, fig_h), layout="constrained")
+    font_scale = max(1.0, max(fig_w, fig_h) / 8.0)
+    title_fontsize = 14 * font_scale
+    label_fontsize = 12 * font_scale
+    tick_fontsize = 10 * font_scale
 
-    if metric_name == "touch_count":
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h), layout="constrained")
+    fig.patch.set_facecolor("black")
+    ax.set_facecolor("black")
+    ax.tick_params(colors="white")
+    ax.xaxis.label.set_color("white")
+    ax.yaxis.label.set_color("white")
+    ax.title.set_color("white")
+    for spine in ax.spines.values():
+        spine.set_edgecolor("white")
+
+    if norm is not None:
+        cmap = plt.get_cmap(colormap_name or "viridis").copy()
+        mesh_kwargs: dict = {"norm": norm}
+    elif metric_name == "touch_count":
         cmap = _TOUCH_COUNT_CMAP
-        mesh_kwargs: dict = {"norm": _TOUCH_COUNT_NORM}
+        mesh_kwargs = {"norm": _TOUCH_COUNT_NORM}
     elif center_value is not None:
         cmap = plt.get_cmap(colormap_name or "RdBu_r").copy()
         finite_vals = pivoted.values[np.isfinite(pivoted.values)]
@@ -161,16 +180,25 @@ def render_grid_metric_heatmap(
         **mesh_kwargs,
     )
 
-    plt.colorbar(im, ax=ax, label=metric_name.replace("_", " "))
+    if xlim is not None:
+        ax.set_xlim(xlim)
+    if ylim is not None:
+        ax.set_ylim(ylim)
+
+    cbar = plt.colorbar(im, ax=ax, label=metric_name.replace("_", " "))
+    cbar.ax.tick_params(labelsize=tick_fontsize, colors="white")
+    cbar.set_label(metric_name.replace("_", " "), fontsize=label_fontsize, color="white")
+    cbar.outline.set_edgecolor("white")
 
     x_label = x_feature_col.removesuffix("_center").replace("_", " ")
     y_label = y_feature_col.removesuffix("_center").replace("_", " ")
-    ax.set_xlabel(x_label)
-    ax.set_ylabel(y_label)
+    ax.set_xlabel(x_label, fontsize=label_fontsize)
+    ax.set_ylabel(y_label, fontsize=label_fontsize)
+    ax.tick_params(labelsize=tick_fontsize)
     title = f"{session_id} / {gesture_type} / {metric_name}"
     if title_suffix:
         title = f"{title} ({title_suffix})"
-    ax.set_title(title)
+    ax.set_title(title, fontsize=title_fontsize)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(str(output_path), dpi=150)
@@ -242,6 +270,9 @@ def run_population_rf_grid_metrics_visualization(
                     f"gesture_type per CSV in {csv_path}, found {list(gesture_types)}"
                 )
 
+            if "velocity" in center_cols[1].lower():
+                center_cols = [center_cols[1], center_cols[0]]
+
             all_session_data.append({
                 "session_id": session_id,
                 "df": df,
@@ -284,6 +315,18 @@ def run_population_rf_grid_metrics_visualization(
         metric_min = float(np.nanmin(vals.values))
         metric_max = float(np.nanmax(vals.values))
         global_metric_ranges[metric_name] = (metric_min, metric_max)
+
+    global_axis_ranges: dict[str, tuple[float, float]] = {}
+    for entry in all_session_data:
+        for col in (entry["x_feature_col"], entry["y_feature_col"]):
+            col_vals = entry["df"][col].values
+            col_min = float(np.nanmin(col_vals))
+            col_max = float(np.nanmax(col_vals))
+            if col in global_axis_ranges:
+                prev_min, prev_max = global_axis_ranges[col]
+                global_axis_ranges[col] = (min(prev_min, col_min), max(prev_max, col_max))
+            else:
+                global_axis_ranges[col] = (col_min, col_max)
 
     session_ids_seen: set[str] = set()
 
@@ -329,6 +372,9 @@ def run_population_rf_grid_metrics_visualization(
             if metric_name in _DEVIATION_FIXED_RANGE:
                 vmin, vmax = _DEVIATION_FIXED_RANGE[metric_name]
 
+            xlim = global_axis_ranges.get(x_feature_col)
+            ylim = global_axis_ranges.get(y_feature_col)
+
             render_grid_metric_heatmap(
                 df=df,
                 metric_name=metric_name,
@@ -342,7 +388,41 @@ def run_population_rf_grid_metrics_visualization(
                 title_suffix=suffix,
                 colormap_name=colormap_name,
                 center_value=center_value,
+                xlim=xlim,
+                ylim=ylim,
             )
+
+            if metric_name == "touch_count":
+                finite_counts = df["touch_count"].values
+                finite_counts = finite_counts[
+                    np.isfinite(finite_counts) & (finite_counts > 0)
+                ]
+                data_max = float(finite_counts.max()) if len(finite_counts) > 0 else 1.0
+                log_norm = matplotlib.colors.LogNorm(
+                    vmin=1, vmax=max(1.0, data_max)
+                )
+
+                if gesture_type == "all_gestures":
+                    log_path = output_dir / "touch_count_log" / "all_gestures" / f"{session_id}.png"
+                else:
+                    log_path = output_dir / "touch_count_log" / f"{session_id}_{safe_gesture}.png"
+
+                log_suffix = suffix + ", log scale" if suffix else "log scale"
+
+                render_grid_metric_heatmap(
+                    df=df,
+                    metric_name=metric_name,
+                    x_feature_col=x_feature_col,
+                    y_feature_col=y_feature_col,
+                    output_path=log_path,
+                    session_id=session_id,
+                    gesture_type=gesture_type,
+                    title_suffix=log_suffix,
+                    norm=log_norm,
+                    colormap_name="viridis",
+                    xlim=xlim,
+                    ylim=ylim,
+                )
 
     session_count = len(session_ids_seen)
 

@@ -25,6 +25,7 @@ These are developer-facing documents, not usage guides.
 | [3D-to-2D Surface Projection Algorithms for RF Heatmaps](note-3d-to-2d-surface-projection-algorithms.md) | Algorithm catalogue (tangent-plane, exponential map, geodesic MDS, LSCM/ARAP, cylindrical unwrap) for projecting forearm point clouds to 2D `(u, v)` coordinates. Includes distortion analysis, implementation sketches, and pipeline architecture vision. | `tangent_plane_alignment.py`, `define_forearm_mesh.py`, `rf_cluster_visualizer.py` |
 | [RF Cluster Gallery Viewer — GUI Component Reference](note-rf-cluster-gallery-gui-components.md) | Catalogue of every visual component in the interactive PyQt5 + PyVista gallery viewer: layout, widgets, settings, 3D scene layers, caching, persistence, and data model. | `gui/rf_cluster_gallery_viewer.py`, `rf_gallery_data.py` |
 | [RF Feature-Space Explorer — GUI Component Reference](note-rf-feature-space-explorer-gui-components.md) | Catalogue of visual components in the interactive scatter + 3D heatmap explorer: layout, widgets, filter rectangle, gesture checkboxes, session switching, and data model. | `gui/rf_feature_space_explorer.py`, `rf_explorer_data.py` |
+| [Matplotlib Blitting in NeuralDataPanel — Blit + Threshold-Resnap Pattern](note-neural-kinect-viewer-blitting.md) | Per-frame cursor update via `copy_from_bbox` + `blit` reduces 30–80 ms full redraws to ~1–3 ms; `tight_layout=True` desync trap and invalidation-site discipline. | `neural_kinect_scene_viewer.py` — `NeuralDataPanel` |
 
 ### Bug reports (`bug-*`)
 
