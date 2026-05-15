@@ -2,9 +2,9 @@
 
 **Created:** 2026-05-12 23:00
 **Approved:** —
-**Completed:** —
+**Completed:** 2026-05-15 08:45
 **Author:** Basil Duvernoy
-**Status:** In Progress
+**Status:** Completed
 **Base Branch:** `dev`
 **Branch:** `feature/stabilise-handmesh-pose`
 
