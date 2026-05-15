@@ -46,11 +46,16 @@ Algorithm reference
 ``docs/development/knowledge-base/note-3d-to-2d-surface-projection-algorithms.md``
 """
 
+import os
 import sys
 from pathlib import Path
 
+import matplotlib
+matplotlib.use("Qt5Agg")
+
 import numpy as np
 import open3d as o3d
+import pyvista as pv
 import trimesh
 import trimesh.repair
 
@@ -68,19 +73,30 @@ if str(_SRC) not in sys.path:
 
 #: Absolute or relative path to the forearm segmentation PLY.
 #: Must be set by the user before running this script.
-PLY_PATH: str = ""
+PLY_PATH: str = r"F:/liu-onedrive-nospecial-carac/_Teams/Social touch Kinect MNG/02_data/semi-controlled/3_merged/2022-06-17_ST16-05/2022-06-17_ST16-05_forearm.ply"
 
 #: Mesh construction method: ``"bpa"`` (Ball-Pivoting Algorithm, recommended)
 #: or ``"delaunay"`` (fast 2.5-D triangulation, no caching).
 MESH_METHOD: str = "bpa"
+
+#: Center point for center-weighted flattening.  Three modes:
+#:
+#: * ``None``            — skip the picker; no center weighting applied.
+#: * ``"interactive"``   — open the interactive PyVista picker window so the
+#:                         user can Ctrl+click the desired center vertex.
+#: * ``(x, y, z)`` tuple — use this hard-coded 3D coordinate directly,
+#:                         bypassing the picker (useful for reproducible runs:
+#:                         copy-paste the coordinate printed by the interactive
+#:                         mode).
+CENTER_POINT: tuple[float, float, float] | str | None = "interactive"
 
 
 # ---------------------------------------------------------------------------
 # Phase 1 — load, mesh, clean
 # ---------------------------------------------------------------------------
 
-def load_pcd(path: str) -> np.ndarray:
-    """Load a PLY point cloud and return the (N, 3) point array.
+def load_pcd(path: str) -> tuple[np.ndarray, np.ndarray | None]:
+    """Load a PLY point cloud and return points and optional vertex colors.
 
     Parameters
     ----------
@@ -89,8 +105,11 @@ def load_pcd(path: str) -> np.ndarray:
 
     Returns
     -------
-    np.ndarray
+    points : np.ndarray
         Shape (N, 3), dtype float64.
+    colors : np.ndarray or None
+        Shape (N, 3), dtype float64, values in [0, 1].  ``None`` if the
+        PLY has no vertex colors.
 
     Raises
     ------
@@ -114,7 +133,97 @@ def load_pcd(path: str) -> np.ndarray:
         )
 
     points = np.asarray(pcd.points, dtype=np.float64)
-    return points
+    colors = np.asarray(pcd.colors, dtype=np.float64) if pcd.has_colors() else None
+    return points, colors
+
+
+def pick_center_point(
+    points: np.ndarray,
+    colors: np.ndarray | None,
+) -> np.ndarray:
+    """Open an interactive PyVista window and return the Ctrl+clicked vertex.
+
+    Parameters
+    ----------
+    points:
+        Shape (N, 3), dtype float64.  The forearm point cloud vertices.
+    colors:
+        Shape (N, 3), dtype float64, values in [0, 1], or ``None`` if the
+        PLY has no vertex colors.
+
+    Returns
+    -------
+    np.ndarray
+        Shape (3,), dtype float64 — the 3D coordinate of the picked vertex.
+
+    Raises
+    ------
+    RuntimeError
+        If the user closes the window without picking any point.
+    """
+    cloud = pv.PolyData(points)
+    if colors is not None:
+        cloud["RGB"] = (colors * 255).astype(np.uint8)
+
+    plotter = pv.Plotter(title="Select Center Point — Ctrl+Click")
+
+    if colors is not None:
+        plotter.add_mesh(
+            cloud,
+            name="forearm_cloud",
+            scalars="RGB",
+            rgb=True,
+            point_size=4,
+            render_points_as_spheres=True,
+        )
+    else:
+        plotter.add_mesh(
+            cloud,
+            name="forearm_cloud",
+            color="lightblue",
+            point_size=4,
+            render_points_as_spheres=True,
+        )
+
+    plotter.add_text(
+        "Ctrl+Click to pick center. Close window (Q) to confirm.",
+        position="upper_left",
+        font_size=10,
+    )
+
+    _picked = [None]
+    _sphere_actor = [None]
+
+    def _on_click(interactor, event):
+        if not interactor.GetControlKey():
+            interactor.GetInteractorStyle().OnLeftButtonDown()
+            return
+        pos = interactor.GetEventPosition()
+        picker = interactor.GetPicker()
+        picker.Pick(pos[0], pos[1], 0, plotter.renderer)
+        pick_pos = picker.GetPickPosition()
+        closest_id = cloud.find_closest_point(pick_pos)
+        coord = cloud.points[closest_id]
+        _picked[0] = coord
+        if _sphere_actor[0] is not None:
+            plotter.remove_actor(_sphere_actor[0])
+        _sphere_actor[0] = plotter.add_mesh(
+            pv.Sphere(radius=0.004, center=coord), color="red"
+        )
+        plotter.render()
+
+    plotter.iren.add_observer("LeftButtonPressEvent", _on_click)
+    plotter.show()
+
+    if _picked[0] is None:
+        raise RuntimeError(
+            "No point was picked. Run the script again and Ctrl+Click on the "
+            "forearm to select a center point."
+        )
+
+    coord = _picked[0]
+    print(f"Picked center point: ({coord[0]:.6f}, {coord[1]:.6f}, {coord[2]:.6f})")
+    return np.array(_picked[0], dtype=np.float64)
 
 
 def build_mesh(ply_path: Path, method: str) -> trimesh.Trimesh:
@@ -155,7 +264,7 @@ def build_mesh(ply_path: Path, method: str) -> trimesh.Trimesh:
         return mesh
 
     elif method == "delaunay":
-        points = load_pcd(str(ply_path))
+        points, _ = load_pcd(str(ply_path))
 
         # Project into the dominant plane via PCA (forearm is roughly planar
         # when viewed along its principal axis).
@@ -218,8 +327,19 @@ def clean_mesh(mesh: trimesh.Trimesh) -> tuple[np.ndarray, np.ndarray]:
     # Remove vertices that are not referenced by any face.
     largest.remove_unreferenced_vertices()
 
-    V = np.asarray(largest.vertices, dtype=np.float64)
-    F = np.asarray(largest.faces, dtype=np.int64)
+    # libigl LSCM/harmonic/ARAP require a strictly manifold mesh.
+    # BPA output frequently has non-manifold edges; clean via Open3D.
+    o3d_mesh = o3d.geometry.TriangleMesh(
+        vertices=o3d.utility.Vector3dVector(largest.vertices),
+        triangles=o3d.utility.Vector3iVector(largest.faces),
+    )
+    o3d_mesh.remove_duplicated_vertices()
+    o3d_mesh.remove_duplicated_triangles()
+    o3d_mesh.remove_degenerate_triangles()
+    o3d_mesh.remove_non_manifold_edges()
+
+    V = np.asarray(o3d_mesh.vertices, dtype=np.float64)
+    F = np.asarray(o3d_mesh.triangles, dtype=np.int32)
 
     if F.shape[0] == 0:
         raise ValueError(
@@ -227,6 +347,37 @@ def clean_mesh(mesh: trimesh.Trimesh) -> tuple[np.ndarray, np.ndarray]:
             "Check that PLY_PATH points to a segmented forearm cloud, "
             "not a raw scan or an empty file."
         )
+
+    # libigl LSCM fails on "pinch" boundary vertices — vertices that appear as
+    # source in 2+ entries of igl.boundary_facets.  These arise from inconsistent
+    # face winding near BPA seam edges.  Remove faces around pinch vertices and
+    # re-take the largest connected component.  Small holes that remain are OK
+    # for LSCM (it does not require single-loop boundary topology).
+    import igl as _igl
+    for _ in range(10):
+        BF_pre, _, _ = _igl.boundary_facets(F.astype(np.int64))
+        source_counts: dict = {}
+        for _e in BF_pre:
+            _u = int(_e[0])
+            source_counts[_u] = source_counts.get(_u, 0) + 1
+        pinch = np.array([u for u, c in source_counts.items() if c > 1], dtype=np.int32)
+        if len(pinch) == 0:
+            break
+        bad_mask = np.any(np.isin(F, pinch), axis=1)
+        F = F[~bad_mask]
+        if F.shape[0] == 0:
+            raise ValueError("Mesh became empty during pinch-vertex repair.")
+        used = np.unique(F)
+        remap = np.full(V.shape[0], -1, dtype=np.int32)
+        remap[used] = np.arange(len(used), dtype=np.int32)
+        V, F = V[used], remap[F]
+        components = trimesh.Trimesh(vertices=V, faces=F, process=False).split(
+            only_watertight=False
+        )
+        if components:
+            lc = max(components, key=lambda m: len(m.vertices))
+            V = np.asarray(lc.vertices, dtype=np.float64)
+            F = np.asarray(lc.faces, dtype=np.int32)
 
     return V, F
 
@@ -254,7 +405,7 @@ def flatten_lscm(V: np.ndarray, F: np.ndarray, boundary: np.ndarray) -> np.ndarr
     # Pin boundary[0] → (0, 0) and the opposite vertex → (1, 0) to fix gauge freedom.
     b = np.array([boundary[0], boundary[len(boundary) // 2]], dtype=np.int32)
     bc = np.array([[0.0, 0.0], [1.0, 0.0]], dtype=np.float64)
-    _, uv = igl.lscm(V, F, b, bc)
+    uv, _ = igl.lscm(V, F, b, bc)
     if np.any(np.isnan(uv)):
         raise RuntimeError("LSCM produced NaN values — mesh may be degenerate.")
     return uv.astype(np.float64)
@@ -279,9 +430,10 @@ def flatten_arap(V: np.ndarray, F: np.ndarray, boundary: np.ndarray) -> np.ndarr
 
     uv = flatten_harmonic(V, F, boundary)
 
-    arap = igl.ARAP(V, F, 2, boundary.astype(np.int32))
+    data = igl.ARAPData()
+    igl.arap_precomputation(V, F.astype(np.int64), 2, boundary.astype(np.int32), data)
     for _ in range(20):
-        uv_new = arap.solve(bc, uv)
+        uv_new = igl.arap_solve(bc, data, uv)
         rel_change = np.linalg.norm(uv_new - uv) / (np.linalg.norm(uv) + 1e-12)
         uv = uv_new
         if rel_change < 1e-6:
@@ -298,6 +450,7 @@ def flatten_arap(V: np.ndarray, F: np.ndarray, boundary: np.ndarray) -> np.ndarr
 
 import matplotlib.pyplot as plt
 import matplotlib.tri
+from matplotlib.collections import PolyCollection
 
 
 def plot_panels(
@@ -306,19 +459,29 @@ def plot_panels(
     uv_lscm: np.ndarray,
     uv_arap: np.ndarray,
     uv_harmonic: np.ndarray,
-) -> None:
+    colors: np.ndarray | None = None,
+) -> plt.Figure:
     """Render the 3D mesh and three 2D flattenings in a single figure."""
     fig = plt.figure(figsize=(16, 4))
 
+    # Per-face colors: average the three vertex colors for each triangle.
+    if colors is not None:
+        face_colors = colors[F].mean(axis=1)
+    else:
+        face_colors = None
+
     # -- 3D input mesh --------------------------------------------------------
     ax3d = fig.add_subplot(141, projection="3d")
-    ax3d.plot_trisurf(
+    surf = ax3d.plot_trisurf(
         V[:, 0], V[:, 1], V[:, 2],
         triangles=F,
-        alpha=0.7,
-        color="steelblue",
         edgecolor="none",
+        shade=False,
     )
+    if face_colors is not None:
+        surf.set_facecolors(face_colors)
+    else:
+        surf.set_facecolors("steelblue")
     ax3d.set_title("Input mesh (3D)")
 
     # -- 2D flattening panels -------------------------------------------------
@@ -329,10 +492,18 @@ def plot_panels(
     ]
     for subplot_id, uv, title in panels:
         ax = fig.add_subplot(subplot_id)
-        tri = matplotlib.tri.Triangulation(uv[:, 0], uv[:, 1], F)
-        ax.triplot(tri, color="steelblue", linewidth=0.4)
+        if face_colors is not None:
+            polys = uv[F]  # (M, 3, 2)
+            pc = PolyCollection(polys, facecolors=face_colors, edgecolors="none")
+            ax.add_collection(pc)
+            ax.autoscale_view()
+        else:
+            tri = matplotlib.tri.Triangulation(uv[:, 0], uv[:, 1], F)
+            ax.triplot(tri, color="steelblue", linewidth=0.4)
         ax.set_title(title)
         ax.set_aspect("equal")
+
+    return fig
 
 
 if __name__ == "__main__":
@@ -343,15 +514,39 @@ if __name__ == "__main__":
         )
 
     ply_path = Path(PLY_PATH)
+    orig_points, orig_colors = load_pcd(str(ply_path))
+
+    if CENTER_POINT == "interactive":
+        center_3d = pick_center_point(orig_points, orig_colors)
+    elif isinstance(CENTER_POINT, tuple):
+        center_3d = np.array(CENTER_POINT, dtype=np.float64)
+    elif CENTER_POINT is None:
+        center_3d = None
+    else:
+        raise ValueError(
+            f"Invalid CENTER_POINT value: {CENTER_POINT!r}. "
+            "Must be None, 'interactive', or a (x, y, z) tuple."
+        )
+    # center_3d will be passed to find_nearest_vertex() when center-weighted flattening is integrated
+
     raw_mesh = build_mesh(ply_path, MESH_METHOD)
     V_raw, F_raw = clean_mesh(raw_mesh)
 
-    boundary = boundary_loop(F_raw)
+    # Map original PLY vertex colors onto the cleaned (reindexed) vertices.
+    if orig_colors is not None:
+        from scipy.spatial import cKDTree
+        _, idx = cKDTree(orig_points).query(V_raw)
+        vertex_colors = orig_colors[idx]
+    else:
+        vertex_colors = None
 
+    boundary = boundary_loop(F_raw)
     uv_lscm = flatten_lscm(V_raw, F_raw, boundary)
     uv_harmonic = flatten_harmonic(V_raw, F_raw, boundary)
     uv_arap = flatten_arap(V_raw, F_raw, boundary)
 
-    plot_panels(V_raw, F_raw, uv_lscm, uv_arap, uv_harmonic)
-    plt.tight_layout()
-    plt.show()
+    fig = plot_panels(V_raw, F_raw, uv_lscm, uv_arap, uv_harmonic, vertex_colors)
+    fig.tight_layout()
+    out = ply_path.with_name(f"{ply_path.stem}_flattening.png")
+    fig.savefig(out, dpi=150)
+    os.startfile(out)
