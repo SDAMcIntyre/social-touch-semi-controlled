@@ -8,8 +8,8 @@ parameters:
   kinect_configs: [valid_configs_ST13-01, valid_configs_ST13-02, 
       valid_configs_ST13-03, valid_configs_ST14-01, valid_configs_ST14-02, 
       valid_configs_ST14-04, valid_configs_ST15-01, valid_configs_ST16-02, 
-      valid_configs_ST16-03, valid_configs_ST16-04, valid_configs_ST16-05, 
-      valid_configs_ST18-01, valid_configs_ST18-04]
+      valid_configs_ST16-03, valid_configs_ST16-05, valid_configs_ST18-01, 
+      valid_configs_ST18-04]
 
 tasks:
   # ============================================================
@@ -105,7 +105,7 @@ tasks:
     category: processing
     enabled: true
     options:
-      force_processing: true
+      force_processing: false
       # Debugging toggle: when true, opens an interactive matplotlib window mid-run.
       # Must be false for unattended / batch processing.
       show_interactive: false
@@ -156,7 +156,7 @@ tasks:
       force_processing: false
       grid_groups:
         velocity_pressure_2d:
-          enabled: true
+          enabled: false
           neuron_mode: iff
           per_gesture_type: true
           vertex_threshold_ratio: 0.25
@@ -172,6 +172,16 @@ tasks:
               max: 0.22
               step: 0.02
               span: 0.04
+        velocity_depth_2d:
+          enabled: true
+          neuron_mode: iff
+          per_gesture_type: true
+          vertex_threshold_ratio: 0.25
+          compute_baseline: true
+          features:
+            contact_depth_mean: {min: 0.0, max: 10.0, step: 0.1, span: 0.2}
+            hand_velocity_amplitude_mean: {min: 0.0, max: 500.0, step: 5.0, span: 
+                10.0}
     depends_on: [map_single_touch_rf, touch_feature_extraction]
 
   # Reduces per-gesture-type population RF grid NPZ files to scalar metric CSVs.
@@ -190,27 +200,10 @@ tasks:
     category: processing
     enabled: true
     options:
-      force_processing: false
+      force_processing: true
       extracted_features:
       - touch_count
-      - max_iff
       - mean_iff
-      - median_iff
-      - std_iff
-      - iff_range
-      - n_active_vertices
-      - hypsometric_integral
-      - coefficient_of_variation
-      - iff_skewness
-      - iff_kurtosis
-      - gini_coefficient
-      - shannon_entropy
-      - perimeter_mm
-      - circularity
-      - eccentricity
-      - hotspot_area_mm2
-      - threshold_area_mm2
-      - convex_hull_area_mm2
     depends_on: [reduce_population_rf_grid]
 
   # Cross-session comparison heatmap: 1D population RF grid + per-gesture heatmap PNGs.

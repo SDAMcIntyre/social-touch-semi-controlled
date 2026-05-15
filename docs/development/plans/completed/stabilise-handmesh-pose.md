@@ -2,9 +2,9 @@
 
 **Created:** 2026-05-12 23:00
 **Approved:** —
-**Completed:** —
+**Completed:** 2026-05-15 08:45
 **Author:** Basil Duvernoy
-**Status:** Draft
+**Status:** Completed
 **Base Branch:** `dev`
 **Branch:** `feature/stabilise-handmesh-pose`
 
@@ -178,14 +178,14 @@ code/scripts/preprocess_workflow_kinect_visualisation.py
 ### Phase 1: NPZ schema extension
 **Goal:** Save and restore `sticker_vertex_indices` in `HandMotionManager` so the
 post-generation step can locate the blue sticker vertex without reading the CSV.
-**Started:** —
-**Completed:** —
+**Started:** 2026-05-12
+**Completed:** 2026-05-12
 
-- [ ] In `process_frame()`, store `sticker_vertex_indices` as `self._sticker_vertex_indices`
+- [x] In `process_frame()`, store `sticker_vertex_indices` as `self._sticker_vertex_indices`
       on the first call (indices are constant across frames — same MANO topology).
-- [ ] In `save()`: add `"sticker_vertex_indices": np.array(self._sticker_vertex_indices)`
+- [x] In `save()`: add `"sticker_vertex_indices": np.array(self._sticker_vertex_indices)`
       to `save_dict`.
-- [ ] In `load()`: restore `self._sticker_vertex_indices = list(data["sticker_vertex_indices"])`;
+- [x] In `load()`: restore `self._sticker_vertex_indices = list(data["sticker_vertex_indices"])`;
       raise `KeyError` with clear message if key is missing.
 
 **Files Modified:**
@@ -195,17 +195,17 @@ post-generation step can locate the blue sticker vertex without reading the CSV.
 
 ### Phase 2: PoseStabilisation class
 **Goal:** Implement the 4-step correction as a reusable class.
-**Started:** —
-**Completed:** —
+**Started:** 2026-05-12
+**Completed:** 2026-05-12
 
-- [ ] Create `pose_stabilisation.py` with `PoseStabilisation` class:
+- [x] Create `pose_stabilisation.py` with `PoseStabilisation` class:
   - `stabilise(vertices, translations, rotations_xyzw, scales, anchor_idx, fps, filter_method, filter_params) → (translations_new, rotations_new, scales_new)`
   - Step 1: reconstruct `t0[i]` from stored data.
   - Step 2: sign-fixup loop on quaternions; rotvec round-trip; `MotionFilterFactory` per-component filtering.
   - Step 3: median scale with `(scale > _SCALE_MIN) & (scale < _SCALE_MAX)` validity mask; raise `ValueError` if no valid scales remain.
   - Step 4: anchor-constrained translation re-derivation.
   - Raise `ValueError` if `len(translations) < min_frames_required` for the chosen filter.
-- [ ] Export `PoseStabilisation` from `__init__.py`.
+- [x] Export `PoseStabilisation` from `__init__.py`.
 
 **Files Modified:**
 - `code/src/preprocessing/motion_analysis/hand_tracking/pose_stabilisation.py` — new
@@ -215,10 +215,10 @@ post-generation step can locate the blue sticker vertex without reading the CSV.
 
 ### Phase 3: Pipeline script
 **Goal:** Wrap `PoseStabilisation` as a standalone pipeline script with idempotency.
-**Started:** —
-**Completed:** —
+**Started:** 2026-05-12
+**Completed:** 2026-05-12
 
-- [ ] Create `stabilise_hand_motion.py`:
+- [x] Create `stabilise_hand_motion.py`:
   - Load `*_handmodel_motion.npz`; raise `FileNotFoundError` immediately if missing.
   - Call `PoseStabilisation.stabilise(...)` with filter options from DAG config.
   - Save corrected `rotations`, `scales`, `translations` plus unchanged `vertices`,
@@ -233,10 +233,10 @@ post-generation step can locate the blue sticker vertex without reading the CSV.
 
 ### Phase 4: DAG and pipeline wiring
 **Goal:** Register `stabilise_hand_motion` in the preprocess auto pipeline.
-**Started:** —
-**Completed:** —
+**Started:** 2026-05-12
+**Completed:** 2026-05-12
 
-- [ ] Add task to `configs/preprocess_workflow_kinect_auto_dag.yaml` after
+- [x] Add task to `configs/preprocess_workflow_kinect_auto_dag.yaml` after
       `generate_3d_hand_in_motion`:
   ```yaml
   stabilise_hand_motion:
@@ -250,10 +250,10 @@ post-generation step can locate the blue sticker vertex without reading the CSV.
           cutoff_hz: 5.0
     depends_on: [generate_3d_hand_in_motion]
   ```
-- [ ] Add `stabilise_hand_motion_flow()` `@flow` wrapper in
+- [x] Add `stabilise_hand_motion_flow()` `@flow` wrapper in
       `preprocess_workflow_kinect_auto.py` following the exact pattern of
       `generate_3d_hand_in_motion_flow` (lines 297–332).
-- [ ] Add pipeline stage entry after line 529 with `"name": "stabilise_hand_motion"`,
+- [x] Add pipeline stage entry after line 529 with `"name": "stabilise_hand_motion"`,
       `"params"` reading `hand_motion_npz_path` from context and filter options from
       `dag_handler.get_task_options("stabilise_hand_motion")`.
 
@@ -265,13 +265,13 @@ post-generation step can locate the blue sticker vertex without reading the CSV.
 
 ### Phase 5: Renderer and visualisation integration
 **Goal:** Have rendering consumers prefer the stabilised NPZ.
-**Started:** —
-**Completed:** —
+**Started:** 2026-05-12
+**Completed:** 2026-05-12
 
-- [ ] `handmesh_overlay_renderer.py`: at NPZ load time, check for
+- [x] `handmesh_overlay_renderer.py`: at NPZ load time, check for
       `*_handmodel_motion_stabilised.npz` first; fall back to `*_handmodel_motion.npz`;
       raise if neither exists.
-- [ ] `preprocess_workflow_kinect_visualisation.py` (line 143): apply the same
+- [x] `preprocess_workflow_kinect_visualisation.py` (line 143): apply the same
       preference logic to `hand_motion_path` construction.
 
 **Files Modified:**
@@ -282,10 +282,10 @@ post-generation step can locate the blue sticker vertex without reading the CSV.
 
 ### Phase 6: Tests and plan cleanup
 **Goal:** Cover the anchor invariant and all edge cases; retire superseded plans.
-**Started:** —
-**Completed:** —
+**Started:** 2026-05-12
+**Completed:** 2026-05-12
 
-- [ ] Add `TestPoseStabilisation` class to `code/tests/test_hand_motion_manager.py`:
+- [x] Add `TestPoseStabilisation` class to `code/tests/test_hand_motion_manager.py`:
   - `test_anchor_preserved` — 3-frame synthetic session; verify `‖s_stable × R_smooth @ s0 + t_new − t0‖ < 1e-5` for each frame.
   - `test_scale_locked_to_median` — known scales `[1.0, 1.05, 0.95, 1.02, 0.98]`; all output scales == median.
   - `test_scale_filters_out_of_range` — scales containing values outside `[_SCALE_MIN, _SCALE_MAX]`; median from valid only.
@@ -294,7 +294,7 @@ post-generation step can locate the blue sticker vertex without reading the CSV.
   - `test_rotation_smoothed` — synthetic jittery rotvec sequence; output rotvecs are smoother than input.
   - `test_raw_npz_unchanged` — raw NPZ is byte-identical after running stabilisation.
   - `test_sign_fixup` — synthetic trajectory crossing quaternion sign boundary; no artefact in output.
-- [ ] Mark `docs/development/plans/pending/lock-handmesh-scale-to-median.md` and
+- [x] Mark `docs/development/plans/pending/lock-handmesh-scale-to-median.md` and
       `docs/development/plans/pending/smooth-handmesh-rotation.md` as superseded.
 
 **Files Modified:**

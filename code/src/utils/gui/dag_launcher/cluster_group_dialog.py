@@ -24,23 +24,9 @@ from PyQt5.QtWidgets import (
 
 __all__ = ["ClusterGroupDialog", "ClusterGroupReadOnlyDialog"]
 
-_DATA_TYPES: list[str] = [
-    "contact_area",
-    "contact_depth",
-    "hand_velocity",
-    "hand_velocity_amplitude",
-    "hand_velocity_signed",
-    "hand_acceleration",
-    "pressure",
-    "hand_position",
-    "mos_strain",
-    "mos_stress_kpa",
-    "mos_strain_rate",
-    "mos_elastic_energy_mj",
-    "mos_impulse_mns",
-    "mechanics_of_solids",
-    "location",
-]
+from ._feature_catalog import DATA_TYPES
+
+_DATA_TYPES = DATA_TYPES
 
 _AGGREGATIONS: list[str] = ["mean", "min", "max", "median", "std", "range", "skewness"]
 

@@ -6,7 +6,7 @@
 parameters:
   # List of directories containing Kinect session config files to scan.
   # Paths are relative to configs/kinect_configs/.
-  kinect_configs: valid_configs_ST16-05
+  kinect_configs: valid_configs_ST18-04
 
 tasks:
   # ============================================================
@@ -54,7 +54,7 @@ tasks:
   # forearm model with accumulating spike heatmap. Opens instantly when series CSVs are cached.
   explore_touch_playback:
     category: viewer
-    enabled: true
+    enabled: false
     options:
       force_processing: false
     depends_on: []
@@ -77,7 +77,7 @@ tasks:
   # Output: interactive GUI (no files written)
   explore_touch_population:
     category: viewer
-    enabled: false
+    enabled: true
     options:
       force_processing: false
       neuron_mode: iff

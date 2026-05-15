@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from ruamel.yaml import YAML
-from ruamel.yaml.comments import CommentedSeq
+from ruamel.yaml.comments import CommentedMap, CommentedSeq
 
 
 class DagConfigModel:
@@ -339,6 +339,65 @@ class DagConfigModel:
         if "clustering_methods" not in group or group["clustering_methods"] is None:
             group["clustering_methods"] = {}
         group["clustering_methods"][profile_name] = spec
+        self._dirty = True
+
+    # ------------------------------------------------------------------
+    # Grid groups — CRUD for map_population_rf_grid grid_groups entries
+    # ------------------------------------------------------------------
+
+    def get_grid_group_spec(self, task_name: str, opt_key: str, name: str) -> dict:
+        """Return a plain-dict copy of the named entry in *task_name*.options[*opt_key*].
+
+        Raises ``KeyError`` if *task_name*, *opt_key*, or *name* is absent.
+        """
+        task = self._get_task(task_name)
+        opts = task.get("options", {}) or {}
+        container = opts.get(opt_key)
+        if container is None:
+            raise KeyError(f"Option key '{opt_key}' not found in task '{task_name}'")
+        spec = container.get(name)
+        if spec is None:
+            raise KeyError(
+                f"Grid group '{name}' not found under '{opt_key}' in task '{task_name}'"
+            )
+        return dict(spec)
+
+    def set_grid_group_spec(
+        self, task_name: str, opt_key: str, name: str, spec: dict
+    ) -> None:
+        """Write (or overwrite) the named entry in *task_name*.options[*opt_key*].
+
+        *spec* is a plain dict with keys ``enabled``, ``neuron_mode``,
+        ``per_gesture_type``, ``vertex_threshold_ratio``, ``compute_baseline``,
+        and ``features``.  Each value in ``spec["features"]`` must be a dict
+        with ``min``, ``max``, ``step``, ``span`` keys; it is written as a
+        flow-style ``CommentedMap`` so the YAML renders on one line.
+
+        Existing entries in the container that are not *name* are left intact.
+        """
+        task = self._get_task(task_name)
+        opts = task.get("options")
+        if opts is None:
+            task["options"] = {}
+            opts = task["options"]
+        if opt_key not in opts or opts[opt_key] is None:
+            opts[opt_key] = {}
+        container = opts[opt_key]
+
+        entry = CommentedMap()
+        for key in ("enabled", "neuron_mode", "per_gesture_type",
+                    "vertex_threshold_ratio", "compute_baseline"):
+            if key in spec:
+                entry[key] = spec[key]
+
+        features_map = CommentedMap()
+        for feat_name, bounds in spec.get("features", {}).items():
+            bounds_cm = CommentedMap(bounds)
+            bounds_cm.fa.set_flow_style()
+            features_map[feat_name] = bounds_cm
+        entry["features"] = features_map
+
+        container[name] = entry
         self._dirty = True
 
     # ------------------------------------------------------------------
