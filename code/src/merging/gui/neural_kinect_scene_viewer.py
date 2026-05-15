@@ -425,9 +425,9 @@ class NeuralDataPanel(QWidget):
         self._total_kinect_frames = total_kinect_frames
         self._total_samples: int = len(merged_df)
 
-        # Zoom state — zoomed ±15 s window is the default
+        # Zoom state — zoomed ±30 s window is the default
         self._neural_fps: int = neural_fps
-        self._zoom_half_window: int = 15.0 * neural_fps  # samples; must match _window_spinbox.setValue(15.0) below
+        self._zoom_half_window: int = 30.0 * neural_fps  # samples; must match _window_spinbox.setValue(30.0) below
         self._max_half_window: int = self._total_samples // 2
         self._current_sample: int = 0
 
@@ -436,7 +436,7 @@ class NeuralDataPanel(QWidget):
         self._bg_xlim: tuple = (0, 1) # xlim at which the snapshot was taken
         # Resnap threshold: centred=25 % drift from centre; edge-pan=5 % margin
         self._blit_threshold_frac: float = 0.25
-        self._centered_mode: bool = True   # True = centred, False = edge-pan
+        self._centered_mode: bool = False   # True = centred, False = edge-pan
         self._supports_blit: bool = True   # set False on non-blitting backends
 
         # --- Matplotlib figure ---
@@ -476,7 +476,7 @@ class NeuralDataPanel(QWidget):
         _max_secs = min(self._total_samples / self._neural_fps / 2.0, 3600.0)
         self._window_spinbox.setMaximum(_max_secs)
         self._window_spinbox.setSingleStep(0.5)
-        self._window_spinbox.setValue(15.0)
+        self._window_spinbox.setValue(30.0)
         self._window_spinbox.setSuffix(" s")
         self._window_spinbox.setFixedWidth(70)
         self._window_spinbox.setFixedHeight(18)
@@ -1264,13 +1264,23 @@ class NeuralKinectViewer(QMainWindow):
         self._buffer_label.setStyleSheet("font-family: monospace; font-size: 8pt; color: gray;")
         layout.addWidget(self._buffer_label)
 
-        recenter_btn = QPushButton("Recenter")
-        recenter_btn.clicked.connect(self._recenter_view)
-        layout.addWidget(recenter_btn)
-
         self.play_button = QPushButton("▶ Play")
         self.play_button.clicked.connect(self._toggle_play)
         layout.addWidget(self.play_button)
+
+        self._speed_spinbox = QDoubleSpinBox()
+        self._speed_spinbox.setRange(0.1, 10.0)
+        self._speed_spinbox.setSingleStep(0.1)
+        self._speed_spinbox.setValue(1.0)
+        self._speed_spinbox.setDecimals(1)
+        self._speed_spinbox.setPrefix("x")
+        self._speed_spinbox.setFixedWidth(65)
+        self._speed_spinbox.setToolTip("Playback speed multiplier (1.0 = native FPS)")
+        layout.addWidget(self._speed_spinbox)
+
+        recenter_btn = QPushButton("Recenter")
+        recenter_btn.clicked.connect(self._recenter_view)
+        layout.addWidget(recenter_btn)
 
         layout.addWidget(QLabel("Crop ±"))
         self.crop_spinbox = QSpinBox()
@@ -1317,6 +1327,14 @@ class NeuralKinectViewer(QMainWindow):
         self._mesh_forearm['colors'] = _seed_col.copy()
         self._mesh_hand = pv.PolyData(np.empty((0, 3), dtype=np.float32))
         self._mesh_contact = pv.PolyData(np.empty((0, 3), dtype=np.float32))
+        # Force a full DeepCopy on the next _update_frame call so the freshly
+        # created PolyData objects (no faces, no points) get populated correctly.
+        # Without this reset, an interim _update_frame fired by frame_slider.setValue(0)
+        # during _load_block sets these counters before _init_actors replaces the
+        # PolyData objects, causing the deferred render to take the no-op path.
+        self._last_hand_tri_count: int = -1
+        self._last_contact_frame: int = -1
+        self._last_contact_empty: bool = True
 
         # Static actors
         self.plotter.add_text(
@@ -1371,9 +1389,11 @@ class NeuralKinectViewer(QMainWindow):
 
         # Register ALL stickers and cache actor refs.
         self._sticker_actors: Dict[str, Any] = {}
+        _small_sticker_colors = {'blue', 'green', 'yellow'}
         for name in self._stickers_xyz_dict:
             color = self._custom_colors.get(name, 'magenta')
-            sphere = pv.Sphere(radius=4.0, center=(0.0, 0.0, 0.0))
+            radius = 4.0 / 3.0 if color in _small_sticker_colors else 4.0
+            sphere = pv.Sphere(radius=radius, center=(0.0, 0.0, 0.0))
             actor = self.plotter.add_mesh(sphere, color=color, name=f'sticker_{name}')
             self._sticker_actors[name] = actor
 
@@ -1929,7 +1949,7 @@ class NeuralKinectViewer(QMainWindow):
                 and hasattr(self._mkv._reader, 'fps')
             ):
                 fps = self._mkv._reader.fps
-            self._play_timer.start(int(1000 / fps))
+            self._play_timer.start(int(1000 / (fps * self._speed_spinbox.value())))
             self.play_button.setText("⏸ Pause")
 
     def _play_advance(self) -> None:
