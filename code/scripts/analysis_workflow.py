@@ -135,9 +135,12 @@ def precompute_forearm_slim_uv_flow(
     """Precompute and cache SLIM UV maps for all sessions.
 
     For each session, loads the forearm PLY (via load_or_build_forearm_mesh)
-    and spike_positions.csv (from map_receptive_fields_simple output), runs
-    SLIM, and caches the UV map next to the PLY as
-    ``<stem>_slim_uv.npz``.
+    and the single-touch RF maps NPZ (from map_single_touch_rf output), runs
+    SLIM, and caches the UV map as
+    ``4_analysed/forearm_slim_uv/<session_id>/<session_id>_slim_uv.npz``.
+
+    The UV origin (center_vid) is placed at the IFF-weighted centroid of all
+    single-touch RF maps, giving a neuroscientifically meaningful anchor point.
     """
     from analysis.receptive_field_mapping.forearm_slim_uv import (
         precompute_forearm_slim_uv as _precompute,
@@ -162,17 +165,17 @@ def precompute_forearm_slim_uv_flow(
                 "run forearm extraction first."
             )
 
-        spike_csv = (
-            db_path / '4_analysed' / 'receptive_field_maps_simple'
-            / session_id / 'spike_positions.csv'
+        rf_maps_npz = (
+            db_path / '4_analysed' / 'single_touch_rf_maps'
+            / session_id / 'single_touch_rf_maps.npz'
         )
 
-        cache_path = forearm_ply_path.with_name(
-            forearm_ply_path.stem + "_slim_uv.npz"
-        )
+        output_dir = db_path / '4_analysed' / 'forearm_slim_uv' / session_id
+        output_dir.mkdir(parents=True, exist_ok=True)
+        cache_path = output_dir / f"{session_id}_slim_uv.npz"
 
         if not should_process_task(
-            input_paths=[forearm_ply_path, spike_csv],
+            input_paths=[forearm_ply_path, rf_maps_npz],
             output_paths=[cache_path],
             force=force_processing,
         ):
@@ -183,7 +186,7 @@ def precompute_forearm_slim_uv_flow(
         print(f"[SLIM UV] {session_id}: computing SLIM UV map (n_iter={n_iter})...")
         result = _precompute(
             forearm_ply_path=forearm_ply_path,
-            spike_positions_csv=spike_csv,
+            rf_maps_npz=rf_maps_npz,
             cache_path=cache_path,
             n_iter=n_iter,
         )
@@ -356,6 +359,10 @@ def reduce_population_rf_grid_flow(
 
     database_path = input_items[0][1]
     output_dir = database_path / '4_analysed'
+    slim_uv_cache_dir = (
+        database_path / '4_analysed' / 'forearm_slim_uv'
+        if projection_method == 'slim' else None
+    )
 
     config = PopulationRFGridMetricsConfig(projection_method=projection_method)
 
@@ -396,6 +403,7 @@ def reduce_population_rf_grid_flow(
             config=config,
             force=force_processing,
             group_name=group_name,
+            slim_uv_cache_dir=slim_uv_cache_dir,
         )
         all_results.extend(results)
     return all_results
@@ -809,6 +817,10 @@ def visualize_receptive_fields_clustered_flow(
 
     database_path = input_items[0][1]
     output_dir = database_path / '4_analysed' / 'receptive_field_maps_clustered'
+    slim_uv_cache_dir = (
+        database_path / '4_analysed' / 'forearm_slim_uv'
+        if projection_method == 'slim' else None
+    )
 
     result = run_cluster_rf_visualization(
         output_dir=output_dir,
@@ -821,6 +833,7 @@ def visualize_receptive_fields_clustered_flow(
         force=force_processing,
         gallery_viewer=gallery_viewer,
         input_items=input_items,
+        slim_uv_cache_dir=slim_uv_cache_dir,
     )
 
     return result

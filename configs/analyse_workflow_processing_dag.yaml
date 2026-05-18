@@ -113,23 +113,24 @@ tasks:
       save_diagnostics: true
     depends_on: [set_rf_camera_settings]
 
-#   # Precompute SLIM UV map per session. Caches the UV next to the forearm PLY.
-#   # Requires map_receptive_fields_simple output (spike_positions.csv).
-#   # Enable when using projection_method: slim in downstream RF tasks.
+  # Precompute SLIM UV map per session. Caches the UV next to the forearm PLY.
+  # Requires map_single_touch_rf output (single_touch_rf_maps.npz) to compute the
+  # IFF-weighted centroid used as the UV origin (center_vid).
+  # Enable when using projection_method: slim in downstream RF tasks.
   precompute_forearm_slim_uv:
     category: processing
-    enabled: false
+    enabled: true
     options:
-      force_processing: false
+      force_processing: true
       n_iter: 40
     depends_on:
-    - map_receptive_fields_simple
+    - map_single_touch_rf
 
   # Stage 2b (Feature Extraction): Per-session feature extraction. Each enabled feature extracts to its own folder.
   # Output: 4_analysed/touch_features/<feature>/<session>_touch_summary.csv
   touch_feature_extraction:
     category: processing
-    enabled: true
+    enabled: false
     options:
       force_processing: false
       # Each key is an aggregation family. StatisticalExtractor auto-discovers all numeric

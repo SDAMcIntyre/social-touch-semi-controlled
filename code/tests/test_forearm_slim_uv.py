@@ -88,11 +88,12 @@ class TestFlattenSlim:
         )
         V, F, center_vid, _ = disk_mesh
         boundary = boundary_loop(F)
-        uv = flatten_slim(V, F, boundary, center_vid=center_vid, n_iter=20)
+        V_out, F_out, uv = flatten_slim(V, F, boundary, center_vid=center_vid, n_iter=20)
         assert not np.any(np.isnan(uv)), "SLIM produced NaN"
-        assert not _has_flipped_triangles(uv, F), "SLIM UV has flipped triangles"
-        np.testing.assert_allclose(uv[center_vid], [0.0, 0.0], atol=1e-6)
-        b0 = int(boundary[0])
+        assert not _has_flipped_triangles(uv, F_out), "SLIM UV has flipped triangles"
+        _, new_center = __import__('scipy.spatial', fromlist=['KDTree']).KDTree(V_out).query(V[center_vid])
+        np.testing.assert_allclose(uv[new_center], [0.0, 0.0], atol=1e-6)
+        b0 = int(boundary_loop(F_out)[0])
         assert uv[b0, 0] > 0, "boundary[0] should be on +x"
         np.testing.assert_allclose(uv[b0, 1], 0.0, atol=1e-6)
 
@@ -105,7 +106,7 @@ class TestFlattenSlim:
         with pytest.raises(ValueError, match="boundary"):
             flatten_slim(V, F, boundary, center_vid=int(boundary[0]))
 
-    def test_flipped_init_raises(self, disk_mesh, monkeypatch):
+    def test_flipped_harmonic_falls_back_to_tutte(self, disk_mesh, monkeypatch):
         import igl
         from analysis.receptive_field_mapping._slim_helpers import (
             boundary_loop, flatten_slim, _has_flipped_triangles,
@@ -113,18 +114,14 @@ class TestFlattenSlim:
         V, F, center_vid, _ = disk_mesh
         boundary = boundary_loop(F)
 
-        # Return a UV that has flipped triangles: negate every y coordinate
-        # of the default harmonic result to guarantee a mix of +/- signed areas.
         _orig_harmonic = igl.harmonic
 
         def _bad_harmonic(*args, **kwargs):
             uv = _orig_harmonic(*args, **kwargs)
-            # Flip every other triangle by negating y on half the boundary.
             uv_bad = uv.copy()
             uv_bad[len(uv) // 2:, 1] *= -1
             return uv_bad
 
-        # Monkeypatch igl inside _slim_helpers module
         import analysis.receptive_field_mapping._slim_helpers as sh
         monkeypatch.setattr(sh, "igl", type("FakeIgl", (), {
             "harmonic": staticmethod(_bad_harmonic),
@@ -135,8 +132,10 @@ class TestFlattenSlim:
             "boundary_facets": igl.boundary_facets,
         })())
 
-        with pytest.raises(RuntimeError, match="flipped"):
-            flatten_slim(V, F, boundary, center_vid=center_vid)
+        V_out, F_out, uv = flatten_slim(V, F, boundary, center_vid=center_vid, n_iter=20)
+        assert not _has_flipped_triangles(uv, F_out), (
+            "Tutte fallback should produce a flip-free init for a simple disk"
+        )
 
 
 # ===========================================================================
@@ -150,9 +149,18 @@ class TestPrecomputeForearmSlimUv:
         mesh = trimesh.Trimesh(vertices=V, faces=F, process=False)
         mesh.export(str(path))
 
-    def _write_spike_csv(self, xyz: np.ndarray, path):
-        import pandas as pd
-        pd.DataFrame(xyz, columns=["x", "y", "z"]).to_csv(path, index=False)
+    def _write_rf_npz(self, vertex_iff_pairs: list[tuple[int, float]], path):
+        """Write a synthetic single-touch RF maps NPZ in ``map_single_touch_rf`` format.
+
+        Parameters
+        ----------
+        vertex_iff_pairs:
+            List of ``(vertex_idx, mean_iff)`` tuples for a single touch.
+        path:
+            Destination path for the ``.npz`` file.
+        """
+        rf_data = {0: vertex_iff_pairs}
+        np.savez(path, rf_data=rf_data)
 
     def test_precompute_writes_cache(self, disk_mesh, tmp_path, monkeypatch):
         import trimesh
@@ -163,18 +171,24 @@ class TestPrecomputeForearmSlimUv:
 
         V, F, center_vid, _ = disk_mesh
         ply_path = tmp_path / "forearm_test.ply"
-        spike_csv = tmp_path / "spike_positions.csv"
+        rf_npz = tmp_path / "single_touch_rf_maps.npz"
 
         self._write_ply(V, F, ply_path)
-        self._write_spike_csv(V[center_vid:center_vid + 1], spike_csv)
+        # One touch: center vertex with nonzero IFF so weighted centroid lands there.
+        self._write_rf_npz([(center_vid, 1.0)], rf_npz)
 
         # Bypass BPA — return trimesh directly from the saved V/F.
         monkeypatch.setattr(
             _mod, "load_or_build_forearm_mesh",
             lambda path, **kw: trimesh.Trimesh(vertices=V, faces=F, process=False),
         )
+        # Bypass PLY vertex loader — return mesh vertices directly.
+        monkeypatch.setattr(
+            _mod, "load_forearm_vertices",
+            lambda path: V,
+        )
 
-        cache_path = precompute_forearm_slim_uv(ply_path, spike_csv, n_iter=20)
+        cache_path = precompute_forearm_slim_uv(ply_path, rf_npz, n_iter=20)
         assert cache_path.exists()
 
         data = np.load(cache_path, allow_pickle=False)
@@ -182,7 +196,7 @@ class TestPrecomputeForearmSlimUv:
         assert int(data["center_vid"]) == center_vid
         assert str(data["ply_hash"]) != "", "ply_hash should be non-empty"
 
-    def test_missing_spike_csv_raises(self, disk_mesh, tmp_path, monkeypatch):
+    def test_missing_rf_npz_raises(self, disk_mesh, tmp_path, monkeypatch):
         import trimesh
         from analysis.receptive_field_mapping.forearm_slim_uv import (
             precompute_forearm_slim_uv,
@@ -198,13 +212,12 @@ class TestPrecomputeForearmSlimUv:
             lambda path, **kw: trimesh.Trimesh(vertices=V, faces=F, process=False),
         )
 
-        missing_csv = tmp_path / "nonexistent_spikes.csv"
-        with pytest.raises(FileNotFoundError, match="spike_positions.csv"):
-            precompute_forearm_slim_uv(ply_path, missing_csv)
+        missing_npz = tmp_path / "nonexistent_rf_maps.npz"
+        with pytest.raises(FileNotFoundError):
+            precompute_forearm_slim_uv(ply_path, missing_npz)
 
-    def test_empty_spike_csv_raises(self, disk_mesh, tmp_path, monkeypatch):
+    def test_empty_rf_data_raises(self, disk_mesh, tmp_path, monkeypatch):
         import trimesh
-        import pandas as pd
         from analysis.receptive_field_mapping.forearm_slim_uv import (
             precompute_forearm_slim_uv,
         )
@@ -212,17 +225,18 @@ class TestPrecomputeForearmSlimUv:
 
         V, F, _, _ = disk_mesh
         ply_path = tmp_path / "forearm_test.ply"
-        empty_csv = tmp_path / "empty_spikes.csv"
+        empty_npz = tmp_path / "empty_rf_maps.npz"
         self._write_ply(V, F, ply_path)
-        pd.DataFrame(columns=["x", "y", "z"]).to_csv(empty_csv, index=False)
+        # Empty rf_data dict — no touches recorded.
+        np.savez(empty_npz, rf_data={})
 
         monkeypatch.setattr(
             _mod, "load_or_build_forearm_mesh",
             lambda path, **kw: trimesh.Trimesh(vertices=V, faces=F, process=False),
         )
 
-        with pytest.raises(ValueError, match="No spikes"):
-            precompute_forearm_slim_uv(ply_path, empty_csv)
+        with pytest.raises(ValueError):
+            precompute_forearm_slim_uv(ply_path, empty_npz)
 
     def test_centre_on_boundary_raises(self, disk_mesh, tmp_path, monkeypatch):
         import trimesh
@@ -233,19 +247,24 @@ class TestPrecomputeForearmSlimUv:
 
         V, F, _, boundary_vids = disk_mesh
         ply_path = tmp_path / "forearm_test.ply"
-        spike_csv = tmp_path / "spike_positions.csv"
+        rf_npz = tmp_path / "boundary_rf_maps.npz"
         self._write_ply(V, F, ply_path)
 
-        # Place spike centroid right on the first boundary vertex.
-        self._write_spike_csv(V[boundary_vids[:1]], spike_csv)
+        # Place all IFF weight on the first boundary vertex so the weighted
+        # centroid snaps to a boundary vertex, triggering the ValueError.
+        self._write_rf_npz([(boundary_vids[0], 1.0)], rf_npz)
 
         monkeypatch.setattr(
             _mod, "load_or_build_forearm_mesh",
             lambda path, **kw: trimesh.Trimesh(vertices=V, faces=F, process=False),
         )
+        monkeypatch.setattr(
+            _mod, "load_forearm_vertices",
+            lambda path: V,
+        )
 
         with pytest.raises(ValueError, match="boundary"):
-            precompute_forearm_slim_uv(ply_path, spike_csv)
+            precompute_forearm_slim_uv(ply_path, rf_npz)
 
 
 # ===========================================================================
@@ -262,12 +281,15 @@ class TestBarycentricUvLookup:
         from analysis.receptive_field_mapping.forearm_slim_uv import SlimUvCache
         V, F, center_vid, _ = disk_mesh
         boundary = boundary_loop(F)
-        uv = flatten_slim(V, F, boundary, center_vid=center_vid, n_iter=20)
+        V_out, F_out, uv = flatten_slim(V, F, boundary, center_vid=center_vid, n_iter=20)
+        from scipy.spatial import KDTree
+        _, new_center = KDTree(V_out).query(V[center_vid])
+        new_boundary = boundary_loop(F_out)
         return SlimUvCache(
-            V=V, F=F, uv=uv,
-            center_vid=center_vid,
-            boundary_vid=int(boundary[0]),
-            ply_mtime=0.0, ply_hash="test", spike_csv_mtime=0.0,
+            V=V_out, F=F_out, uv=uv,
+            center_vid=int(new_center),
+            boundary_vid=int(new_boundary[0]),
+            ply_mtime=0.0, ply_hash="test", rf_npz_mtime=0.0,
             centroid_3d=V[center_vid],
         )
 
