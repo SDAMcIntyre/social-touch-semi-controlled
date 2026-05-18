@@ -48,6 +48,7 @@ from analysis.receptive_field_mapping import (
     PopulationRFGridMetricsConfig,
     run_population_rf_grid_metrics_visualization,
     run_session_comparison_visualization,
+    run_population_rf_maps,
     precompute_explorer_caches,
     launch_feature_space_explorer,
     launch_single_touch_rf_explorer,
@@ -220,6 +221,34 @@ def map_single_touch_rf_flow(
         force=force_processing,
         neuron_mode=neuron_mode,
         preparation_dir=preparation_dir,
+    )
+
+
+@flow(name="visualize_population_rf_maps")
+def visualize_population_rf_maps_flow(
+    input_items: List[Tuple[Path, Path]],
+    force_processing: bool = False,
+    neuron_mode: str = "iff",
+    min_overlap_pct: float = 25.0,
+    disjoint_mask_distance_mm: float = 10.0,
+) -> None:
+    """Render per-session 2D population RF heatmap PNGs projected via SLIM UV.
+
+    For each session, produces one PNG per gesture subset (all, tap,
+    stroke_proximal, stroke_distal) under
+    ``4_analysed/population_rf_maps/<session_id>/``.
+    Idempotent via sentinel JSON.
+    """
+    print(f"[Batch Analysis] Rendering population RF maps for {len(input_items)} item(s)...")
+    if not input_items:
+        return
+
+    run_population_rf_maps(
+        session_configs=input_items,
+        neuron_mode=neuron_mode,
+        min_overlap_pct=min_overlap_pct,
+        disjoint_mask_distance_mm=disjoint_mask_distance_mm,
+        force_processing=force_processing,
     )
 
 
@@ -1147,6 +1176,7 @@ def run_batch_analysis(
         ("set_rf_camera_settings", set_rf_camera_settings_flow),
         ("map_receptive_fields_simple", map_receptive_fields_simple_flow),
         ("precompute_forearm_slim_uv", precompute_forearm_slim_uv_flow),
+        ("visualize_population_rf_maps", visualize_population_rf_maps_flow),
         ("touch_feature_extraction", touch_feature_extraction_flow),
         ("map_population_rf_grid", map_population_rf_grid_flow),
         ("reduce_population_rf_grid", reduce_population_rf_grid_flow),
@@ -1324,6 +1354,13 @@ def run_batch_analysis(
                     if task_name == "precompute_forearm_slim_uv":
                         if "n_iter" in options:
                             kwargs["n_iter"] = int(options["n_iter"])
+                    if task_name == "visualize_population_rf_maps":
+                        if "neuron_mode" in options:
+                            kwargs["neuron_mode"] = options["neuron_mode"]
+                        if "min_overlap_pct" in options:
+                            kwargs["min_overlap_pct"] = float(options["min_overlap_pct"])
+                        if "disjoint_mask_distance_mm" in options:
+                            kwargs["disjoint_mask_distance_mm"] = float(options["disjoint_mask_distance_mm"])
                     if options.get("projection_method"):
                         kwargs["projection_method"] = options["projection_method"]
                     if "disjoint_mask_distance_mm" in options:
