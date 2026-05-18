@@ -63,6 +63,7 @@ cupy-cuda12x>=13.0; platform_system != "Darwin"
 torch
 
 # --- Miscellaneous ---
+grandalf
 keyboard
 psutil==7.0.0
 psychopy==2025.1.1
