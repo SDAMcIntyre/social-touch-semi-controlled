@@ -7,7 +7,7 @@ Purpose
 -------
 Standalone comparison harness that flattens the same cleaned forearm mesh
 with six methods side-by-side and emits comparison figures plus a per-method
-distortion summary CSV.  Implements Phases 1–2 of the plan:
+distortion summary CSV.
 
     docs/development/plans/active/compare-flattening-methods.md
 
@@ -22,10 +22,11 @@ How to use
 2. Optionally set ``CENTER_POINT`` to a (x, y, z) tuple from a previous run.
 3. Run:  ``python code/scripts/compare_flattening_methods.py``
 
-Phase 2 (current)
------------------
-Runs all six methods, computes per-face distortion metrics, persists a summary
-CSV next to the PLY.  Figures (PNGs) are emitted in Phase 3.
+Output (saved next to the PLY)
+-------------------------------
+- ``*_compare_{timestamp}.png``            — 7-panel figure (3D + 6 UVs)
+- ``*_compare_{timestamp}_distortion.png`` — 6-column distortion maps
+- ``*_compare_{timestamp}_summary.csv``    — per-method distortion statistics
 """
 
 import os
@@ -59,16 +60,19 @@ from flatten_forearm_sandbox import (  # noqa: E402
     clean_mesh,
     pick_center_point,
     boundary_loop,
+    canonicalise_uv,
     flatten_lscm,
     flatten_harmonic,
     flatten_arap,
-    compute_face_distortion,
     plot_panels,
     plot_distortion_panels,
     show_mesh_inspector,
 )
 
-import igl  # noqa: E402  (must come after flatten_forearm_sandbox which also imports it)
+from analysis.receptive_field_mapping._slim_helpers import (  # noqa: E402
+    flatten_slim,
+    compute_face_distortion,
+)
 
 from analysis.receptive_field_mapping.rf_projection import (  # noqa: E402
     project_tangent_plane,
@@ -126,87 +130,6 @@ def _pca_rotation(V: np.ndarray) -> np.ndarray:
     centered = V - V.mean(axis=0)
     _, _, Vt = np.linalg.svd(centered, full_matrices=False)
     return Vt  # (3, 3) orthonormal
-
-
-# ---------------------------------------------------------------------------
-# SLIM flattening
-# ---------------------------------------------------------------------------
-
-def flatten_slim(
-    V: np.ndarray,
-    F: np.ndarray,
-    boundary: np.ndarray,
-    center_vid: int | None = None,
-    n_iter: int = 40,
-) -> np.ndarray:
-    """Symmetric-Dirichlet SLIM flattening, initialised from the harmonic map.
-
-    Parameters
-    ----------
-    V:
-        Vertex positions, shape (N, 3), float64.
-    F:
-        Face indices, shape (M, 3), int32.
-    boundary:
-        Ordered boundary vertex indices from ``boundary_loop(F)``.
-    center_vid:
-        Interior vertex index to pin to UV origin ``(0, 0)``.  When ``None``,
-        two opposite boundary vertices are pinned instead.
-    n_iter:
-        Number of SLIM solve iterations (each call to ``igl.slim_solve``
-        runs one global step).
-
-    Returns
-    -------
-    uv : np.ndarray
-        Shape (N, 2), float64 — UV coordinates per vertex.
-
-    Raises
-    ------
-    RuntimeError
-        If SLIM produces NaN values (degenerate mesh).
-
-    Notes
-    -----
-    ``igl.SLIM_ENERGY_TYPE_SYMMETRIC_DIRICHLET`` is the constant name in the
-    Python binding as of libigl 2.5.  If the installed version exposes a
-    different name or a plain integer enum, the script raises ``AttributeError``
-    immediately — do not add a fallback; inspect ``dir(igl)`` and fix the name.
-    """
-    uv_init = flatten_harmonic(V, F, boundary, center_vid=center_vid)
-
-    if center_vid is not None:
-        b = np.array([int(boundary[0]), int(center_vid)], dtype=np.int32)
-        bc = np.array([[1.0, 0.0], [0.0, 0.0]], dtype=np.float64)
-    else:
-        b = np.array(
-            [int(boundary[0]), int(boundary[len(boundary) // 2])], dtype=np.int32
-        )
-        bc = np.array([[1.0, 0.0], [-1.0, 0.0]], dtype=np.float64)
-
-    data = igl.SLIMData()
-    igl.slim_precompute(
-        V,
-        F,
-        uv_init,
-        data,
-        igl.SLIM_ENERGY_TYPE_SYMMETRIC_DIRICHLET,
-        b,
-        bc,
-        soft_p=1e5,
-    )
-
-    uv = uv_init
-    for _ in range(n_iter):
-        uv = igl.slim_solve(data, 1)
-
-    if np.any(np.isnan(uv)):
-        raise RuntimeError(
-            "SLIM produced NaN values — mesh may be degenerate or the energy "
-            "constant is incorrect for this libigl binding."
-        )
-
-    return uv.astype(np.float64)
 
 
 # ---------------------------------------------------------------------------
@@ -371,7 +294,7 @@ if __name__ == "__main__":
     print("  Harmonic converged.")
 
     print("Running SLIM ...")
-    uv_slim = flatten_slim(V, F, boundary, center_vid=center_vid)
+    _, _, uv_slim = flatten_slim(V, F, boundary, center_vid=center_vid)
     print("  SLIM converged.")
 
     # ------------------------------------------------------------------

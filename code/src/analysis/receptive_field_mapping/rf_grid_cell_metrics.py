@@ -382,6 +382,7 @@ def compute_grid_cell_metrics(
     forearm_vertices: np.ndarray,
     projection_method: str = "tangent_plane",
     rotation_matrix: np.ndarray = None,
+    slim_cache_path=None,
 ) -> dict:
     """Reduce a single grid cell RF heatmap to a flat dict of scalar metrics.
 
@@ -417,7 +418,7 @@ def compute_grid_cell_metrics(
             "spike_count": active_values,
         }
     )
-    rf_metrics = compute_rf_metrics(df, forearm_vertices, projection_method, rotation_matrix=rotation_matrix)
+    rf_metrics = compute_rf_metrics(df, forearm_vertices, projection_method, rotation_matrix=rotation_matrix, slim_cache_path=slim_cache_path)
     rf_dict = _rf_metrics_to_kept_dict(rf_metrics)
 
     # --- IFF-specific metrics ---
@@ -433,6 +434,7 @@ def compute_grid_cell_metrics(
         centroid,
         method=projection_method,
         rotation_matrix=rotation_matrix,
+        slim_cache_path=slim_cache_path,
     )
     shape = compute_boundary_shape_metrics(
         uv_2d,
