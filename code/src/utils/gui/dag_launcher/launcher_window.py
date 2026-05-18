@@ -103,7 +103,7 @@ class LauncherWindow(QMainWindow):
         self._kinect_selector = SessionConfigSelector(self._configs_dir)
         self._splitter.addWidget(self._kinect_selector)
 
-        self._splitter.setStretchFactor(0, 1)  # workflow selector  (1/4)
+        self._splitter.setStretchFactor(0, 0)  # workflow selector — no extra stretch, stays at content width
         self._splitter.setStretchFactor(1, 2)  # task panel        (1/2)
         self._splitter.setStretchFactor(2, 1)  # kinect selector   (1/4)
 
