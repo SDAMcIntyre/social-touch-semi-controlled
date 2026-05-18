@@ -177,6 +177,51 @@ def project_cylindrical_unwrap(
     return np.column_stack([u, v])
 
 
+def project_slim(
+    points_3d: np.ndarray,
+    forearm_vertices: np.ndarray,
+    contact_centroid: np.ndarray,
+    slim_cache_path=None,
+    **kwargs,
+) -> np.ndarray:
+    """Project 3D points to 2D UV using the cached SLIM UV map.
+
+    Parameters
+    ----------
+    points_3d:
+        (N, 3) array of 3D contact points.
+    forearm_vertices:
+        Accepted for registry interface compatibility; not used for SLIM.
+    contact_centroid:
+        Accepted for registry interface compatibility; not used for SLIM.
+    slim_cache_path:
+        Path (str or Path) to the ``.npz`` SLIM UV cache produced by
+        ``precompute_forearm_slim_uv``.  **Required** — raises if None.
+    **kwargs:
+        Accepted for registry interface compatibility; unused.
+
+    Returns
+    -------
+    (N, 2) float64 array of UV coordinates.
+
+    Raises
+    ------
+    ValueError
+        If ``slim_cache_path`` is None.
+    FileNotFoundError
+        If the cache file does not exist.
+    """
+    if slim_cache_path is None:
+        raise ValueError(
+            "project_slim requires slim_cache_path. Pass the path to the "
+            ".npz cache produced by precompute_forearm_slim_uv."
+        )
+    from pathlib import Path as _Path
+    from .forearm_slim_uv import barycentric_uv_lookup, load_slim_uv_cache
+    cache = load_slim_uv_cache(_Path(slim_cache_path))
+    return barycentric_uv_lookup(cache, np.asarray(points_3d, dtype=np.float64))
+
+
 # ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
@@ -184,6 +229,7 @@ def project_cylindrical_unwrap(
 PROJECTION_METHODS: dict = {
     "tangent_plane": project_tangent_plane,
     "cylindrical_unwrap": project_cylindrical_unwrap,
+    "slim": project_slim,
 }
 
 

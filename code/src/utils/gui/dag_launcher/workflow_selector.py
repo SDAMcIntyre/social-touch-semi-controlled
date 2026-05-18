@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from PyQt5.QtCore import pyqtSignal
+from PyQt5.QtGui import QFontMetrics
 from PyQt5.QtWidgets import (
+    QApplication,
     QButtonGroup,
     QFrame,
     QGroupBox,
@@ -75,6 +77,15 @@ class WorkflowSelector(QWidget):
             self._buttons.append(btn)
 
         self._btn_layout.addStretch()
+        self._set_minimum_width()
+
+    def _set_minimum_width(self) -> None:
+        if not self._buttons:
+            return
+        fm = QFontMetrics(QApplication.font())
+        max_text_w = max(fm.horizontalAdvance(btn.text()) for btn in self._buttons)
+        # button padding (10px each side) + group box content margins (6+6) + group box border (~4+4)
+        self.setMinimumWidth(max_text_w + 40)
 
     def _on_button_clicked(self, btn_id: int) -> None:
         if 0 <= btn_id < len(self._entries):

@@ -100,6 +100,7 @@ def render_forearm_heatmap(
     render_context: 'RFRenderContext' = None,
     disjoint_mask_distance_mm: float = 8.0,
     camera_settings: dict = None,
+    slim_cache_path: 'Path | None' = None,
 ) -> None:
     """Render a 3D forearm heatmap of spike-count contact points and save as PNG.
 
@@ -186,12 +187,12 @@ def render_forearm_heatmap(
             except Exception:
                 logger.warning("Could not load forearm PLY for 2D projection: %s", forearm_ply_path, exc_info=True)
 
-        uv_points = project_to_2d(spike_xyz, forearm_vertices, projection_centroid, method=projection_method, rotation_matrix=rotation_matrix)
+        uv_points = project_to_2d(spike_xyz, forearm_vertices, projection_centroid, method=projection_method, rotation_matrix=rotation_matrix, slim_cache_path=slim_cache_path)
 
         forearm_uv = None
         if forearm_vertices is not None:
             try:
-                forearm_uv = project_to_2d(forearm_vertices, forearm_vertices, projection_centroid, method=projection_method, rotation_matrix=rotation_matrix)
+                forearm_uv = project_to_2d(forearm_vertices, forearm_vertices, projection_centroid, method=projection_method, rotation_matrix=rotation_matrix, slim_cache_path=slim_cache_path)
             except Exception:
                 logger.debug("Could not project forearm vertices to 2D for background.", exc_info=True)
 
@@ -214,6 +215,7 @@ def render_forearm_heatmap(
                     projection_centroid,
                     method=projection_method,
                     rotation_matrix=rotation_matrix,
+                    slim_cache_path=slim_cache_path,
                 )
             except Exception:
                 logger.debug(
@@ -227,6 +229,7 @@ def render_forearm_heatmap(
                     projection_centroid,
                     method=projection_method,
                     rotation_matrix=rotation_matrix,
+                    slim_cache_path=slim_cache_path,
                 )
             except Exception:
                 logger.debug(

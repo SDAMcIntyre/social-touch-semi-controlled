@@ -35,6 +35,7 @@ These are developer-facing documents, not usage guides.
 | [bug-neural-kinect-viewer-initial-render.md](bug-neural-kinect-viewer-initial-render.md) | Neural Kinect Viewer initial render issue | — |
 | [bug-hue-circle-drag-not-working.md](bug-hue-circle-drag-not-working.md) | Hue circle drag interaction not working | — |
 | [bug-rf-explorer-nearest-vertex-distance.md](bug-rf-explorer-nearest-vertex-distance.md) | RF Explorer crashes: contact frames >15mm from forearm mesh vertices | — |
+| [bug-slim-uv-non-manifold-flip.md](bug-slim-uv-non-manifold-flip.md) | SLIM UV precompute fails on ST13-02: non-manifold BPA mesh creates 5 boundary loops, causing harmonic and Tutte init flips | [note-mesh-parameterization-interior-pin-foldovers.md](note-mesh-parameterization-interior-pin-foldovers.md), [note-igl-slim-api-version-mismatch.md](note-igl-slim-api-version-mismatch.md) |
 
 ---
 

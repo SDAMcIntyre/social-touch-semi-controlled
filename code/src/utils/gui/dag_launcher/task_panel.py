@@ -10,26 +10,22 @@ from PyQt5.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
+    QPushButton,
     QSplitter,
+    QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
+from utils.gui.dag_launcher.dag_graph_view import DagGraphView
 from utils.gui.dag_launcher.task_detail_panel import TaskDetailPanel
 from utils.pipeline.dag_config_model import DagConfigModel
 
 
-
 class TaskPanel(QWidget):
-    """Panel that renders DAG tasks as a compact 3-column list with a detail panel.
-
-    Public interface
-    ----------------
-    populate(model)  — rebuild the table from a :class:`DagConfigModel`.
-    task_changed     — signal emitted whenever any value is modified.
-    """
+    """Panel that renders DAG tasks as a compact 3-column list with a detail panel."""
 
     task_changed = pyqtSignal()
 
@@ -41,6 +37,7 @@ class TaskPanel(QWidget):
         super().__init__(parent)
         self._model: DagConfigModel | None = None
         self._row_task: list[str] = []
+        self._selected_task: str | None = None
 
         outer_layout = QVBoxLayout(self)
         outer_layout.setContentsMargins(4, 4, 4, 4)
@@ -48,6 +45,19 @@ class TaskPanel(QWidget):
         group = QGroupBox("Tasks")
         group_layout = QVBoxLayout(group)
         group_layout.setContentsMargins(4, 4, 4, 4)
+
+        toggle_bar = QHBoxLayout()
+        self._btn_graph = QPushButton("Graph View")
+        self._btn_table = QPushButton("Table View")
+        self._btn_graph.setCheckable(True)
+        self._btn_table.setCheckable(True)
+        self._btn_graph.setChecked(True)
+        toggle_bar.addWidget(self._btn_graph)
+        toggle_bar.addWidget(self._btn_table)
+        self._btn_fit = QPushButton("Fit All")
+        toggle_bar.addWidget(self._btn_fit)
+        toggle_bar.addStretch()
+        group_layout.addLayout(toggle_bar)
 
         self._splitter = QSplitter(Qt.Vertical)
 
@@ -61,13 +71,27 @@ class TaskPanel(QWidget):
         self._table.cellClicked.connect(self._on_cell_clicked)
         self._table.currentCellChanged.connect(self._on_current_cell_changed)
 
+        self._graph_view = DagGraphView()
+        self._graph_view.node_clicked.connect(self._on_graph_node_clicked)
+        self._graph_view.enabled_changed.connect(self._on_graph_enabled_changed)
+        self._graph_view.force_changed.connect(self._on_graph_force_changed)
+
+        self._stack = QStackedWidget()
+        self._stack.addWidget(self._graph_view)
+        self._stack.addWidget(self._table)
+        self._stack.setCurrentIndex(0)
+
         self._detail = TaskDetailPanel()
         self._detail.task_changed.connect(self.task_changed)
 
-        self._splitter.addWidget(self._table)
+        self._splitter.addWidget(self._stack)
         self._splitter.addWidget(self._detail)
         self._splitter.setStretchFactor(0, 2)
         self._splitter.setStretchFactor(1, 5)
+
+        self._btn_graph.clicked.connect(self._show_graph_view)
+        self._btn_table.clicked.connect(self._show_table_view)
+        self._btn_fit.clicked.connect(self._graph_view.fit_all)
 
         group_layout.addWidget(self._splitter)
         outer_layout.addWidget(group)
@@ -80,6 +104,9 @@ class TaskPanel(QWidget):
         """Clear and rebuild the table from *model*."""
         self._model = model
         self._row_task.clear()
+        self._selected_task = None
+
+        self._graph_view.populate(model)
 
         task_names = model.get_task_names()
 
@@ -140,6 +167,67 @@ class TaskPanel(QWidget):
             # _on_current_cell_changed fires from selectRow and calls show_task
 
     # ------------------------------------------------------------------
+    # Toggle handlers
+    # ------------------------------------------------------------------
+
+    def _show_graph_view(self) -> None:
+        self._btn_graph.setChecked(True)
+        self._btn_table.setChecked(False)
+        self._stack.setCurrentIndex(0)
+        if self._model is not None:
+            self._graph_view.update_from_model(self._model)
+        if self._selected_task is not None:
+            self._graph_view.select_task(self._selected_task)
+
+    def _sync_table_checkboxes(self) -> None:
+        if self._model is None:
+            return
+        for row, name in enumerate(self._row_task):
+            container = self._table.cellWidget(row, self._COL_ENABLED)
+            if container is None:
+                continue
+            for cb in container.findChildren(QCheckBox):
+                cb.blockSignals(True)
+                if cb.text() == "Force":
+                    val = self._model.get_task_option(name, "force_processing")
+                    if val is not None:
+                        cb.setChecked(bool(val))
+                else:
+                    cb.setChecked(self._model.is_task_enabled(name))
+                cb.blockSignals(False)
+
+    def _show_table_view(self) -> None:
+        self._btn_graph.setChecked(False)
+        self._btn_table.setChecked(True)
+        self._stack.setCurrentIndex(1)
+        self._sync_table_checkboxes()
+        if self._selected_task is not None and self._selected_task in self._row_task:
+            row = self._row_task.index(self._selected_task)
+            self._table.selectRow(row)
+
+    # ------------------------------------------------------------------
+    # Graph view signal handlers
+    # ------------------------------------------------------------------
+
+    def _on_graph_node_clicked(self, task_name: str) -> None:
+        if self._model is None:
+            return
+        self._detail.show_task(self._model, task_name)
+        self._selected_task = task_name
+
+    def _on_graph_enabled_changed(self, task_name: str, enabled: bool) -> None:
+        if self._model is None:
+            return
+        self._model.set_task_enabled(task_name, enabled)
+        self.task_changed.emit()
+
+    def _on_graph_force_changed(self, task_name: str, value: bool) -> None:
+        if self._model is None:
+            return
+        self._model.set_task_option(task_name, "force_processing", value)
+        self.task_changed.emit()
+
+    # ------------------------------------------------------------------
     # Handler factories
     # ------------------------------------------------------------------
 
@@ -168,7 +256,8 @@ class TaskPanel(QWidget):
     ) -> None:
         if self._model is None or current_row < 0 or current_row >= len(self._row_task):
             return
-        self._detail.show_task(self._model, self._row_task[current_row])
+        self._selected_task = self._row_task[current_row]
+        self._detail.show_task(self._model, self._selected_task)
 
     def _on_cell_clicked(self, row: int, col: int) -> None:
         """Handle depends-on click to scroll to the first dependency."""
