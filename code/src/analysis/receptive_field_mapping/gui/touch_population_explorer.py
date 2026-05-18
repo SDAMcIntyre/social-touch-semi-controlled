@@ -35,6 +35,11 @@ from PyQt5.QtWidgets import (
 from pyvistaqt import QtInteractor
 
 from analysis.receptive_field_mapping.gui.rf_feature_space_explorer import DraggableFilterRect
+from analysis.receptive_field_mapping.rf_population_heatmap import (
+    apply_vertex_threshold,
+    compute_rf_heatmap,
+    compute_unique_touch_count,
+)
 from analysis.receptive_field_mapping.touch_population_data import PopulationData, PopulationRFData
 
 logger = logging.getLogger(__name__)
@@ -371,7 +376,13 @@ class TouchPopulationExplorer(QMainWindow):
         bar.setContentsMargins(4, 2, 4, 2)
         bar.setSpacing(6)
 
-        bar.addWidget(QLabel("W:"))
+        self._select_all_cb = QCheckBox("Select all")
+        self._select_all_cb.setChecked(False)
+        self._select_all_cb.toggled.connect(self._on_select_all_toggled)
+        bar.addWidget(self._select_all_cb)
+
+        self._w_label = QLabel("W:")
+        bar.addWidget(self._w_label)
         self._w_spinbox = QDoubleSpinBox()
         self._w_spinbox.setRange(0.001, 1e9)
         self._w_spinbox.setSingleStep(0.1)
@@ -379,7 +390,8 @@ class TouchPopulationExplorer(QMainWindow):
         self._w_spinbox.valueChanged.connect(self._update_rect_from_controls)
         bar.addWidget(self._w_spinbox)
 
-        bar.addWidget(QLabel("H:"))
+        self._h_label = QLabel("H:")
+        bar.addWidget(self._h_label)
         self._h_spinbox = QDoubleSpinBox()
         self._h_spinbox.setRange(0.001, 1e9)
         self._h_spinbox.setSingleStep(0.1)
@@ -389,6 +401,46 @@ class TouchPopulationExplorer(QMainWindow):
 
         bar.addStretch()
         return bar
+
+    # ------------------------------------------------------------------
+    # Select-all toggle
+    # ------------------------------------------------------------------
+
+    def _on_select_all_toggled(self, checked: bool) -> None:
+        self._w_label.setVisible(not checked)
+        self._w_spinbox.setVisible(not checked)
+        self._h_label.setVisible(not checked)
+        self._h_spinbox.setVisible(not checked)
+        if checked:
+            self._expand_rect_to_all_data()
+        else:
+            if self._rect is not None:
+                self._apply_filter_update()
+
+    def _expand_rect_to_all_data(self) -> None:
+        if self._rect is None:
+            return
+        x_data = self._data.get_feature_array(self._x_feature())
+        y_data = self._data.get_feature_array(self._y_feature())
+        checked_types = {g for g, cb in self._checkboxes.items() if cb.isChecked()}
+        visible = np.isin(self._data.gesture_types, list(checked_types))
+        if not visible.any():
+            return
+        x_min = float(np.nanmin(x_data[visible]))
+        x_max = float(np.nanmax(x_data[visible]))
+        y_min = float(np.nanmin(y_data[visible]))
+        y_max = float(np.nanmax(y_data[visible]))
+        if not (np.isfinite(x_min) and np.isfinite(x_max)):
+            return
+        if not (np.isfinite(y_min) and np.isfinite(y_max)):
+            return
+        margin_x = (x_max - x_min) * 0.01 if x_max > x_min else 0.5
+        margin_y = (y_max - y_min) * 0.01 if y_max > y_min else 0.5
+        self._rect.set_bounds(
+            x_min - margin_x, x_max + margin_x,
+            y_min - margin_y, y_max + margin_y,
+        )
+        self._scatter_canvas.draw_idle()
 
     # ------------------------------------------------------------------
     # Scatter
@@ -605,36 +657,17 @@ class TouchPopulationExplorer(QMainWindow):
         return result
 
     def _compute_rf_heatmap(self, touch_indices: list, n_verts: int) -> np.ndarray:
-        """Compute mean RF heatmap across *touch_indices* using pre-loaded RF maps.
-
-        For each vertex contacted by at least one selected touch, computes the
-        mean of the per-touch RF values (mean neuron response per vertex index).
-        Vertices not contacted by any selected touch are set to NaN.
-
-        Parameters
-        ----------
-        touch_indices:
-            List of integer touch indices (into ``self._rf_data`` lists).
-        n_verts:
-            Total number of forearm mesh vertices.
-        """
+        """Compute mean RF heatmap across *touch_indices* using pre-loaded RF maps."""
         if self._rf_data is None:
             raise ValueError(
                 "_compute_rf_heatmap: called with self._rf_data=None — RF mode is not available"
             )
-        result = np.zeros(n_verts, dtype=np.float64)
-        count = np.zeros(n_verts, dtype=np.int64)
-        for idx in touch_indices:
-            verts = self._rf_data.rf_vertex_indices[idx]
-            vals = self._rf_data.rf_values[idx]
-            if len(verts) == 0:
-                continue
-            np.add.at(result, verts, vals)
-            np.add.at(count, verts, 1)
-        nonzero = count > 0
-        result[nonzero] /= count[nonzero]
-        result[~nonzero] = np.nan
-        return result
+        return compute_rf_heatmap(
+            touch_indices,
+            self._rf_data.rf_vertex_indices,
+            self._rf_data.rf_values,
+            n_verts,
+        )
 
     def _sync_heatmap_modes(self) -> None:
         """Add or remove the RF heatmap mode item from the dropdown.
@@ -717,7 +750,7 @@ class TouchPopulationExplorer(QMainWindow):
         self._controls_updating = False
 
     def _update_rect_from_controls(self, *_) -> None:
-        if self._controls_updating or self._rect is None:
+        if self._controls_updating or self._rect is None or self._select_all_cb.isChecked():
             return
         x_min, x_max, y_min, y_max = self._rect.get_bounds()
         cx = (x_min + x_max) / 2
@@ -731,6 +764,8 @@ class TouchPopulationExplorer(QMainWindow):
         self._draw_scatter()
         if self._single_touch_mode:
             self._apply_single_touch_display()
+        elif self._select_all_cb.isChecked():
+            self._expand_rect_to_all_data()
         else:
             self._apply_filter_update()
 
@@ -778,37 +813,13 @@ class TouchPopulationExplorer(QMainWindow):
         self._touch_count_label.setText(f"N touches shown: {n_shown} / {n_total}")
 
     def _compute_unique_touch_count(self, cp_mask: np.ndarray, n_verts: int) -> np.ndarray:
-        """Return per-vertex count of unique touches in the masked contact points.
-
-        Parameters
-        ----------
-        cp_mask:
-            Boolean mask of shape ``(C,)`` over the full contact-point arrays
-            (``self._data.cp_vertex_idx``, ``self._data.cp_touch_idx``).
-        n_verts:
-            Total number of forearm mesh vertices.
-
-        Returns
-        -------
-        np.ndarray
-            Shape ``(n_verts,)`` int64 — number of distinct touches that
-            contacted each vertex among the masked contact points.
-        """
-        vertex_idx = self._data.cp_vertex_idx[cp_mask]
-        touch_idx = self._data.cp_touch_idx[cp_mask]
-
-        if len(vertex_idx) == 0:
-            return np.zeros(n_verts, dtype=np.int64)
-
-        # Encode (vertex, touch) pairs as a single integer for fast deduplication.
-        max_touch = int(touch_idx.max()) + 1
-        key = vertex_idx * max_touch + touch_idx
-        unique_keys = np.unique(key)
-
-        # Decode vertex indices from deduplicated keys.
-        unique_verts = unique_keys // max_touch
-
-        return np.bincount(unique_verts, minlength=n_verts).astype(np.int64)
+        """Return per-vertex count of unique touches in the masked contact points."""
+        return compute_unique_touch_count(
+            self._data.cp_vertex_idx,
+            self._data.cp_touch_idx,
+            cp_mask,
+            n_verts,
+        )
 
     def _effective_threshold(self, n_filtered: int) -> int:
         """Return the effective integer threshold given the current mode and *n_filtered*."""
@@ -819,33 +830,12 @@ class TouchPopulationExplorer(QMainWindow):
     def _apply_vertex_threshold(
         self, heatmap_val: np.ndarray, unique_touch_count: np.ndarray
     ) -> np.ndarray:
-        """Return a copy of *heatmap_val* with below-threshold contacted vertices set to -1.0.
-
-        Only contacted vertices (those with ``heatmap_val != 0.0``) that have
-        fewer unique touches than ``self._vertex_threshold`` are set to -1.0.
-        Uncontacted vertices (``heatmap_val == 0.0`` or NaN) are left unchanged
-        so that the dark-grey uncontacted colour is preserved.
-
-        Parameters
-        ----------
-        heatmap_val:
-            Float array of shape ``(n_verts,)`` produced by ``_compute_heatmap``
-            or ``_compute_rf_heatmap``.
-        unique_touch_count:
-            Integer array of shape ``(n_verts,)`` produced by
-            ``_compute_unique_touch_count``.
-
-        Returns
-        -------
-        np.ndarray
-            Modified copy of *heatmap_val*.
-        """
-        result = heatmap_val.copy()
-        # A vertex is "contacted" when it has a positive unique-touch count.
-        contacted = unique_touch_count > 0
-        below_threshold = contacted & (unique_touch_count < self._effective_threshold(self._n_filtered))
-        result[below_threshold] = -1.0
-        return result
+        """Return a copy of *heatmap_val* with below-threshold contacted vertices set to -1.0."""
+        return apply_vertex_threshold(
+            heatmap_val,
+            unique_touch_count,
+            self._effective_threshold(self._n_filtered),
+        )
 
     def _update_threshold_range(self, n_filtered_touches: int) -> None:
         """Update the threshold spinbox range and suffix label to reflect *n_filtered_touches*.
@@ -998,7 +988,10 @@ class TouchPopulationExplorer(QMainWindow):
                 "button_press_event", self._on_scatter_click_single_touch
             )
             self._single_touch_mode = True
+            self._select_all_cb.setVisible(False)
+            self._w_label.setVisible(False)
             self._w_spinbox.setVisible(False)
+            self._h_label.setVisible(False)
             self._h_spinbox.setVisible(False)
             # Hide threshold row widgets in single-touch mode.
             for i in range(self._threshold_row_layout.count()):
@@ -1013,15 +1006,22 @@ class TouchPopulationExplorer(QMainWindow):
                 self._single_touch_cid = None
             self._single_touch_mode = False
             self._selected_touch_idx = None
-            self._w_spinbox.setVisible(True)
-            self._h_spinbox.setVisible(True)
+            self._select_all_cb.setVisible(True)
+            select_all = self._select_all_cb.isChecked()
+            self._w_label.setVisible(not select_all)
+            self._w_spinbox.setVisible(not select_all)
+            self._h_label.setVisible(not select_all)
+            self._h_spinbox.setVisible(not select_all)
             # Restore threshold row widgets when returning to population mode.
             for i in range(self._threshold_row_layout.count()):
                 item = self._threshold_row_layout.itemAt(i)
                 if item is not None and item.widget() is not None:
                     item.widget().show()
             self._init_filter_rect()
-            self._on_rect_changed(*self._rect.get_bounds()) if self._rect is not None else None
+            if select_all:
+                self._expand_rect_to_all_data()
+            elif self._rect is not None:
+                self._on_rect_changed(*self._rect.get_bounds())
 
     def _on_scatter_click_single_touch(self, event) -> None:
         if event.inaxes is None:
@@ -1281,6 +1281,8 @@ class TouchPopulationExplorer(QMainWindow):
         self._draw_scatter()
         if not self._single_touch_mode:
             self._init_filter_rect()
+            if self._select_all_cb.isChecked():
+                self._expand_rect_to_all_data()
 
     # ------------------------------------------------------------------
     # Session management
@@ -1295,7 +1297,13 @@ class TouchPopulationExplorer(QMainWindow):
         self._single_touch_btn.blockSignals(True)
         self._single_touch_btn.setChecked(False)
         self._single_touch_btn.blockSignals(False)
+        self._select_all_cb.blockSignals(True)
+        self._select_all_cb.setChecked(False)
+        self._select_all_cb.blockSignals(False)
+        self._select_all_cb.setVisible(True)
+        self._w_label.setVisible(True)
         self._w_spinbox.setVisible(True)
+        self._h_label.setVisible(True)
         self._h_spinbox.setVisible(True)
 
         self._data = new_data
