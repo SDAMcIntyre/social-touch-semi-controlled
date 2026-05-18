@@ -48,6 +48,7 @@ from analysis.receptive_field_mapping import (
     PopulationRFGridMetricsConfig,
     run_population_rf_grid_metrics_visualization,
     run_session_comparison_visualization,
+    run_population_rf_maps,
     precompute_explorer_caches,
     launch_feature_space_explorer,
     launch_single_touch_rf_explorer,
@@ -126,6 +127,76 @@ def map_receptive_fields_simple_flow(
     )
 
 
+@flow(name="precompute_forearm_slim_uv")
+def precompute_forearm_slim_uv_flow(
+    input_items: List[Tuple[Path, Path]],
+    force_processing: bool = False,
+    n_iter: int = 40,
+) -> List[Path]:
+    """Precompute and cache SLIM UV maps for all sessions.
+
+    For each session, loads the forearm PLY (via load_or_build_forearm_mesh)
+    and the single-touch RF maps NPZ (from map_single_touch_rf output), runs
+    SLIM, and caches the UV map as
+    ``4_analysed/forearm_slim_uv/<session_id>/<session_id>_slim_uv.npz``.
+
+    The UV origin (center_vid) is placed at the IFF-weighted centroid of all
+    single-touch RF maps, giving a neuroscientifically meaningful anchor point.
+    """
+    from analysis.receptive_field_mapping.forearm_slim_uv import (
+        precompute_forearm_slim_uv as _precompute,
+    )
+    from analysis.receptive_field_mapping.rf_data_loader import resolve_forearm_ply
+    from analysis.touch_analytics.pipeline_shared import session_id_from_path
+    from utils.should_process_task import should_process_task
+
+    print(f"[SLIM UV] Precomputing SLIM UV maps for {len(input_items)} item(s)...")
+    if not input_items:
+        return []
+
+    results: List[Path] = []
+
+    for csv_path, db_path in input_items:
+        session_id = session_id_from_path(csv_path)
+
+        forearm_ply_path = resolve_forearm_ply(csv_path.parent, session_id)
+        if forearm_ply_path is None:
+            raise ValueError(
+                f"[SLIM UV] {session_id}: forearm PLY not found in {csv_path.parent} — "
+                "run forearm extraction first."
+            )
+
+        rf_maps_npz = (
+            db_path / '4_analysed' / 'single_touch_rf_maps'
+            / session_id / 'single_touch_rf_maps.npz'
+        )
+
+        output_dir = db_path / '4_analysed' / 'forearm_slim_uv' / session_id
+        output_dir.mkdir(parents=True, exist_ok=True)
+        cache_path = output_dir / f"{session_id}_slim_uv.npz"
+
+        if not should_process_task(
+            input_paths=[forearm_ply_path, rf_maps_npz],
+            output_paths=[cache_path],
+            force=force_processing,
+        ):
+            print(f"[SLIM UV] {session_id}: up-to-date, skipping.")
+            results.append(cache_path)
+            continue
+
+        print(f"[SLIM UV] {session_id}: computing SLIM UV map (n_iter={n_iter})...")
+        result = _precompute(
+            forearm_ply_path=forearm_ply_path,
+            rf_maps_npz=rf_maps_npz,
+            cache_path=cache_path,
+            n_iter=n_iter,
+        )
+        print(f"[SLIM UV] {session_id}: cached → {result.name}")
+        results.append(result)
+
+    return results
+
+
 @flow(name="map_single_touch_rf")
 def map_single_touch_rf_flow(
     input_items: List[Tuple[Path, Path]],
@@ -150,6 +221,34 @@ def map_single_touch_rf_flow(
         force=force_processing,
         neuron_mode=neuron_mode,
         preparation_dir=preparation_dir,
+    )
+
+
+@flow(name="visualize_population_rf_maps")
+def visualize_population_rf_maps_flow(
+    input_items: List[Tuple[Path, Path]],
+    force_processing: bool = False,
+    neuron_mode: str = "iff",
+    min_overlap_pct: float = 25.0,
+    median_filter_size: int | None = None,
+) -> None:
+    """Render per-session 2D population RF heatmap PNGs projected via SLIM UV.
+
+    For each session, produces one PNG per gesture subset (all, tap,
+    stroke_proximal, stroke_distal) under
+    ``4_analysed/population_rf_maps/<session_id>/``.
+    Idempotent via sentinel JSON.
+    """
+    print(f"[Batch Analysis] Rendering population RF maps for {len(input_items)} item(s)...")
+    if not input_items:
+        return
+
+    run_population_rf_maps(
+        session_configs=input_items,
+        neuron_mode=neuron_mode,
+        min_overlap_pct=min_overlap_pct,
+        force_processing=force_processing,
+        median_filter_size=median_filter_size,
     )
 
 
@@ -289,6 +388,10 @@ def reduce_population_rf_grid_flow(
 
     database_path = input_items[0][1]
     output_dir = database_path / '4_analysed'
+    slim_uv_cache_dir = (
+        database_path / '4_analysed' / 'forearm_slim_uv'
+        if projection_method == 'slim' else None
+    )
 
     config = PopulationRFGridMetricsConfig(projection_method=projection_method)
 
@@ -329,6 +432,7 @@ def reduce_population_rf_grid_flow(
             config=config,
             force=force_processing,
             group_name=group_name,
+            slim_uv_cache_dir=slim_uv_cache_dir,
         )
         all_results.extend(results)
     return all_results
@@ -742,6 +846,10 @@ def visualize_receptive_fields_clustered_flow(
 
     database_path = input_items[0][1]
     output_dir = database_path / '4_analysed' / 'receptive_field_maps_clustered'
+    slim_uv_cache_dir = (
+        database_path / '4_analysed' / 'forearm_slim_uv'
+        if projection_method == 'slim' else None
+    )
 
     result = run_cluster_rf_visualization(
         output_dir=output_dir,
@@ -754,6 +862,7 @@ def visualize_receptive_fields_clustered_flow(
         force=force_processing,
         gallery_viewer=gallery_viewer,
         input_items=input_items,
+        slim_uv_cache_dir=slim_uv_cache_dir,
     )
 
     return result
@@ -1066,6 +1175,8 @@ def run_batch_analysis(
         ("touch_series_transforms", touch_series_transforms_flow),
         ("set_rf_camera_settings", set_rf_camera_settings_flow),
         ("map_receptive_fields_simple", map_receptive_fields_simple_flow),
+        ("precompute_forearm_slim_uv", precompute_forearm_slim_uv_flow),
+        ("visualize_population_rf_maps", visualize_population_rf_maps_flow),
         ("touch_feature_extraction", touch_feature_extraction_flow),
         ("map_population_rf_grid", map_population_rf_grid_flow),
         ("reduce_population_rf_grid", reduce_population_rf_grid_flow),
@@ -1240,6 +1351,16 @@ def run_batch_analysis(
                         kwargs["show_interactive"] = options["show_interactive"]
                     if "save_diagnostics" in options:
                         kwargs["save_diagnostics"] = bool(options["save_diagnostics"])
+                    if task_name == "precompute_forearm_slim_uv":
+                        if "n_iter" in options:
+                            kwargs["n_iter"] = int(options["n_iter"])
+                    if task_name == "visualize_population_rf_maps":
+                        if "neuron_mode" in options:
+                            kwargs["neuron_mode"] = options["neuron_mode"]
+                        if "min_overlap_pct" in options:
+                            kwargs["min_overlap_pct"] = float(options["min_overlap_pct"])
+                        if "median_filter_size" in options and options["median_filter_size"] is not None:
+                            kwargs["median_filter_size"] = int(options["median_filter_size"])
                     if options.get("projection_method"):
                         kwargs["projection_method"] = options["projection_method"]
                     if "disjoint_mask_distance_mm" in options:

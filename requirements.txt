@@ -17,6 +17,7 @@ chumpy==0.70
 open3d==0.19.0
 plyfile==1.1.2
 pygltflib==1.16.5
+libigl
 pyvista==0.46.1
 pyvistaqt==0.11.3
 transforms3d==0.4.2
@@ -62,6 +63,7 @@ cupy-cuda12x>=13.0; platform_system != "Darwin"
 torch
 
 # --- Miscellaneous ---
+grandalf
 keyboard
 psutil==7.0.0
 psychopy==2025.1.1
