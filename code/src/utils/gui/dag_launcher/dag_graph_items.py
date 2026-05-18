@@ -8,6 +8,8 @@ from PyQt5.QtCore import QObject, QPointF, QRectF, Qt, pyqtSignal
 from PyQt5.QtGui import (
     QBrush,
     QColor,
+    QFont,
+    QFontMetrics,
     QPainter,
     QPainterPath,
     QPen,
@@ -28,8 +30,10 @@ from PyQt5.QtWidgets import (
 
 from utils.pipeline.dag_config_model import DagConfigModel
 
-_NODE_W = 180
-_NODE_H = 70
+_NODE_H = 90
+_MIN_NODE_W = 180
+_LABEL_FONT_SIZE = 13
+_H_PADDING = 40   # insets + margins + badge clearance
 _CORNER_RADIUS = 6
 _INSET = 6
 
@@ -60,6 +64,7 @@ class DagTaskNode(QGraphicsRectItem):
         node_clicked = pyqtSignal(str)
         enabled_changed = pyqtSignal(str, bool)
         force_changed = pyqtSignal(str, bool)
+        position_changed = pyqtSignal(str, float, float)  # task_name, x, y
 
     def __init__(
         self,
@@ -68,7 +73,12 @@ class DagTaskNode(QGraphicsRectItem):
         category: str = "none",
         parent: QGraphicsItem | None = None,
     ) -> None:
-        super().__init__(0, 0, _NODE_W, _NODE_H, parent)
+        _lf = QFont()
+        _lf.setBold(True)
+        _lf.setPointSize(_LABEL_FONT_SIZE)
+        node_w = max(_MIN_NODE_W, QFontMetrics(_lf).horizontalAdvance(task_name) + _H_PADDING)
+
+        super().__init__(0, 0, node_w, _NODE_H, parent)
         self._task_name = task_name
         self._category = category
         self._updating = False
@@ -76,6 +86,7 @@ class DagTaskNode(QGraphicsRectItem):
         self.signals = DagTaskNode._Signals()
 
         self.setFlag(QGraphicsItem.ItemIsSelectable, True)
+        self.setFlag(QGraphicsItem.ItemIsMovable, True)
         self.setFlag(QGraphicsItem.ItemSendsGeometryChanges, True)
 
         self._enabled = model.is_task_enabled(task_name)
@@ -91,7 +102,7 @@ class DagTaskNode(QGraphicsRectItem):
         inner_layout.setSpacing(2)
 
         self._label = QLabel(task_name)
-        self._label.setStyleSheet("font-weight: bold; font-size: 9pt;")
+        self._label.setStyleSheet("font-weight: bold; font-size: 13pt;")
         self._label.setWordWrap(False)
         self._label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         inner_layout.addWidget(self._label)
@@ -120,7 +131,7 @@ class DagTaskNode(QGraphicsRectItem):
         proxy = QGraphicsProxyWidget(self)
         proxy.setWidget(inner)
         proxy.setPos(_INSET, _INSET)
-        proxy.resize(_NODE_W - 2 * _INSET, _NODE_H - 2 * _INSET)
+        proxy.resize(node_w - 2 * _INSET, _NODE_H - 2 * _INSET)
 
     # ------------------------------------------------------------------
     # Visual helpers
@@ -161,7 +172,7 @@ class DagTaskNode(QGraphicsRectItem):
         painter.setOpacity(1.0)
 
     def boundingRect(self) -> QRectF:
-        return QRectF(0, 0, _NODE_W, _NODE_H).adjusted(-2, -2, 2, 2)
+        return self.rect().adjusted(-2, -2, 2, 2)
 
     # ------------------------------------------------------------------
     # Mouse events
@@ -170,6 +181,11 @@ class DagTaskNode(QGraphicsRectItem):
     def mousePressEvent(self, event) -> None:
         super().mousePressEvent(event)
         self.signals.node_clicked.emit(self._task_name)
+
+    def itemChange(self, change, value):
+        if change == QGraphicsItem.ItemPositionHasChanged:
+            self.signals.position_changed.emit(self._task_name, value.x(), value.y())
+        return super().itemChange(change, value)
 
     # ------------------------------------------------------------------
     # Checkbox handlers

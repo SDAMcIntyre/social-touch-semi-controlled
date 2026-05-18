@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
-from PyQt5.QtCore import QPoint, Qt, pyqtSignal
+import json
+import logging
+from pathlib import Path
+
+from PyQt5.QtCore import QPoint, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QPainter, QKeySequence
 from PyQt5.QtWidgets import QGraphicsScene, QGraphicsView, QShortcut
+
+logger = logging.getLogger(__name__)
 
 from grandalf.graphs import Edge as GEdge
 from grandalf.graphs import Graph
@@ -14,8 +20,6 @@ from grandalf.layouts import SugiyamaLayout
 from utils.gui.dag_launcher.dag_graph_items import DagEdge, DagTaskNode
 from utils.pipeline.dag_config_model import DagConfigModel
 
-_NODE_W = 180
-_NODE_H = 70
 _SPACING_FACTOR = 1.4
 
 
@@ -52,8 +56,15 @@ class DagGraphView(QGraphicsView):
         self.setDragMode(QGraphicsView.NoDrag)
 
         self._nodes: dict[str, DagTaskNode] = {}
+        self._edges: list[DagEdge] = []
         self._panning = False
         self._pan_start = QPoint()
+        self._config_path: Path | None = None
+
+        self._save_timer = QTimer(self)
+        self._save_timer.setSingleShot(True)
+        self._save_timer.setInterval(800)
+        self._save_timer.timeout.connect(self._save_layout)
 
         fit_shortcut = QShortcut(QKeySequence("Ctrl+0"), self)
         fit_shortcut.activated.connect(self.fit_all)
@@ -64,17 +75,27 @@ class DagGraphView(QGraphicsView):
 
     def populate(self, model: DagConfigModel) -> None:
         """Clear and rebuild the graph from *model*."""
+        self._save_timer.stop()
         self._scene.clear()
         self._nodes = {}
+        self._edges = []
+        self._config_path = model.path
 
         task_names = model.get_task_names()
         if not task_names:
             return
 
+        # Create nodes first so each one measures its own text-fitted width.
+        pre_nodes: dict[str, DagTaskNode] = {
+            name: DagTaskNode(name, model, category=model._get_task(name).get("category", "none"))
+            for name in task_names
+        }
+
         vertices: dict[str, Vertex] = {}
-        for name in task_names:
+        for name, node in pre_nodes.items():
             v = Vertex(name)
-            v.view = _VertexView(_NODE_W, _NODE_H)
+            r = node.rect()
+            v.view = _VertexView(r.width(), r.height())
             vertices[name] = v
 
         gedges: list[GEdge] = []
@@ -99,11 +120,11 @@ class DagGraphView(QGraphicsView):
                 v.view.xy = (shifted_x, shifted_y)
 
             comp_max_x = max(v.view.xy[0] for v in component.sV)
-            x_offset = comp_max_x + _NODE_W * _SPACING_FACTOR * 1.5
+            comp_max_w = max(pre_nodes[v.data].rect().width() for v in component.sV)
+            x_offset = comp_max_x + comp_max_w * _SPACING_FACTOR * 1.5
 
         for name in task_names:
-            category = model._get_task(name).get("category", "none")
-            node = DagTaskNode(name, model, category=category)
+            node = pre_nodes[name]
             x, y = vertices[name].view.xy
             node.setPos(x, y)
             self._scene.addItem(node)
@@ -112,14 +133,17 @@ class DagGraphView(QGraphicsView):
             node.signals.node_clicked.connect(self.node_clicked)
             node.signals.enabled_changed.connect(self.enabled_changed)
             node.signals.force_changed.connect(self.force_changed)
+            node.signals.position_changed.connect(self._on_node_moved)
 
         for name in task_names:
             for dep in model.get_task_dependencies(name):
                 if dep in self._nodes:
                     edge = DagEdge(self._nodes[dep], self._nodes[name])
                     self._scene.addItem(edge)
+                    self._edges.append(edge)
 
-        self.fit_all()
+        if not self._load_layout():
+            self.fit_all()
 
     # ------------------------------------------------------------------
     # Public interface
@@ -137,6 +161,47 @@ class DagGraphView(QGraphicsView):
     def update_from_model(self, model: DagConfigModel) -> None:
         for node in self._nodes.values():
             node.update_from_model(model)
+
+    # ------------------------------------------------------------------
+    # Layout persistence
+    # ------------------------------------------------------------------
+
+    def _layout_path(self) -> Path | None:
+        if self._config_path is None:
+            return None
+        return self._config_path.with_suffix(".layout.json")
+
+    def _load_layout(self) -> bool:
+        """Apply saved positions. Returns True if layout was loaded."""
+        path = self._layout_path()
+        if path is None or not path.exists():
+            return False
+        try:
+            saved: dict[str, list[float]] = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            logger.warning("Failed to read layout file %s", path)
+            return False
+        loaded_any = False
+        for name, (x, y) in saved.items():
+            if name in self._nodes:
+                self._nodes[name].setPos(x, y)
+                loaded_any = True
+        return loaded_any
+
+    def _save_layout(self) -> None:
+        path = self._layout_path()
+        if path is None:
+            return
+        data = {name: [node.pos().x(), node.pos().y()] for name, node in self._nodes.items()}
+        try:
+            path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        except Exception:
+            logger.warning("Failed to save layout to %s", path)
+
+    def _on_node_moved(self, _task_name: str, _x: float, _y: float) -> None:
+        for edge in self._edges:
+            edge.update_path()
+        self._save_timer.start()
 
     # ------------------------------------------------------------------
     # Zoom

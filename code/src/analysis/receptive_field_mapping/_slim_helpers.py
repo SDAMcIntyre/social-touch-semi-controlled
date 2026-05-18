@@ -40,6 +40,101 @@ logger = logging.getLogger(__name__)
 # Mesh cleaning
 # ---------------------------------------------------------------------------
 
+def _find_boundary_loops(F: np.ndarray) -> list[list[int]]:
+    """Trace all boundary loops from directed boundary edges.
+
+    Returns a list of loops, each a list of vertex indices in traversal order.
+    The loops are sorted longest-first.
+    """
+    BF, _, _ = igl.boundary_facets(F.astype(np.int64))
+    if len(BF) == 0:
+        return []
+
+    adj: dict[int, list[int]] = {}
+    for e in BF:
+        u, v = int(e[0]), int(e[1])
+        adj.setdefault(u, []).append(v)
+
+    visited: set[int] = set()
+    loops: list[list[int]] = []
+    for start in list(adj.keys()):
+        if start in visited:
+            continue
+        loop: list[int] = []
+        cur = start
+        while cur not in visited:
+            visited.add(cur)
+            loop.append(cur)
+            nexts = [n for n in adj.get(cur, []) if n not in visited]
+            if not nexts:
+                break
+            cur = nexts[0]
+        if len(loop) >= 3:
+            loops.append(loop)
+
+    loops.sort(key=len, reverse=True)
+    return loops
+
+
+def _fill_interior_holes(
+    V: np.ndarray,
+    F: np.ndarray,
+    max_passes: int = 5,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Fill non-largest boundary loops with centroid fan triangulation.
+
+    Interior holes left by ``remove_non_manifold_edges()`` break the
+    single-boundary disk topology required by harmonic/Tutte parameterisation.
+    This function closes each inner hole by inserting a centroid vertex and
+    fanning triangles around the loop.  Winding is fixed afterwards.
+
+    Iterates up to ``max_passes`` because filling can occasionally create
+    new small boundary anomalies that require an additional pass.
+
+    Returns ``(V, F)`` — may have new vertices appended to V.
+    """
+    total_holes = 0
+    total_tris = 0
+
+    for _pass in range(max_passes):
+        loops = _find_boundary_loops(F)
+        if len(loops) <= 1:
+            break
+
+        inner_loops = loops[1:]
+        new_verts: list[np.ndarray] = []
+        new_faces: list[list[int]] = []
+
+        for loop in inner_loops:
+            centroid = V[loop].mean(axis=0)
+            new_vid = V.shape[0] + len(new_verts)
+            new_verts.append(centroid)
+            for i in range(len(loop)):
+                j = (i + 1) % len(loop)
+                new_faces.append([new_vid, loop[i], loop[j]])
+
+        if not new_faces:
+            break
+
+        V = np.vstack([V, np.array(new_verts, dtype=np.float64)])
+        F = np.vstack([F, np.array(new_faces, dtype=np.int32)])
+        total_holes += len(inner_loops)
+        total_tris += len(new_faces)
+
+        tmp = trimesh.Trimesh(vertices=V, faces=F, process=False)
+        trimesh.repair.fix_winding(tmp)
+        V = np.asarray(tmp.vertices, dtype=np.float64)
+        F = np.asarray(tmp.faces, dtype=np.int32)
+
+    if total_holes > 0:
+        logger.info(
+            "Filled %d interior hole(s) with %d fan triangles.",
+            total_holes, total_tris,
+        )
+
+    return V, F
+
+
 def clean_mesh(mesh: trimesh.Trimesh) -> tuple[np.ndarray, np.ndarray]:
     """Keep the largest connected component, fix winding, drop orphan vertices.
 
@@ -129,6 +224,12 @@ def clean_mesh(mesh: trimesh.Trimesh) -> tuple[np.ndarray, np.ndarray]:
             lc = max(components, key=lambda m: len(m.vertices))
             V = np.asarray(lc.vertices, dtype=np.float64)
             F = np.asarray(lc.faces, dtype=np.int32)
+
+    # Both remove_non_manifold_edges() and the pinch-vertex repair above can
+    # leave interior holes that break the single-boundary disk topology
+    # required for harmonic/Tutte UV initialisation.  Fill them with centroid
+    # fan triangulation as the last cleanup step.
+    V, F = _fill_interior_holes(V, F)
 
     return V, F
 
@@ -304,8 +405,10 @@ def flatten_slim(
         )
         uv_init = _tutte_uniform_map(F, V.shape[0], boundary, boundary_uv)
 
-        if _has_flipped_triangles(uv_init, F):
-            # Count flipped faces.
+        for _trim_round in range(_TRIM_MAX_ROUNDS):
+            if not _has_flipped_triangles(uv_init, F):
+                break
+
             p0, p1, p2 = uv_init[F[:, 0]], uv_init[F[:, 1]], uv_init[F[:, 2]]
             cross = (
                 (p1[:, 0] - p0[:, 0]) * (p2[:, 1] - p0[:, 1])
@@ -323,12 +426,11 @@ def flatten_slim(
                 )
 
             logger.warning(
-                "Tutte init has %d flipped face(s) — trimming 1-ring of "
-                "degenerate face vertices and retrying.",
-                n_flip,
+                "Tutte init has %d flipped face(s) (round %d) — trimming "
+                "1-ring of degenerate face vertices and retrying.",
+                n_flip, _trim_round + 1,
             )
 
-            # Excise the 1-ring neighbourhood of flipped face vertices.
             bad_verts = set(int(v) for fi in flipped_fi for v in F[fi])
             ring_mask = np.any(np.isin(F, list(bad_verts)), axis=1)
             F_trim = F[~ring_mask]
@@ -340,12 +442,11 @@ def flatten_slim(
             used = np.unique(F_trim)
             remap_arr = np.full(V.shape[0], -1, dtype=np.int32)
             remap_arr[used] = np.arange(len(used), dtype=np.int32)
-            V_trim = V[used]
-            F_trim = remap_arr[F_trim]
+            V = V[used]
+            F = remap_arr[F_trim]
 
-            # Keep the largest connected component.
             comps = trimesh.Trimesh(
-                vertices=V_trim, faces=F_trim, process=False
+                vertices=V, faces=F, process=False
             ).split(only_watertight=False)
             if not comps:
                 raise RuntimeError(
@@ -355,11 +456,11 @@ def flatten_slim(
             V = np.asarray(lc.vertices, dtype=np.float64)
             F = np.asarray(lc.faces, dtype=np.int32)
 
-            # Recompute boundary and boundary_uv for the trimmed mesh.
+            V, F = _fill_interior_holes(V, F)
+
             boundary = boundary_loop(F)
             boundary_uv = _setup_boundary_uv(boundary)
 
-            # Re-locate center_vid in the trimmed mesh.
             if _center_3d is not None:
                 _, center_vid = _KDTree(V).query(_center_3d)
                 center_vid = int(center_vid)
@@ -369,14 +470,14 @@ def flatten_slim(
                         "after trimming — the spike centroid is in the excised region."
                     )
 
-            # Recompute Tutte on the trimmed mesh.
             uv_init = _tutte_uniform_map(F, V.shape[0], boundary, boundary_uv)
+        else:
             if _has_flipped_triangles(uv_init, F):
                 raise RuntimeError(
-                    "Tutte fallback still has flipped triangles after 1-ring trim — "
-                    "the mesh topology is too complex for boundary-only "
-                    "parameterisation.  Re-mesh with a finer BPA radius or inspect "
-                    "the forearm PLY."
+                    f"Tutte fallback still has flipped triangles after "
+                    f"{_TRIM_MAX_ROUNDS} trim rounds — the mesh topology is too "
+                    "complex for boundary-only parameterisation.  Re-mesh with "
+                    "a finer BPA radius or inspect the forearm PLY."
                 )
 
     # libigl 709 tutorial pattern: empty constraints, soft_p=0.
@@ -411,7 +512,8 @@ def flatten_slim(
 # Maximum number of flipped faces that trigger the 1-ring trim fallback.
 # Beyond this count the failure is global, not local, and trimming would
 # remove too much of the mesh.
-_TRIM_FLIP_MAX: int = 10
+_TRIM_FLIP_MAX: int = 50
+_TRIM_MAX_ROUNDS: int = 5
 
 
 # ---------------------------------------------------------------------------

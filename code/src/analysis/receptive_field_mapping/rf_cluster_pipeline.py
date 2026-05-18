@@ -1079,6 +1079,7 @@ def run_cluster_rf_visualization(
     force: bool = False,
     gallery_viewer: bool = False,
     input_items: List[Tuple[Path, Path]] = None,
+    slim_uv_cache_dir: Optional[Path] = None,
 ) -> List[Path]:
     """Compute RF metrics and render heatmaps from extraction artifacts.
 
@@ -1242,11 +1243,17 @@ def run_cluster_rf_visualization(
                 if metrics_sid is not None:
                     metrics_rotation = load_rf_camera_rotation(camera_settings_dir, metrics_sid)
 
+                metrics_slim_cache = (
+                    slim_uv_cache_dir / metrics_sid / f"{metrics_sid}_slim_uv.npz"
+                    if slim_uv_cache_dir is not None and metrics_sid is not None
+                    else None
+                )
                 metrics = compute_rf_metrics(
                     pooled_df,
                     metrics_forearm_vertices,
                     projection_method=projection_method or "tangent_plane",
                     rotation_matrix=metrics_rotation,
+                    slim_cache_path=metrics_slim_cache,
                 )
                 metrics_json_path = cluster_dir / 'rf_metrics.json'
                 with open(metrics_json_path, 'w') as _f:
@@ -1312,6 +1319,11 @@ def run_cluster_rf_visualization(
 
                     _ply_str = sessions_metadata.get(session_id, {}).get('forearm_ply')
                     forearm_ply = Path(_ply_str) if _ply_str else None
+                    session_slim_cache = (
+                        slim_uv_cache_dir / session_id / f"{session_id}_slim_uv.npz"
+                        if slim_uv_cache_dir is not None
+                        else None
+                    )
 
                     render_context = RFRenderContext(
                         neuron_touches=neuron_touches.get(session_id, 0),
@@ -1338,6 +1350,7 @@ def run_cluster_rf_visualization(
                             render_context=render_context,
                             disjoint_mask_distance_mm=disjoint_mask_distance_mm,
                             camera_settings=session_cam,
+                            slim_cache_path=session_slim_cache,
                         )
                         produced.append(count_png)
                     except Exception:
@@ -1362,6 +1375,7 @@ def run_cluster_rf_visualization(
                                 render_context=render_context,
                                 disjoint_mask_distance_mm=disjoint_mask_distance_mm,
                                 camera_settings=session_cam,
+                                slim_cache_path=session_slim_cache,
                             )
                             produced.append(ratio_png)
                         except Exception:

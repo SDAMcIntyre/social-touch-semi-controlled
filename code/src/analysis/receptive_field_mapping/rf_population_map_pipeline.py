@@ -51,6 +51,7 @@ def run_population_rf_maps(
     neuron_mode: str,
     min_overlap_pct: float = 25.0,
     force_processing: bool = False,
+    median_filter_size: int | None = None,
 ) -> None:
     """Render per-session 2D population RF heatmap PNGs projected via SLIM UV.
 
@@ -142,16 +143,33 @@ def run_population_rf_maps(
         slim_faces = cache.F
 
         # --- Build KDTree mapping: original forearm vertices → SLIM vertices ---
+        # The SLIM cache stores cleaned-mesh vertices (after BPA + clean_mesh +
+        # flatten_slim), which can include synthetic centroid vertices from
+        # interior hole filling.  These vertices are not in the raw PLY, so a
+        # handful will be >1 mm from their nearest raw neighbour.  Genuine
+        # misalignment (wrong PLY) would show distances of 10+ mm.
         orig_tree = KDTree(pop_data.forearm_vertices)
         distances, nearest_orig_for_slim = orig_tree.query(slim_V)
         max_dist_mm = float(distances.max())
-        if max_dist_mm > 1.0:
+        _WARN_THRESHOLD_MM = 1.0
+        _ERROR_THRESHOLD_MM = 5.0
+        if max_dist_mm > _ERROR_THRESHOLD_MM:
             raise ValueError(
                 f"[Population RF Maps] {session_id}: KDTree nearest-neighbour "
                 f"mapping from SLIM vertices to original forearm vertices has a "
-                f"maximum distance of {max_dist_mm:.3f} mm (threshold: 1 mm). "
-                "The SLIM mesh and forearm PLY are misaligned — re-run "
-                "'precompute_forearm_slim_uv' after verifying the forearm PLY."
+                f"maximum distance of {max_dist_mm:.3f} mm (threshold: "
+                f"{_ERROR_THRESHOLD_MM} mm). The SLIM mesh and forearm PLY are "
+                "misaligned — re-run 'precompute_forearm_slim_uv' after "
+                "verifying the forearm PLY."
+            )
+        if max_dist_mm > _WARN_THRESHOLD_MM:
+            n_over = int((distances > _WARN_THRESHOLD_MM).sum())
+            logger.info(
+                "[Population RF Maps] %s: %d / %d SLIM vertices are >%.0f mm "
+                "from the nearest raw PLY vertex (max=%.3f mm) — expected for "
+                "hole-fill centroid vertices.",
+                session_id, n_over, len(slim_V),
+                _WARN_THRESHOLD_MM, max_dist_mm,
             )
 
         # --- Compute heatmaps for all gesture subsets ---
@@ -235,6 +253,7 @@ def run_population_rf_maps(
                 output_path=png_path,
                 forearm_faces=slim_faces,
                 forearm_V=slim_V,
+                median_filter_size=median_filter_size,
             )
             produced.append(png_path)
             print(f"[Population RF Maps] {session_id}: saved {png_path.name}")
@@ -300,6 +319,7 @@ def run_population_rf_maps(
                 uv_ylim=global_uv_ylim,
                 forearm_faces=sd.forearm_faces,
                 forearm_V=sd.forearm_V,
+                median_filter_size=median_filter_size,
             )
             sd.produced.append(composite_path)
             print(
