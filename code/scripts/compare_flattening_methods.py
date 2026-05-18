@@ -64,17 +64,14 @@ from flatten_forearm_sandbox import (  # noqa: E402
     flatten_lscm,
     flatten_harmonic,
     flatten_arap,
-    compute_face_distortion,
     plot_panels,
     plot_distortion_panels,
     show_mesh_inspector,
 )
 
-import igl  # noqa: E402  (must come after flatten_forearm_sandbox which also imports it)
-
 from analysis.receptive_field_mapping._slim_helpers import (  # noqa: E402
-    _has_flipped_triangles,
-    flatten_slim as _slim_base,
+    flatten_slim,
+    compute_face_distortion,
 )
 
 from analysis.receptive_field_mapping.rf_projection import (  # noqa: E402
@@ -133,96 +130,6 @@ def _pca_rotation(V: np.ndarray) -> np.ndarray:
     centered = V - V.mean(axis=0)
     _, _, Vt = np.linalg.svd(centered, full_matrices=False)
     return Vt  # (3, 3) orthonormal
-
-
-# ---------------------------------------------------------------------------
-# SLIM flattening
-# ---------------------------------------------------------------------------
-
-# _has_flipped_triangles is imported from _slim_helpers above.
-
-
-def _tutte_uniform_map(
-    F: np.ndarray,
-    n_vertices: int,
-    boundary: np.ndarray,
-    boundary_uv: np.ndarray,
-) -> np.ndarray:
-    # Tutte (1963): uniform-weight Laplacian + convex boundary => bijective.
-    # Used as a foldover-free fallback when the cotangent-harmonic init flips.
-    from scipy.sparse import coo_matrix
-    from scipy.sparse.linalg import spsolve
-
-    e_all = np.vstack([F[:, [0, 1]], F[:, [1, 2]], F[:, [2, 0]]])
-    edges = np.unique(np.sort(e_all, axis=1), axis=0)
-    a = edges[:, 0]
-    b = edges[:, 1]
-    n_e = len(edges)
-    rows = np.concatenate([a, b, a, b])
-    cols = np.concatenate([b, a, a, b])
-    vals = np.concatenate([-np.ones(n_e), -np.ones(n_e), np.ones(n_e), np.ones(n_e)])
-    L = coo_matrix((vals, (rows, cols)), shape=(n_vertices, n_vertices)).tolil()
-
-    boundary = np.asarray(boundary, dtype=np.int64)
-    for bi in boundary:
-        L.rows[bi] = [int(bi)]
-        L.data[bi] = [1.0]
-    rhs = np.zeros((n_vertices, 2), dtype=np.float64)
-    rhs[boundary] = boundary_uv
-
-    return np.asarray(spsolve(L.tocsr(), rhs))
-
-
-def flatten_slim(
-    V: np.ndarray,
-    F: np.ndarray,
-    boundary: np.ndarray,
-    center_vid: int | None = None,
-    n_iter: int = 40,
-) -> np.ndarray:
-    """Sandbox wrapper around the production ``flatten_slim``.
-
-    Delegates to ``_slim_base`` (the production implementation in
-    ``_slim_helpers``).  When the cotangent-harmonic initialisation has
-    flipped triangles, falls back to the Tutte (uniform-weight Laplacian)
-    map for robustness during sandbox exploration.  The production module
-    does **not** include this fallback — it raises immediately.
-    """
-    try:
-        return _slim_base(V, F, boundary, center_vid=center_vid, n_iter=n_iter)
-    except RuntimeError as exc:
-        if "flipped triangles" not in str(exc):
-            raise
-        # Tutte fallback for sandbox exploration only.
-        n_b = len(boundary)
-        angles = np.linspace(0.0, 2.0 * np.pi, n_b, endpoint=False)
-        boundary_uv = np.column_stack([np.cos(angles), np.sin(angles)])
-        uv_init = _tutte_uniform_map(F, V.shape[0], boundary, boundary_uv)
-        if _has_flipped_triangles(uv_init, F):
-            raise RuntimeError(
-                "Tutte fallback still produced flipped triangles — the mesh "
-                "topology is likely invalid (non-manifold edges, holes, or "
-                "boundary not mapping homeomorphically)."
-            )
-        # Run SLIM from the Tutte init.
-        empty_b = np.empty((0,), dtype=np.int32)
-        empty_bc = np.empty((0, 2), dtype=np.float64)
-        data = igl.slim_precompute(
-            V, F, uv_init,
-            igl.MappingEnergyType.SYMMETRIC_DIRICHLET,
-            empty_b, empty_bc, 0.0,
-        )
-        uv = uv_init
-        for _ in range(n_iter):
-            uv = igl.slim_solve(data, 1)
-        if np.any(np.isnan(uv)):
-            raise RuntimeError("SLIM produced NaN values after Tutte fallback.")
-        uv = uv.astype(np.float64)
-        from analysis.receptive_field_mapping._slim_helpers import canonicalise_uv
-        if center_vid is not None:
-            b0 = int(boundary[0])
-            uv = canonicalise_uv(uv, int(center_vid), b0)
-        return uv
 
 
 # ---------------------------------------------------------------------------
@@ -387,7 +294,7 @@ if __name__ == "__main__":
     print("  Harmonic converged.")
 
     print("Running SLIM ...")
-    uv_slim = flatten_slim(V, F, boundary, center_vid=center_vid)
+    _, _, uv_slim = flatten_slim(V, F, boundary, center_vid=center_vid)
     print("  SLIM converged.")
 
     # ------------------------------------------------------------------

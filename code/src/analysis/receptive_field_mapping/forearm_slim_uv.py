@@ -14,7 +14,7 @@ precompute_forearm_slim_uv
 
 load_slim_uv_cache
     Load the ``.npz`` cache and optionally verify that the source PLY and
-    spike CSV have not changed since the cache was written.
+    single-touch RF maps NPZ have not changed since the cache was written.
 
 The cached data is described by :class:`SlimUvCache`.
 """
@@ -25,9 +25,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
-import pandas as pd
 from scipy.spatial import KDTree
 
+from .rf_data_loader import load_forearm_vertices
 from .rf_surface_utils import load_or_build_forearm_mesh
 from ._slim_helpers import clean_mesh, boundary_loop, flatten_slim
 
@@ -47,8 +47,8 @@ class SlimUvCache:
     boundary_vid: int      # boundary anchor vertex (boundary[0])
     ply_mtime: float       # PLY mtime at cache-write time
     ply_hash: str          # SHA-256 of first 4 kB of PLY
-    spike_csv_mtime: float # spike_positions.csv mtime at cache-write time
-    centroid_3d: np.ndarray  # (3,) float64 — spike-weighted centroid
+    rf_npz_mtime: float    # single-touch RF maps NPZ mtime at cache-write time
+    centroid_3d: np.ndarray  # (3,) float64 — IFF-weighted centroid
 
 
 # ---------------------------------------------------------------------------
@@ -68,7 +68,7 @@ def _ply_hash(ply_path: Path) -> str:
 
 def precompute_forearm_slim_uv(
     forearm_ply_path: Path,
-    spike_positions_csv: Path,
+    rf_maps_npz: Path,
     cache_path: Path | None = None,
     n_iter: int = 40,
 ) -> Path:
@@ -78,10 +78,10 @@ def precompute_forearm_slim_uv(
     ----------
     forearm_ply_path:
         Path to the forearm point-cloud PLY file.
-    spike_positions_csv:
-        Path to the ``spike_positions.csv`` produced by
-        ``map_receptive_fields_simple``.  Its rows must contain at least
-        ``x``, ``y``, ``z`` columns.
+    rf_maps_npz:
+        Path to the ``single_touch_rf_maps.npz`` produced by
+        ``map_single_touch_rf``.  Its ``rf_data`` key must contain at least
+        one touch with at least one contacted vertex carrying a nonzero IFF.
     cache_path:
         Destination path for the ``.npz`` cache.  Defaults to
         ``<forearm_ply_stem>_slim_uv.npz`` in the same directory.
@@ -98,11 +98,14 @@ def precompute_forearm_slim_uv(
     ValueError
         If ``load_or_build_forearm_mesh`` returns ``None`` (degenerate PLY).
     FileNotFoundError
-        If ``spike_positions_csv`` does not exist.
+        If ``rf_maps_npz`` does not exist.
     ValueError
-        If ``spike_positions_csv`` exists but contains no rows.
+        If ``rf_maps_npz`` contains no touches (empty ``rf_data`` dict).
     ValueError
-        If the spike-weighted centroid maps to a boundary vertex.
+        If all aggregated per-vertex IFF values are zero (cannot compute
+        weighted centroid).
+    ValueError
+        If the IFF-weighted centroid maps to a boundary vertex.
     RuntimeError
         If the cotangent-harmonic initialisation has flipped triangles
         (propagated from ``flatten_slim``).
@@ -128,53 +131,104 @@ def precompute_forearm_slim_uv(
         V.shape[0], F.shape[0], forearm_ply_path.name,
     )
 
-    # 4. Read spike_positions.csv.
-    if not spike_positions_csv.exists():
+    # 4. Load single-touch RF maps NPZ.
+    if not rf_maps_npz.exists():
         raise FileNotFoundError(
-            f"spike_positions.csv not found: {spike_positions_csv}\n"
-            "Run 'map_receptive_fields_simple' before 'precompute_forearm_slim_uv'."
+            f"Single-touch RF maps NPZ not found: {rf_maps_npz}\n"
+            "Run 'map_single_touch_rf' before 'precompute_forearm_slim_uv'."
         )
 
-    spikes = pd.read_csv(spike_positions_csv)
-    if spikes.empty:
+    npz = np.load(rf_maps_npz, allow_pickle=True)
+    rf_data: dict = npz["rf_data"].item()
+
+    if not rf_data:
         raise ValueError(
-            f"No spikes in {spike_positions_csv} — cannot determine forearm "
+            f"No touches in {rf_maps_npz} — cannot determine forearm "
             "hotspot centroid."
         )
 
-    # 5. Compute spike-weighted centroid.
-    centroid_3d = spikes[['x', 'y', 'z']].values.mean(axis=0)
+    # 5. Load raw PLY vertices to resolve NPZ vertex indices to 3D positions.
+    raw_verts = load_forearm_vertices(forearm_ply_path)
+    if raw_verts is None:
+        raise ValueError(
+            f"load_forearm_vertices returned None for {forearm_ply_path}. "
+            "The PLY may be empty or unreadable."
+        )
+    n_verts = len(raw_verts)
 
-    # 6. KDTree → nearest mesh vertex.
+    # 6. Aggregate per-vertex mean IFF across all touches.
+    #    Pattern mirrors touch_population_explorer.py:654-684.
+    iff_sum = np.zeros(n_verts, dtype=np.float64)
+    touch_count = np.zeros(n_verts, dtype=np.int64)
+
+    for pairs in rf_data.values():
+        for vertex_idx, mean_iff in pairs:
+            idx = int(vertex_idx)
+            if idx < 0 or idx >= n_verts:
+                # Out-of-bounds index — skip silently (safety guard).
+                continue
+            iff_sum[idx] += float(mean_iff)
+            touch_count[idx] += 1
+
+    contacted_mask = touch_count > 0
+    contacted_indices = np.where(contacted_mask)[0]
+
+    if len(contacted_indices) == 0:
+        raise ValueError(
+            f"No contacted vertices found in {rf_maps_npz} — cannot determine "
+            "forearm hotspot centroid."
+        )
+
+    per_vertex_mean_iff = iff_sum[contacted_indices] / touch_count[contacted_indices]
+
+    # 7. Compute IFF-weighted 3D centroid.
+    total_weight = per_vertex_mean_iff.sum()
+    if total_weight == 0.0:
+        raise ValueError(
+            f"All aggregated per-vertex IFF values are zero in {rf_maps_npz}. "
+            "Cannot compute IFF-weighted centroid — check that the neuron was "
+            "responding during the recorded touches."
+        )
+
+    contacted_positions = raw_verts[contacted_indices]
+    centroid_3d = np.average(contacted_positions, weights=per_vertex_mean_iff, axis=0)
+
+    # 8. KDTree → nearest cleaned-mesh vertex.
     tree = KDTree(V)
     _, center_vid = tree.query(centroid_3d)
     center_vid = int(center_vid)
 
-    # 7. Boundary loop.
+    # 9. Boundary loop.
     bloop = boundary_loop(F)
 
-    # 8. Fail-fast if centroid maps to a boundary vertex.
+    # 10. Fail-fast if centroid maps to a boundary vertex.
     boundary_set = set(int(v) for v in bloop)
     if center_vid in boundary_set:
         raise ValueError(
-            f"Spike-weighted centroid maps to mesh boundary vertex {center_vid}. "
+            f"IFF-weighted centroid maps to mesh boundary vertex {center_vid}. "
             "The forearm mesh boundary does not cover the neuron hotspot — "
             "consider re-extracting the forearm PLY with a larger skin region."
         )
 
-    # 9. SLIM flattening.
+    # 11. SLIM flattening.
     logger.info(
         "Running SLIM (n_iter=%d, center_vid=%d) for %s ...",
         n_iter, center_vid, forearm_ply_path.name,
     )
-    uv = flatten_slim(V, F, bloop, center_vid=center_vid, n_iter=n_iter)
+    V, F, uv = flatten_slim(V, F, bloop, center_vid=center_vid, n_iter=n_iter)
 
-    # 10. Collect provenance.
+    # 12. Re-derive center_vid and boundary after potential mesh trimming inside
+    #     flatten_slim.  In the common (no-trim) case these are unchanged.
+    _, center_vid = KDTree(V).query(centroid_3d)
+    center_vid = int(center_vid)
+    bloop = boundary_loop(F)
+
+    # 13. Collect provenance.
     ply_mtime = forearm_ply_path.stat().st_mtime
-    spike_csv_mtime = spike_positions_csv.stat().st_mtime
+    rf_npz_mtime = rf_maps_npz.stat().st_mtime
     phash = _ply_hash(forearm_ply_path)
 
-    # 11. Write cache.
+    # 14. Write cache.
     np.savez(
         cache_path,
         V=V.astype(np.float64),
@@ -184,13 +238,18 @@ def precompute_forearm_slim_uv(
         boundary_vid=np.int32(int(bloop[0])),
         ply_mtime=np.float64(ply_mtime),
         ply_hash=np.array(phash, dtype='U64'),
-        spike_csv_mtime=np.float64(spike_csv_mtime),
+        rf_npz_mtime=np.float64(rf_npz_mtime),
         centroid_3d=centroid_3d.astype(np.float64),
     )
 
     logger.info("SLIM UV cache written → %s", cache_path)
 
-    # 12. Return path.
+    # 15. Save QC figures (300 DPI) next to the cache for visual verification.
+    from ._slim_qc_figures import save_slim_qc_figures
+    qc_path, dist_path = save_slim_qc_figures(V, F, uv, center_vid, cache_path)
+    logger.info("QC figures written → %s, %s", qc_path, dist_path)
+
+    # 16. Return path.
     return cache_path
 
 
@@ -202,7 +261,7 @@ def load_slim_uv_cache(
     cache_path: Path,
     *,
     forearm_ply_path: Path | None = None,
-    spike_positions_csv: Path | None = None,
+    rf_maps_npz: Path | None = None,
 ) -> SlimUvCache:
     """Load cached UV + mesh data.
 
@@ -213,9 +272,9 @@ def load_slim_uv_cache(
     forearm_ply_path:
         When provided, verify that the PLY mtime and hash match the cached
         values.  Raises :class:`RuntimeError` if stale.
-    spike_positions_csv:
-        When provided, verify that the spike CSV mtime matches the cached
-        value.  Raises :class:`RuntimeError` if stale.
+    rf_maps_npz:
+        When provided, verify that the single-touch RF maps NPZ mtime matches
+        the cached value.  Raises :class:`RuntimeError` if stale.
 
     Returns
     -------
@@ -225,6 +284,10 @@ def load_slim_uv_cache(
     ------
     FileNotFoundError
         If the cache file does not exist.
+    RuntimeError
+        If the cache was written with the old ``spike_csv_mtime`` schema
+        (pre-IFF-weighted centroid).  Delete the cache and re-run
+        ``precompute_forearm_slim_uv`` to rebuild it.
     RuntimeError
         If mtime/hash staleness check fails (inputs changed since cache).
     """
@@ -238,7 +301,18 @@ def load_slim_uv_cache(
     # 2. Load arrays.
     data = np.load(cache_path, allow_pickle=False)
 
-    # 3. Build dataclass.
+    # 3. Old-cache guard: reject caches written before the IFF-weighted centroid
+    #    migration.  A cache with spike_csv_mtime but without rf_npz_mtime was
+    #    produced by the old CSV-based code.
+    if "spike_csv_mtime" in data and "rf_npz_mtime" not in data:
+        raise RuntimeError(
+            f"Old-format SLIM UV cache detected at {cache_path}: contains "
+            "'spike_csv_mtime' but not 'rf_npz_mtime'. "
+            "Delete the cache and re-run 'precompute_forearm_slim_uv' to "
+            "rebuild it with the IFF-weighted centroid schema."
+        )
+
+    # 4. Build dataclass.
     cache = SlimUvCache(
         V=data['V'],
         F=data['F'],
@@ -247,11 +321,11 @@ def load_slim_uv_cache(
         boundary_vid=int(data['boundary_vid']),
         ply_mtime=float(data['ply_mtime']),
         ply_hash=str(data['ply_hash']),
-        spike_csv_mtime=float(data['spike_csv_mtime']),
+        rf_npz_mtime=float(data['rf_npz_mtime']),
         centroid_3d=data['centroid_3d'],
     )
 
-    # 4. Optional PLY staleness check.
+    # 5. Optional PLY staleness check.
     if forearm_ply_path is not None:
         current_mtime = forearm_ply_path.stat().st_mtime
         if current_mtime > cache.ply_mtime + 1e-3:
@@ -274,15 +348,15 @@ def load_slim_uv_cache(
                 "Re-run 'precompute_forearm_slim_uv' to rebuild the cache."
             )
 
-    # 5. Optional spike CSV staleness check.
-    if spike_positions_csv is not None:
-        current_mtime = spike_positions_csv.stat().st_mtime
-        if current_mtime > cache.spike_csv_mtime + 1e-3:
+    # 6. Optional RF maps NPZ staleness check.
+    if rf_maps_npz is not None:
+        current_mtime = rf_maps_npz.stat().st_mtime
+        if current_mtime > cache.rf_npz_mtime + 1e-3:
             raise RuntimeError(
-                f"SLIM UV cache is stale: spike_positions.csv has been modified "
-                f"since the cache was written.\n"
-                f"  CSV mtime:   {current_mtime}\n"
-                f"  Cache mtime: {cache.spike_csv_mtime}\n"
+                f"SLIM UV cache is stale: single-touch RF maps NPZ has been "
+                f"modified since the cache was written.\n"
+                f"  NPZ mtime:   {current_mtime}\n"
+                f"  Cache mtime: {cache.rf_npz_mtime}\n"
                 f"  Cache path:  {cache_path}\n"
                 "Re-run 'precompute_forearm_slim_uv' to rebuild the cache."
             )

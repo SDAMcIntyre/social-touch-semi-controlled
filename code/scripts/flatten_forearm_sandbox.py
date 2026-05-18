@@ -75,6 +75,7 @@ from analysis.receptive_field_mapping._slim_helpers import (  # noqa: E402
     clean_mesh,
     boundary_loop,
     canonicalise_uv,
+    compute_face_distortion,
 )
 
 # ---------------------------------------------------------------------------
@@ -542,63 +543,6 @@ def flatten_arap(
         uv = canonicalise_uv(uv, int(center_vid), int(boundary[0]))
 
     return uv
-
-
-def compute_face_distortion(
-    V: np.ndarray,
-    F: np.ndarray,
-    uv: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Per-face distortion via Jacobian SVD of the 3D-to-UV affine map.
-
-    Returns
-    -------
-    conformal : (M,) — sigma_max/sigma_min per face (1 = perfectly conformal).
-    area : (M,) — log2(det_J / median(det_J)); 0 = median area ratio.
-    """
-    e1 = V[F[:, 1]] - V[F[:, 0]]
-    e2 = V[F[:, 2]] - V[F[:, 0]]
-
-    t1 = e1 / np.linalg.norm(e1, axis=1, keepdims=True).clip(1e-15)
-    n = np.cross(e1, e2)
-    n /= np.linalg.norm(n, axis=1, keepdims=True).clip(1e-15)
-    t2 = np.cross(n, t1)
-
-    q1x = np.einsum("ij,ij->i", e1, t1)
-    q1y = np.einsum("ij,ij->i", e1, t2)
-    q2x = np.einsum("ij,ij->i", e2, t1)
-    q2y = np.einsum("ij,ij->i", e2, t2)
-
-    du1 = uv[F[:, 1]] - uv[F[:, 0]]
-    du2 = uv[F[:, 2]] - uv[F[:, 0]]
-
-    det = q1x * q2y - q2x * q1y
-    degen = np.abs(det) < 1e-15
-    det_safe = np.where(degen, 1.0, det)
-
-    iq00 = q2y / det_safe
-    iq01 = -q2x / det_safe
-    iq10 = -q1y / det_safe
-    iq11 = q1x / det_safe
-
-    M = len(F)
-    J = np.empty((M, 2, 2), dtype=np.float64)
-    J[:, 0, 0] = du1[:, 0] * iq00 + du2[:, 0] * iq10
-    J[:, 0, 1] = du1[:, 0] * iq01 + du2[:, 0] * iq11
-    J[:, 1, 0] = du1[:, 1] * iq00 + du2[:, 1] * iq10
-    J[:, 1, 1] = du1[:, 1] * iq01 + du2[:, 1] * iq11
-
-    S = np.linalg.svd(J, compute_uv=False)
-    s1 = np.maximum(S[:, 0], 1e-15)
-    s2 = np.maximum(S[:, 1], 1e-15)
-    s1[degen] = 1.0
-    s2[degen] = 1.0
-
-    conformal = s1 / s2
-    det_J = s1 * s2
-    area = np.log2(det_J / np.maximum(np.median(det_J), 1e-15))
-
-    return conformal, area
 
 
 # ---------------------------------------------------------------------------

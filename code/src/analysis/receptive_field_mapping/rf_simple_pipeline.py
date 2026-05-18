@@ -250,8 +250,9 @@ def run_simple_rf_mapping(
                 if len(spike_unique_vtx) > 0:
                     _slim_cache_path = None
                     if proj_method == "slim":
-                        _slim_cache_path = forearm_ply_path.with_name(
-                            forearm_ply_path.stem + "_slim_uv.npz"
+                        _slim_cache_path = (
+                            database_path / '4_analysed' / 'forearm_slim_uv'
+                            / session_id / f"{session_id}_slim_uv.npz"
                         )
                     uv_spikes = project_to_2d(
                         forearm_vertices[spike_unique_vtx], forearm_vertices, centroid,
