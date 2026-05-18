@@ -126,6 +126,73 @@ def map_receptive_fields_simple_flow(
     )
 
 
+@flow(name="precompute_forearm_slim_uv")
+def precompute_forearm_slim_uv_flow(
+    input_items: List[Tuple[Path, Path]],
+    force_processing: bool = False,
+    n_iter: int = 40,
+) -> List[Path]:
+    """Precompute and cache SLIM UV maps for all sessions.
+
+    For each session, loads the forearm PLY (via load_or_build_forearm_mesh)
+    and spike_positions.csv (from map_receptive_fields_simple output), runs
+    SLIM, and caches the UV map next to the PLY as
+    ``<stem>_slim_uv.npz``.
+    """
+    from analysis.receptive_field_mapping.forearm_slim_uv import (
+        precompute_forearm_slim_uv as _precompute,
+    )
+    from analysis.receptive_field_mapping.rf_data_loader import resolve_forearm_ply
+    from analysis.touch_analytics.pipeline_shared import session_id_from_path
+    from utils.should_process_task import should_process_task
+
+    print(f"[SLIM UV] Precomputing SLIM UV maps for {len(input_items)} item(s)...")
+    if not input_items:
+        return []
+
+    results: List[Path] = []
+
+    for csv_path, db_path in input_items:
+        session_id = session_id_from_path(csv_path)
+
+        forearm_ply_path = resolve_forearm_ply(csv_path.parent, session_id)
+        if forearm_ply_path is None:
+            raise ValueError(
+                f"[SLIM UV] {session_id}: forearm PLY not found in {csv_path.parent} — "
+                "run forearm extraction first."
+            )
+
+        spike_csv = (
+            db_path / '4_analysed' / 'receptive_field_maps_simple'
+            / session_id / 'spike_positions.csv'
+        )
+
+        cache_path = forearm_ply_path.with_name(
+            forearm_ply_path.stem + "_slim_uv.npz"
+        )
+
+        if not should_process_task(
+            input_paths=[forearm_ply_path, spike_csv],
+            output_paths=[cache_path],
+            force=force_processing,
+        ):
+            print(f"[SLIM UV] {session_id}: up-to-date, skipping.")
+            results.append(cache_path)
+            continue
+
+        print(f"[SLIM UV] {session_id}: computing SLIM UV map (n_iter={n_iter})...")
+        result = _precompute(
+            forearm_ply_path=forearm_ply_path,
+            spike_positions_csv=spike_csv,
+            cache_path=cache_path,
+            n_iter=n_iter,
+        )
+        print(f"[SLIM UV] {session_id}: cached → {result.name}")
+        results.append(result)
+
+    return results
+
+
 @flow(name="map_single_touch_rf")
 def map_single_touch_rf_flow(
     input_items: List[Tuple[Path, Path]],
@@ -1066,6 +1133,7 @@ def run_batch_analysis(
         ("touch_series_transforms", touch_series_transforms_flow),
         ("set_rf_camera_settings", set_rf_camera_settings_flow),
         ("map_receptive_fields_simple", map_receptive_fields_simple_flow),
+        ("precompute_forearm_slim_uv", precompute_forearm_slim_uv_flow),
         ("touch_feature_extraction", touch_feature_extraction_flow),
         ("map_population_rf_grid", map_population_rf_grid_flow),
         ("reduce_population_rf_grid", reduce_population_rf_grid_flow),
@@ -1240,6 +1308,9 @@ def run_batch_analysis(
                         kwargs["show_interactive"] = options["show_interactive"]
                     if "save_diagnostics" in options:
                         kwargs["save_diagnostics"] = bool(options["save_diagnostics"])
+                    if task_name == "precompute_forearm_slim_uv":
+                        if "n_iter" in options:
+                            kwargs["n_iter"] = int(options["n_iter"])
                     if options.get("projection_method"):
                         kwargs["projection_method"] = options["projection_method"]
                     if "disjoint_mask_distance_mm" in options:

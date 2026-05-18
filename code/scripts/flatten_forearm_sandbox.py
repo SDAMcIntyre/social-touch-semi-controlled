@@ -58,6 +58,10 @@ import open3d as o3d
 import pyvista as pv
 import trimesh
 import trimesh.repair
+from PyQt5.QtWidgets import (
+    QApplication, QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout, QWidget,
+)
+from pyvistaqt import QtInteractor
 
 # ---------------------------------------------------------------------------
 # Extend sys.path so pipeline helpers can be imported without installing
@@ -66,6 +70,12 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent.parent   # …/social-touch-
 _SRC = _REPO_ROOT / "code" / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
+
+from analysis.receptive_field_mapping._slim_helpers import (  # noqa: E402
+    clean_mesh,
+    boundary_loop,
+    canonicalise_uv,
+)
 
 # ---------------------------------------------------------------------------
 # User-editable constants — edit these before running
@@ -137,11 +147,142 @@ def load_pcd(path: str) -> tuple[np.ndarray, np.ndarray | None]:
     return points, colors
 
 
+class _CenterPickerWindow(QWidget):
+    """Qt window with a 3D point-cloud view, Ctrl+click picking, and
+    vertex-ID text entry.
+
+    Two ways to select a vertex:
+    - **Ctrl+click** on the point cloud in the 3D view.
+    - Type a vertex index in the text field and click **Show**.
+
+    Both methods place a red sphere on the selected vertex.  Click
+    **Confirm** to accept.  Closing the window without confirming leaves
+    ``result`` as ``None``.
+    """
+
+    def __init__(self, points: np.ndarray, colors: np.ndarray | None):
+        import vtk as _vtk
+        from scipy.spatial import cKDTree
+
+        super().__init__()
+        self.points = points
+        self.result: np.ndarray | None = None
+        self._current_idx: int | None = None
+        self._tree = cKDTree(points)
+
+        self.setWindowTitle("Select Center Point")
+        self.resize(900, 650)
+
+        root = QVBoxLayout(self)
+
+        # -- 3D view --
+        self.plotter = QtInteractor(self)
+        cloud = pv.PolyData(points)
+        if colors is not None:
+            cloud["RGB"] = (colors * 255).astype(np.uint8)
+            self.plotter.add_mesh(
+                cloud, name="forearm_cloud", scalars="RGB", rgb=True,
+                point_size=4, render_points_as_spheres=True,
+            )
+        else:
+            self.plotter.add_mesh(
+                cloud, name="forearm_cloud", color="lightblue",
+                point_size=4, render_points_as_spheres=True,
+            )
+        root.addWidget(self.plotter.interactor, stretch=1)
+
+        # -- Ctrl+click picking via vtkPointPicker --
+        self._vtk_picker = _vtk.vtkPointPicker()
+        self._vtk_picker.SetTolerance(0.025)
+        self.plotter.iren.interactor.AddObserver(
+            "LeftButtonPressEvent", self._on_ctrl_click, 1.0,
+        )
+
+        # -- Controls row --
+        row = QHBoxLayout()
+        row.addWidget(QLabel(f"Vertex ID (0–{len(points) - 1}):"))
+        self._id_edit = QLineEdit()
+        self._id_edit.setText("8000")
+        row.addWidget(self._id_edit)
+
+        self._show_btn = QPushButton("Show")
+        self._show_btn.clicked.connect(self._on_show)
+        row.addWidget(self._show_btn)
+
+        self._confirm_btn = QPushButton("Confirm")
+        self._confirm_btn.setEnabled(False)
+        self._confirm_btn.clicked.connect(self._on_confirm)
+        row.addWidget(self._confirm_btn)
+
+        self._status = QLabel("Ctrl+Click on the cloud or type a vertex ID.")
+        row.addWidget(self._status, stretch=1)
+        root.addLayout(row)
+
+    # -- Ctrl+click handler ---------------------------------------------------
+
+    def _on_ctrl_click(self, interactor, _event):
+        if not interactor.GetControlKey():
+            return
+
+        x, y = interactor.GetEventPosition()
+        self._vtk_picker.Pick(x, y, 0, self.plotter.renderer)
+
+        if self._vtk_picker.GetPointId() < 0:
+            return
+
+        pick_pos = np.array(self._vtk_picker.GetPickPosition())
+        _, closest_idx = self._tree.query(pick_pos)
+        self._select_vertex(int(closest_idx))
+
+    # -- Text-entry handler ---------------------------------------------------
+
+    def _on_show(self):
+        text = self._id_edit.text().strip()
+        try:
+            idx = int(text)
+        except ValueError:
+            self._status.setText(f"Invalid input: '{text}' — enter an integer.")
+            return
+        if idx < 0 or idx >= len(self.points):
+            self._status.setText(f"Out of range: must be 0–{len(self.points) - 1}.")
+            return
+        self._select_vertex(idx)
+
+    # -- Shared selection logic -----------------------------------------------
+
+    def _select_vertex(self, idx: int):
+        coord = self.points[idx]
+        self._current_idx = idx
+        self._id_edit.setText(str(idx))
+        self.plotter.add_mesh(
+            pv.Sphere(radius=4.0, center=coord.tolist()),
+            color="red", name="center_pick_sphere",
+        )
+        self.plotter.render()
+        self._confirm_btn.setEnabled(True)
+        self._status.setText(
+            f"Vertex {idx}: ({coord[0]:.6f}, {coord[1]:.6f}, {coord[2]:.6f})"
+        )
+
+    def _on_confirm(self):
+        if self._current_idx is not None:
+            self.result = self.points[self._current_idx].copy()
+        self.close()
+
+    def closeEvent(self, event):
+        self.plotter.close()
+        super().closeEvent(event)
+
+
 def pick_center_point(
     points: np.ndarray,
     colors: np.ndarray | None,
 ) -> np.ndarray:
-    """Open an interactive PyVista window and return the Ctrl+clicked vertex.
+    """Open an interactive PyVista+Qt window and return the selected vertex.
+
+    The user enters a vertex index in a text field, clicks **Show** to
+    preview it as a red sphere on the point cloud, then clicks **Confirm**
+    to accept.
 
     Parameters
     ----------
@@ -154,76 +295,64 @@ def pick_center_point(
     Returns
     -------
     np.ndarray
-        Shape (3,), dtype float64 — the 3D coordinate of the picked vertex.
+        Shape (3,), dtype float64 — the 3D coordinate of the selected vertex.
 
     Raises
     ------
     RuntimeError
-        If the user closes the window without picking any point.
+        If the user closes the window without confirming a point.
     """
-    cloud = pv.PolyData(points)
-    if colors is not None:
-        cloud["RGB"] = (colors * 255).astype(np.uint8)
+    app = QApplication.instance() or QApplication(sys.argv)
+    win = _CenterPickerWindow(points, colors)
+    win.show()
+    app.exec_()
 
-    plotter = pv.Plotter(title="Select Center Point — Ctrl+Click")
-
-    if colors is not None:
-        plotter.add_mesh(
-            cloud,
-            name="forearm_cloud",
-            scalars="RGB",
-            rgb=True,
-            point_size=4,
-            render_points_as_spheres=True,
-        )
-    else:
-        plotter.add_mesh(
-            cloud,
-            name="forearm_cloud",
-            color="lightblue",
-            point_size=4,
-            render_points_as_spheres=True,
-        )
-
-    plotter.add_text(
-        "Ctrl+Click to pick center. Close window (Q) to confirm.",
-        position="upper_left",
-        font_size=10,
-    )
-
-    _picked = [None]
-    _sphere_actor = [None]
-
-    def _on_click(interactor, event):
-        if not interactor.GetControlKey():
-            interactor.GetInteractorStyle().OnLeftButtonDown()
-            return
-        pos = interactor.GetEventPosition()
-        picker = interactor.GetPicker()
-        picker.Pick(pos[0], pos[1], 0, plotter.renderer)
-        pick_pos = picker.GetPickPosition()
-        closest_id = cloud.find_closest_point(pick_pos)
-        coord = cloud.points[closest_id]
-        _picked[0] = coord
-        if _sphere_actor[0] is not None:
-            plotter.remove_actor(_sphere_actor[0])
-        _sphere_actor[0] = plotter.add_mesh(
-            pv.Sphere(radius=0.004, center=coord), color="red"
-        )
-        plotter.render()
-
-    plotter.iren.add_observer("LeftButtonPressEvent", _on_click)
-    plotter.show()
-
-    if _picked[0] is None:
+    if win.result is None:
         raise RuntimeError(
-            "No point was picked. Run the script again and Ctrl+Click on the "
-            "forearm to select a center point."
+            "No point was confirmed. Run the script again and enter a vertex "
+            "ID, click Show, then click Confirm."
         )
 
-    coord = _picked[0]
+    coord = win.result
     print(f"Picked center point: ({coord[0]:.6f}, {coord[1]:.6f}, {coord[2]:.6f})")
-    return np.array(_picked[0], dtype=np.float64)
+    return np.array(coord, dtype=np.float64)
+
+
+def show_mesh_inspector(
+    V: np.ndarray,
+    F: np.ndarray,
+    vertex_colors: np.ndarray | None,
+    center_vid: int | None,
+) -> None:
+    """Open a standalone PyVista window for interactive 3D mesh inspection.
+
+    Blocks until the user closes the window.
+    """
+    # Ensure a QApplication exists (the picker may have already created one).
+    _ = QApplication.instance() or QApplication(sys.argv)
+
+    # PyVista expects face arrays in [n, v0, v1, v2, n, v0, v1, v2, ...] format.
+    faces_pv = np.column_stack(
+        [np.full(len(F), 3, dtype=np.int64), F.astype(np.int64)]
+    ).ravel()
+    mesh = pv.PolyData(V, faces_pv)
+
+    plotter = pv.Plotter(title="Forearm mesh — 3D inspection")
+    if vertex_colors is not None:
+        mesh["RGB"] = (vertex_colors * 255).astype(np.uint8)
+        plotter.add_mesh(mesh, scalars="RGB", rgb=True, show_edges=False)
+    else:
+        plotter.add_mesh(mesh, color="lightblue", show_edges=False)
+
+    if center_vid is not None:
+        c = V[center_vid]
+        # Sphere radius scaled to ~1% of mesh diagonal for visibility.
+        diag = float(np.linalg.norm(V.max(axis=0) - V.min(axis=0)))
+        plotter.add_mesh(
+            pv.Sphere(radius=diag * 0.01, center=c.tolist()), color="red"
+        )
+
+    plotter.show()
 
 
 def build_mesh(ply_path: Path, method: str) -> trimesh.Trimesh:
@@ -289,99 +418,6 @@ def build_mesh(ply_path: Path, method: str) -> trimesh.Trimesh:
         )
 
 
-def clean_mesh(mesh: trimesh.Trimesh) -> tuple[np.ndarray, np.ndarray]:
-    """Keep the largest connected component, fix winding, drop orphan vertices.
-
-    Parameters
-    ----------
-    mesh:
-        Input trimesh (may have multiple components, flipped faces, or
-        unreferenced vertices).
-
-    Returns
-    -------
-    V : np.ndarray
-        Vertex positions, shape (N, 3), float64.
-    F : np.ndarray
-        Face indices (into V), shape (M, 3), int64.
-
-    Raises
-    ------
-    ValueError
-        If the mesh has zero faces after cleaning (completely degenerate
-        input or wrong PLY file).
-    """
-    # Split into connected components; keep the one with the most vertices.
-    components = mesh.split(only_watertight=False)
-    if len(components) == 0:
-        raise ValueError(
-            "mesh.split() returned no components — the mesh is empty or "
-            "entirely degenerate."
-        )
-
-    largest = max(components, key=lambda m: len(m.vertices))
-
-    # Fix face winding for consistent outward normals.
-    trimesh.repair.fix_winding(largest)
-
-    # Remove vertices that are not referenced by any face.
-    largest.remove_unreferenced_vertices()
-
-    # libigl LSCM/harmonic/ARAP require a strictly manifold mesh.
-    # BPA output frequently has non-manifold edges; clean via Open3D.
-    o3d_mesh = o3d.geometry.TriangleMesh(
-        vertices=o3d.utility.Vector3dVector(largest.vertices),
-        triangles=o3d.utility.Vector3iVector(largest.faces),
-    )
-    o3d_mesh.remove_duplicated_vertices()
-    o3d_mesh.remove_duplicated_triangles()
-    o3d_mesh.remove_degenerate_triangles()
-    o3d_mesh.remove_non_manifold_edges()
-
-    V = np.asarray(o3d_mesh.vertices, dtype=np.float64)
-    F = np.asarray(o3d_mesh.triangles, dtype=np.int32)
-
-    if F.shape[0] == 0:
-        raise ValueError(
-            "Zero faces remain after cleaning the mesh. "
-            "Check that PLY_PATH points to a segmented forearm cloud, "
-            "not a raw scan or an empty file."
-        )
-
-    # libigl LSCM fails on "pinch" boundary vertices — vertices that appear as
-    # source in 2+ entries of igl.boundary_facets.  These arise from inconsistent
-    # face winding near BPA seam edges.  Remove faces around pinch vertices and
-    # re-take the largest connected component.  Small holes that remain are OK
-    # for LSCM (it does not require single-loop boundary topology).
-    import igl as _igl
-    for _ in range(10):
-        BF_pre, _, _ = _igl.boundary_facets(F.astype(np.int64))
-        source_counts: dict = {}
-        for _e in BF_pre:
-            _u = int(_e[0])
-            source_counts[_u] = source_counts.get(_u, 0) + 1
-        pinch = np.array([u for u, c in source_counts.items() if c > 1], dtype=np.int32)
-        if len(pinch) == 0:
-            break
-        bad_mask = np.any(np.isin(F, pinch), axis=1)
-        F = F[~bad_mask]
-        if F.shape[0] == 0:
-            raise ValueError("Mesh became empty during pinch-vertex repair.")
-        used = np.unique(F)
-        remap = np.full(V.shape[0], -1, dtype=np.int32)
-        remap[used] = np.arange(len(used), dtype=np.int32)
-        V, F = V[used], remap[F]
-        components = trimesh.Trimesh(vertices=V, faces=F, process=False).split(
-            only_watertight=False
-        )
-        if components:
-            lc = max(components, key=lambda m: len(m.vertices))
-            V = np.asarray(lc.vertices, dtype=np.float64)
-            F = np.asarray(lc.faces, dtype=np.int32)
-
-    return V, F
-
-
 # ---------------------------------------------------------------------------
 # Phase 2 — flattening baselines
 # ---------------------------------------------------------------------------
@@ -389,49 +425,108 @@ def clean_mesh(mesh: trimesh.Trimesh) -> tuple[np.ndarray, np.ndarray]:
 import igl
 
 
-def boundary_loop(F: np.ndarray) -> np.ndarray:
-    """Return the ordered boundary vertex indices for the mesh."""
-    b = igl.boundary_loop(F)
-    if b is None or len(b) == 0:
-        raise RuntimeError(
-            "No boundary loop found — the mesh appears to be a closed surface. "
-            "Forearm meshes must have an open boundary for flattening."
+def flatten_lscm(
+    V: np.ndarray,
+    F: np.ndarray,
+    boundary: np.ndarray,
+    center_vid: int | None = None,
+) -> np.ndarray:
+    """Least-Squares Conformal Map with two pinned vertices.
+
+    When ``center_vid`` is given, pin it to UV origin ``(0, 0)`` and
+    ``boundary[0]`` to ``(1, 0)``. Otherwise pin two opposite boundary
+    vertices (legacy behaviour).
+    """
+    if center_vid is not None:
+        # Pin centre→(0,0) for translation gauge, boundary[0]→(1,0) for scale/rotation gauge.
+        b = np.array([int(center_vid), int(boundary[0])], dtype=np.int64)
+    else:
+        b = np.array(
+            [int(boundary[0]), int(boundary[len(boundary) // 2])], dtype=np.int64
         )
-    return b
-
-
-def flatten_lscm(V: np.ndarray, F: np.ndarray, boundary: np.ndarray) -> np.ndarray:
-    """Least-Squares Conformal Map with two pinned boundary vertices."""
-    # Pin boundary[0] → (0, 0) and the opposite vertex → (1, 0) to fix gauge freedom.
-    b = np.array([boundary[0], boundary[len(boundary) // 2]], dtype=np.int32)
     bc = np.array([[0.0, 0.0], [1.0, 0.0]], dtype=np.float64)
     uv, _ = igl.lscm(V, F, b, bc)
     if np.any(np.isnan(uv)):
         raise RuntimeError("LSCM produced NaN values — mesh may be degenerate.")
-    return uv.astype(np.float64)
+    uv = uv.astype(np.float64)
+
+    if center_vid is not None:
+        # LSCM already pins these by construction; reapply for layout symmetry
+        # with the other methods (centre at origin, boundary[0] on +x).
+        uv = canonicalise_uv(uv, int(center_vid), int(boundary[0]))
+
+    return uv
 
 
-def flatten_harmonic(V: np.ndarray, F: np.ndarray, boundary: np.ndarray) -> np.ndarray:
-    """Harmonic map with boundary vertices uniformly distributed on the unit circle."""
+def flatten_harmonic(
+    V: np.ndarray,
+    F: np.ndarray,
+    boundary: np.ndarray,
+    center_vid: int | None = None,
+) -> np.ndarray:
+    """Harmonic map with boundary vertices uniformly distributed on the unit circle.
+
+    When ``center_vid`` is given, the centre is **not** added as a Dirichlet
+    constraint — the Tutte / Rado-Kneser-Choquet bijectivity guarantee only
+    holds when interior vertices are free.  The centre is placed at the UV
+    origin via a rigid post-processing similarity transform instead.
+    """
     n_b = len(boundary)
     angles = np.linspace(0.0, 2.0 * np.pi, n_b, endpoint=False)
     boundary_uv = np.column_stack([np.cos(angles), np.sin(angles)])
-    uv = igl.harmonic(V, F, boundary.astype(np.int32), boundary_uv, 1)
+
+    b = boundary.astype(np.int32)
+    bc = boundary_uv
+
+    uv = igl.harmonic(V, F, b, bc, 1)
     if np.any(np.isnan(uv)):
         raise RuntimeError("Harmonic map produced NaN values — mesh may be degenerate.")
-    return uv.astype(np.float64)
+    uv = uv.astype(np.float64)
+
+    if center_vid is not None:
+        if int(center_vid) in set(int(v) for v in boundary):
+            raise ValueError(
+                f"center_vid {int(center_vid)} is on the mesh boundary — "
+                "it must be an interior vertex for centre-aligned flattening."
+            )
+        uv = canonicalise_uv(uv, int(center_vid), int(boundary[0]))
+
+    return uv
 
 
-def flatten_arap(V: np.ndarray, F: np.ndarray, boundary: np.ndarray) -> np.ndarray:
-    """As-Rigid-As-Possible flattening, initialised from the harmonic map."""
+def flatten_arap(
+    V: np.ndarray,
+    F: np.ndarray,
+    boundary: np.ndarray,
+    center_vid: int | None = None,
+) -> np.ndarray:
+    """As-Rigid-As-Possible flattening, initialised from the harmonic map.
+
+    Only boundary vertices are pinned (to the unit circle).  When
+    ``center_vid`` is given, the centre is moved to the UV origin via a
+    rigid similarity transform after the solve — the same reasoning as
+    ``flatten_harmonic``: pinning an interior vertex inside the solve
+    breaks the bijectivity guarantee and induces fold-overs.
+    """
     n_b = len(boundary)
     angles = np.linspace(0.0, 2.0 * np.pi, n_b, endpoint=False)
-    bc = np.column_stack([np.cos(angles), np.sin(angles)])
+    boundary_uv = np.column_stack([np.cos(angles), np.sin(angles)])
 
-    uv = flatten_harmonic(V, F, boundary)
+    if center_vid is not None and int(center_vid) in set(int(v) for v in boundary):
+        raise ValueError(
+            f"center_vid {int(center_vid)} is on the mesh boundary — "
+            "it must be an interior vertex for centre-aligned flattening."
+        )
+
+    pin_idx = boundary.astype(np.int32)
+    bc = boundary_uv
+
+    # Use boundary-only harmonic init (no centre pin) so the initial guess
+    # is itself flip-free per Rado-Kneser-Choquet.
+    uv = flatten_harmonic(V, F, boundary, center_vid=None)
 
     data = igl.ARAPData()
-    igl.arap_precomputation(V, F.astype(np.int64), 2, boundary.astype(np.int32), data)
+    igl.arap_precomputation(V, F.astype(np.int64), 2, pin_idx, data)
     for _ in range(20):
         uv_new = igl.arap_solve(bc, data, uv)
         rel_change = np.linalg.norm(uv_new - uv) / (np.linalg.norm(uv) + 1e-12)
@@ -441,7 +536,69 @@ def flatten_arap(V: np.ndarray, F: np.ndarray, boundary: np.ndarray) -> np.ndarr
 
     if np.any(np.isnan(uv)):
         raise RuntimeError("ARAP produced NaN values — mesh may be degenerate.")
-    return uv.astype(np.float64)
+    uv = uv.astype(np.float64)
+
+    if center_vid is not None:
+        uv = canonicalise_uv(uv, int(center_vid), int(boundary[0]))
+
+    return uv
+
+
+def compute_face_distortion(
+    V: np.ndarray,
+    F: np.ndarray,
+    uv: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Per-face distortion via Jacobian SVD of the 3D-to-UV affine map.
+
+    Returns
+    -------
+    conformal : (M,) — sigma_max/sigma_min per face (1 = perfectly conformal).
+    area : (M,) — log2(det_J / median(det_J)); 0 = median area ratio.
+    """
+    e1 = V[F[:, 1]] - V[F[:, 0]]
+    e2 = V[F[:, 2]] - V[F[:, 0]]
+
+    t1 = e1 / np.linalg.norm(e1, axis=1, keepdims=True).clip(1e-15)
+    n = np.cross(e1, e2)
+    n /= np.linalg.norm(n, axis=1, keepdims=True).clip(1e-15)
+    t2 = np.cross(n, t1)
+
+    q1x = np.einsum("ij,ij->i", e1, t1)
+    q1y = np.einsum("ij,ij->i", e1, t2)
+    q2x = np.einsum("ij,ij->i", e2, t1)
+    q2y = np.einsum("ij,ij->i", e2, t2)
+
+    du1 = uv[F[:, 1]] - uv[F[:, 0]]
+    du2 = uv[F[:, 2]] - uv[F[:, 0]]
+
+    det = q1x * q2y - q2x * q1y
+    degen = np.abs(det) < 1e-15
+    det_safe = np.where(degen, 1.0, det)
+
+    iq00 = q2y / det_safe
+    iq01 = -q2x / det_safe
+    iq10 = -q1y / det_safe
+    iq11 = q1x / det_safe
+
+    M = len(F)
+    J = np.empty((M, 2, 2), dtype=np.float64)
+    J[:, 0, 0] = du1[:, 0] * iq00 + du2[:, 0] * iq10
+    J[:, 0, 1] = du1[:, 0] * iq01 + du2[:, 0] * iq11
+    J[:, 1, 0] = du1[:, 1] * iq00 + du2[:, 1] * iq10
+    J[:, 1, 1] = du1[:, 1] * iq01 + du2[:, 1] * iq11
+
+    S = np.linalg.svd(J, compute_uv=False)
+    s1 = np.maximum(S[:, 0], 1e-15)
+    s2 = np.maximum(S[:, 1], 1e-15)
+    s1[degen] = 1.0
+    s2[degen] = 1.0
+
+    conformal = s1 / s2
+    det_J = s1 * s2
+    area = np.log2(det_J / np.maximum(np.median(det_J), 1e-15))
+
+    return conformal, area
 
 
 # ---------------------------------------------------------------------------
@@ -460,8 +617,11 @@ def plot_panels(
     uv_arap: np.ndarray,
     uv_harmonic: np.ndarray,
     colors: np.ndarray | None = None,
+    center_vertex_idx: int | None = None,
 ) -> plt.Figure:
     """Render the 3D mesh and three 2D flattenings in a single figure."""
+    from datetime import datetime
+
     fig = plt.figure(figsize=(16, 4))
 
     # Per-face colors: average the three vertex colors for each triangle.
@@ -482,6 +642,9 @@ def plot_panels(
         surf.set_facecolors(face_colors)
     else:
         surf.set_facecolors("steelblue")
+    if center_vertex_idx is not None:
+        c = V[center_vertex_idx]
+        ax3d.scatter(c[0], c[1], c[2], color="red", s=60, zorder=10)
     ax3d.set_title("Input mesh (3D)")
 
     # -- 2D flattening panels -------------------------------------------------
@@ -500,8 +663,70 @@ def plot_panels(
         else:
             tri = matplotlib.tri.Triangulation(uv[:, 0], uv[:, 1], F)
             ax.triplot(tri, color="steelblue", linewidth=0.4)
+        if center_vertex_idx is not None:
+            cx, cy = uv[center_vertex_idx]
+            ax.plot(cx, cy, "o", color="red", markersize=6, zorder=10)
         ax.set_title(title)
         ax.set_aspect("equal")
+
+    fig.text(
+        0.99, 0.01, datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        ha="right", va="bottom", fontsize=7, color="gray",
+    )
+
+    return fig
+
+
+def plot_distortion_panels(
+    V: np.ndarray,
+    F: np.ndarray,
+    uvs: dict[str, np.ndarray],
+    center_vertex_idx: int | None = None,
+) -> plt.Figure:
+    """Render per-face conformal and area distortion for each flattening method.
+
+    Layout: 2 rows (conformal, area) x N columns (one per method).
+    """
+    from datetime import datetime
+
+    methods = list(uvs.keys())
+    n = len(methods)
+    fig, axes = plt.subplots(2, n, figsize=(5 * n, 8))
+    if n == 1:
+        axes = axes[:, np.newaxis]
+
+    for col, name in enumerate(methods):
+        uv = uvs[name]
+        conformal, area_dist = compute_face_distortion(V, F, uv)
+        polys = uv[F]
+
+        ax = axes[0, col]
+        pc = PolyCollection(polys, array=conformal, cmap="YlOrRd", edgecolors="none")
+        pc.set_clim(1.0, max(np.percentile(conformal, 95), 1.01))
+        ax.add_collection(pc)
+        ax.autoscale_view()
+        ax.set_aspect("equal")
+        ax.set_title(f"{name} — conformal (σ₁/σ₂)")
+        fig.colorbar(pc, ax=ax)
+        if center_vertex_idx is not None:
+            ax.plot(*uv[center_vertex_idx], "o", color="blue", markersize=4, zorder=10)
+
+        ax = axes[1, col]
+        vmax = max(abs(np.percentile(area_dist, 5)), abs(np.percentile(area_dist, 95)), 0.01)
+        pc = PolyCollection(polys, array=area_dist, cmap="RdBu_r", edgecolors="none")
+        pc.set_clim(-vmax, vmax)
+        ax.add_collection(pc)
+        ax.autoscale_view()
+        ax.set_aspect("equal")
+        ax.set_title(f"{name} — area (log₂ scale)")
+        fig.colorbar(pc, ax=ax)
+        if center_vertex_idx is not None:
+            ax.plot(*uv[center_vertex_idx], "o", color="blue", markersize=4, zorder=10)
+
+    fig.text(
+        0.99, 0.01, datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        ha="right", va="bottom", fontsize=7, color="gray",
+    )
 
     return fig
 
@@ -527,7 +752,7 @@ if __name__ == "__main__":
             f"Invalid CENTER_POINT value: {CENTER_POINT!r}. "
             "Must be None, 'interactive', or a (x, y, z) tuple."
         )
-    # center_3d will be passed to find_nearest_vertex() when center-weighted flattening is integrated
+    # center_3d is resolved to a cleaned-mesh vertex index below and passed to flatten_*().
 
     raw_mesh = build_mesh(ply_path, MESH_METHOD)
     V_raw, F_raw = clean_mesh(raw_mesh)
@@ -540,13 +765,37 @@ if __name__ == "__main__":
     else:
         vertex_colors = None
 
-    boundary = boundary_loop(F_raw)
-    uv_lscm = flatten_lscm(V_raw, F_raw, boundary)
-    uv_harmonic = flatten_harmonic(V_raw, F_raw, boundary)
-    uv_arap = flatten_arap(V_raw, F_raw, boundary)
+    # Resolve picked 3D point to nearest cleaned-mesh vertex index.
+    if center_3d is not None:
+        from scipy.spatial import cKDTree as _cKDTree
+        _, center_vid = _cKDTree(V_raw).query(center_3d)
+        center_vid = int(center_vid)
+    else:
+        center_vid = None
 
-    fig = plot_panels(V_raw, F_raw, uv_lscm, uv_arap, uv_harmonic, vertex_colors)
+    boundary = boundary_loop(F_raw)
+    uv_lscm = flatten_lscm(V_raw, F_raw, boundary, center_vid=center_vid)
+    uv_harmonic = flatten_harmonic(V_raw, F_raw, boundary, center_vid=center_vid)
+    uv_arap = flatten_arap(V_raw, F_raw, boundary, center_vid=center_vid)
+
+    fig = plot_panels(V_raw, F_raw, uv_lscm, uv_arap, uv_harmonic, vertex_colors, center_vid)
     fig.tight_layout()
-    out = ply_path.with_name(f"{ply_path.stem}_flattening.png")
+    from datetime import datetime as _dt
+    timestamp = _dt.now().strftime("%Y-%m-%d_%H-%M-%S")
+    out = ply_path.with_name(f"{ply_path.stem}_flattening_{timestamp}.png")
     fig.savefig(out, dpi=150)
     os.startfile(out)
+
+    distortion_fig = plot_distortion_panels(
+        V_raw, F_raw,
+        {"LSCM": uv_lscm, "ARAP": uv_arap, "Harmonic": uv_harmonic},
+        center_vertex_idx=center_vid,
+    )
+    distortion_fig.tight_layout()
+    distortion_out = ply_path.with_name(
+        f"{ply_path.stem}_flattening_distortion_{timestamp}.png"
+    )
+    distortion_fig.savefig(distortion_out, dpi=150)
+    os.startfile(distortion_out)
+
+    show_mesh_inspector(V_raw, F_raw, vertex_colors, center_vid)

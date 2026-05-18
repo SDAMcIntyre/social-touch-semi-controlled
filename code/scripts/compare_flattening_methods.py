@@ -7,7 +7,7 @@ Purpose
 -------
 Standalone comparison harness that flattens the same cleaned forearm mesh
 with six methods side-by-side and emits comparison figures plus a per-method
-distortion summary CSV.  Implements Phases 1–2 of the plan:
+distortion summary CSV.
 
     docs/development/plans/active/compare-flattening-methods.md
 
@@ -22,10 +22,11 @@ How to use
 2. Optionally set ``CENTER_POINT`` to a (x, y, z) tuple from a previous run.
 3. Run:  ``python code/scripts/compare_flattening_methods.py``
 
-Phase 2 (current)
------------------
-Runs all six methods, computes per-face distortion metrics, persists a summary
-CSV next to the PLY.  Figures (PNGs) are emitted in Phase 3.
+Output (saved next to the PLY)
+-------------------------------
+- ``*_compare_{timestamp}.png``            — 7-panel figure (3D + 6 UVs)
+- ``*_compare_{timestamp}_distortion.png`` — 6-column distortion maps
+- ``*_compare_{timestamp}_summary.csv``    — per-method distortion statistics
 """
 
 import os
@@ -59,6 +60,7 @@ from flatten_forearm_sandbox import (  # noqa: E402
     clean_mesh,
     pick_center_point,
     boundary_loop,
+    canonicalise_uv,
     flatten_lscm,
     flatten_harmonic,
     flatten_arap,
@@ -69,6 +71,11 @@ from flatten_forearm_sandbox import (  # noqa: E402
 )
 
 import igl  # noqa: E402  (must come after flatten_forearm_sandbox which also imports it)
+
+from analysis.receptive_field_mapping._slim_helpers import (  # noqa: E402
+    _has_flipped_triangles,
+    flatten_slim as _slim_base,
+)
 
 from analysis.receptive_field_mapping.rf_projection import (  # noqa: E402
     project_tangent_plane,
@@ -132,6 +139,40 @@ def _pca_rotation(V: np.ndarray) -> np.ndarray:
 # SLIM flattening
 # ---------------------------------------------------------------------------
 
+# _has_flipped_triangles is imported from _slim_helpers above.
+
+
+def _tutte_uniform_map(
+    F: np.ndarray,
+    n_vertices: int,
+    boundary: np.ndarray,
+    boundary_uv: np.ndarray,
+) -> np.ndarray:
+    # Tutte (1963): uniform-weight Laplacian + convex boundary => bijective.
+    # Used as a foldover-free fallback when the cotangent-harmonic init flips.
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.linalg import spsolve
+
+    e_all = np.vstack([F[:, [0, 1]], F[:, [1, 2]], F[:, [2, 0]]])
+    edges = np.unique(np.sort(e_all, axis=1), axis=0)
+    a = edges[:, 0]
+    b = edges[:, 1]
+    n_e = len(edges)
+    rows = np.concatenate([a, b, a, b])
+    cols = np.concatenate([b, a, a, b])
+    vals = np.concatenate([-np.ones(n_e), -np.ones(n_e), np.ones(n_e), np.ones(n_e)])
+    L = coo_matrix((vals, (rows, cols)), shape=(n_vertices, n_vertices)).tolil()
+
+    boundary = np.asarray(boundary, dtype=np.int64)
+    for bi in boundary:
+        L.rows[bi] = [int(bi)]
+        L.data[bi] = [1.0]
+    rhs = np.zeros((n_vertices, 2), dtype=np.float64)
+    rhs[boundary] = boundary_uv
+
+    return np.asarray(spsolve(L.tocsr(), rhs))
+
+
 def flatten_slim(
     V: np.ndarray,
     F: np.ndarray,
@@ -139,74 +180,49 @@ def flatten_slim(
     center_vid: int | None = None,
     n_iter: int = 40,
 ) -> np.ndarray:
-    """Symmetric-Dirichlet SLIM flattening, initialised from the harmonic map.
+    """Sandbox wrapper around the production ``flatten_slim``.
 
-    Parameters
-    ----------
-    V:
-        Vertex positions, shape (N, 3), float64.
-    F:
-        Face indices, shape (M, 3), int32.
-    boundary:
-        Ordered boundary vertex indices from ``boundary_loop(F)``.
-    center_vid:
-        Interior vertex index to pin to UV origin ``(0, 0)``.  When ``None``,
-        two opposite boundary vertices are pinned instead.
-    n_iter:
-        Number of SLIM solve iterations (each call to ``igl.slim_solve``
-        runs one global step).
-
-    Returns
-    -------
-    uv : np.ndarray
-        Shape (N, 2), float64 — UV coordinates per vertex.
-
-    Raises
-    ------
-    RuntimeError
-        If SLIM produces NaN values (degenerate mesh).
-
-    Notes
-    -----
-    ``igl.SLIM_ENERGY_TYPE_SYMMETRIC_DIRICHLET`` is the constant name in the
-    Python binding as of libigl 2.5.  If the installed version exposes a
-    different name or a plain integer enum, the script raises ``AttributeError``
-    immediately — do not add a fallback; inspect ``dir(igl)`` and fix the name.
+    Delegates to ``_slim_base`` (the production implementation in
+    ``_slim_helpers``).  When the cotangent-harmonic initialisation has
+    flipped triangles, falls back to the Tutte (uniform-weight Laplacian)
+    map for robustness during sandbox exploration.  The production module
+    does **not** include this fallback — it raises immediately.
     """
-    uv_init = flatten_harmonic(V, F, boundary, center_vid=center_vid)
-
-    if center_vid is not None:
-        b = np.array([int(boundary[0]), int(center_vid)], dtype=np.int32)
-        bc = np.array([[1.0, 0.0], [0.0, 0.0]], dtype=np.float64)
-    else:
-        b = np.array(
-            [int(boundary[0]), int(boundary[len(boundary) // 2])], dtype=np.int32
+    try:
+        return _slim_base(V, F, boundary, center_vid=center_vid, n_iter=n_iter)
+    except RuntimeError as exc:
+        if "flipped triangles" not in str(exc):
+            raise
+        # Tutte fallback for sandbox exploration only.
+        n_b = len(boundary)
+        angles = np.linspace(0.0, 2.0 * np.pi, n_b, endpoint=False)
+        boundary_uv = np.column_stack([np.cos(angles), np.sin(angles)])
+        uv_init = _tutte_uniform_map(F, V.shape[0], boundary, boundary_uv)
+        if _has_flipped_triangles(uv_init, F):
+            raise RuntimeError(
+                "Tutte fallback still produced flipped triangles — the mesh "
+                "topology is likely invalid (non-manifold edges, holes, or "
+                "boundary not mapping homeomorphically)."
+            )
+        # Run SLIM from the Tutte init.
+        empty_b = np.empty((0,), dtype=np.int32)
+        empty_bc = np.empty((0, 2), dtype=np.float64)
+        data = igl.slim_precompute(
+            V, F, uv_init,
+            igl.MappingEnergyType.SYMMETRIC_DIRICHLET,
+            empty_b, empty_bc, 0.0,
         )
-        bc = np.array([[1.0, 0.0], [-1.0, 0.0]], dtype=np.float64)
-
-    data = igl.SLIMData()
-    igl.slim_precompute(
-        V,
-        F,
-        uv_init,
-        data,
-        igl.SLIM_ENERGY_TYPE_SYMMETRIC_DIRICHLET,
-        b,
-        bc,
-        soft_p=1e5,
-    )
-
-    uv = uv_init
-    for _ in range(n_iter):
-        uv = igl.slim_solve(data, 1)
-
-    if np.any(np.isnan(uv)):
-        raise RuntimeError(
-            "SLIM produced NaN values — mesh may be degenerate or the energy "
-            "constant is incorrect for this libigl binding."
-        )
-
-    return uv.astype(np.float64)
+        uv = uv_init
+        for _ in range(n_iter):
+            uv = igl.slim_solve(data, 1)
+        if np.any(np.isnan(uv)):
+            raise RuntimeError("SLIM produced NaN values after Tutte fallback.")
+        uv = uv.astype(np.float64)
+        from analysis.receptive_field_mapping._slim_helpers import canonicalise_uv
+        if center_vid is not None:
+            b0 = int(boundary[0])
+            uv = canonicalise_uv(uv, int(center_vid), b0)
+        return uv
 
 
 # ---------------------------------------------------------------------------

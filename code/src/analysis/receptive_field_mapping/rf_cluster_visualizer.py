@@ -176,6 +176,12 @@ def render_forearm_heatmap(
         if camera_settings is not None:
             rotation_matrix = camera_settings_to_rotation(camera_settings)
 
+        slim_cache_path = None
+        if projection_method == "slim" and forearm_ply_path is not None:
+            slim_cache_path = forearm_ply_path.with_name(
+                forearm_ply_path.stem + "_slim_uv.npz"
+            )
+
         spike_xyz = spike_counts_df[['x', 'y', 'z']].to_numpy()
         counts = spike_counts_df['spike_count'].to_numpy()
 
@@ -186,12 +192,12 @@ def render_forearm_heatmap(
             except Exception:
                 logger.warning("Could not load forearm PLY for 2D projection: %s", forearm_ply_path, exc_info=True)
 
-        uv_points = project_to_2d(spike_xyz, forearm_vertices, projection_centroid, method=projection_method, rotation_matrix=rotation_matrix)
+        uv_points = project_to_2d(spike_xyz, forearm_vertices, projection_centroid, method=projection_method, rotation_matrix=rotation_matrix, slim_cache_path=slim_cache_path)
 
         forearm_uv = None
         if forearm_vertices is not None:
             try:
-                forearm_uv = project_to_2d(forearm_vertices, forearm_vertices, projection_centroid, method=projection_method, rotation_matrix=rotation_matrix)
+                forearm_uv = project_to_2d(forearm_vertices, forearm_vertices, projection_centroid, method=projection_method, rotation_matrix=rotation_matrix, slim_cache_path=slim_cache_path)
             except Exception:
                 logger.debug("Could not project forearm vertices to 2D for background.", exc_info=True)
 
@@ -214,6 +220,7 @@ def render_forearm_heatmap(
                     projection_centroid,
                     method=projection_method,
                     rotation_matrix=rotation_matrix,
+                    slim_cache_path=slim_cache_path,
                 )
             except Exception:
                 logger.debug(
@@ -227,6 +234,7 @@ def render_forearm_heatmap(
                     projection_centroid,
                     method=projection_method,
                     rotation_matrix=rotation_matrix,
+                    slim_cache_path=slim_cache_path,
                 )
             except Exception:
                 logger.debug(
