@@ -230,7 +230,6 @@ def visualize_population_rf_maps_flow(
     force_processing: bool = False,
     neuron_mode: str = "iff",
     min_overlap_pct: float = 25.0,
-    disjoint_mask_distance_mm: float = 10.0,
 ) -> None:
     """Render per-session 2D population RF heatmap PNGs projected via SLIM UV.
 
@@ -247,7 +246,6 @@ def visualize_population_rf_maps_flow(
         session_configs=input_items,
         neuron_mode=neuron_mode,
         min_overlap_pct=min_overlap_pct,
-        disjoint_mask_distance_mm=disjoint_mask_distance_mm,
         force_processing=force_processing,
     )
 
@@ -1359,8 +1357,6 @@ def run_batch_analysis(
                             kwargs["neuron_mode"] = options["neuron_mode"]
                         if "min_overlap_pct" in options:
                             kwargs["min_overlap_pct"] = float(options["min_overlap_pct"])
-                        if "disjoint_mask_distance_mm" in options:
-                            kwargs["disjoint_mask_distance_mm"] = float(options["disjoint_mask_distance_mm"])
                     if options.get("projection_method"):
                         kwargs["projection_method"] = options["projection_method"]
                     if "disjoint_mask_distance_mm" in options:
