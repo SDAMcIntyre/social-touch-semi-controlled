@@ -9,22 +9,31 @@ sandbox comparison harness can import a single authoritative copy.
 
 Functions
 ---------
-clean_mesh         — Keep largest component, fix winding, drop orphans,
-                     remove non-manifold edges and pinch vertices.
-boundary_loop      — Return ordered boundary vertex indices.
-canonicalise_uv    — Rigid 2D similarity: centre at origin, boundary[0] on +x.
+clean_mesh             — Keep largest component, fix winding, drop orphans,
+                         remove non-manifold edges and pinch vertices.
+boundary_loop          — Return ordered boundary vertex indices.
+canonicalise_uv        — Rigid 2D similarity: centre at origin, boundary[0] on +x.
+_tutte_uniform_map     — Tutte (1963) uniform-weight Laplacian; provably bijective
+                         on a convex boundary.  Used as a fallback for flatten_slim.
 _has_flipped_triangles — Return True when the UV map has inconsistent triangle
                          orientation.
-flatten_slim       — Symmetric-Dirichlet SLIM, initialised from a cotangent-
-                     harmonic map.  **Fail-fast** — raises RuntimeError if the
-                     harmonic init has flipped triangles.  No Tutte fallback.
+flatten_slim           — Symmetric-Dirichlet SLIM, initialised from a harmonic map.
+                         Falls back to Tutte, then trims degenerate faces if needed.
+                         Returns (V_out, F_out, uv) — V/F may be trimmed.
+compute_face_distortion — Per-face conformal and area distortion via Jacobian SVD.
 """
+
+import logging
 
 import numpy as np
 import igl
 import open3d as o3d
 import trimesh
 import trimesh.repair
+from scipy.sparse import coo_matrix
+from scipy.sparse.linalg import spsolve
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -175,43 +184,76 @@ def _has_flipped_triangles(uv: np.ndarray, F: np.ndarray) -> bool:
     return bool(np.any(cross > 0) and np.any(cross < 0))
 
 
+def _tutte_uniform_map(
+    F: np.ndarray,
+    n_vertices: int,
+    boundary: np.ndarray,
+    boundary_uv: np.ndarray,
+) -> np.ndarray:
+    """Tutte (1963) uniform-weight Laplacian with a convex boundary.
+
+    Provably bijective when the boundary maps homeomorphically to a convex
+    polygon (unit circle here).  Used as a fallback init for SLIM when the
+    cotangent-harmonic init produces flipped triangles.
+    """
+    e_all = np.vstack([F[:, [0, 1]], F[:, [1, 2]], F[:, [2, 0]]])
+    edges = np.unique(np.sort(e_all, axis=1), axis=0)
+    a = edges[:, 0]
+    b = edges[:, 1]
+    n_e = len(edges)
+    rows = np.concatenate([a, b, a, b])
+    cols = np.concatenate([b, a, a, b])
+    vals = np.concatenate([-np.ones(n_e), -np.ones(n_e), np.ones(n_e), np.ones(n_e)])
+    L = coo_matrix((vals, (rows, cols)), shape=(n_vertices, n_vertices)).tolil()
+
+    boundary = np.asarray(boundary, dtype=np.int64)
+    for bi in boundary:
+        L.rows[int(bi)] = [int(bi)]
+        L.data[int(bi)] = [1.0]
+    rhs = np.zeros((n_vertices, 2), dtype=np.float64)
+    rhs[boundary] = boundary_uv
+
+    return np.asarray(spsolve(L.tocsr(), rhs), dtype=np.float64)
+
+
 def flatten_slim(
     V: np.ndarray,
     F: np.ndarray,
     boundary: np.ndarray,
     center_vid: int | None = None,
     n_iter: int = 40,
-) -> np.ndarray:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Symmetric-Dirichlet SLIM flattening, initialised from a harmonic map.
-
-    Production version — **no Tutte fallback**.  If the cotangent-harmonic
-    initialisation has flipped triangles, raises ``RuntimeError`` immediately
-    rather than silently degrading to a Tutte map.
 
     Mirrors libigl's ``tutorial/709_SLIM/param_2d_demo_iter.cpp``:
 
     * Initialise UV with the cotangent-harmonic map, **boundary-only**
       Dirichlet constraints (no interior pin — interior pins break the
       Rado-Kneser-Choquet bijectivity guarantee and create fold-overs).
-    * If the harmonic init has any flipped triangles, raise immediately.
-    * Run ``slim_precompute`` with **empty** ``b``/``bc`` and ``soft_p=0``
-      — SLIM optimises symmetric Dirichlet over the whole map without any
-      positional constraints.
+    * If the harmonic init has any flipped triangles, fall back to the
+      Tutte (uniform-weight Laplacian) map.  A ``logger.warning`` is
+      emitted when this fallback is taken.
+    * If the Tutte init still has ≤ ``_TRIM_FLIP_MAX`` flipped faces (a
+      sign of degenerate sliver triangles from BPA meshing rather than
+      global topology failure), the 1-ring neighbourhood of those faces is
+      excised from the mesh, the boundary and ``center_vid`` are re-located
+      via KDTree, and Tutte is recomputed on the trimmed mesh.  A second
+      ``logger.warning`` is emitted.  If flips persist after the trim,
+      ``RuntimeError`` is raised.
+    * Run ``slim_precompute`` with **empty** ``b``/``bc`` and ``soft_p=0``.
     * If ``center_vid`` is given, apply a rigid 2D similarity transform
       after the solve to place the centre at the UV origin.
 
-    Parameters
-    ----------
-    V:
-        Vertex positions, shape (N, 3), float64.
-    F:
-        Face indices, shape (M, 3), int32.
-    boundary:
-        Ordered boundary vertex indices from ``boundary_loop(F)``.
-    center_vid:
-        Interior vertex index to place at the UV origin post-solve.
-    n_iter:
-        Number of SLIM iterations.
+    Returns
+    -------
+    V_out : np.ndarray, shape (N', 3)
+        Vertex positions of the (possibly trimmed) mesh.
+    F_out : np.ndarray, shape (M', 3), int32
+        Face indices of the (possibly trimmed) mesh.
+    uv : np.ndarray, shape (N', 2), float64
+        SLIM UV coordinates.
+
+    In the common case (no trimming), ``V_out is V`` and ``F_out is F``.
 
     Raises
     ------
@@ -220,36 +262,122 @@ def flatten_slim(
     RuntimeError
         If the cotangent-harmonic initialisation produces NaN values.
     RuntimeError
-        If the cotangent-harmonic initialisation has flipped triangles —
-        the mesh topology may have non-manifold edges or ill-conditioned
-        geometry.  Re-mesh with a finer BPA radius or inspect the forearm PLY.
+        If the Tutte init still has flipped triangles after the 1-ring trim
+        (the mesh topology is too complex for boundary-only parameterisation).
     RuntimeError
         If SLIM produces NaN values after the solve.
     """
+    from scipy.spatial import KDTree as _KDTree
+
+    # Save the 3D position of the centre so we can re-locate it after any
+    # potential mesh trimming.
+    _center_3d: np.ndarray | None = (
+        V[int(center_vid)].copy() if center_vid is not None else None
+    )
+
     if center_vid is not None and int(center_vid) in set(int(v) for v in boundary):
         raise ValueError(
             f"center_vid {int(center_vid)} is on the mesh boundary — "
             "it must be an interior vertex for centre-aligned flattening."
         )
 
+    def _setup_boundary_uv(bdy: np.ndarray) -> np.ndarray:
+        angles = np.linspace(0.0, 2.0 * np.pi, len(bdy), endpoint=False)
+        return np.column_stack([np.cos(angles), np.sin(angles)])
+
     # Boundary-only harmonic init (no interior pin).
-    n_b = len(boundary)
-    angles = np.linspace(0.0, 2.0 * np.pi, n_b, endpoint=False)
-    boundary_uv = np.column_stack([np.cos(angles), np.sin(angles)])
-    b = boundary.astype(np.int32)
-    uv_init = igl.harmonic(V, F, b, boundary_uv, 1).astype(np.float64)
+    boundary_uv = _setup_boundary_uv(boundary)
+    uv_init = igl.harmonic(V, F, boundary.astype(np.int32), boundary_uv, 1).astype(
+        np.float64
+    )
     if np.any(np.isnan(uv_init)):
         raise RuntimeError(
             "Harmonic initialisation produced NaN — mesh may be degenerate."
         )
 
-    # Fail-fast: no Tutte fallback in production.
+    # Cotangent-harmonic can flip on ill-conditioned forearm topologies.
+    # Fall back to the Tutte (uniform-weight) map.
     if _has_flipped_triangles(uv_init, F):
-        raise RuntimeError(
+        logger.warning(
             "Cotangent-harmonic initialisation produced flipped triangles — "
-            "the mesh topology may have non-manifold edges or ill-conditioned "
-            "geometry. Re-mesh with a finer BPA radius or inspect the forearm PLY."
+            "falling back to Tutte (uniform-weight Laplacian) initialisation."
         )
+        uv_init = _tutte_uniform_map(F, V.shape[0], boundary, boundary_uv)
+
+        if _has_flipped_triangles(uv_init, F):
+            # Count flipped faces.
+            p0, p1, p2 = uv_init[F[:, 0]], uv_init[F[:, 1]], uv_init[F[:, 2]]
+            cross = (
+                (p1[:, 0] - p0[:, 0]) * (p2[:, 1] - p0[:, 1])
+                - (p1[:, 1] - p0[:, 1]) * (p2[:, 0] - p0[:, 0])
+            )
+            flipped_fi = np.where(cross < 0)[0]
+            n_flip = len(flipped_fi)
+
+            if n_flip > _TRIM_FLIP_MAX:
+                raise RuntimeError(
+                    f"Tutte fallback has {n_flip} flipped triangle(s) — too many "
+                    f"to repair by trimming (limit: {_TRIM_FLIP_MAX}).  The mesh "
+                    "topology may have severe non-manifold structure; re-mesh with "
+                    "a finer BPA radius or inspect the forearm PLY."
+                )
+
+            logger.warning(
+                "Tutte init has %d flipped face(s) — trimming 1-ring of "
+                "degenerate face vertices and retrying.",
+                n_flip,
+            )
+
+            # Excise the 1-ring neighbourhood of flipped face vertices.
+            bad_verts = set(int(v) for fi in flipped_fi for v in F[fi])
+            ring_mask = np.any(np.isin(F, list(bad_verts)), axis=1)
+            F_trim = F[~ring_mask]
+            if F_trim.shape[0] == 0:
+                raise RuntimeError(
+                    "Mesh became empty while trimming degenerate flip-faces."
+                )
+
+            used = np.unique(F_trim)
+            remap_arr = np.full(V.shape[0], -1, dtype=np.int32)
+            remap_arr[used] = np.arange(len(used), dtype=np.int32)
+            V_trim = V[used]
+            F_trim = remap_arr[F_trim]
+
+            # Keep the largest connected component.
+            comps = trimesh.Trimesh(
+                vertices=V_trim, faces=F_trim, process=False
+            ).split(only_watertight=False)
+            if not comps:
+                raise RuntimeError(
+                    "No components remain after trimming degenerate flip-faces."
+                )
+            lc = max(comps, key=lambda m: len(m.vertices))
+            V = np.asarray(lc.vertices, dtype=np.float64)
+            F = np.asarray(lc.faces, dtype=np.int32)
+
+            # Recompute boundary and boundary_uv for the trimmed mesh.
+            boundary = boundary_loop(F)
+            boundary_uv = _setup_boundary_uv(boundary)
+
+            # Re-locate center_vid in the trimmed mesh.
+            if _center_3d is not None:
+                _, center_vid = _KDTree(V).query(_center_3d)
+                center_vid = int(center_vid)
+                if center_vid in set(int(v) for v in boundary):
+                    raise ValueError(
+                        f"center_vid {center_vid} landed on the new mesh boundary "
+                        "after trimming — the spike centroid is in the excised region."
+                    )
+
+            # Recompute Tutte on the trimmed mesh.
+            uv_init = _tutte_uniform_map(F, V.shape[0], boundary, boundary_uv)
+            if _has_flipped_triangles(uv_init, F):
+                raise RuntimeError(
+                    "Tutte fallback still has flipped triangles after 1-ring trim — "
+                    "the mesh topology is too complex for boundary-only "
+                    "parameterisation.  Re-mesh with a finer BPA radius or inspect "
+                    "the forearm PLY."
+                )
 
     # libigl 709 tutorial pattern: empty constraints, soft_p=0.
     empty_b = np.empty((0,), dtype=np.int32)
@@ -277,4 +405,71 @@ def flatten_slim(
     if center_vid is not None:
         uv = canonicalise_uv(uv, int(center_vid), int(boundary[0]))
 
-    return uv
+    return V, F, uv
+
+
+# Maximum number of flipped faces that trigger the 1-ring trim fallback.
+# Beyond this count the failure is global, not local, and trimming would
+# remove too much of the mesh.
+_TRIM_FLIP_MAX: int = 10
+
+
+# ---------------------------------------------------------------------------
+# Distortion metrics
+# ---------------------------------------------------------------------------
+
+def compute_face_distortion(
+    V: np.ndarray,
+    F: np.ndarray,
+    uv: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Per-face distortion via Jacobian SVD of the 3D-to-UV affine map.
+
+    Returns
+    -------
+    conformal : (M,) float64 — σ_max/σ_min per face (1 = perfectly conformal).
+    area : (M,) float64 — log2(det_J / median(det_J)); 0 = median area ratio.
+    """
+    e1 = V[F[:, 1]] - V[F[:, 0]]
+    e2 = V[F[:, 2]] - V[F[:, 0]]
+
+    t1 = e1 / np.linalg.norm(e1, axis=1, keepdims=True).clip(1e-15)
+    n = np.cross(e1, e2)
+    n /= np.linalg.norm(n, axis=1, keepdims=True).clip(1e-15)
+    t2 = np.cross(n, t1)
+
+    q1x = np.einsum("ij,ij->i", e1, t1)
+    q1y = np.einsum("ij,ij->i", e1, t2)
+    q2x = np.einsum("ij,ij->i", e2, t1)
+    q2y = np.einsum("ij,ij->i", e2, t2)
+
+    du1 = uv[F[:, 1]] - uv[F[:, 0]]
+    du2 = uv[F[:, 2]] - uv[F[:, 0]]
+
+    det = q1x * q2y - q2x * q1y
+    degen = np.abs(det) < 1e-15
+    det_safe = np.where(degen, 1.0, det)
+
+    iq00 = q2y / det_safe
+    iq01 = -q2x / det_safe
+    iq10 = -q1y / det_safe
+    iq11 = q1x / det_safe
+
+    M_faces = len(F)
+    J = np.empty((M_faces, 2, 2), dtype=np.float64)
+    J[:, 0, 0] = du1[:, 0] * iq00 + du2[:, 0] * iq10
+    J[:, 0, 1] = du1[:, 0] * iq01 + du2[:, 0] * iq11
+    J[:, 1, 0] = du1[:, 1] * iq00 + du2[:, 1] * iq10
+    J[:, 1, 1] = du1[:, 1] * iq01 + du2[:, 1] * iq11
+
+    S = np.linalg.svd(J, compute_uv=False)
+    s1 = np.maximum(S[:, 0], 1e-15)
+    s2 = np.maximum(S[:, 1], 1e-15)
+    s1[degen] = 1.0
+    s2[degen] = 1.0
+
+    conformal = s1 / s2
+    det_J = s1 * s2
+    area = np.log2(det_J / np.maximum(np.median(det_J), 1e-15))
+
+    return conformal, area

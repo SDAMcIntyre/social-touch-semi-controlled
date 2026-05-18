@@ -167,14 +167,20 @@ def precompute_forearm_slim_uv(
         "Running SLIM (n_iter=%d, center_vid=%d) for %s ...",
         n_iter, center_vid, forearm_ply_path.name,
     )
-    uv = flatten_slim(V, F, bloop, center_vid=center_vid, n_iter=n_iter)
+    V, F, uv = flatten_slim(V, F, bloop, center_vid=center_vid, n_iter=n_iter)
 
-    # 10. Collect provenance.
+    # 10. Re-derive center_vid and boundary after potential mesh trimming inside
+    #     flatten_slim.  In the common (no-trim) case these are unchanged.
+    _, center_vid = KDTree(V).query(centroid_3d)
+    center_vid = int(center_vid)
+    bloop = boundary_loop(F)
+
+    # 11. Collect provenance.
     ply_mtime = forearm_ply_path.stat().st_mtime
     spike_csv_mtime = spike_positions_csv.stat().st_mtime
     phash = _ply_hash(forearm_ply_path)
 
-    # 11. Write cache.
+    # 12. Write cache.
     np.savez(
         cache_path,
         V=V.astype(np.float64),
@@ -190,7 +196,12 @@ def precompute_forearm_slim_uv(
 
     logger.info("SLIM UV cache written → %s", cache_path)
 
-    # 12. Return path.
+    # 13. Save QC figures (300 DPI) next to the cache for visual verification.
+    from ._slim_qc_figures import save_slim_qc_figures
+    qc_path, dist_path = save_slim_qc_figures(V, F, uv, center_vid, cache_path)
+    logger.info("QC figures written → %s, %s", qc_path, dist_path)
+
+    # 14. Return path.
     return cache_path
 
 
