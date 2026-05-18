@@ -2,8 +2,9 @@
 
 **Date:** 2026-05-16
 **Author:** Basil Duvernoy
-**Status:** In Progress
+**Status:** Completed
 **Started:** 2026-05-16
+**Completed:** 2026-05-18 20:33
 **Base Branch:** `feature/center-point-picker-gui`
 **Branch:** `feature/compare-flattening-methods`
 
