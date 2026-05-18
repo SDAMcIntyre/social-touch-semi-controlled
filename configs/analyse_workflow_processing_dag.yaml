@@ -121,10 +121,25 @@ tasks:
     category: processing
     enabled: true
     options:
-      force_processing: true
+      force_processing: false
       n_iter: 40
     depends_on:
     - map_single_touch_rf
+
+  # Render per-session 2D population RF heatmap PNGs projected via SLIM UV.
+  # Produces one PNG per gesture subset (all, tap, stroke_proximal, stroke_distal)
+  # with a session-wide consistent colour scale.
+  # Output: 4_analysed/population_rf_maps/<session_id>/
+  visualize_population_rf_maps:
+    category: processing
+    enabled: true
+    options:
+      force_processing: true
+      neuron_mode: iff
+      min_overlap_pct: 25
+      median_filter_size: 5
+    depends_on: [map_single_touch_rf, set_rf_camera_settings, 
+        precompute_forearm_slim_uv]
 
   # Stage 2b (Feature Extraction): Per-session feature extraction. Each enabled feature extracts to its own folder.
   # Output: 4_analysed/touch_features/<feature>/<session>_touch_summary.csv
@@ -213,7 +228,7 @@ tasks:
     category: processing
     enabled: true
     options:
-      force_processing: true
+      force_processing: false
       extracted_features:
       - touch_count
       - mean_iff

@@ -25,6 +25,7 @@ from .rf_population_grid_metrics_pipeline import run_population_rf_grid_metrics,
 from .rf_population_grid_metrics_renderer import run_population_rf_grid_metrics_visualization
 from .rf_session_comparison_renderer import run_session_comparison_visualization
 from .rf_baseline_deviation import BaselineDeviationMetrics, compute_baseline_deviation
+from .rf_population_map_pipeline import run_population_rf_maps
 
 __all__ = [
     "project_to_2d",
@@ -50,4 +51,5 @@ __all__ = [
     "run_session_comparison_visualization",
     "BaselineDeviationMetrics",
     "compute_baseline_deviation",
+    "run_population_rf_maps",
 ]

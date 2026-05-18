@@ -100,6 +100,7 @@ def render_forearm_heatmap(
     render_context: 'RFRenderContext' = None,
     disjoint_mask_distance_mm: float = 8.0,
     camera_settings: dict = None,
+    slim_cache_path: 'Path | None' = None,
 ) -> None:
     """Render a 3D forearm heatmap of spike-count contact points and save as PNG.
 
@@ -175,12 +176,6 @@ def render_forearm_heatmap(
         rotation_matrix = None
         if camera_settings is not None:
             rotation_matrix = camera_settings_to_rotation(camera_settings)
-
-        slim_cache_path = None
-        if projection_method == "slim" and forearm_ply_path is not None:
-            slim_cache_path = forearm_ply_path.with_name(
-                forearm_ply_path.stem + "_slim_uv.npz"
-            )
 
         spike_xyz = spike_counts_df[['x', 'y', 'z']].to_numpy()
         counts = spike_counts_df['spike_count'].to_numpy()
