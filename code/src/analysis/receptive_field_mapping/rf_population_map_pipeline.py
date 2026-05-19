@@ -50,6 +50,7 @@ class _SessionCompositeData:
     sentinel: Path
     produced: List[Path] = field(default_factory=list)
     gesture_boundaries: dict = field(default_factory=dict)
+    vertex_data_npz: Path | None = None
 
 
 def run_population_rf_maps(
@@ -247,6 +248,7 @@ def run_population_rf_maps(
         output_dir.mkdir(parents=True, exist_ok=True)
         produced: List[Path] = []
         gesture_boundaries: dict = {}
+        per_gesture_grids: dict = {}
 
         for gtype, (slim_heatmap, n_touches, threshold) in results.items():
             title = (
@@ -260,8 +262,25 @@ def run_population_rf_maps(
                 forearm_uv, slim_faces, slim_V, slim_heatmap,
                 median_filter_size=median_filter_size,
             )
+            per_gesture_grids[gtype] = (grid_u, grid_v, grid_z)
+            if inflection_sigma is not None:
+                _fin = grid_z[np.isfinite(grid_z)]
+                _nan_ct = int(np.isnan(grid_z).sum())
+                logger.warning(
+                    "[DIAG] pre-inflection pass1 | gesture=%s | shape=%s | "
+                    "nan=%d/%d (%.1f%%) | finite: min=%.4f max=%.4f mean=%.4f | sigma=%.1f",
+                    gtype, grid_z.shape, _nan_ct, grid_z.size,
+                    100.0 * _nan_ct / grid_z.size,
+                    float(_fin.min()) if _fin.size > 0 else float('nan'),
+                    float(_fin.max()) if _fin.size > 0 else float('nan'),
+                    float(_fin.mean()) if _fin.size > 0 else float('nan'),
+                    inflection_sigma,
+                )
             boundary = (
-                compute_inflection_boundary(grid_z, grid_u, grid_v, inflection_sigma)
+                compute_inflection_boundary(
+                    grid_u, grid_v, grid_z, inflection_sigma,
+                    _diag_output_dir=output_dir, _diag_label=gtype,
+                )
                 if inflection_sigma is not None
                 else None
             )
@@ -281,7 +300,24 @@ def run_population_rf_maps(
             produced.append(png_path)
             print(f"[Population RF Maps] {session_id}: saved {png_path.name}")
 
-        _write_sentinel(sentinel, session_id, produced=produced, inflection_boundaries=gesture_boundaries)
+        vertex_data_npz = _save_vertex_data_npz(
+            output_dir=output_dir,
+            session_id=session_id,
+            forearm_uv=forearm_uv,
+            forearm_faces=slim_faces,
+            forearm_V=slim_V,
+            results=results,
+            per_gesture_grids=per_gesture_grids,
+            neuron_mode=neuron_mode,
+            min_overlap_pct=min_overlap_pct,
+            gesture_boundaries=gesture_boundaries,
+            inflection_sigma=inflection_sigma,
+        )
+        _write_sentinel(
+            sentinel, session_id, produced=produced,
+            inflection_boundaries=gesture_boundaries,
+            vertex_data_npz=vertex_data_npz,
+        )
         print(
             f"[Population RF Maps] {session_id}: done — {len(produced)} PNG(s) written."
         )
@@ -298,6 +334,7 @@ def run_population_rf_maps(
             sentinel=sentinel,
             produced=produced,
             gesture_boundaries=gesture_boundaries,
+            vertex_data_npz=vertex_data_npz,
         ))
 
     # ---- Pass 2: render composite PNGs with global colour scale + UV limits ----
@@ -341,8 +378,24 @@ def run_population_rf_maps(
                         median_filter_size=median_filter_size,
                     )
                     precomputed_grids[gtype] = (grid_u_g, grid_v_g, grid_z_g)
+                    if inflection_sigma is not None:
+                        _fin = grid_z_g[np.isfinite(grid_z_g)]
+                        _nan_ct = int(np.isnan(grid_z_g).sum())
+                        logger.warning(
+                            "[DIAG] pre-inflection pass2 | gesture=%s | shape=%s | "
+                            "nan=%d/%d (%.1f%%) | finite: min=%.4f max=%.4f mean=%.4f | sigma=%.1f",
+                            gtype, grid_z_g.shape, _nan_ct, grid_z_g.size,
+                            100.0 * _nan_ct / grid_z_g.size,
+                            float(_fin.min()) if _fin.size > 0 else float('nan'),
+                            float(_fin.max()) if _fin.size > 0 else float('nan'),
+                            float(_fin.mean()) if _fin.size > 0 else float('nan'),
+                            inflection_sigma,
+                        )
                     inflection_boundaries[gtype] = (
-                        compute_inflection_boundary(grid_z_g, grid_u_g, grid_v_g, inflection_sigma)
+                        compute_inflection_boundary(
+                            grid_u_g, grid_v_g, grid_z_g, inflection_sigma,
+                            _diag_output_dir=sd.output_dir, _diag_label=f"{sd.session_id}_{gtype}_composite",
+                        )
                         if inflection_sigma is not None
                         else None
                     )
@@ -370,7 +423,56 @@ def run_population_rf_maps(
                 f"[Population RF Maps] {sd.session_id}: saved {composite_path.name}"
             )
 
-        _write_sentinel(sd.sentinel, sd.session_id, produced=sd.produced, inflection_boundaries=sd.gesture_boundaries)
+        _write_sentinel(sd.sentinel, sd.session_id, produced=sd.produced,
+                        inflection_boundaries=sd.gesture_boundaries,
+                        vertex_data_npz=sd.vertex_data_npz)
+
+
+def _save_vertex_data_npz(
+    output_dir: Path,
+    session_id: str,
+    forearm_uv: np.ndarray,
+    forearm_faces: np.ndarray,
+    forearm_V: np.ndarray,
+    results: dict,
+    per_gesture_grids: dict,
+    neuron_mode: str,
+    min_overlap_pct: float,
+    gesture_boundaries: dict,
+    inflection_sigma: float | None,
+) -> Path:
+    npz_path = output_dir / f'{session_id}_rf_population_vertex_data.npz'
+
+    data_dict: dict = {
+        'forearm_uv': forearm_uv.astype(np.float64),
+        'forearm_faces': forearm_faces.astype(np.int32),
+        'forearm_V': forearm_V.astype(np.float64),
+        'session_id': np.array(session_id, dtype=object),
+        'neuron_mode': np.array(neuron_mode, dtype=object),
+        'min_overlap_pct': np.float64(min_overlap_pct),
+        'gesture_types': np.array(list(results.keys()), dtype=object),
+        'inflection_sigma': np.float64(inflection_sigma if inflection_sigma is not None else float('nan')),
+    }
+
+    for gtype in results.keys():
+        slim_heatmap, n_touches, threshold = results[gtype]
+        grid_u, grid_v, grid_z = per_gesture_grids[gtype]
+        data_dict[f'heatmap_{gtype}'] = slim_heatmap.astype(np.float64)
+        data_dict[f'n_touches_{gtype}'] = np.int64(n_touches)
+        data_dict[f'threshold_{gtype}'] = np.int64(threshold)
+        data_dict[f'grid_u_{gtype}'] = grid_u.astype(np.float64)
+        data_dict[f'grid_v_{gtype}'] = grid_v.astype(np.float64)
+        data_dict[f'grid_z_{gtype}'] = grid_z.astype(np.float64)
+
+        boundary = gesture_boundaries.get(gtype)
+        if boundary is not None:
+            data_dict[f'boundary_contour_uv_{gtype}'] = boundary.contour_uv.astype(np.float64)
+            data_dict[f'boundary_area_uv_{gtype}'] = np.float64(boundary.area_uv)
+            data_dict[f'boundary_centroid_uv_{gtype}'] = np.array(boundary.centroid_uv, dtype=np.float64)
+
+    np.savez(npz_path, **data_dict)
+    logger.info("[Population RF Maps] %s: saved vertex data NPZ → %s", session_id, npz_path.name)
+    return npz_path
 
 
 def _write_sentinel(
@@ -378,6 +480,7 @@ def _write_sentinel(
     session_id: str,
     produced: List[Path],
     inflection_boundaries: dict | None = None,
+    vertex_data_npz: Path | None = None,
 ) -> None:
     serialized_boundaries = {}
     if inflection_boundaries:
@@ -391,6 +494,8 @@ def _write_sentinel(
     }
     if serialized_boundaries:
         data['inflection_boundaries'] = serialized_boundaries
+    if vertex_data_npz is not None:
+        data['vertex_data_npz'] = str(vertex_data_npz)
 
     with open(sentinel, 'w') as f:
         json.dump(data, f, indent=2)
