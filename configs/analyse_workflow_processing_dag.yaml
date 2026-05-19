@@ -5,11 +5,9 @@
 parameters:
   # List of directories containing Kinect session config files to scan.
   # Paths are relative to configs/kinect_configs/.
-  kinect_configs: [valid_configs_ST13-01, valid_configs_ST13-02, 
-      valid_configs_ST13-03, valid_configs_ST14-01, valid_configs_ST14-02, 
-      valid_configs_ST14-04, valid_configs_ST15-01, valid_configs_ST16-02, 
-      valid_configs_ST16-03, valid_configs_ST16-05, valid_configs_ST18-01, 
-      valid_configs_ST18-04]
+  kinect_configs: [valid_configs_ST13-01, valid_configs_ST13-02, valid_configs_ST13-03, valid_configs_ST14-01, 
+      valid_configs_ST14-02, valid_configs_ST14-04, valid_configs_ST15-01, valid_configs_ST16-02, valid_configs_ST16-03, 
+      valid_configs_ST16-05, valid_configs_ST18-01, valid_configs_ST18-04]
 
 tasks:
   # ============================================================
@@ -138,8 +136,7 @@ tasks:
       neuron_mode: iff
       min_overlap_pct: 25
       median_filter_size: 5
-    depends_on: [map_single_touch_rf, set_rf_camera_settings, 
-        precompute_forearm_slim_uv]
+    depends_on: [map_single_touch_rf, set_rf_camera_settings, precompute_forearm_slim_uv]
 
   # Stage 2b (Feature Extraction): Per-session feature extraction. Each enabled feature extracts to its own folder.
   # Output: 4_analysed/touch_features/<feature>/<session>_touch_summary.csv
@@ -208,8 +205,7 @@ tasks:
           compute_baseline: true
           features:
             contact_depth_mean: {min: 0.0, max: 10.0, step: 0.1, span: 0.2}
-            hand_velocity_amplitude_mean: {min: 0.0, max: 500.0, step: 5.0, span: 
-                10.0}
+            hand_velocity_amplitude_mean: {min: 0.0, max: 500.0, step: 5.0, span: 10.0}
     depends_on: [map_single_touch_rf, touch_feature_extraction]
 
   # Reduces per-gesture-type population RF grid NPZ files to scalar metric CSVs.
@@ -257,8 +253,7 @@ tasks:
           max: 500
           step: 25
           span: 50
-    depends_on: [map_single_touch_rf, touch_feature_extraction, 
-        set_rf_camera_settings]
+    depends_on: [map_single_touch_rf, touch_feature_extraction, set_rf_camera_settings]
 
   # Stages 3–5 (Reduction + Clustering + Evaluation): Global clustering on pooled feature CSVs.
   # Each cluster_group defines which data types / aggregations to use and its own clustering_methods.
@@ -487,8 +482,19 @@ tasks:
       cluster_groups: [pressure_velocity_mean_cartesian_binning]
     depends_on: [touch_clustering]
 
-  # Step 2 of split pipeline: RF metrics, 2D heatmap rendering.
-  # Re-runs only when projection_method / disjoint_mask_distance_mm change or force=true.
+  # Step 2a of split pipeline: RF metrics computation (centroid, hull area, Gaussian fit).
+  # Re-runs only when projection_method changes or force=true. Independent of rendering params.
+  compute_receptive_field_metrics:
+    category: processing
+    enabled: false
+    options:
+      force_processing: false
+      cluster_groups: [pressure_velocity_mean_cartesian_binning]
+      projection_method: cylindrical_unwrap
+    depends_on: [extract_receptive_fields_clustered, set_rf_camera_settings]
+
+  # Step 2b of split pipeline: 2D heatmap rendering.
+  # Re-runs only when disjoint_mask_distance_mm changes or force=true. Independent of metrics params.
   visualize_receptive_fields_clustered:
     category: processing
     enabled: false

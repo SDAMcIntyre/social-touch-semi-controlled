@@ -38,6 +38,7 @@ from analysis.touch_analytics.clustering_pipeline import run_clustering
 from analysis.touch_analytics.comparing_pipeline import run_comparing
 from analysis.receptive_field_mapping import (
     run_cluster_rf_extraction,
+    run_cluster_rf_metrics_computation,
     run_cluster_rf_mapping,
     run_cluster_rf_visualization,
     run_simple_rf_mapping,
@@ -823,6 +824,46 @@ def extract_receptive_fields_clustered_flow(
     )
 
 
+@flow(name="compute_receptive_field_metrics")
+def compute_receptive_field_metrics_flow(
+    input_items: List[Tuple[Path, Path]],
+    force_processing: bool = False,
+    cluster_groups: list = None,
+    cluster_group_defs: dict = None,
+    feature_combinations: dict = None,
+    clustering_profiles: dict = None,
+    projection_method: str = None,
+    slim_uv_cache_dir: Optional[Path] = None,
+) -> None:
+    """
+    Metrics-only step: load extraction artifacts and compute RF metrics
+    (centroid, hull area, Gaussian fit) per cluster, writing rf_metrics.json
+    and rf_metrics_summary.csv.
+    Output: ``4_analysed/receptive_field_maps_clustered/<group>/<clusterer>/``
+    """
+    print(f"[Batch Analysis] Running RF metrics computation for {len(input_items)} item(s)...")
+    if not input_items:
+        return
+
+    database_path = input_items[0][1]
+    output_dir = database_path / '4_analysed' / 'receptive_field_maps_clustered'
+    slim_uv_cache_dir = (
+        database_path / '4_analysed' / 'forearm_slim_uv'
+        if projection_method == 'slim' else None
+    )
+
+    run_cluster_rf_metrics_computation(
+        output_dir=output_dir,
+        cluster_groups=cluster_groups,
+        cluster_group_defs=cluster_group_defs,
+        feature_combinations=feature_combinations,
+        clustering_profiles=clustering_profiles,
+        projection_method=projection_method,
+        force=force_processing,
+        slim_uv_cache_dir=slim_uv_cache_dir,
+    )
+
+
 @flow(name="visualize_receptive_fields_clustered")
 def visualize_receptive_fields_clustered_flow(
     input_items: List[Tuple[Path, Path]],
@@ -1186,6 +1227,7 @@ def run_batch_analysis(
         ("touch_comparing", touch_comparing_flow),
         ("analyse_ap_efficacy", analyse_ap_efficacy_flow),
         ("extract_receptive_fields_clustered", extract_receptive_fields_clustered_flow),
+        ("compute_receptive_field_metrics", compute_receptive_field_metrics_flow),
         ("visualize_receptive_fields_clustered", visualize_receptive_fields_clustered_flow),
         # --- Legacy / Deprecated ---
         ("map_receptive_fields_clustered", map_receptive_fields_clustered_flow),
@@ -1319,6 +1361,7 @@ def run_batch_analysis(
                         "touch_comparing",
                         "map_receptive_fields_clustered",
                         "extract_receptive_fields_clustered",
+                        "compute_receptive_field_metrics",
                         "visualize_receptive_fields_clustered",
                         "explore_rf_gallery",
                     ):

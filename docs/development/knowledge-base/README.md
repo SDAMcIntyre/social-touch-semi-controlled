@@ -26,6 +26,7 @@ These are developer-facing documents, not usage guides.
 | [RF Cluster Gallery Viewer — GUI Component Reference](note-rf-cluster-gallery-gui-components.md) | Catalogue of every visual component in the interactive PyQt5 + PyVista gallery viewer: layout, widgets, settings, 3D scene layers, caching, persistence, and data model. | `gui/rf_cluster_gallery_viewer.py`, `rf_gallery_data.py` |
 | [RF Feature-Space Explorer — GUI Component Reference](note-rf-feature-space-explorer-gui-components.md) | Catalogue of visual components in the interactive scatter + 3D heatmap explorer: layout, widgets, filter rectangle, gesture checkboxes, session switching, and data model. | `gui/rf_feature_space_explorer.py`, `rf_explorer_data.py` |
 | [Matplotlib Blitting in NeuralDataPanel — Blit + Threshold-Resnap Pattern](note-neural-kinect-viewer-blitting.md) | Per-frame cursor update via `copy_from_bbox` + `blit` reduces 30–80 ms full redraws to ~1–3 ms; `tight_layout=True` desync trap and invalidation-site discipline. | `neural_kinect_scene_viewer.py` — `NeuralDataPanel` |
+| [Analysis Pipeline Coordinate Spaces](note-analysis-pipeline-coordinate-spaces.md) | Coordinate space boundary (3D↔2D) in the analysis pipeline; neuron-centroid projection invariant. | `rf_projection.py`, `rf_metrics.py`, `rf_cluster_pipeline.py` |
 
 ### Bug reports (`bug-*`)
 

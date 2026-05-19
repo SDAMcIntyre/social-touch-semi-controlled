@@ -307,6 +307,67 @@ def visualization_is_up_to_date(
 
 
 # ---------------------------------------------------------------------------
+# Metrics computation summary sentinel
+# ---------------------------------------------------------------------------
+
+def save_metrics_computation_summary(
+    output_dir: Path,
+    projection_method: Optional[str],
+    extraction_summary_mtime: float,
+    camera_settings_mtime: Optional[float] = None,
+) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    with open(output_dir / 'rf_metrics_computation_summary.json', 'w') as f:
+        json.dump(
+            {
+                'projection_method': projection_method,
+                'extraction_summary_mtime': extraction_summary_mtime,
+                'camera_settings_mtime': camera_settings_mtime,
+            },
+            f,
+            indent=2,
+        )
+
+
+def load_metrics_computation_summary(output_dir: Path) -> dict:
+    path = output_dir / 'rf_metrics_computation_summary.json'
+    if not path.exists():
+        raise ValueError(f"load_metrics_computation_summary: sentinel missing: {path}")
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except Exception as exc:
+        raise ValueError(
+            f"load_metrics_computation_summary: corrupt rf_metrics_computation_summary.json: {path}"
+        ) from exc
+
+
+def metrics_computation_is_up_to_date(
+    output_dir: Path,
+    projection_method: Optional[str],
+    force: bool = False,
+    camera_settings_path: Optional[Path] = None,
+) -> bool:
+    """Return True if metrics computation artifacts match the given params and are not stale."""
+    if force:
+        return False
+    extraction_path = output_dir / 'extraction_summary.json'
+    if not extraction_path.exists():
+        return False
+    try:
+        metrics = load_metrics_computation_summary(output_dir)
+    except ValueError:
+        return False
+    return (
+        metrics.get('projection_method') == projection_method
+        and metrics.get('extraction_summary_mtime') == extraction_path.stat().st_mtime
+        and metrics.get('camera_settings_mtime') == (
+            camera_settings_path.stat().st_mtime if (camera_settings_path is not None and camera_settings_path.exists()) else None
+        )
+    )
+
+
+# ---------------------------------------------------------------------------
 # Delaunay threshold persistence (user-preference file, not a pipeline artifact)
 # ---------------------------------------------------------------------------
 

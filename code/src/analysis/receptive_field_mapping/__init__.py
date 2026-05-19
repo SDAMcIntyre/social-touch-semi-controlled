@@ -6,6 +6,7 @@ Simple per-neuron spike-position pipeline (rf_simple_pipeline).
 
 from .rf_cluster_pipeline import (
     run_cluster_rf_extraction,
+    run_cluster_rf_metrics_computation,
     run_cluster_rf_mapping,
     run_cluster_rf_visualization,
     precompute_explorer_caches,
@@ -30,6 +31,7 @@ from .rf_population_map_pipeline import run_population_rf_maps
 __all__ = [
     "project_to_2d",
     "run_cluster_rf_extraction",
+    "run_cluster_rf_metrics_computation",
     "run_cluster_rf_mapping",
     "run_cluster_rf_visualization",
     "precompute_explorer_caches",
