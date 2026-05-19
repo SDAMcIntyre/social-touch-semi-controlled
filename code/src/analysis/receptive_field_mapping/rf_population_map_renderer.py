@@ -14,6 +14,8 @@ from scipy.ndimage import generic_filter
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components
 
+from analysis.receptive_field_mapping.rf_inflection_boundary import InflectionBoundary
+
 logger = logging.getLogger(__name__)
 
 
@@ -149,6 +151,49 @@ def _interpolate_on_mesh(
     return grid_z
 
 
+def compute_interpolated_grid(
+    forearm_uv: np.ndarray,
+    forearm_faces: np.ndarray,
+    forearm_V: np.ndarray,
+    heatmap_val: np.ndarray,
+    median_filter_size: int | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Build a 150x150 interpolation grid over the forearm UV extent and interpolate heatmap values.
+
+    Returns
+    -------
+    (grid_u, grid_v, grid_z):
+        grid_u, grid_v — meshgrid coordinate arrays (150, 150).
+        grid_z — interpolated heatmap values (150, 150), NaN outside the mesh.
+    """
+    u_all = forearm_uv[:, 0]
+    v_all = forearm_uv[:, 1]
+    margin_u = (u_all.max() - u_all.min()) * 0.05 or 1.0
+    margin_v = (v_all.max() - v_all.min()) * 0.05 or 1.0
+    grid_u, grid_v = np.mgrid[
+        u_all.min() - margin_u : u_all.max() + margin_u : 150j,
+        v_all.min() - margin_v : v_all.max() + margin_v : 150j,
+    ]
+    grid_z = _interpolate_on_mesh(
+        forearm_uv, forearm_faces, forearm_V, heatmap_val, grid_u, grid_v,
+        median_filter_size=median_filter_size,
+    )
+    return grid_u, grid_v, grid_z
+
+
+def _draw_inflection_boundary(
+    ax,
+    contour_uv: np.ndarray,
+    centroid_uv: tuple[float, float],
+) -> None:
+    closed = np.vstack([contour_uv, contour_uv[0]])
+    ax.plot(closed[:, 0], closed[:, 1], color='#00ff88', linewidth=1.5, zorder=6)
+    ax.plot(
+        centroid_uv[0], centroid_uv[1],
+        color='#00ff88', marker='+', markersize=8, zorder=7,
+    )
+
+
 def render_population_rf_map(
     forearm_uv: np.ndarray,
     forearm_faces: np.ndarray,
@@ -158,6 +203,8 @@ def render_population_rf_map(
     title: str,
     output_path: Path,
     median_filter_size: int | None = None,
+    precomputed_grid: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None,
+    inflection_boundary: InflectionBoundary | None = None,
 ) -> None:
     """Render a two-panel population RF heatmap (scatter + interpolated) and save as PNG.
 
@@ -177,6 +224,11 @@ def render_population_rf_map(
         Figure title string.
     output_path:
         Destination PNG file path.
+    precomputed_grid:
+        If provided, skip internal grid computation and use (grid_u, grid_v, grid_z)
+        directly. Must be the output of ``compute_interpolated_grid()``.
+    inflection_boundary:
+        If provided, draw the inflection contour on the interpolated heatmap panel.
     """
     matplotlib.use('Agg')
 
@@ -231,24 +283,29 @@ def render_population_rf_map(
         c='#404040', s=4, alpha=0.5, linewidths=0, rasterized=True,
     )
 
-    u_all = forearm_uv[:, 0]
-    v_all = forearm_uv[:, 1]
-    margin_u = (u_all.max() - u_all.min()) * 0.05 or 1.0
-    margin_v = (v_all.max() - v_all.min()) * 0.05 or 1.0
-    grid_u, grid_v = np.mgrid[
-        u_all.min() - margin_u : u_all.max() + margin_u : 150j,
-        v_all.min() - margin_v : v_all.max() + margin_v : 150j,
-    ]
-
-    grid_z = _interpolate_on_mesh(
-        forearm_uv, forearm_faces, forearm_V, heatmap_val, grid_u, grid_v,
-        median_filter_size=median_filter_size,
-    )
+    if precomputed_grid is not None:
+        grid_u, grid_v, grid_z = precomputed_grid
+    else:
+        u_all = forearm_uv[:, 0]
+        v_all = forearm_uv[:, 1]
+        margin_u = (u_all.max() - u_all.min()) * 0.05 or 1.0
+        margin_v = (v_all.max() - v_all.min()) * 0.05 or 1.0
+        grid_u, grid_v = np.mgrid[
+            u_all.min() - margin_u : u_all.max() + margin_u : 150j,
+            v_all.min() - margin_v : v_all.max() + margin_v : 150j,
+        ]
+        grid_z = _interpolate_on_mesh(
+            forearm_uv, forearm_faces, forearm_V, heatmap_val, grid_u, grid_v,
+            median_filter_size=median_filter_size,
+        )
 
     im = ax_hm.pcolormesh(
         grid_u, grid_v, grid_z,
         cmap='jet', norm=norm, shading='auto',
     )
+
+    if inflection_boundary is not None:
+        _draw_inflection_boundary(ax_hm, inflection_boundary.contour_uv, inflection_boundary.centroid_uv)
     cbar2 = plt.colorbar(im, ax=ax_hm, label='Mean IFF / spike', shrink=0.8)
     cbar2.ax.yaxis.set_tick_params(color='white')
     cbar2.ax.yaxis.label.set_color('white')
@@ -280,6 +337,8 @@ def render_population_rf_composite(
     uv_xlim: tuple[float, float],
     uv_ylim: tuple[float, float],
     median_filter_size: int | None = None,
+    precomputed_grids: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]] | None = None,
+    inflection_boundaries: dict[str, InflectionBoundary | None] | None = None,
 ) -> None:
     """Render a multi-panel composite (one panel per gesture type) and save as PNG.
 
@@ -308,6 +367,12 @@ def render_population_rf_composite(
         (min, max) U axis limits (global across all sessions).
     uv_ylim:
         (min, max) V axis limits (global across all sessions).
+    precomputed_grids:
+        If provided, maps gesture type to (grid_u, grid_v, grid_z) — skips
+        internal grid computation for those gesture types.
+    inflection_boundaries:
+        If provided, maps gesture type to an ``InflectionBoundary`` (or ``None``).
+        Boundaries are drawn on the interpolated panel only.
     """
     matplotlib.use('Agg')
 
@@ -333,7 +398,7 @@ def render_population_rf_composite(
     fig.suptitle(f"{session_id} | {type_label} composite", color='white', fontsize=11, y=1.01)
 
     if panel_type == 'interpolated':
-        grid_u, grid_v = np.mgrid[
+        _shared_grid_u, _shared_grid_v = np.mgrid[
             uv_xlim[0] : uv_xlim[1] : 150j,
             uv_ylim[0] : uv_ylim[1] : 150j,
         ]
@@ -369,14 +434,28 @@ def render_population_rf_composite(
                     s=20, alpha=0.9, linewidths=0, zorder=3, rasterized=True,
                 )
         else:
-            grid_z = _interpolate_on_mesh(
-                forearm_uv, forearm_faces, forearm_V, heatmap_val, grid_u, grid_v,
-                median_filter_size=median_filter_size,
-            )
+            if precomputed_grids is not None and gtype in precomputed_grids:
+                grid_u, grid_v, grid_z = precomputed_grids[gtype]
+            else:
+                grid_u, grid_v = _shared_grid_u, _shared_grid_v
+                grid_z = _interpolate_on_mesh(
+                    forearm_uv, forearm_faces, forearm_V, heatmap_val, grid_u, grid_v,
+                    median_filter_size=median_filter_size,
+                )
             ax.pcolormesh(
                 grid_u, grid_v, grid_z,
                 cmap='jet', norm=norm, shading='auto',
             )
+            if (
+                inflection_boundaries is not None
+                and gtype in inflection_boundaries
+                and inflection_boundaries[gtype] is not None
+            ):
+                _draw_inflection_boundary(
+                    ax,
+                    inflection_boundaries[gtype].contour_uv,
+                    inflection_boundaries[gtype].centroid_uv,
+                )
 
         subtitle = (
             f"{gtype} | {n_touches} touches | "

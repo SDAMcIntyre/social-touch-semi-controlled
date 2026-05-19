@@ -23,7 +23,12 @@ from analysis.receptive_field_mapping.rf_population_heatmap import (
     compute_threshold_from_ratio,
     compute_unique_touch_count,
 )
+from analysis.receptive_field_mapping.rf_inflection_boundary import (
+    compute_inflection_boundary,
+    inflection_boundary_to_dict,
+)
 from analysis.receptive_field_mapping.rf_population_map_renderer import (
+    compute_interpolated_grid,
     render_population_rf_map,
     render_population_rf_composite,
 )
@@ -44,6 +49,7 @@ class _SessionCompositeData:
     min_overlap_pct: float
     sentinel: Path
     produced: List[Path] = field(default_factory=list)
+    gesture_boundaries: dict = field(default_factory=dict)
 
 
 def run_population_rf_maps(
@@ -52,6 +58,7 @@ def run_population_rf_maps(
     min_overlap_pct: float = 25.0,
     force_processing: bool = False,
     median_filter_size: int | None = None,
+    inflection_sigma: float | None = None,
 ) -> None:
     """Render per-session 2D population RF heatmap PNGs projected via SLIM UV.
 
@@ -74,6 +81,9 @@ def run_population_rf_maps(
         included in the heatmap (default 25 %).
     force_processing:
         If True, reprocess sessions even when the sentinel file exists.
+    inflection_sigma:
+        Gaussian smoothing sigma for Laplacian inflection boundary detection.
+        Pass ``None`` to disable boundary computation entirely.
     """
     # ---- Pass 1: compute heatmaps + render per-gesture PNGs ----
     composite_queue: List[_SessionCompositeData] = []
@@ -236,6 +246,7 @@ def run_population_rf_maps(
 
         output_dir.mkdir(parents=True, exist_ok=True)
         produced: List[Path] = []
+        gesture_boundaries: dict = {}
 
         for gtype, (slim_heatmap, n_touches, threshold) in results.items():
             title = (
@@ -245,6 +256,16 @@ def run_population_rf_maps(
             png_path = output_dir / f'{session_id}_rf_population_{gtype}.png'
 
             print(f"[Population RF Maps] {session_id}: rendering '{gtype}'...")
+            grid_u, grid_v, grid_z = compute_interpolated_grid(
+                forearm_uv, slim_faces, slim_V, slim_heatmap,
+                median_filter_size=median_filter_size,
+            )
+            boundary = (
+                compute_inflection_boundary(grid_z, grid_u, grid_v, inflection_sigma)
+                if inflection_sigma is not None
+                else None
+            )
+            gesture_boundaries[gtype] = boundary
             render_population_rf_map(
                 forearm_uv=forearm_uv,
                 heatmap_val=slim_heatmap,
@@ -254,11 +275,13 @@ def run_population_rf_maps(
                 forearm_faces=slim_faces,
                 forearm_V=slim_V,
                 median_filter_size=median_filter_size,
+                precomputed_grid=(grid_u, grid_v, grid_z),
+                inflection_boundary=boundary,
             )
             produced.append(png_path)
             print(f"[Population RF Maps] {session_id}: saved {png_path.name}")
 
-        _write_sentinel(sentinel, session_id, produced=produced)
+        _write_sentinel(sentinel, session_id, produced=produced, inflection_boundaries=gesture_boundaries)
         print(
             f"[Population RF Maps] {session_id}: done — {len(produced)} PNG(s) written."
         )
@@ -274,6 +297,7 @@ def run_population_rf_maps(
             min_overlap_pct=min_overlap_pct,
             sentinel=sentinel,
             produced=produced,
+            gesture_boundaries=gesture_boundaries,
         ))
 
     # ---- Pass 2: render composite PNGs with global colour scale + UV limits ----
@@ -307,6 +331,24 @@ def run_population_rf_maps(
                 f"[Population RF Maps] {sd.session_id}: "
                 f"rendering '{panel_type}' composite..."
             )
+            if panel_type == 'interpolated':
+                precomputed_grids = {}
+                inflection_boundaries = {}
+                for gtype in sd.results:
+                    slim_heatmap_g, _, _ = sd.results[gtype]
+                    grid_u_g, grid_v_g, grid_z_g = compute_interpolated_grid(
+                        sd.forearm_uv, sd.forearm_faces, sd.forearm_V, slim_heatmap_g,
+                        median_filter_size=median_filter_size,
+                    )
+                    precomputed_grids[gtype] = (grid_u_g, grid_v_g, grid_z_g)
+                    inflection_boundaries[gtype] = (
+                        compute_inflection_boundary(grid_z_g, grid_u_g, grid_v_g, inflection_sigma)
+                        if inflection_sigma is not None
+                        else None
+                    )
+            else:
+                precomputed_grids = None
+                inflection_boundaries = None
             render_population_rf_composite(
                 forearm_uv=sd.forearm_uv,
                 results=sd.results,
@@ -320,23 +362,35 @@ def run_population_rf_maps(
                 forearm_faces=sd.forearm_faces,
                 forearm_V=sd.forearm_V,
                 median_filter_size=median_filter_size,
+                precomputed_grids=precomputed_grids,
+                inflection_boundaries=inflection_boundaries,
             )
             sd.produced.append(composite_path)
             print(
                 f"[Population RF Maps] {sd.session_id}: saved {composite_path.name}"
             )
 
-        _write_sentinel(sd.sentinel, sd.session_id, produced=sd.produced)
+        _write_sentinel(sd.sentinel, sd.session_id, produced=sd.produced, inflection_boundaries=sd.gesture_boundaries)
 
 
-def _write_sentinel(sentinel: Path, session_id: str, produced: List[Path]) -> None:
+def _write_sentinel(
+    sentinel: Path,
+    session_id: str,
+    produced: List[Path],
+    inflection_boundaries: dict | None = None,
+) -> None:
+    serialized_boundaries = {}
+    if inflection_boundaries:
+        for gtype, b in inflection_boundaries.items():
+            serialized_boundaries[gtype] = inflection_boundary_to_dict(b) if b is not None else None
+
+    data = {
+        'session_id': session_id,
+        'n_pngs': len(produced),
+        'pngs': [str(p) for p in produced],
+    }
+    if serialized_boundaries:
+        data['inflection_boundaries'] = serialized_boundaries
+
     with open(sentinel, 'w') as f:
-        json.dump(
-            {
-                'session_id': session_id,
-                'n_pngs': len(produced),
-                'pngs': [str(p) for p in produced],
-            },
-            f,
-            indent=2,
-        )
+        json.dump(data, f, indent=2)
