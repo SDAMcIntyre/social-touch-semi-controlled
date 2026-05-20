@@ -303,72 +303,222 @@ def _sample_grid_along_contour(
 # ---------------------------------------------------------------------------
 
 
-def _save_inflection_snapshot(
+def _render_step_gaussian(
+    grid_z: np.ndarray,
+    normalized: np.ndarray,
+    nan_mask: np.ndarray,
+    peak_rc: tuple[int, int],
+) -> "plt.Figure":
+    """Step 1: raw input alongside NaN-aware Gaussian smoothing result."""
+    import matplotlib.pyplot as plt
+
+    jet = plt.cm.jet.copy()
+    jet.set_bad("lightgrey")
+
+    fig, (ax_in, ax_out) = plt.subplots(1, 2, figsize=(12, 5))
+
+    ax_in.imshow(np.ma.masked_invalid(grid_z), cmap=jet, origin="upper")
+    ax_in.plot(peak_rc[1], peak_rc[0], "rx", markersize=10, markeredgewidth=2)
+    ax_in.set_title("Input grid_z")
+
+    ax_out.imshow(np.ma.masked_invalid(normalized), cmap=jet, origin="upper")
+    ax_out.set_title("Normalized Gaussian")
+
+    fig.suptitle("Step 1 — NaN-aware Gaussian smoothing", fontsize=10)
+    fig.tight_layout()
+    return fig
+
+
+def _render_step_laplacian(
+    laplacian: np.ndarray,
+    extrapolated: np.ndarray,
+    extrapolation_mask: np.ndarray,
+) -> "plt.Figure":
+    """Step 2: extrapolated field alongside Laplacian with zero-crossing."""
+    import matplotlib.pyplot as plt
+
+    jet = plt.cm.jet.copy()
+    jet.set_bad("lightgrey")
+
+    fig, (ax_ext, ax_lap) = plt.subplots(1, 2, figsize=(12, 5))
+
+    ax_ext.imshow(np.ma.masked_invalid(extrapolated), cmap=jet, origin="upper")
+    ext_contours = find_contours(extrapolation_mask.astype(float), 0.5)
+    for c in ext_contours:
+        ax_ext.plot(c[:, 1], c[:, 0], "--", color="white", linewidth=0.8, alpha=0.7)
+    ax_ext.set_title("Extrapolated field")
+
+    vabs = float(np.nanmax(np.abs(laplacian)))
+    vabs = max(vabs, 1e-12)
+    ax_lap.imshow(laplacian, cmap="RdBu_r", vmin=-vabs, vmax=vabs, origin="upper")
+    lap_filled = np.where(np.isnan(laplacian), 0.0, laplacian)
+    ax_lap.contour(lap_filled, levels=[0.0], colors=["black"], linewidths=[0.5])
+    ax_lap.set_title("Laplacian")
+
+    fig.suptitle("Step 2 — Laplacian computation", fontsize=10)
+    fig.tight_layout()
+    return fig
+
+
+def _render_step_basin(
+    laplacian: np.ndarray,
+    component_mask: np.ndarray | None,
+    peak_rc: tuple[int, int],
+) -> "plt.Figure":
+    """Step 3: negative-Laplacian flood-fill basin mask."""
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(6, 5))
+
+    if component_mask is not None:
+        ax.imshow(component_mask, cmap="Greys_r", vmin=0, vmax=1, origin="upper")
+    else:
+        ax.imshow(np.zeros_like(laplacian), cmap="Greys_r", vmin=0, vmax=1, origin="upper")
+        ax.text(
+            0.5, 0.5, "FAILED", transform=ax.transAxes,
+            ha="center", va="center", fontsize=24, color="red", fontweight="bold",
+        )
+    ax.plot(peak_rc[1], peak_rc[0], "rx", markersize=10, markeredgewidth=2)
+    ax.set_title("Basin mask")
+
+    fig.suptitle("Step 3 — Negative-Laplacian flood fill", fontsize=10)
+    fig.tight_layout()
+    return fig
+
+
+def _render_step_contour(
+    grid_z: np.ndarray,
+    contour_rc: np.ndarray,
+    peak_rc: tuple[int, int],
+) -> "plt.Figure":
+    """Step 4: marching-squares contour overlaid on input heatmap."""
+    import matplotlib.pyplot as plt
+
+    jet = plt.cm.jet.copy()
+    jet.set_bad("lightgrey")
+
+    fig, ax = plt.subplots(figsize=(6, 5))
+    ax.imshow(np.ma.masked_invalid(grid_z), cmap=jet, origin="upper")
+    ax.plot(contour_rc[:, 1], contour_rc[:, 0], "-", color="violet", linewidth=1.5)
+    ax.plot(peak_rc[1], peak_rc[0], "rx", markersize=10, markeredgewidth=2)
+    ax.set_title("Contour extraction")
+
+    fig.suptitle("Step 4 — Marching-squares contour", fontsize=10)
+    fig.tight_layout()
+    return fig
+
+
+def _render_step_uv(
+    grid_u: np.ndarray,
+    grid_v: np.ndarray,
+    grid_z: np.ndarray,
+    contour_uv: np.ndarray,
+    centroid_uv: tuple[float, float],
+    pca_major_uv: float,
+    pca_minor_uv: float,
+    pca_orientation_deg: float,
+    area_uv: float,
+    circularity: float,
+) -> "plt.Figure":
+    """Step 5: contour in UV space with PCA axes and metric annotations."""
+    import matplotlib.pyplot as plt
+
+    jet = plt.cm.jet.copy()
+    jet.set_bad("lightgrey")
+
+    fig, ax = plt.subplots(figsize=(7, 6))
+    ax.pcolormesh(grid_u, grid_v, np.ma.masked_invalid(grid_z), cmap=jet, shading="auto")
+
+    closed = np.vstack([contour_uv, contour_uv[:1]])
+    ax.plot(closed[:, 0], closed[:, 1], "-", color="violet", linewidth=1.5)
+
+    cu, cv = centroid_uv
+    ax.plot(cu, cv, "+", color="violet", markersize=12, markeredgewidth=2)
+
+    angle_rad = math.radians(pca_orientation_deg)
+    cos_a, sin_a = math.cos(angle_rad), math.sin(angle_rad)
+    major_half = pca_major_uv / 2.0
+    minor_half = pca_minor_uv / 2.0
+    ax.plot(
+        [cu - major_half * cos_a, cu + major_half * cos_a],
+        [cv - major_half * sin_a, cv + major_half * sin_a],
+        "-", color="black", linewidth=1.0,
+    )
+    ax.plot(
+        [cu + minor_half * sin_a, cu - minor_half * sin_a],
+        [cv - minor_half * cos_a, cv + minor_half * cos_a],
+        "--", color="black", linewidth=1.0,
+    )
+
+    ax.text(
+        0.02, 0.98,
+        f"area={area_uv:.4f}  circ={circularity:.3f}",
+        transform=ax.transAxes, va="top", fontsize=8,
+        bbox=dict(boxstyle="round,pad=0.3", fc="white", alpha=0.7),
+    )
+    ax.set_xlabel("U")
+    ax.set_ylabel("V")
+    ax.set_title("UV-space contour")
+
+    fig.suptitle("Step 5 — Pixel-to-UV conversion", fontsize=10)
+    fig.tight_layout()
+    return fig
+
+
+def _save_inflection_snapshots(
     grid_z: np.ndarray,
     peak_rc: tuple[int, int],
     lap_result: _LaplacianResult,
     component_mask: np.ndarray | None,
     contour_rc: np.ndarray | None,
+    contour_uv: np.ndarray | None,
+    grid_u: np.ndarray,
+    grid_v: np.ndarray,
+    centroid_uv: tuple[float, float] | None,
+    pca_major_uv: float | None,
+    pca_minor_uv: float | None,
+    pca_orientation_deg: float | None,
+    area_uv: float | None,
+    circularity: float | None,
     snapshot_dir: pathlib.Path,
     snapshot_label: str,
 ) -> None:
+    """Save per-step diagnostic PNGs for the inflection boundary pipeline."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+    prefix = f"inflection_{snapshot_label}" if snapshot_label else "inflection"
 
-    jet = plt.cm.jet.copy()
-    jet.set_bad("lightgrey")
+    steps: list[tuple[str, object]] = [
+        (f"{prefix}_step1_gaussian.png",
+         lambda: _render_step_gaussian(grid_z, lap_result.normalized, lap_result.nan_mask, peak_rc)),
+        (f"{prefix}_step2_laplacian.png",
+         lambda: _render_step_laplacian(
+             lap_result.laplacian, lap_result.extrapolated, lap_result.extrapolation_mask)),
+        (f"{prefix}_step3_basin.png",
+         lambda: _render_step_basin(lap_result.laplacian, component_mask, peak_rc)),
+    ]
 
-    ax = axes[0, 0]
-    ax.imshow(np.ma.masked_invalid(grid_z), cmap=jet, origin="upper")
-    ax.plot(peak_rc[1], peak_rc[0], "rx", markersize=10, markeredgewidth=2)
-    ax.set_title("(0,0) Input grid_z")
-
-    ax = axes[0, 1]
-    ax.imshow(np.ma.masked_invalid(lap_result.normalized), cmap=jet, origin="upper")
-    ax.set_title("(0,1) Normalized Gaussian")
-
-    ax = axes[0, 2]
-    ax.imshow(np.ma.masked_invalid(lap_result.extrapolated), cmap=jet, origin="upper")
-    ext_contours = find_contours(lap_result.extrapolation_mask.astype(float), 0.5)
-    for c in ext_contours:
-        ax.plot(c[:, 1], c[:, 0], "--", color="white", linewidth=0.8, alpha=0.7)
-    ax.set_title("(0,2) Extrapolated field")
-
-    ax = axes[1, 0]
-    vabs = float(np.nanmax(np.abs(lap_result.laplacian)))
-    vabs = max(vabs, 1e-12)
-    ax.imshow(lap_result.laplacian, cmap="RdBu_r", vmin=-vabs, vmax=vabs, origin="upper")
-    lap_filled = np.where(np.isnan(lap_result.laplacian), 0.0, lap_result.laplacian)
-    ax.contour(lap_filled, levels=[0.0], colors=["black"], linewidths=[0.5])
-    ax.set_title("(1,0) Laplacian")
-
-    ax = axes[1, 1]
-    if component_mask is not None:
-        ax.imshow(component_mask, cmap="Greys_r", vmin=0, vmax=1, origin="upper")
-    else:
-        ax.imshow(np.zeros_like(grid_z), cmap="Greys_r", vmin=0, vmax=1, origin="upper")
-    ax.plot(peak_rc[1], peak_rc[0], "rx", markersize=10, markeredgewidth=2)
-    ax.set_title("(1,1) Basin mask")
-
-    ax = axes[1, 2]
-    ax.imshow(np.ma.masked_invalid(grid_z), cmap=jet, origin="upper")
     if contour_rc is not None:
-        ax.plot(contour_rc[:, 1], contour_rc[:, 0], "-", color="violet", linewidth=1.5)
-        ax.set_title("(1,2) Final contour")
-    else:
-        ax.set_title("(1,2) FAILED — no contour")
-    ax.plot(peak_rc[1], peak_rc[0], "rx", markersize=10, markeredgewidth=2)
+        cr = contour_rc
+        steps.append((f"{prefix}_step4_contour.png",
+                       lambda: _render_step_contour(grid_z, cr, peak_rc)))
 
-    fig.suptitle(f"Inflection boundary steps | {snapshot_label}", fontsize=10)
-    fig.tight_layout()
-    fname = f"inflection_steps_{snapshot_label}.png" if snapshot_label else "inflection_steps.png"
-    path = pathlib.Path(snapshot_dir) / fname
-    fig.savefig(path, dpi=150)
-    plt.close(fig)
-    logger.debug("inflection_snapshot: saved %s", path)
+    if contour_uv is not None and centroid_uv is not None:
+        cuv, cen = contour_uv, centroid_uv
+        maj, mino, ori = pca_major_uv, pca_minor_uv, pca_orientation_deg
+        a, ci = area_uv, circularity
+        steps.append((f"{prefix}_step5_uv.png",
+                       lambda: _render_step_uv(
+                           grid_u, grid_v, grid_z, cuv, cen, maj, mino, ori, a, ci)))
+
+    for filename, build_fig in steps:
+        fig = build_fig()
+        path = pathlib.Path(snapshot_dir) / filename
+        fig.savefig(path, dpi=150)
+        plt.close(fig)
+        logger.debug("inflection_snapshot: saved %s", path)
 
 
 # ---------------------------------------------------------------------------
@@ -460,12 +610,21 @@ def compute_inflection_boundary(
             peak_rc[0], peak_rc[1],
         )
         if snapshot_dir is not None:
-            _save_inflection_snapshot(
+            _save_inflection_snapshots(
                 grid_z=grid_z,
                 peak_rc=peak_rc,
                 lap_result=result,
                 component_mask=None,
                 contour_rc=None,
+                contour_uv=None,
+                grid_u=grid_u,
+                grid_v=grid_v,
+                centroid_uv=None,
+                pca_major_uv=None,
+                pca_minor_uv=None,
+                pca_orientation_deg=None,
+                area_uv=None,
+                circularity=None,
                 snapshot_dir=snapshot_dir,
                 snapshot_label=snapshot_label,
             )
@@ -492,12 +651,21 @@ def compute_inflection_boundary(
     )
 
     if snapshot_dir is not None:
-        _save_inflection_snapshot(
+        _save_inflection_snapshots(
             grid_z=grid_z,
             peak_rc=peak_rc,
             lap_result=result,
             component_mask=component_mask,
             contour_rc=selected,
+            contour_uv=contour_uv,
+            grid_u=grid_u,
+            grid_v=grid_v,
+            centroid_uv=centroid_uv,
+            pca_major_uv=pca_major,
+            pca_minor_uv=pca_minor,
+            pca_orientation_deg=pca_orientation_deg,
+            area_uv=area_uv,
+            circularity=circularity,
             snapshot_dir=snapshot_dir,
             snapshot_label=snapshot_label,
         )
