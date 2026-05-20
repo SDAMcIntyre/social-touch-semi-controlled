@@ -51,7 +51,7 @@ _stub("analysis.receptive_field_mapping")
 # Imports under test
 # ---------------------------------------------------------------------------
 
-from analysis.receptive_field_mapping.rf_inflection_boundary import (  # noqa: E402
+from analysis.receptive_field_mapping.metrics.rf_inflection_boundary import (  # noqa: E402
     InflectionBoundary,
     _compute_contour_pca,
     _compute_polygon_area,
@@ -305,7 +305,7 @@ class TestPolygonMetrics:
         assert _compute_polygon_area(square) == pytest.approx(1.0)
 
     def test_square_perimeter(self) -> None:
-        square = np.array([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0], [0.0, 0.0]])
+        square = np.array([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]])
         assert _compute_polygon_perimeter(square) == pytest.approx(4.0)
 
     def test_square_centroid(self) -> None:
@@ -319,3 +319,96 @@ class TestPolygonMetrics:
         contour = np.column_stack([np.cos(theta), np.sin(theta)])
         major, minor, _ = _compute_contour_pca(contour)
         assert abs(major - minor) / major < 0.05
+
+
+# ---------------------------------------------------------------------------
+# Test: partial-NaN grid (forearm-shaped valid region)
+# ---------------------------------------------------------------------------
+
+
+class TestPartialNaNGrid:
+    """compute_inflection_boundary works with a high-NaN-fraction valid region.
+
+    Simulates forearm-shaped data: a circular valid region centred in the grid
+    at ~70 percent NaN overall.  The extrapolation fix is required because the
+    old binary_dilation approach would erode the valid Laplacian domain far
+    enough inward that a centred Gaussian still succeeded — this test verifies
+    the algorithm still works correctly under high NaN density.
+    """
+
+    @pytest.fixture(scope="class")
+    def boundary(self) -> InflectionBoundary | None:
+        size = 100
+        u = np.linspace(0.0, 1.0, size)
+        grid_u, grid_v = np.meshgrid(u, u, indexing="ij")
+
+        # Gaussian peak at centre
+        sigma_px = 10.0
+        pixel_scale = 1.0 / (size - 1)
+        sigma_uv = sigma_px * pixel_scale
+        grid_z = 100.0 * np.exp(
+            -0.5 * ((grid_u - 0.5) ** 2 + (grid_v - 0.5) ** 2) / sigma_uv ** 2
+        )
+
+        # Circular NaN mask: ~70% NaN (valid radius ~31 px out of 100)
+        rows = np.arange(size)[:, None]
+        cols = np.arange(size)[None, :]
+        dist_from_centre = np.sqrt((rows - 49.5) ** 2 + (cols - 49.5) ** 2)
+        grid_z[dist_from_centre > 31.0] = np.nan
+
+        return compute_inflection_boundary(grid_u, grid_v, grid_z, gaussian_sigma=2.0)
+
+    def test_boundary_found(self, boundary: InflectionBoundary | None) -> None:
+        assert boundary is not None, "boundary must be found for centred peak in circular valid region"
+
+    def test_contour_shape(self, boundary: InflectionBoundary) -> None:
+        assert boundary.contour_uv.ndim == 2
+        assert boundary.contour_uv.shape[1] == 2
+        assert len(boundary.contour_uv) >= 4
+
+    def test_area_positive(self, boundary: InflectionBoundary) -> None:
+        assert boundary.area_uv > 0.0
+
+
+# ---------------------------------------------------------------------------
+# Test: border peak (peak close to NaN boundary)
+# ---------------------------------------------------------------------------
+
+
+class TestBorderPeak:
+    """compute_inflection_boundary finds a boundary for a peak near the NaN edge.
+
+    With the old binary_dilation strategy (5x5 kernel, 2px dilation), a peak
+    positioned close to the NaN boundary had its Laplacian masked — the basin
+    flood-fill produced a truncated or absent contour.  The nearest-neighbour
+    extrapolation fix resolves this by extending valid Laplacian values to the
+    original data boundary.
+    """
+
+    @pytest.fixture(scope="class")
+    def boundary(self) -> InflectionBoundary | None:
+        size = 100
+        u = np.linspace(0.0, 1.0, size)
+        grid_u, grid_v = np.meshgrid(u, u, indexing="ij")
+
+        # Gaussian centred at row 10, col 50 (10 rows from the top grid edge)
+        pixel_scale = 1.0 / (size - 1)
+        center_u = 10 * pixel_scale
+        center_v = 0.5
+        sigma_uv = 8.0 * pixel_scale
+        grid_z = 100.0 * np.exp(
+            -0.5 * ((grid_u - center_u) ** 2 + (grid_v - center_v) ** 2) / sigma_uv ** 2
+        )
+
+        # NaN mask: rows 0-4 are NaN (peak at row 10 is 6 rows from the boundary)
+        grid_z[:5, :] = np.nan
+
+        return compute_inflection_boundary(grid_u, grid_v, grid_z, gaussian_sigma=2.0)
+
+    def test_boundary_found(self, boundary: InflectionBoundary | None) -> None:
+        assert boundary is not None, (
+            "boundary must be found for peak 6 rows from NaN boundary with extrapolation fix"
+        )
+
+    def test_contour_has_points(self, boundary: InflectionBoundary) -> None:
+        assert len(boundary.contour_uv) >= 4

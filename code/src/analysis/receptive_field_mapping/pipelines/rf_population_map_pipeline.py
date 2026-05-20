@@ -9,25 +9,25 @@ from typing import List
 import numpy as np
 from scipy.spatial import KDTree
 
-from analysis.receptive_field_mapping.rf_data_loader import resolve_forearm_ply
-from analysis.receptive_field_mapping.forearm_slim_uv import load_slim_uv_cache
-from analysis.receptive_field_mapping.touch_population_data import (
+from analysis.receptive_field_mapping.data.rf_data_loader import resolve_forearm_ply
+from analysis.receptive_field_mapping.surface.forearm_slim_uv import load_slim_uv_cache
+from analysis.receptive_field_mapping.data.touch_population_data import (
     load_population_data,
     load_population_rf_data,
 )
 from analysis.pipeline.shared_constants import GESTURE_TYPES
-from analysis.receptive_field_mapping.rf_population_heatmap import (
+from analysis.receptive_field_mapping.data.rf_population_heatmap import (
     apply_vertex_threshold,
     build_gesture_touch_indices,
     compute_rf_heatmap,
     compute_threshold_from_ratio,
     compute_unique_touch_count,
 )
-from analysis.receptive_field_mapping.rf_inflection_boundary import (
+from analysis.receptive_field_mapping.metrics.rf_inflection_boundary import (
     compute_inflection_boundary,
     inflection_boundary_to_dict,
 )
-from analysis.receptive_field_mapping.rf_population_map_renderer import (
+from analysis.receptive_field_mapping.rendering.rf_population_map_renderer import (
     compute_interpolated_grid,
     render_population_rf_map,
     render_population_rf_composite,
@@ -263,23 +263,10 @@ def run_population_rf_maps(
                 median_filter_size=median_filter_size,
             )
             per_gesture_grids[gtype] = (grid_u, grid_v, grid_z)
-            if inflection_sigma is not None:
-                _fin = grid_z[np.isfinite(grid_z)]
-                _nan_ct = int(np.isnan(grid_z).sum())
-                logger.warning(
-                    "[DIAG] pre-inflection pass1 | gesture=%s | shape=%s | "
-                    "nan=%d/%d (%.1f%%) | finite: min=%.4f max=%.4f mean=%.4f | sigma=%.1f",
-                    gtype, grid_z.shape, _nan_ct, grid_z.size,
-                    100.0 * _nan_ct / grid_z.size,
-                    float(_fin.min()) if _fin.size > 0 else float('nan'),
-                    float(_fin.max()) if _fin.size > 0 else float('nan'),
-                    float(_fin.mean()) if _fin.size > 0 else float('nan'),
-                    inflection_sigma,
-                )
             boundary = (
                 compute_inflection_boundary(
                     grid_u, grid_v, grid_z, inflection_sigma,
-                    _diag_output_dir=output_dir, _diag_label=gtype,
+                    snapshot_dir=output_dir, snapshot_label=gtype,
                 )
                 if inflection_sigma is not None
                 else None
@@ -378,23 +365,10 @@ def run_population_rf_maps(
                         median_filter_size=median_filter_size,
                     )
                     precomputed_grids[gtype] = (grid_u_g, grid_v_g, grid_z_g)
-                    if inflection_sigma is not None:
-                        _fin = grid_z_g[np.isfinite(grid_z_g)]
-                        _nan_ct = int(np.isnan(grid_z_g).sum())
-                        logger.warning(
-                            "[DIAG] pre-inflection pass2 | gesture=%s | shape=%s | "
-                            "nan=%d/%d (%.1f%%) | finite: min=%.4f max=%.4f mean=%.4f | sigma=%.1f",
-                            gtype, grid_z_g.shape, _nan_ct, grid_z_g.size,
-                            100.0 * _nan_ct / grid_z_g.size,
-                            float(_fin.min()) if _fin.size > 0 else float('nan'),
-                            float(_fin.max()) if _fin.size > 0 else float('nan'),
-                            float(_fin.mean()) if _fin.size > 0 else float('nan'),
-                            inflection_sigma,
-                        )
                     inflection_boundaries[gtype] = (
                         compute_inflection_boundary(
                             grid_u_g, grid_v_g, grid_z_g, inflection_sigma,
-                            _diag_output_dir=sd.output_dir, _diag_label=f"{sd.session_id}_{gtype}_composite",
+                            snapshot_dir=sd.output_dir, snapshot_label=f"{sd.session_id}_{gtype}_composite",
                         )
                         if inflection_sigma is not None
                         else None
