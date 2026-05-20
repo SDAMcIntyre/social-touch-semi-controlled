@@ -186,6 +186,14 @@ tasks:
           pre_iff_window_ms: 250
     depends_on: [touch_series_transforms]
 
+  render_touch_feature_radar:
+    category: processing
+    enabled: false
+    options:
+      force_processing: false
+      aggregation: mean_during_iff
+    depends_on: [touch_feature_extraction]
+
   # Population RF grid: sweep N-D feature space, average single-touch RFs per cell.
   # Depends on: map_single_touch_rf (RF maps), touch_feature_extraction (feature CSVs).
   # Output: 4_analysed/population_rf_grid/<session_id>/

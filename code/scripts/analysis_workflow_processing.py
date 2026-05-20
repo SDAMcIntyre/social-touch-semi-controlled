@@ -38,6 +38,7 @@ from analysis.receptive_field_mapping import (
     run_session_comparison_visualization,
     run_population_response_field_extraction,
     run_session_rf_boundary_comparison,
+    run_touch_feature_radar,
     launch_rf_camera_settings_viewer,
 )
 from analysis.receptive_field_mapping.data.rf_data_loader import resolve_forearm_ply
@@ -678,6 +679,27 @@ def touch_feature_extraction_flow(
     return [path for paths in per_feature.values() for path in paths]
 
 
+@flow(name="render_touch_feature_radar")
+def render_touch_feature_radar_flow(
+    input_items: List[Tuple[Path, Path]],
+    force_processing: bool = False,
+    aggregation: str = "mean_during_iff",
+) -> None:
+    """
+    Stage 2c: Per-session radar plots of touch feature distributions.
+    Writes one PNG per gesture type + composite to
+    ``4_analysed/touch_feature_radar/<session_id>/``.
+    """
+    print(f"[Batch Analysis] Rendering touch feature radar plots for {len(input_items)} item(s)...")
+    if not input_items:
+        return
+    run_touch_feature_radar(
+        session_configs=input_items,
+        aggregation=aggregation,
+        force_processing=force_processing,
+    )
+
+
 @flow(name="touch_clustering")
 def touch_clustering_flow(
     input_items: List[Tuple[Path, Path]],
@@ -1146,6 +1168,13 @@ def _build_pipeline_stages(dag_handler: DagConfigHandler, items_to_process) -> l
                 "features": dag_handler.get_task_options("touch_feature_extraction").get("features"),
                 "series_dir": _series_dir(),
                 "preparation_dir": _preparation_dir(),
+            },
+        },
+        {
+            "name": "render_touch_feature_radar",
+            "func": render_touch_feature_radar_flow,
+            "params": lambda: {
+                "aggregation": dag_handler.get_task_options("render_touch_feature_radar").get("aggregation", "mean_during_iff"),
             },
         },
         {
