@@ -50,6 +50,32 @@ _stub("primary_processing")
 
 
 # ---------------------------------------------------------------------------
+# Fixture: unit-square mesh (2 triangles)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def unit_square_mesh():
+    """Unit square in UV space split into 2 triangles.
+
+    Vertices:
+      0 = (0, 0, 0)   1 = (1, 0, 0)
+      2 = (1, 1, 0)   3 = (0, 1, 0)
+    Triangles:
+      [0, 1, 2]  [0, 2, 3]
+    UV coords equal (x, y) so barycentric results are exact.
+    """
+    V = np.array([
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [1.0, 1.0, 0.0],
+        [0.0, 1.0, 0.0],
+    ], dtype=np.float64)
+    F = np.array([[0, 1, 2], [0, 2, 3]], dtype=np.int32)
+    uv = V[:, :2].copy()
+    return V, F, uv
+
+
+# ---------------------------------------------------------------------------
 # Fixture: synthetic flat disk mesh
 # ---------------------------------------------------------------------------
 
@@ -83,7 +109,7 @@ def disk_mesh():
 class TestFlattenSlim:
 
     def test_smoke_flip_free(self, disk_mesh):
-        from analysis.receptive_field_mapping._slim_helpers import (
+        from analysis.receptive_field_mapping.surface.slim_helpers import (
             boundary_loop, flatten_slim, _has_flipped_triangles,
         )
         V, F, center_vid, _ = disk_mesh
@@ -98,7 +124,7 @@ class TestFlattenSlim:
         np.testing.assert_allclose(uv[b0, 1], 0.0, atol=1e-6)
 
     def test_boundary_vertex_raises(self, disk_mesh):
-        from analysis.receptive_field_mapping._slim_helpers import (
+        from analysis.receptive_field_mapping.surface.slim_helpers import (
             boundary_loop, flatten_slim,
         )
         V, F, _, boundary_vids = disk_mesh
@@ -108,7 +134,7 @@ class TestFlattenSlim:
 
     def test_flipped_harmonic_falls_back_to_tutte(self, disk_mesh, monkeypatch):
         import igl
-        from analysis.receptive_field_mapping._slim_helpers import (
+        from analysis.receptive_field_mapping.surface.slim_helpers import (
             boundary_loop, flatten_slim, _has_flipped_triangles,
         )
         V, F, center_vid, _ = disk_mesh
@@ -122,7 +148,7 @@ class TestFlattenSlim:
             uv_bad[len(uv) // 2:, 1] *= -1
             return uv_bad
 
-        import analysis.receptive_field_mapping._slim_helpers as sh
+        import analysis.receptive_field_mapping.surface.slim_helpers as sh
         monkeypatch.setattr(sh, "igl", type("FakeIgl", (), {
             "harmonic": staticmethod(_bad_harmonic),
             "slim_precompute": igl.slim_precompute,
@@ -164,10 +190,10 @@ class TestPrecomputeForearmSlimUv:
 
     def test_precompute_writes_cache(self, disk_mesh, tmp_path, monkeypatch):
         import trimesh
-        from analysis.receptive_field_mapping.forearm_slim_uv import (
+        from analysis.receptive_field_mapping.surface.forearm_slim_uv import (
             precompute_forearm_slim_uv,
         )
-        import analysis.receptive_field_mapping.forearm_slim_uv as _mod
+        import analysis.receptive_field_mapping.surface.forearm_slim_uv as _mod
 
         V, F, center_vid, _ = disk_mesh
         ply_path = tmp_path / "forearm_test.ply"
@@ -198,10 +224,10 @@ class TestPrecomputeForearmSlimUv:
 
     def test_missing_rf_npz_raises(self, disk_mesh, tmp_path, monkeypatch):
         import trimesh
-        from analysis.receptive_field_mapping.forearm_slim_uv import (
+        from analysis.receptive_field_mapping.surface.forearm_slim_uv import (
             precompute_forearm_slim_uv,
         )
-        import analysis.receptive_field_mapping.forearm_slim_uv as _mod
+        import analysis.receptive_field_mapping.surface.forearm_slim_uv as _mod
 
         V, F, _, _ = disk_mesh
         ply_path = tmp_path / "forearm_test.ply"
@@ -218,10 +244,10 @@ class TestPrecomputeForearmSlimUv:
 
     def test_empty_rf_data_raises(self, disk_mesh, tmp_path, monkeypatch):
         import trimesh
-        from analysis.receptive_field_mapping.forearm_slim_uv import (
+        from analysis.receptive_field_mapping.surface.forearm_slim_uv import (
             precompute_forearm_slim_uv,
         )
-        import analysis.receptive_field_mapping.forearm_slim_uv as _mod
+        import analysis.receptive_field_mapping.surface.forearm_slim_uv as _mod
 
         V, F, _, _ = disk_mesh
         ply_path = tmp_path / "forearm_test.ply"
@@ -240,10 +266,10 @@ class TestPrecomputeForearmSlimUv:
 
     def test_centre_on_boundary_raises(self, disk_mesh, tmp_path, monkeypatch):
         import trimesh
-        from analysis.receptive_field_mapping.forearm_slim_uv import (
+        from analysis.receptive_field_mapping.surface.forearm_slim_uv import (
             precompute_forearm_slim_uv,
         )
-        import analysis.receptive_field_mapping.forearm_slim_uv as _mod
+        import analysis.receptive_field_mapping.surface.forearm_slim_uv as _mod
 
         V, F, _, boundary_vids = disk_mesh
         ply_path = tmp_path / "forearm_test.ply"
@@ -275,10 +301,10 @@ class TestBarycentricUvLookup:
 
     @pytest.fixture
     def slim_cache(self, disk_mesh):
-        from analysis.receptive_field_mapping._slim_helpers import (
+        from analysis.receptive_field_mapping.surface.slim_helpers import (
             boundary_loop, flatten_slim,
         )
-        from analysis.receptive_field_mapping.forearm_slim_uv import SlimUvCache
+        from analysis.receptive_field_mapping.surface.forearm_slim_uv import SlimUvCache
         V, F, center_vid, _ = disk_mesh
         boundary = boundary_loop(F)
         V_out, F_out, uv = flatten_slim(V, F, boundary, center_vid=center_vid, n_iter=20)
@@ -294,7 +320,7 @@ class TestBarycentricUvLookup:
         )
 
     def test_vertex_round_trip(self, slim_cache):
-        from analysis.receptive_field_mapping.forearm_slim_uv import (
+        from analysis.receptive_field_mapping.surface.forearm_slim_uv import (
             barycentric_uv_lookup,
         )
         result = barycentric_uv_lookup(slim_cache, slim_cache.V)
@@ -303,7 +329,7 @@ class TestBarycentricUvLookup:
 
     def test_face_centroid_in_hull(self, slim_cache):
         """UV of face centroid should lie inside the face's UV triangle."""
-        from analysis.receptive_field_mapping.forearm_slim_uv import (
+        from analysis.receptive_field_mapping.surface.forearm_slim_uv import (
             barycentric_uv_lookup,
         )
         V, F, uv = slim_cache.V, slim_cache.F, slim_cache.uv
@@ -335,3 +361,46 @@ class TestBarycentricUvLookup:
                 f"Face {fi} centroid UV is outside its UV triangle "
                 f"(bary=({l0:.4f}, {l1:.4f}, {l2:.4f}))"
             )
+
+
+# ===========================================================================
+# TestUvPointsToXyz
+# ===========================================================================
+
+class TestUvPointsToXyz:
+
+    def test_barycentric_known_point(self, unit_square_mesh):
+        """UV centre (0.5, 0.5) should map to 3D point (0.5, 0.5, 0.0)."""
+        from analysis.receptive_field_mapping.surface.forearm_slim_uv import uv_points_to_xyz
+        V, F, uv = unit_square_mesh
+        query = np.array([[0.5, 0.5]], dtype=np.float64)
+        xyz = uv_points_to_xyz(query, uv, F, V)
+        np.testing.assert_allclose(xyz, [[0.5, 0.5, 0.0]], atol=1e-12)
+
+    def test_vertex_positions_round_trip(self, unit_square_mesh):
+        """Querying at each mesh vertex UV should return the exact 3D vertex."""
+        from analysis.receptive_field_mapping.surface.forearm_slim_uv import uv_points_to_xyz
+        V, F, uv = unit_square_mesh
+        xyz = uv_points_to_xyz(uv, uv, F, V)
+        np.testing.assert_allclose(xyz, V, atol=1e-12)
+
+    def test_outside_triangle_raises(self, unit_square_mesh):
+        """A UV point outside the mesh must raise ValueError."""
+        from analysis.receptive_field_mapping.surface.forearm_slim_uv import uv_points_to_xyz
+        V, F, uv = unit_square_mesh
+        outside_point = np.array([[2.0, 2.0]], dtype=np.float64)
+        with pytest.raises(ValueError, match="outside every triangle"):
+            uv_points_to_xyz(outside_point, uv, F, V)
+
+    def test_multiple_points_mixed_triangles(self, unit_square_mesh):
+        """Points in both triangles of the unit square should interpolate correctly."""
+        from analysis.receptive_field_mapping.surface.forearm_slim_uv import uv_points_to_xyz
+        V, F, uv = unit_square_mesh
+        queries = np.array([
+            [0.25, 0.25],   # in triangle [0,1,2] near vertex 0
+            [0.75, 0.75],   # in triangle [0,2,3] near vertex 2
+        ], dtype=np.float64)
+        xyz = uv_points_to_xyz(queries, uv, F, V)
+        # Since UV = XY and Z = 0 everywhere, XY output must equal input UV
+        np.testing.assert_allclose(xyz[:, :2], queries, atol=1e-12)
+        np.testing.assert_allclose(xyz[:, 2], [0.0, 0.0], atol=1e-12)

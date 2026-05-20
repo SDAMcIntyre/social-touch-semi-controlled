@@ -210,9 +210,9 @@ def explore_rf_surface_flow(
 ) -> None:
     """Interactive 3D RF surface viewer: Z = mean IFF, coloured by jet colormap.
 
-    Loads the per-session ``_rf_population_vertex_data.npz`` produced by
-    ``visualize_population_rf_maps`` and presents a rotatable 3D surface showing
-    RF topography. Requires ``visualize_population_rf_maps`` to have run first.
+    Loads the per-session ``_population_response_fields.npz`` produced by
+    ``extract_population_rf_response_field_boundaries`` and presents a rotatable 3D surface showing
+    RF topography. Requires ``extract_population_rf_response_field_boundaries`` to have run first.
     """
     print(f"[Batch Analysis] Launching RF surface viewer for {len(input_items)} item(s)...")
     if not input_items:

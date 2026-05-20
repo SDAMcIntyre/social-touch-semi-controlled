@@ -23,17 +23,18 @@ from .pipelines.rf_cluster_gui_launchers import (
     launch_touch_population_explorer,
     launch_gallery_viewer,
     launch_rf_camera_settings_viewer,
+    launch_rf_surface_viewer,
 )
-from .rf_metrics import RFMetrics, compute_rf_metrics
-from .rf_projection import project_to_2d
-from .rf_simple_pipeline import run_simple_rf_mapping
-from .rf_single_touch_pipeline import run_single_touch_rf_mapping
-from .rf_population_grid_pipeline import run_population_rf_grid, PopulationRFGridConfig
-from .rf_population_grid_metrics_pipeline import run_population_rf_grid_metrics, PopulationRFGridMetricsConfig
-from .rf_population_grid_metrics_renderer import run_population_rf_grid_metrics_visualization
-from .rf_session_comparison_renderer import run_session_comparison_visualization
-from .rf_baseline_deviation import BaselineDeviationMetrics, compute_baseline_deviation
-from .rf_population_map_pipeline import run_population_rf_maps
+from .metrics.rf_metrics import RFMetrics, compute_rf_metrics
+from .surface.rf_projection import project_to_2d
+from .pipelines.rf_simple_pipeline import run_simple_rf_mapping
+from .pipelines.rf_single_touch_pipeline import run_single_touch_rf_mapping
+from .pipelines.rf_population_grid_pipeline import run_population_rf_grid, PopulationRFGridConfig
+from .pipelines.rf_population_grid_metrics_pipeline import run_population_rf_grid_metrics, PopulationRFGridMetricsConfig
+from .rendering.rf_population_grid_metrics_renderer import run_population_rf_grid_metrics_visualization
+from .rendering.rf_session_comparison_renderer import run_session_comparison_visualization
+from .metrics.rf_baseline_deviation import BaselineDeviationMetrics, compute_baseline_deviation
+from .pipelines.rf_population_response_field_pipeline import run_population_response_field_extraction
 
 __all__ = [
     "project_to_2d",
@@ -48,6 +49,7 @@ __all__ = [
     "launch_touch_population_explorer",
     "launch_gallery_viewer",
     "launch_rf_camera_settings_viewer",
+    "launch_rf_surface_viewer",
     "RFMetrics",
     "compute_rf_metrics",
     "run_simple_rf_mapping",
@@ -60,5 +62,5 @@ __all__ = [
     "run_session_comparison_visualization",
     "BaselineDeviationMetrics",
     "compute_baseline_deviation",
-    "run_population_rf_maps",
+    "run_population_response_field_extraction",
 ]

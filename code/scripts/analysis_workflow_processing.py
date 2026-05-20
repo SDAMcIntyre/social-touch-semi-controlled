@@ -36,11 +36,11 @@ from analysis.receptive_field_mapping import (
     PopulationRFGridMetricsConfig,
     run_population_rf_grid_metrics_visualization,
     run_session_comparison_visualization,
-    run_population_rf_maps,
+    run_population_response_field_extraction,
     launch_rf_camera_settings_viewer,
 )
-from analysis.receptive_field_mapping.rf_data_loader import resolve_forearm_ply
-from analysis.receptive_field_mapping.rf_extraction_io import load_rf_camera_settings
+from analysis.receptive_field_mapping.data.rf_data_loader import resolve_forearm_ply
+from analysis.receptive_field_mapping.data.rf_extraction_io import load_rf_camera_settings
 from analysis.touch_analytics.pipeline_shared import session_id_from_path
 
 from analysis.pipeline import collect_unique_session_dirs, discover_input_items, run_pipeline_stages
@@ -157,10 +157,10 @@ def precompute_forearm_slim_uv_flow(
     The UV origin (center_vid) is placed at the IFF-weighted centroid of all
     single-touch RF maps, giving a neuroscientifically meaningful anchor point.
     """
-    from analysis.receptive_field_mapping.forearm_slim_uv import (
+    from analysis.receptive_field_mapping.surface.forearm_slim_uv import (
         precompute_forearm_slim_uv as _precompute,
     )
-    from analysis.receptive_field_mapping.rf_data_loader import resolve_forearm_ply
+    from analysis.receptive_field_mapping.data.rf_data_loader import resolve_forearm_ply
     from analysis.touch_analytics.pipeline_shared import session_id_from_path
     from utils.should_process_task import should_process_task
 
@@ -238,8 +238,8 @@ def map_single_touch_rf_flow(
     )
 
 
-@flow(name="visualize_population_rf_maps")
-def visualize_population_rf_maps_flow(
+@flow(name="extract_population_rf_response_field_boundaries")
+def extract_population_rf_response_field_boundaries_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
     neuron_mode: str = "iff",
@@ -251,14 +251,14 @@ def visualize_population_rf_maps_flow(
 
     For each session, produces one PNG per gesture subset (all, tap,
     stroke_proximal, stroke_distal) under
-    ``4_analysed/population_rf_maps/<session_id>/``.
+    ``4_analysed/population_response_fields/<session_id>/``.
     Idempotent via sentinel JSON.
     """
-    print(f"[Batch Analysis] Rendering population RF maps for {len(input_items)} item(s)...")
+    print(f"[Batch Analysis] Extracting population response field boundaries for {len(input_items)} item(s)...")
     if not input_items:
         return
 
-    run_population_rf_maps(
+    run_population_response_field_extraction(
         session_configs=input_items,
         neuron_mode=neuron_mode,
         min_overlap_pct=min_overlap_pct,
@@ -1094,19 +1094,19 @@ def _build_pipeline_stages(dag_handler: DagConfigHandler, items_to_process) -> l
             },
         },
         {
-            "name": "visualize_population_rf_maps",
-            "func": visualize_population_rf_maps_flow,
+            "name": "extract_population_rf_response_field_boundaries",
+            "func": extract_population_rf_response_field_boundaries_flow,
             "params": lambda: {
-                "neuron_mode": dag_handler.get_task_options("visualize_population_rf_maps").get("neuron_mode", "iff"),
-                "min_overlap_pct": float(dag_handler.get_task_options("visualize_population_rf_maps").get("min_overlap_pct", 25.0)),
+                "neuron_mode": dag_handler.get_task_options("extract_population_rf_response_field_boundaries").get("neuron_mode", "iff"),
+                "min_overlap_pct": float(dag_handler.get_task_options("extract_population_rf_response_field_boundaries").get("min_overlap_pct", 25.0)),
                 **(
-                    {"median_filter_size": int(dag_handler.get_task_options("visualize_population_rf_maps")["median_filter_size"])}
-                    if dag_handler.get_task_options("visualize_population_rf_maps").get("median_filter_size") is not None
+                    {"median_filter_size": int(dag_handler.get_task_options("extract_population_rf_response_field_boundaries")["median_filter_size"])}
+                    if dag_handler.get_task_options("extract_population_rf_response_field_boundaries").get("median_filter_size") is not None
                     else {}
                 ),
                 **(
-                    {"inflection_sigma": float(dag_handler.get_task_options("visualize_population_rf_maps")["inflection_sigma"])}
-                    if dag_handler.get_task_options("visualize_population_rf_maps").get("inflection_sigma") is not None
+                    {"inflection_sigma": float(dag_handler.get_task_options("extract_population_rf_response_field_boundaries")["inflection_sigma"])}
+                    if dag_handler.get_task_options("extract_population_rf_response_field_boundaries").get("inflection_sigma") is not None
                     else {}
                 ),
             },

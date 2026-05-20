@@ -25,6 +25,7 @@ from .forearm_slim_uv import (
     precompute_forearm_slim_uv,
     load_slim_uv_cache,
     barycentric_uv_lookup,
+    uv_points_to_xyz,
 )
 from .rf_projection import (
     project_tangent_plane,
@@ -59,6 +60,7 @@ __all__ = [
     "precompute_forearm_slim_uv",
     "load_slim_uv_cache",
     "barycentric_uv_lookup",
+    "uv_points_to_xyz",
     # rf_projection
     "project_tangent_plane",
     "project_cylindrical_unwrap",

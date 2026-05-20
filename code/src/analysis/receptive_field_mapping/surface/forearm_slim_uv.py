@@ -365,6 +365,80 @@ def load_slim_uv_cache(
 
 
 # ---------------------------------------------------------------------------
+# UV → 3D world mapping
+# ---------------------------------------------------------------------------
+
+def uv_points_to_xyz(
+    uv_points: np.ndarray,
+    forearm_uv: np.ndarray,
+    forearm_faces: np.ndarray,
+    forearm_V: np.ndarray,
+) -> np.ndarray:
+    """Map UV points to 3D world (mm) via barycentric interpolation on the SLIM mesh.
+
+    Uses matplotlib.tri.Triangulation + get_trifinder() to locate the containing
+    triangle for each UV point, then interpolates forearm_V with barycentric weights.
+
+    Raises ValueError if any UV point lies outside every triangle.
+    """
+    import matplotlib.tri as mtri
+
+    uv_points = np.asarray(uv_points, dtype=np.float64)
+    forearm_uv = np.asarray(forearm_uv, dtype=np.float64)
+    forearm_V = np.asarray(forearm_V, dtype=np.float64)
+
+    triang = mtri.Triangulation(forearm_uv[:, 0], forearm_uv[:, 1], forearm_faces)
+    trifinder = triang.get_trifinder()
+
+    tri_idx = trifinder(uv_points[:, 0], uv_points[:, 1])
+    outside = tri_idx < 0
+    if np.any(outside):
+        n_out = int(outside.sum())
+        raise ValueError(
+            f"uv_points_to_xyz: {n_out} of {len(uv_points)} UV point(s) lie "
+            "outside every triangle of the SLIM mesh. "
+            "The boundary contour must stay within the UV domain."
+        )
+
+    face_vids = forearm_faces[tri_idx]  # (N, 3)
+    A = forearm_uv[face_vids[:, 0]]
+    B = forearm_uv[face_vids[:, 1]]
+    C = forearm_uv[face_vids[:, 2]]
+
+    v0 = B - A
+    v1 = C - A
+    v2 = uv_points - A
+
+    d00 = np.einsum('ij,ij->i', v0, v0)
+    d01 = np.einsum('ij,ij->i', v0, v1)
+    d11 = np.einsum('ij,ij->i', v1, v1)
+    d20 = np.einsum('ij,ij->i', v2, v0)
+    d21 = np.einsum('ij,ij->i', v2, v1)
+
+    denom = d00 * d11 - d01 * d01
+    if np.any(np.abs(denom) < 1e-30):
+        raise ValueError(
+            "uv_points_to_xyz: degenerate triangle(s) in SLIM mesh (near-zero "
+            "UV area). The SLIM UV map may be invalid."
+        )
+
+    lam1 = (d11 * d20 - d01 * d21) / denom
+    lam2 = (d00 * d21 - d01 * d20) / denom
+    lam0 = 1.0 - lam1 - lam2
+
+    V0 = forearm_V[face_vids[:, 0]]
+    V1 = forearm_V[face_vids[:, 1]]
+    V2 = forearm_V[face_vids[:, 2]]
+
+    xyz = (
+        lam0[:, np.newaxis] * V0
+        + lam1[:, np.newaxis] * V1
+        + lam2[:, np.newaxis] * V2
+    )
+    return xyz.astype(np.float64)
+
+
+# ---------------------------------------------------------------------------
 # Barycentric UV lookup
 # ---------------------------------------------------------------------------
 
