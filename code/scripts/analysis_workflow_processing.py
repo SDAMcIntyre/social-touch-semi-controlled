@@ -683,19 +683,19 @@ def touch_feature_extraction_flow(
 def render_touch_feature_radar_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
-    aggregation: str = "mean_during_iff",
+    radar_groups: dict = None,
 ) -> None:
     """
     Stage 2c: Per-session radar plots of touch feature distributions.
     Writes one PNG per gesture type + composite to
-    ``4_analysed/touch_feature_radar/<session_id>/``.
+    ``4_analysed/touch_feature_radar/<group_name>/<session_id>/``.
     """
     print(f"[Batch Analysis] Rendering touch feature radar plots for {len(input_items)} item(s)...")
     if not input_items:
         return
     run_touch_feature_radar(
         session_configs=input_items,
-        aggregation=aggregation,
+        radar_groups=radar_groups,
         force_processing=force_processing,
     )
 
@@ -1174,7 +1174,7 @@ def _build_pipeline_stages(dag_handler: DagConfigHandler, items_to_process) -> l
             "name": "render_touch_feature_radar",
             "func": render_touch_feature_radar_flow,
             "params": lambda: {
-                "aggregation": dag_handler.get_task_options("render_touch_feature_radar").get("aggregation", "mean_during_iff"),
+                "radar_groups": dag_handler.get_task_options("render_touch_feature_radar").get("radar_groups"),
             },
         },
         {

@@ -148,7 +148,7 @@ tasks:
   # session-x-gesture heatmap PNGs under 4_analysed/session_rf_boundary_comparison/
   compare_session_rf_boundaries:
     category: processing
-    enabled: false
+    enabled: true
     options:
       force_processing: false
     depends_on: [extract_population_rf_response_field_boundaries]
@@ -188,10 +188,22 @@ tasks:
 
   render_touch_feature_radar:
     category: processing
-    enabled: false
+    enabled: true
     options:
       force_processing: false
-      aggregation: mean_during_iff
+      radar_groups:
+        canonical_iff:
+          enabled: true
+          features:
+            contact_area: [mean_during_iff]
+            contact_depth: [mean_during_iff]
+            hand_velocity_amplitude: [mean_during_iff]
+            pressure: [mean_during_iff]
+            mos_strain: [mean_during_iff]
+            mos_stress_kpa: [mean_during_iff]
+            mos_strain_rate: [mean_during_iff]
+            mos_elastic_energy_mj: [mean_during_iff]
+            mos_impulse_mns: [mean_during_iff]
     depends_on: [touch_feature_extraction]
 
   # Population RF grid: sweep N-D feature space, average single-touch RFs per cell.
