@@ -1,0 +1,528 @@
+"""Inflection boundary detection for population RF heatmaps.
+
+Detects the Laplacian zero-crossing on a 2D IFF heatmap, which marks
+where the surface transitions from concave (near the peak) to convex
+(on the flanks) — the ring of steepest descent around the peak.
+"""
+
+from __future__ import annotations
+
+import math
+import pathlib
+from dataclasses import dataclass
+
+import numpy as np
+from matplotlib.path import Path
+from scipy.ndimage import binary_dilation, gaussian_filter, label as label_components, laplace, map_coordinates
+from skimage.measure import find_contours
+
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# InflectionBoundary dataclass
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class InflectionBoundary:
+    """Geometric metrics for the inflection boundary of a population RF map."""
+
+    contour_uv: np.ndarray
+    """(N, 2) UV coordinates of the boundary contour."""
+
+    area_uv: float
+    """Polygon area in UV space (shoelace formula)."""
+
+    perimeter_uv: float
+    """Polygon perimeter in UV space."""
+
+    circularity: float
+    """Shape compactness: 4π·area / perimeter². 1.0 = perfect circle."""
+
+    centroid_uv: tuple[float, float]
+    """Polygon centroid in UV space."""
+
+    pca_major_uv: float
+    """PCA major axis length (2σ) in UV space."""
+
+    pca_minor_uv: float
+    """PCA minor axis length (2σ) in UV space."""
+
+    pca_orientation_deg: float
+    """Major axis orientation in degrees."""
+
+    mean_iff_on_contour: float
+    """Mean IFF value sampled along the contour path."""
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+
+def _compute_masked_laplacian(
+    grid_z: np.ndarray,
+    gaussian_sigma: float,
+) -> np.ndarray:
+    """NaN-aware Laplacian of a 2D grid.
+
+    Replaces NaN cells with 0 for smoothing, uses a binary weight mask to
+    normalize near NaN edges, then applies the Laplacian. Re-masks NaN regions
+    plus a 2-pixel border around them to prevent finite-difference artifacts.
+
+    Returns an array of the same shape with NaN where masked.
+    """
+    nan_mask = np.isnan(grid_z)
+
+    values = np.where(nan_mask, 0.0, grid_z)
+    weight = (~nan_mask).astype(float)
+
+    smoothed_values = gaussian_filter(values, sigma=gaussian_sigma)
+    smoothed_weight = gaussian_filter(weight, sigma=gaussian_sigma)
+
+    with np.errstate(invalid="ignore", divide="ignore"):
+        normalized = np.where(smoothed_weight > 0, smoothed_values / smoothed_weight, np.nan)
+
+    laplacian = laplace(np.where(np.isnan(normalized), 0.0, normalized))
+
+    dilation_kernel = np.ones((5, 5), dtype=bool)
+    expanded_nan_mask = binary_dilation(nan_mask, structure=dilation_kernel)
+
+    laplacian = np.where(expanded_nan_mask, np.nan, laplacian)
+    return laplacian
+
+
+def _find_peak_location(grid_z: np.ndarray) -> tuple[int, int] | None:
+    """Return (row, col) of the global maximum ignoring NaN.
+
+    Returns None if grid_z is all NaN.
+    """
+    if np.all(np.isnan(grid_z)):
+        return None
+    flat_idx = np.nanargmax(grid_z)
+    row, col = np.unravel_index(flat_idx, grid_z.shape)
+    return int(row), int(col)
+
+
+def _is_contour_closed(contour_rc: np.ndarray, tolerance_px: float = 2.0) -> bool:
+    """Return True if the first and last contour points are within tolerance_px."""
+    dist = np.linalg.norm(contour_rc[0] - contour_rc[-1])
+    return bool(dist <= tolerance_px)
+
+
+def _contour_area_pixels(contour_rc: np.ndarray) -> float:
+    """Shoelace area in pixel coordinates (row, col)."""
+    r = contour_rc[:, 0]
+    c = contour_rc[:, 1]
+    return abs(float(np.dot(r, np.roll(c, 1)) - np.dot(c, np.roll(r, 1)))) * 0.5
+
+
+def _select_enclosing_contour(
+    contours: list[np.ndarray],
+    peak_rc: tuple[int, int],
+) -> np.ndarray | None:
+    """Return the smallest closed contour (by shoelace area) enclosing the peak.
+
+    Returns None if no contour is both closed and encloses the peak.
+    """
+    peak_point = np.array([peak_rc[0], peak_rc[1]], dtype=float)
+
+    candidates: list[tuple[float, np.ndarray]] = []
+    for contour in contours:
+        if len(contour) < 4:
+            continue
+        if not _is_contour_closed(contour):
+            continue
+        path = Path(contour)
+        if path.contains_point(peak_point):
+            area = _contour_area_pixels(contour)
+            candidates.append((area, contour))
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda x: x[0])
+    return candidates[0][1]
+
+
+def _select_peak_basin_contour(
+    laplacian: np.ndarray,
+    peak_rc: tuple[int, int],
+) -> np.ndarray | None:
+    """Return the boundary of the negative-Laplacian connected region containing the peak.
+
+    The peak of grid_z has negative Laplacian (concave down). This function
+    flood-fills from the peak through connected negative-Laplacian pixels and
+    extracts the boundary contour of that region — the inflection ring.
+
+    Returns None if the peak is not in a negative-Laplacian cell or the
+    boundary has fewer than 4 points.
+    """
+    valid = ~np.isnan(laplacian)
+    negative_mask = np.zeros_like(laplacian, dtype=bool)
+    negative_mask[valid] = laplacian[valid] < 0
+
+    pr, pc = peak_rc
+    if not negative_mask[pr, pc]:
+        lap_val = laplacian[pr, pc] if valid[pr, pc] else float("nan")
+        logger.warning(
+            "[DIAG] peak_basin: peak (%d,%d) not in negative Laplacian — "
+            "lap_val=%.4e, is_nan=%s",
+            pr, pc, lap_val, not valid[pr, pc],
+        )
+        return None
+
+    labeled, n_components = label_components(negative_mask)
+    peak_label = labeled[pr, pc]
+    if peak_label == 0:
+        logger.warning("[DIAG] peak_basin: peak label is 0 (should not happen)")
+        return None
+
+    component_mask = (labeled == peak_label).astype(float)
+    component_size = int(component_mask.sum())
+    contours = find_contours(component_mask, 0.5)
+
+    if not contours:
+        logger.warning(
+            "[DIAG] peak_basin: find_contours empty — component_size=%d", component_size,
+        )
+        return None
+
+    selected = max(contours, key=len)
+    if len(selected) < 4:
+        logger.warning(
+            "[DIAG] peak_basin: largest contour too small — pts=%d, component_size=%d",
+            len(selected), component_size,
+        )
+        return None
+
+    logger.info(
+        "[DIAG] peak_basin: OK — component_size=%d, n_components=%d, contour_pts=%d",
+        component_size, n_components, len(selected),
+    )
+    return selected
+
+
+def _contour_pixels_to_uv(
+    contour_rc: np.ndarray,
+    grid_u: np.ndarray,
+    grid_v: np.ndarray,
+) -> np.ndarray:
+    """Convert find_contours (row, col) coordinates to UV space.
+
+    grid_u and grid_v are both (R, C) arrays where axis 0 is the U dimension
+    and axis 1 is the V dimension (produced by np.mgrid[u_min:u_max:150j, ...]).
+    Row index maps to U, col index maps to V.
+    """
+    n_rows, n_cols = grid_u.shape
+    rows = contour_rc[:, 0]
+    cols = contour_rc[:, 1]
+
+    u_min = float(grid_u[0, 0])
+    u_max = float(grid_u[-1, 0])
+    v_min = float(grid_v[0, 0])
+    v_max = float(grid_v[0, -1])
+
+    u_coords = u_min + rows * (u_max - u_min) / (n_rows - 1)
+    v_coords = v_min + cols * (v_max - v_min) / (n_cols - 1)
+
+    return np.column_stack([u_coords, v_coords])
+
+
+# ---------------------------------------------------------------------------
+# Polygon metrics
+# ---------------------------------------------------------------------------
+
+
+def _compute_polygon_area(contour_uv: np.ndarray) -> float:
+    """Shoelace formula polygon area in UV space."""
+    u = contour_uv[:, 0]
+    v = contour_uv[:, 1]
+    return abs(float(np.dot(u, np.roll(v, 1)) - np.dot(v, np.roll(u, 1)))) * 0.5
+
+
+def _compute_polygon_perimeter(contour_uv: np.ndarray) -> float:
+    """Polygon perimeter: sum of Euclidean segment lengths."""
+    diffs = np.diff(contour_uv, axis=0)
+    return float(np.sum(np.linalg.norm(diffs, axis=1)))
+
+
+def _compute_polygon_centroid(contour_uv: np.ndarray) -> tuple[float, float]:
+    """Polygon centroid via the shoelace-based area centroid formula."""
+    u = contour_uv[:, 0]
+    v = contour_uv[:, 1]
+    u_next = np.roll(u, -1)
+    v_next = np.roll(v, -1)
+
+    cross = u * v_next - u_next * v
+    signed_area = float(np.sum(cross)) * 0.5
+
+    if abs(signed_area) < 1e-12:
+        return float(u.mean()), float(v.mean())
+
+    cu = float(np.sum((u + u_next) * cross)) / (6.0 * signed_area)
+    cv = float(np.sum((v + v_next) * cross)) / (6.0 * signed_area)
+    return cu, cv
+
+
+def _compute_contour_pca(
+    contour_uv: np.ndarray,
+) -> tuple[float, float, float]:
+    """Unweighted PCA of contour vertices.
+
+    Returns (major_2sigma, minor_2sigma, orientation_deg).
+    """
+    centroid = contour_uv.mean(axis=0)
+    diff = contour_uv - centroid
+    cov = (diff.T @ diff) / len(contour_uv)
+
+    eigenvalues, eigenvectors = np.linalg.eigh(cov)
+
+    major_var = float(eigenvalues[-1])
+    minor_var = float(eigenvalues[0])
+    major_vec = eigenvectors[:, -1]
+
+    major_2sigma = 2.0 * math.sqrt(max(major_var, 0.0))
+    minor_2sigma = 2.0 * math.sqrt(max(minor_var, 0.0))
+    orientation_deg = float(math.degrees(math.atan2(float(major_vec[1]), float(major_vec[0]))))
+
+    return major_2sigma, minor_2sigma, orientation_deg
+
+
+# ---------------------------------------------------------------------------
+# Contour IFF sampling
+# ---------------------------------------------------------------------------
+
+
+def _sample_grid_along_contour(
+    grid_z: np.ndarray,
+    contour_rc: np.ndarray,
+) -> float:
+    """Bilinear interpolation of grid_z at contour (row, col) positions.
+
+    Uses scipy.ndimage.map_coordinates with order=1. NaN cells in grid_z
+    are replaced with the grid mean before sampling to avoid propagating NaN
+    through the interpolation kernel; sampled positions over original NaN
+    cells are excluded from the mean.
+    """
+    nan_mask = np.isnan(grid_z)
+    fill_value = float(np.nanmean(grid_z)) if not np.all(nan_mask) else 0.0
+    filled = np.where(nan_mask, fill_value, grid_z)
+
+    coords = np.array([contour_rc[:, 0], contour_rc[:, 1]])
+    sampled = map_coordinates(filled, coords, order=1, mode="nearest")
+
+    return float(np.mean(sampled))
+
+
+# ---------------------------------------------------------------------------
+# [DIAG] Temporary debug visualisation — remove after investigation
+# ---------------------------------------------------------------------------
+
+
+def _diag_save_laplacian_png(
+    laplacian: np.ndarray,
+    contours: list[np.ndarray],
+    peak_rc: tuple[int, int],
+    grid_z: np.ndarray,
+    output_dir: pathlib.Path | None = None,
+    label: str = "",
+) -> None:
+    """[DIAG] Save a debug PNG showing the Laplacian, contours, and peak."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    fig, axes = plt.subplots(1, 2, figsize=(16, 7))
+
+    ax_lap = axes[0]
+    lap_display = laplacian.copy()
+    vabs = max(abs(float(np.nanmin(lap_display))), abs(float(np.nanmax(lap_display))))
+    im = ax_lap.imshow(lap_display, cmap="RdBu_r", vmin=-vabs, vmax=vabs, origin="upper")
+    for i, c in enumerate(contours):
+        closed = _is_contour_closed(c) and len(c) >= 4
+        color = "lime" if closed else "yellow"
+        ax_lap.plot(c[:, 1], c[:, 0], linewidth=0.8, color=color)
+    ax_lap.plot(peak_rc[1], peak_rc[0], "rx", markersize=12, markeredgewidth=2)
+    ax_lap.set_title(
+        f"Laplacian (RdBu) | {len(contours)} contours | peak=({peak_rc[0]},{peak_rc[1]})"
+    )
+    plt.colorbar(im, ax=ax_lap, shrink=0.7)
+
+    ax_gz = axes[1]
+    im2 = ax_gz.imshow(grid_z, cmap="jet", origin="upper")
+    for c in contours:
+        ax_gz.plot(c[:, 1], c[:, 0], linewidth=0.8, color="white", alpha=0.7)
+    ax_gz.plot(peak_rc[1], peak_rc[0], "rx", markersize=12, markeredgewidth=2)
+    ax_gz.set_title("grid_z (jet) with contours overlay")
+    plt.colorbar(im2, ax=ax_gz, shrink=0.7)
+
+    fig.tight_layout()
+    fname = f"diag_laplacian_{label}.png" if label else f"diag_laplacian_{peak_rc[0]}_{peak_rc[1]}.png"
+    if output_dir is not None:
+        path = pathlib.Path(output_dir) / fname
+    else:
+        import tempfile
+        path = pathlib.Path(tempfile.gettempdir()) / fname
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    logger.warning("[DIAG] saved debug Laplacian PNG: %s", path)
+
+
+# ---------------------------------------------------------------------------
+# Public orchestrator
+# ---------------------------------------------------------------------------
+
+
+def compute_inflection_boundary(
+    grid_u: np.ndarray,
+    grid_v: np.ndarray,
+    grid_z: np.ndarray,
+    gaussian_sigma: float = 1.0,
+    _diag_output_dir: pathlib.Path | None = None,
+    _diag_label: str = "",
+) -> InflectionBoundary | None:
+    """Detect the inflection boundary on a 2D IFF population heatmap.
+
+    The inflection boundary is the Laplacian zero-crossing of the smoothed
+    heatmap — the ring where the surface transitions from concave (near the
+    peak) to convex (on the flanks). Gaussian smoothing is applied first to
+    suppress noise; ``gaussian_sigma`` controls the trade-off between
+    sensitivity and smoothness.
+
+    Parameters
+    ----------
+    grid_u:
+        (R, C) U-coordinate grid (axis 0 = U dimension).
+    grid_v:
+        (R, C) V-coordinate grid (axis 1 = V dimension).
+    grid_z:
+        (R, C) IFF values; NaN where no data exists.
+    gaussian_sigma:
+        Standard deviation for the NaN-aware Gaussian pre-smoothing step.
+
+    Returns
+    -------
+    InflectionBoundary or None if no valid boundary can be extracted
+    (all-NaN input, flat surface, no closed contour enclosing the peak,
+    or peak within 2 pixels of the grid border).
+    """
+    if grid_z is None:
+        logger.warning("[DIAG] inflection_boundary: grid_z is None")
+        return None
+
+    if np.all(np.isnan(grid_z)):
+        logger.warning("[DIAG] inflection_boundary: all-NaN grid, shape=%s", grid_z.shape)
+        return None
+
+    peak_rc = _find_peak_location(grid_z)
+    if peak_rc is None:
+        logger.warning("[DIAG] inflection_boundary: _find_peak_location returned None")
+        return None
+
+    n_rows, n_cols = grid_z.shape
+    pr, pc = peak_rc
+    if pr < 2 or pr >= n_rows - 2 or pc < 2 or pc >= n_cols - 2:
+        nan_frac = float(np.isnan(grid_z).sum()) / grid_z.size
+        logger.warning(
+            "[DIAG] inflection_boundary: peak at border — peak_rc=(%d, %d), "
+            "grid=%dx%d, nan_frac=%.3f, peak_val=%.4f",
+            pr, pc, n_rows, n_cols, nan_frac, float(np.nanmax(grid_z)),
+        )
+        return None
+
+    laplacian = _compute_masked_laplacian(grid_z, gaussian_sigma)
+
+    valid_lap = laplacian[~np.isnan(laplacian)]
+    if valid_lap.size == 0 or float(np.ptp(valid_lap)) < 1e-12:
+        nan_frac = float(np.isnan(grid_z).sum()) / grid_z.size
+        lap_nan_frac = float(np.isnan(laplacian).sum()) / laplacian.size
+        logger.warning(
+            "[DIAG] inflection_boundary: Laplacian flat or empty — "
+            "valid_lap.size=%d, ptp=%.2e, grid_nan_frac=%.3f, lap_nan_frac=%.3f",
+            valid_lap.size,
+            float(np.ptp(valid_lap)) if valid_lap.size > 0 else 0.0,
+            nan_frac, lap_nan_frac,
+        )
+        return None
+
+    selected = _select_peak_basin_contour(laplacian, peak_rc)
+    if selected is None:
+        logger.warning(
+            "[DIAG] inflection_boundary: peak basin contour failed — peak_rc=(%d, %d)",
+            peak_rc[0], peak_rc[1],
+        )
+        lap_for_diag = np.where(np.isnan(laplacian), np.nanmin(laplacian) - 1.0, laplacian)
+        diag_contours = find_contours(lap_for_diag, 0.0)
+        _diag_save_laplacian_png(laplacian, diag_contours, peak_rc, grid_z, _diag_output_dir, _diag_label)
+        return None
+
+    contour_uv = _contour_pixels_to_uv(selected, grid_u, grid_v)
+
+    area_uv = _compute_polygon_area(contour_uv)
+    perimeter_uv = _compute_polygon_perimeter(contour_uv)
+
+    if perimeter_uv > 0:
+        circularity = 4.0 * math.pi * area_uv / (perimeter_uv ** 2)
+    else:
+        circularity = float("nan")
+
+    centroid_uv = _compute_polygon_centroid(contour_uv)
+    pca_major, pca_minor, pca_orientation_deg = _compute_contour_pca(contour_uv)
+    mean_iff = _sample_grid_along_contour(grid_z, selected)
+
+    logger.info(
+        "[DIAG] inflection_boundary: SUCCESS — contour_pts=%d, area_uv=%.4f, "
+        "circularity=%.3f, centroid_uv=(%.3f, %.3f)",
+        len(contour_uv), area_uv, circularity, centroid_uv[0], centroid_uv[1],
+    )
+
+    return InflectionBoundary(
+        contour_uv=contour_uv,
+        area_uv=area_uv,
+        perimeter_uv=perimeter_uv,
+        circularity=circularity,
+        centroid_uv=centroid_uv,
+        pca_major_uv=pca_major,
+        pca_minor_uv=pca_minor,
+        pca_orientation_deg=pca_orientation_deg,
+        mean_iff_on_contour=mean_iff,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Serialization
+# ---------------------------------------------------------------------------
+
+
+def _to_json_safe(val: float) -> float | None:
+    """Convert float to JSON-safe value; NaN → None."""
+    if isinstance(val, float) and math.isnan(val):
+        return None
+    if hasattr(val, "item"):
+        val = val.item()
+    if isinstance(val, float) and math.isnan(val):
+        return None
+    return val
+
+
+def inflection_boundary_to_dict(boundary: InflectionBoundary) -> dict:
+    """Serialize InflectionBoundary to a JSON-safe dict.
+
+    contour_uv is serialized as a list of [u, v] pairs. All scalar fields are
+    plain Python floats; NaN is converted to None.
+    """
+    return {
+        "contour_uv": [[float(pt[0]), float(pt[1])] for pt in boundary.contour_uv],
+        "area_uv": _to_json_safe(boundary.area_uv),
+        "perimeter_uv": _to_json_safe(boundary.perimeter_uv),
+        "circularity": _to_json_safe(boundary.circularity),
+        "centroid_uv": [_to_json_safe(boundary.centroid_uv[0]), _to_json_safe(boundary.centroid_uv[1])],
+        "pca_major_uv": _to_json_safe(boundary.pca_major_uv),
+        "pca_minor_uv": _to_json_safe(boundary.pca_minor_uv),
+        "pca_orientation_deg": _to_json_safe(boundary.pca_orientation_deg),
+        "mean_iff_on_contour": _to_json_safe(boundary.mean_iff_on_contour),
+    }

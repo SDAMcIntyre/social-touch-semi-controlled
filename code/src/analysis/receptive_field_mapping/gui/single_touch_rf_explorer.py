@@ -33,9 +33,11 @@ from analysis.receptive_field_mapping.rf_data_loader import (
     load_forearm_vertices,
 )
 
+from analysis.pipeline.shared_constants import NEURON_MODES
+
 logger = logging.getLogger(__name__)
 
-_VALID_NEURON_MODES = ("iff", "spike")
+_VALID_NEURON_MODES = NEURON_MODES
 
 
 # ---------------------------------------------------------------------------

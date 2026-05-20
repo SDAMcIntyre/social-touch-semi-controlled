@@ -9,6 +9,7 @@ from .representation.series_level.kinematics import compute_velocity, compute_ac
 
 # Architectural Import
 from utils.should_process_task import should_process_task, clean_task_outputs
+from analysis.pipeline.shared_constants import NERVE_SPIKE_COL
 
 def generate_unified_summary(
         input_path: Path,
@@ -52,9 +53,9 @@ def _process_touch_analysis(input_path: Path, output_path: Path, show: bool) -> 
             df['block_order_id'] = None
 
     # Check for Nerve_spike column presence
-    has_nerve_data = 'Nerve_spike' in df.columns
+    has_nerve_data = NERVE_SPIKE_COL in df.columns
     if not has_nerve_data:
-        logging.warning(f"'Nerve_spike' column missing in {input_path.name}. 'spike_elicited' will be 0.")
+        logging.warning(f"'{NERVE_SPIKE_COL}' column missing in {input_path.name}. 'spike_elicited' will be 0.")
 
     results = []
 
@@ -84,7 +85,7 @@ def _process_touch_analysis(input_path: Path, output_path: Path, show: bool) -> 
         # --- Efficacy Logic (Always Run) ---
         # Check if ANY frame in this touch had a spike (1)
         if has_nerve_data:
-            spike_elicited = 1 if group['Nerve_spike'].max() == 1 else 0
+            spike_elicited = 1 if group[NERVE_SPIKE_COL].max() == 1 else 0
         else:
             spike_elicited = 0
 

@@ -1,14 +1,21 @@
 """Receptive field mapping.
 
-Cluster-based spike-count pipeline (rf_cluster_pipeline / rf_cluster_visualizer).
+Cluster-based spike-count pipeline split across four focused modules:
+- ``pipelines/rf_cluster_pipeline``                — extraction orchestration
+- ``pipelines/rf_cluster_metrics_pipeline``        — RF metrics computation
+- ``pipelines/rf_cluster_visualization_pipeline``  — heatmap rendering
+- ``pipelines/rf_cluster_gui_launchers``           — GUI launcher functions
+
 Simple per-neuron spike-position pipeline (rf_simple_pipeline).
 """
 
-from .rf_cluster_pipeline import (
+from .pipelines.rf_cluster_pipeline import (
     run_cluster_rf_extraction,
-    run_cluster_rf_metrics_computation,
     run_cluster_rf_mapping,
-    run_cluster_rf_visualization,
+)
+from .pipelines.rf_cluster_metrics_pipeline import run_cluster_rf_metrics_computation
+from .pipelines.rf_cluster_visualization_pipeline import run_cluster_rf_visualization
+from .pipelines.rf_cluster_gui_launchers import (
     precompute_explorer_caches,
     launch_feature_space_explorer,
     launch_single_touch_rf_explorer,
