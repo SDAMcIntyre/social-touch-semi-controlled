@@ -142,6 +142,17 @@ tasks:
     depends_on: [map_single_touch_rf, set_rf_camera_settings, 
         precompute_forearm_slim_uv]
 
+  # Aggregate inflection boundary metrics across sessions and render comparison visuals.
+  # Reads per-session NPZ files from extract_population_rf_response_field_boundaries.
+  # Produces: session_rf_boundary_summary.csv, contour overlay PNGs, metric panel PNGs,
+  # session-x-gesture heatmap PNGs under 4_analysed/session_rf_boundary_comparison/
+  compare_session_rf_boundaries:
+    category: processing
+    enabled: false
+    options:
+      force_processing: false
+    depends_on: [extract_population_rf_response_field_boundaries]
+
   # Stage 2b (Feature Extraction): Per-session feature extraction. Each enabled feature extracts to its own folder.
   # Output: 4_analysed/touch_features/<feature>/<session>_touch_summary.csv
   touch_feature_extraction:

@@ -37,6 +37,7 @@ from analysis.receptive_field_mapping import (
     run_population_rf_grid_metrics_visualization,
     run_session_comparison_visualization,
     run_population_response_field_extraction,
+    run_session_rf_boundary_comparison,
     launch_rf_camera_settings_viewer,
 )
 from analysis.receptive_field_mapping.data.rf_data_loader import resolve_forearm_ply
@@ -265,6 +266,28 @@ def extract_population_rf_response_field_boundaries_flow(
         force_processing=force_processing,
         median_filter_size=median_filter_size,
         inflection_sigma=inflection_sigma,
+    )
+
+
+@flow(name="compare_session_rf_boundaries")
+def compare_session_rf_boundaries_flow(
+    input_items: List[Tuple[Path, Path]],
+    force_processing: bool = False,
+) -> None:
+    """Aggregate RF boundary metrics across sessions and render comparison visuals.
+
+    Reads per-session NPZ files produced by extract_population_rf_response_field_boundaries,
+    builds a summary CSV, and renders UV contour overlays, per-gesture metric panels,
+    and session-x-gesture heatmaps.
+    Output: 4_analysed/session_rf_boundary_comparison/
+    """
+    print(f"[Batch Analysis] Comparing session RF boundaries for {len(input_items)} item(s)...")
+    if not input_items:
+        return
+
+    run_session_rf_boundary_comparison(
+        session_configs=input_items,
+        force_processing=force_processing,
     )
 
 
@@ -1110,6 +1133,11 @@ def _build_pipeline_stages(dag_handler: DagConfigHandler, items_to_process) -> l
                     else {}
                 ),
             },
+        },
+        {
+            "name": "compare_session_rf_boundaries",
+            "func": compare_session_rf_boundaries_flow,
+            "params": lambda: {},
         },
         {
             "name": "touch_feature_extraction",

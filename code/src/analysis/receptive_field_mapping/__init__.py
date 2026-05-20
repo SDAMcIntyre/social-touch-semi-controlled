@@ -35,6 +35,7 @@ from .rendering.rf_population_grid_metrics_renderer import run_population_rf_gri
 from .rendering.rf_session_comparison_renderer import run_session_comparison_visualization
 from .metrics.rf_baseline_deviation import BaselineDeviationMetrics, compute_baseline_deviation
 from .pipelines.rf_population_response_field_pipeline import run_population_response_field_extraction
+from .pipelines.rf_session_boundary_comparison_pipeline import run_session_rf_boundary_comparison
 
 __all__ = [
     "project_to_2d",
@@ -63,4 +64,5 @@ __all__ = [
     "BaselineDeviationMetrics",
     "compute_baseline_deviation",
     "run_population_response_field_extraction",
+    "run_session_rf_boundary_comparison",
 ]
