@@ -32,6 +32,8 @@ import trimesh
 import trimesh.repair
 from scipy.sparse import coo_matrix
 from scipy.sparse.linalg import spsolve
+from scipy.spatial import Delaunay as _Delaunay
+from matplotlib.path import Path as _MplPath
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +78,91 @@ def _find_boundary_loops(F: np.ndarray) -> list[list[int]]:
     return loops
 
 
+def _fill_hole_delaunay(
+    V: np.ndarray,
+    loop: list[int],
+    n_extra_verts: int = 0,
+) -> tuple[list[np.ndarray], list[list[int]]]:
+    """Delaunay triangulation for a hole boundary with >4 vertices.
+
+    Projects boundary vertices onto their best-fit plane (SVD), runs
+    scipy Delaunay, filters simplices whose 2D centroid lies outside the
+    ordered boundary polygon.  For N > 20 boundary vertices, inserts the
+    3D centroid as an interior point before Delaunay to prevent triangles
+    spanning the full hole diameter.
+
+    Falls back to centroid-fan if the plane is degenerate (second singular
+    value < 1e-10 — nearly collinear boundary).
+
+    Parameters
+    ----------
+    V:
+        Current vertex array (before new vertices from this pass are appended).
+    loop:
+        Ordered boundary vertex indices into V.
+    n_extra_verts:
+        Number of new vertices already accumulated in the current
+        _fill_interior_holes pass (not yet appended to V).  Used to
+        compute the correct new vertex IDs.
+
+    Returns
+    -------
+    new_verts : list of (3,) float64 arrays — positions to append to V
+    new_faces : list of [int, int, int] — faces using correct global vertex IDs
+    """
+    pts3d = V[loop]          # (N, 3)
+    N = len(loop)
+    centroid_3d = pts3d.mean(axis=0)
+    centered = pts3d - centroid_3d
+
+    _, S, Vt = np.linalg.svd(centered, full_matrices=False)
+
+    # Degenerate plane (nearly collinear boundary) — fall back to centroid-fan.
+    if S[1] < 1e-10:
+        logger.warning(
+            "_fill_hole_delaunay: degenerate best-fit plane for hole "
+            "with %d boundary vertices — falling back to centroid-fan.",
+            N,
+        )
+        new_vid = V.shape[0] + n_extra_verts
+        new_faces = [
+            [new_vid, loop[i], loop[(i + 1) % N]] for i in range(N)
+        ]
+        return [centroid_3d], new_faces
+
+    u1, u2 = Vt[0], Vt[1]
+    pts2d = np.column_stack([centered @ u1, centered @ u2])  # (N, 2)
+
+    insert_centroid = N > 20
+    if insert_centroid:
+        centroid_vid = V.shape[0] + n_extra_verts
+        pts2d_ext = np.vstack([pts2d, [[0.0, 0.0]]])
+        new_verts: list[np.ndarray] = [centroid_3d]
+    else:
+        centroid_vid = -1
+        pts2d_ext = pts2d
+        new_verts = []
+
+    tri = _Delaunay(pts2d_ext)
+
+    boundary_poly = _MplPath(pts2d)
+
+    new_faces: list[list[int]] = []
+    for simplex in tri.simplices:
+        centroid_2d = pts2d_ext[simplex].mean(axis=0)
+        if not boundary_poly.contains_point(centroid_2d):
+            continue
+        face_vids = []
+        for idx in simplex:
+            if idx < N:
+                face_vids.append(loop[idx])
+            else:
+                face_vids.append(centroid_vid)
+        new_faces.append(face_vids)
+
+    return new_verts, new_faces
+
+
 def _fill_interior_holes(
     V: np.ndarray,
     F: np.ndarray,
@@ -106,12 +193,23 @@ def _fill_interior_holes(
         new_faces: list[list[int]] = []
 
         for loop in inner_loops:
-            centroid = V[loop].mean(axis=0)
-            new_vid = V.shape[0] + len(new_verts)
-            new_verts.append(centroid)
-            for i in range(len(loop)):
-                j = (i + 1) % len(loop)
-                new_faces.append([new_vid, loop[i], loop[j]])
+            if len(loop) > 4:
+                lv, lf = _fill_hole_delaunay(V, loop, n_extra_verts=len(new_verts))
+                method = "Delaunay"
+            else:
+                new_vid = V.shape[0] + len(new_verts)
+                lv = [V[loop].mean(axis=0)]
+                lf = [
+                    [new_vid, loop[i], loop[(i + 1) % len(loop)]]
+                    for i in range(len(loop))
+                ]
+                method = "fan"
+            new_verts.extend(lv)
+            new_faces.extend(lf)
+            logger.debug(
+                "Hole (%d verts) filled via %s: %d new triangle(s).",
+                len(loop), method, len(lf),
+            )
 
         if not new_faces:
             break
@@ -128,7 +226,7 @@ def _fill_interior_holes(
 
     if total_holes > 0:
         logger.info(
-            "Filled %d interior hole(s) with %d fan triangles.",
+            "Filled %d interior hole(s) with %d total triangle(s).",
             total_holes, total_tris,
         )
 
@@ -323,6 +421,7 @@ def flatten_slim(
     boundary: np.ndarray,
     center_vid: int | None = None,
     n_iter: int = 40,
+    diagnostics: dict | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Symmetric-Dirichlet SLIM flattening, initialised from a harmonic map.
 
@@ -386,6 +485,8 @@ def flatten_slim(
         angles = np.linspace(0.0, 2.0 * np.pi, len(bdy), endpoint=False)
         return np.column_stack([np.cos(angles), np.sin(angles)])
 
+    _trimmed = False
+
     # Boundary-only harmonic init (no interior pin).
     boundary_uv = _setup_boundary_uv(boundary)
     uv_init = igl.harmonic(V, F, boundary.astype(np.int32), boundary_uv, 1).astype(
@@ -396,6 +497,8 @@ def flatten_slim(
             "Harmonic initialisation produced NaN — mesh may be degenerate."
         )
 
+    _init_method = "harmonic"
+
     # Cotangent-harmonic can flip on ill-conditioned forearm topologies.
     # Fall back to the Tutte (uniform-weight) map.
     if _has_flipped_triangles(uv_init, F):
@@ -403,6 +506,7 @@ def flatten_slim(
             "Cotangent-harmonic initialisation produced flipped triangles — "
             "falling back to Tutte (uniform-weight Laplacian) initialisation."
         )
+        _init_method = "tutte"
         uv_init = _tutte_uniform_map(F, V.shape[0], boundary, boundary_uv)
 
         for _trim_round in range(_TRIM_MAX_ROUNDS):
@@ -430,6 +534,8 @@ def flatten_slim(
                 "1-ring of degenerate face vertices and retrying.",
                 n_flip, _trim_round + 1,
             )
+
+            _trimmed = True
 
             bad_verts = set(int(v) for fi in flipped_fi for v in F[fi])
             ring_mask = np.any(np.isin(F, list(bad_verts)), axis=1)
@@ -479,6 +585,13 @@ def flatten_slim(
                     "complex for boundary-only parameterisation.  Re-mesh with "
                     "a finer BPA radius or inspect the forearm PLY."
                 )
+
+    if diagnostics is not None:
+        diagnostics["init_method"] = _init_method
+        diagnostics["init_uv"] = uv_init.copy()
+        diagnostics["trimmed"] = _trimmed
+        diagnostics["V_trimmed"] = V.copy()
+        diagnostics["F_trimmed"] = F.copy()
 
     # libigl 709 tutorial pattern: empty constraints, soft_p=0.
     empty_b = np.empty((0,), dtype=np.int32)

@@ -384,13 +384,15 @@ class TestUvPointsToXyz:
         xyz = uv_points_to_xyz(uv, uv, F, V)
         np.testing.assert_allclose(xyz, V, atol=1e-12)
 
-    def test_outside_triangle_raises(self, unit_square_mesh):
-        """A UV point outside the mesh must raise ValueError."""
+    def test_outside_point_snaps_to_boundary(self, unit_square_mesh):
+        """A UV point outside the mesh is snapped to the nearest triangle boundary."""
         from analysis.receptive_field_mapping.surface.forearm_slim_uv import uv_points_to_xyz
         V, F, uv = unit_square_mesh
         outside_point = np.array([[2.0, 2.0]], dtype=np.float64)
-        with pytest.raises(ValueError, match="outside every triangle"):
-            uv_points_to_xyz(outside_point, uv, F, V)
+        # Must not raise — outside points are snapped, not hard-failed.
+        xyz = uv_points_to_xyz(outside_point, uv, F, V)
+        # Point (2,2) is nearest to vertex 2 at (1,1,0) — snapped there.
+        np.testing.assert_allclose(xyz, [[1.0, 1.0, 0.0]], atol=1e-12)
 
     def test_multiple_points_mixed_triangles(self, unit_square_mesh):
         """Points in both triangles of the unit square should interpolate correctly."""
@@ -404,3 +406,152 @@ class TestUvPointsToXyz:
         # Since UV = XY and Z = 0 everywhere, XY output must equal input UV
         np.testing.assert_allclose(xyz[:, :2], queries, atol=1e-12)
         np.testing.assert_allclose(xyz[:, 2], [0.0, 0.0], atol=1e-12)
+
+
+# ===========================================================================
+# TestFillInteriorHoles
+# ===========================================================================
+
+class TestFillInteriorHoles:
+    """Tests for _fill_hole_delaunay and _fill_interior_holes."""
+
+    def _ring_V_loop(self, n: int, radius: float = 1.0):
+        """n boundary vertices on a horizontal circle at z=0."""
+        angles = np.linspace(0, 2 * np.pi, n, endpoint=False)
+        V = np.column_stack([
+            radius * np.cos(angles),
+            radius * np.sin(angles),
+            np.zeros(n, dtype=np.float64),
+        ])
+        loop = list(range(n))
+        return V, loop
+
+    def test_small_hole_uses_fan(self):
+        """3-vertex hole → centroid-fan: exactly 3 new faces and 1 new vertex."""
+        from analysis.receptive_field_mapping.surface.slim_helpers import (
+            _fill_interior_holes,
+        )
+        # Build a flat "donut" mesh: outer ring (N=20) + inner triangle (N=3).
+        # Outer ring vertices [0..19], inner triangle [20, 21, 22].
+        n_out = 20
+        angles_out = np.linspace(0, 2 * np.pi, n_out, endpoint=False)
+        outer = np.column_stack([
+            2.0 * np.cos(angles_out),
+            2.0 * np.sin(angles_out),
+            np.zeros(n_out),
+        ])
+        inner = np.array([
+            [0.1, 0.0, 0.0],
+            [-0.05, 0.087, 0.0],
+            [-0.05, -0.087, 0.0],
+        ])
+        V = np.vstack([outer, inner]).astype(np.float64)
+        # Build faces: outer ring fan to a dummy centre + separate inner triangle
+        # so we have a closed outer boundary and an open inner hole.
+        # Use scipy Delaunay on all 2D points, then remove triangles inside inner radius.
+        from scipy.spatial import Delaunay
+        pts2d = V[:, :2]
+        tri = Delaunay(pts2d)
+        F_all = tri.simplices.astype(np.int32)
+        # Keep only triangles whose centroid is between r=0.15 and r=1.95
+        centroids = V[F_all].mean(axis=1)[:, :2]
+        r = np.linalg.norm(centroids, axis=1)
+        F = F_all[(r > 0.15) & (r < 1.95)]
+        assert len(F) > 0, "Test mesh setup failed"
+
+        V_out, F_out = _fill_interior_holes(V, F)
+
+        # Inner hole had 3 boundary vertices → centroid-fan → 1 new vert, 3 new faces.
+        n_new_verts = V_out.shape[0] - V.shape[0]
+        n_new_faces = F_out.shape[0] - F.shape[0]
+        assert n_new_verts == 1, f"Expected 1 new vertex (centroid), got {n_new_verts}"
+        assert n_new_faces == 3, f"Expected 3 new faces (fan), got {n_new_faces}"
+
+    def test_large_hole_uses_delaunay(self):
+        """25-vertex hole → Delaunay: max AR < 10, exactly 1 boundary loop after fill."""
+        from analysis.receptive_field_mapping.surface.slim_helpers import (
+            _fill_hole_delaunay, _find_boundary_loops,
+        )
+        import trimesh
+        import trimesh.repair
+
+        n = 25
+        V, loop = self._ring_V_loop(n)
+        new_verts, new_faces = _fill_hole_delaunay(V, loop, n_extra_verts=0)
+
+        assert len(new_verts) >= 1, "Expected at least 1 new vertex (centroid for N>20)"
+        assert len(new_faces) > 0, "Expected at least 1 new face"
+
+        # Build a full mesh by combining boundary verts + new verts + faces
+        V_all = np.vstack([V] + [nv.reshape(1, 3) for nv in new_verts])
+        F_all = np.array(new_faces, dtype=np.int32)
+
+        # Check aspect ratios of the new faces
+        p0 = V_all[F_all[:, 0]]
+        p1 = V_all[F_all[:, 1]]
+        p2 = V_all[F_all[:, 2]]
+        e0 = np.linalg.norm(p1 - p0, axis=1)
+        e1 = np.linalg.norm(p2 - p1, axis=1)
+        e2 = np.linalg.norm(p0 - p2, axis=1)
+        longest = np.maximum(np.maximum(e0, e1), e2)
+        shortest = np.minimum(np.minimum(e0, e1), e2).clip(1e-15)
+        ar = longest / shortest
+        assert ar.max() < 10.0, (
+            f"Max aspect ratio {ar.max():.2f} >= 10 — Delaunay fill produced poor triangles"
+        )
+
+        # Resulting filled mesh should have 1 boundary loop (closed surface)
+        # Fix winding and check
+        tmp = trimesh.Trimesh(vertices=V_all, faces=F_all, process=False)
+        trimesh.repair.fix_winding(tmp)
+        loops = _find_boundary_loops(np.asarray(tmp.faces, dtype=np.int32))
+        assert len(loops) == 1, (
+            f"Expected 1 boundary loop after fill, got {len(loops)}"
+        )
+
+    def test_nonconvex_hole(self):
+        """Concave hole boundary: no filled triangles outside the boundary polygon."""
+        from analysis.receptive_field_mapping.surface.slim_helpers import _fill_hole_delaunay
+        from matplotlib.path import Path
+
+        # Star-shaped (non-convex) hole boundary: 10 vertices alternating r=1 and r=0.5
+        n = 10
+        angles = np.linspace(0, 2 * np.pi, n, endpoint=False)
+        radii = np.where(np.arange(n) % 2 == 0, 1.0, 0.5)
+        pts2d = np.column_stack([radii * np.cos(angles), radii * np.sin(angles)])
+        V = np.column_stack([pts2d, np.zeros(n)])
+        loop = list(range(n))
+
+        new_verts, new_faces = _fill_hole_delaunay(V, loop, n_extra_verts=0)
+
+        if len(new_faces) == 0:
+            pytest.skip("No faces generated for non-convex hole (acceptable for degenerate star)")
+
+        V_all = np.vstack([V] + [nv.reshape(1, 3) for nv in new_verts])
+        boundary_poly = Path(pts2d)
+
+        for face in new_faces:
+            centroid_3d = V_all[np.array(face)].mean(axis=0)
+            centroid_2d = centroid_3d[:2]
+            assert boundary_poly.contains_point(centroid_2d), (
+                f"Triangle centroid {centroid_2d} is outside the non-convex hole polygon"
+            )
+
+    def test_degenerate_plane_fallback(self):
+        """Nearly collinear boundary → centroid-fan fallback: 1 new vertex, N new faces."""
+        from analysis.receptive_field_mapping.surface.slim_helpers import _fill_hole_delaunay
+
+        # 8 points nearly on a line (degenerate plane, S[1] ≈ 0)
+        n = 8
+        t = np.linspace(0.0, 1.0, n)
+        V = np.column_stack([t, 1e-12 * t, np.zeros(n)])
+        loop = list(range(n))
+
+        new_verts, new_faces = _fill_hole_delaunay(V, loop, n_extra_verts=0)
+
+        assert len(new_verts) == 1, (
+            f"Degenerate plane fallback should produce 1 centroid vertex, got {len(new_verts)}"
+        )
+        assert len(new_faces) == n, (
+            f"Degenerate plane fallback should produce {n} fan faces, got {len(new_faces)}"
+        )

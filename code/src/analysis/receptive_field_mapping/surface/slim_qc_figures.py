@@ -224,6 +224,17 @@ def _rotation_matrix_to_elev_azim(R: np.ndarray) -> tuple[float, float]:
     return elev, azim
 
 
+def _compute_face_aspect_ratios(V: np.ndarray, F: np.ndarray) -> np.ndarray:
+    """Per-face aspect ratio: longest edge / shortest edge (>= 1.0)."""
+    p0, p1, p2 = V[F[:, 0]], V[F[:, 1]], V[F[:, 2]]
+    e0 = np.linalg.norm(p1 - p0, axis=1)
+    e1 = np.linalg.norm(p2 - p1, axis=1)
+    e2 = np.linalg.norm(p0 - p2, axis=1)
+    longest = np.maximum(np.maximum(e0, e1), e2)
+    shortest = np.minimum(np.minimum(e0, e1), e2).clip(1e-15)
+    return longest / shortest
+
+
 def _plot_mesh_3d(
     ax: Axes3D,
     V: np.ndarray,
@@ -232,13 +243,16 @@ def _plot_mesh_3d(
     azim: float,
     title: str,
     overlay_fn: Callable[[Axes3D], None] | None = None,
+    edgecolor: str = "none",
+    linewidth: float = 0.0,
 ) -> None:
     """Render a triangular mesh into *ax* from the given view angle."""
     ax.plot_trisurf(
         V[:, 0], V[:, 1], V[:, 2],
         triangles=F,
         color="lightsteelblue",
-        edgecolor="none",
+        edgecolor=edgecolor,
+        linewidth=linewidth,
         alpha=0.85,
     )
     ax.view_init(elev=elev, azim=azim)
@@ -279,18 +293,73 @@ def _plot_step2_cleaned_mesh(
     cam_azim: float,
     cam_label: str,
 ) -> Figure:
-    """Step 2 — cleaned mesh: dual view with vertex/face/boundary-loop annotations."""
+    """Step 2 — cleaned mesh: 2x2 layout with wireframe and aspect-ratio heatmap."""
     n_loops = len(_find_boundary_loops(F))
-    ann = f"V={V.shape[0]:,}  F={F.shape[0]:,}  boundary loops={n_loops}"
+    ar = _compute_face_aspect_ratios(V, F)
+    ar_max = float(ar.max())
+    ar_p95 = float(np.percentile(ar, 95))
+    ar_median = float(np.median(ar))
+    n_bad = int(np.sum(ar > 10.0))
 
-    fig = Figure(figsize=(10, 4.5))
+    fig = Figure(figsize=(10, 9))
     FigureCanvasAgg(fig)
-    ax_left = fig.add_subplot(1, 2, 1, projection="3d")
-    ax_right = fig.add_subplot(1, 2, 2, projection="3d")
-    _plot_mesh_3d(ax_left, V, F, elev, azim, "Step 2 — cleaned mesh (skin-normal view)")
-    _plot_mesh_3d(ax_right, V, F, cam_elev, cam_azim, f"Step 2 — cleaned mesh ({cam_label})")
-    fig.text(0.5, 0.02, ann, ha="center", va="bottom", fontsize=8)
-    fig.tight_layout(rect=[0, 0.05, 1, 1])
+
+    ax_tl = fig.add_subplot(2, 2, 1, projection="3d")
+    ax_tr = fig.add_subplot(2, 2, 2, projection="3d")
+    ax_bl = fig.add_subplot(2, 2, 3)
+    ax_br = fig.add_subplot(2, 2, 4)
+
+    _plot_mesh_3d(
+        ax_tl, V, F, elev, azim,
+        "Step 2 — cleaned mesh (skin-normal view)",
+        edgecolor="gray", linewidth=0.15,
+    )
+    _plot_mesh_3d(
+        ax_tr, V, F, cam_elev, cam_azim,
+        f"Step 2 — cleaned mesh ({cam_label})",
+        edgecolor="gray", linewidth=0.15,
+    )
+
+    # Bottom-left: face aspect-ratio heatmap (2D UV-space proxy: use XY projection)
+    # Project faces to 2D using first two PCA components of V for a flat view.
+    V_c = V - V.mean(axis=0)
+    _, _, Vt = np.linalg.svd(V_c, full_matrices=False)
+    V2d = V_c @ Vt[:2].T          # (N, 2)
+    polys2d = V2d[F]               # (M, 3, 2)
+    clim_high = max(ar_p95, 1.1)
+    pc = PolyCollection(polys2d, array=ar, cmap="YlOrRd", edgecolors="none")
+    pc.set_clim(1.0, clim_high)
+    ax_bl.add_collection(pc)
+    ax_bl.autoscale_view()
+    ax_bl.set_aspect("equal")
+    ax_bl.set_title("Step 2 — face aspect ratio (longest/shortest edge)", fontsize=8)
+    ax_bl.set_xlabel("PCA-1")
+    ax_bl.set_ylabel("PCA-2")
+    fig.colorbar(pc, ax=ax_bl, label="AR (clipped at 95th pct)")
+
+    # Bottom-right: quality statistics text
+    ax_br.axis("off")
+    stats_text = (
+        f"Mesh statistics\n"
+        f"─────────────────────\n"
+        f"Vertices      : {V.shape[0]:,}\n"
+        f"Faces         : {F.shape[0]:,}\n"
+        f"Boundary loops: {n_loops}\n"
+        f"\nFace aspect ratio (longest/shortest edge)\n"
+        f"─────────────────────\n"
+        f"Median AR     : {ar_median:.2f}\n"
+        f"95th pct AR   : {ar_p95:.2f}\n"
+        f"Max AR        : {ar_max:.2f}\n"
+        f"Faces AR > 10 : {n_bad} ({100.0 * n_bad / max(len(ar), 1):.1f}%)\n"
+    )
+    ax_br.text(
+        0.05, 0.95, stats_text,
+        transform=ax_br.transAxes,
+        fontsize=8, verticalalignment="top", fontfamily="monospace",
+    )
+    ax_br.set_title("Step 2 — quality statistics", fontsize=8)
+
+    fig.tight_layout()
     return fig
 
 
