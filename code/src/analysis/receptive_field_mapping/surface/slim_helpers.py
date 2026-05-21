@@ -33,9 +33,28 @@ import trimesh.repair
 from scipy.sparse import coo_matrix
 from scipy.sparse.linalg import spsolve
 from scipy.spatial import Delaunay as _Delaunay
+from scipy.spatial import KDTree as _KDTree
 from matplotlib.path import Path as _MplPath
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Triangle quality
+# ---------------------------------------------------------------------------
+
+_SLIVER_AR_THRESHOLD: float = 10.0
+
+
+def _compute_face_aspect_ratios(V: np.ndarray, F: np.ndarray) -> np.ndarray:
+    """Per-face aspect ratio: longest edge / shortest edge (>= 1.0)."""
+    p0, p1, p2 = V[F[:, 0]], V[F[:, 1]], V[F[:, 2]]
+    e0 = np.linalg.norm(p1 - p0, axis=1)
+    e1 = np.linalg.norm(p2 - p1, axis=1)
+    e2 = np.linalg.norm(p0 - p2, axis=1)
+    longest = np.maximum(np.maximum(e0, e1), e2)
+    shortest = np.minimum(np.minimum(e0, e1), e2).clip(1e-15)
+    return longest / shortest
 
 
 # ---------------------------------------------------------------------------
@@ -78,6 +97,11 @@ def _find_boundary_loops(F: np.ndarray) -> list[list[int]]:
     return loops
 
 
+_HOLE_FILL_EDGE_FACTOR: float = 3.0
+"""Insert Steiner points when hole diameter exceeds this multiple of the
+median boundary edge length."""
+
+
 def _fill_hole_delaunay(
     V: np.ndarray,
     loop: list[int],
@@ -87,9 +111,12 @@ def _fill_hole_delaunay(
 
     Projects boundary vertices onto their best-fit plane (SVD), runs
     scipy Delaunay, filters simplices whose 2D centroid lies outside the
-    ordered boundary polygon.  For N > 20 boundary vertices, inserts the
-    3D centroid as an interior point before Delaunay to prevent triangles
-    spanning the full hole diameter.
+    ordered boundary polygon.
+
+    When the hole diameter exceeds ``_HOLE_FILL_EDGE_FACTOR`` times the
+    median boundary edge length, a grid of interior Steiner points is
+    inserted at the median spacing so that filled triangles stay comparable
+    in size to the surrounding mesh.
 
     Falls back to centroid-fan if the plane is degenerate (second singular
     value < 1e-10 — nearly collinear boundary).
@@ -133,21 +160,64 @@ def _fill_hole_delaunay(
     u1, u2 = Vt[0], Vt[1]
     pts2d = np.column_stack([centered @ u1, centered @ u2])  # (N, 2)
 
-    insert_centroid = N > 20
-    if insert_centroid:
-        centroid_vid = V.shape[0] + n_extra_verts
-        pts2d_ext = np.vstack([pts2d, [[0.0, 0.0]]])
-        new_verts: list[np.ndarray] = [centroid_3d]
+    # ---- Decide whether to insert interior Steiner points ----
+    boundary_edges_2d = np.diff(
+        pts2d[list(range(N)) + [0]], axis=0,
+    )
+    boundary_edge_lens = np.linalg.norm(boundary_edges_2d, axis=1)
+    median_edge = float(np.median(boundary_edge_lens))
+
+    from scipy.spatial.distance import pdist as _pdist
+    diameter = float(_pdist(pts2d).max()) if N > 2 else 0.0
+
+    new_verts: list[np.ndarray] = []
+    interior_2d: list[list[float]] = []
+
+    if median_edge > 1e-10 and diameter > _HOLE_FILL_EDGE_FACTOR * median_edge:
+        # Generate a rectangular grid of interior points at median spacing,
+        # keep only those inside the boundary polygon.
+        boundary_poly = _MplPath(pts2d)
+        step = median_edge
+        margin = step * 0.5
+        xmin, ymin = pts2d.min(axis=0) + margin
+        xmax, ymax = pts2d.max(axis=0) - margin
+        xs = np.arange(float(xmin), float(xmax) + 1e-12, step)
+        ys = np.arange(float(ymin), float(ymax) + 1e-12, step)
+        if len(xs) > 0 and len(ys) > 0:
+            grid = np.array([[x, y] for x in xs for y in ys], dtype=np.float64)
+            inside = boundary_poly.contains_points(grid)
+            interior_2d = grid[inside].tolist()
+
+        # Convert interior 2D points to 3D via the best-fit plane.
+        for pt2d in interior_2d:
+            pt3d = centroid_3d + pt2d[0] * u1 + pt2d[1] * u2
+            new_verts.append(pt3d)
+
+        logger.debug(
+            "Hole (%d boundary verts): diameter=%.2f, median_edge=%.2f "
+            "→ inserted %d Steiner point(s).",
+            N, diameter, median_edge, len(interior_2d),
+        )
+
+    if not interior_2d and N > 20:
+        # Fallback: single centroid for very large holes with small diameter
+        interior_2d = [[0.0, 0.0]]
+        new_verts = [centroid_3d]
+
+    if interior_2d:
+        pts2d_ext = np.vstack([pts2d, np.array(interior_2d, dtype=np.float64)])
     else:
-        centroid_vid = -1
         pts2d_ext = pts2d
-        new_verts = []
 
+    # ---- Delaunay + polygon filter ----
     tri = _Delaunay(pts2d_ext)
-
     boundary_poly = _MplPath(pts2d)
 
+    first_interior_idx = N
+    base_vid = V.shape[0] + n_extra_verts
+
     new_faces: list[list[int]] = []
+    interior_used: set[int] = set()
     for simplex in tri.simplices:
         centroid_2d = pts2d_ext[simplex].mean(axis=0)
         if not boundary_poly.contains_point(centroid_2d):
@@ -157,8 +227,40 @@ def _fill_hole_delaunay(
             if idx < N:
                 face_vids.append(loop[idx])
             else:
-                face_vids.append(centroid_vid)
+                interior_offset = idx - first_interior_idx
+                face_vids.append(base_vid + interior_offset)
+                interior_used.add(interior_offset)
         new_faces.append(face_vids)
+
+    # Polygon filter removed every triangle — fall back to centroid-fan.
+    if not new_faces:
+        logger.warning(
+            "_fill_hole_delaunay: polygon filter removed all Delaunay triangles "
+            "for hole with %d boundary vertices — falling back to centroid-fan.",
+            N,
+        )
+        new_vid = V.shape[0] + n_extra_verts
+        new_faces = [
+            [new_vid, loop[i], loop[(i + 1) % N]] for i in range(N)
+        ]
+        return [centroid_3d], new_faces
+
+    # Remove interior vertices that were not used by any kept triangle.
+    if new_verts and len(interior_used) < len(new_verts):
+        kept = sorted(interior_used)
+        remap_interior = {old: new_i for new_i, old in enumerate(kept)}
+        new_verts = [new_verts[i] for i in kept]
+        remapped_faces: list[list[int]] = []
+        for face in new_faces:
+            remapped = []
+            for vid in face:
+                offset = vid - base_vid
+                if 0 <= offset < len(interior_2d):
+                    remapped.append(base_vid + remap_interior[offset])
+                else:
+                    remapped.append(vid)
+            remapped_faces.append(remapped)
+        new_faces = remapped_faces
 
     return new_verts, new_faces
 
@@ -214,7 +316,8 @@ def _fill_interior_holes(
         if not new_faces:
             break
 
-        V = np.vstack([V, np.array(new_verts, dtype=np.float64)])
+        if new_verts:
+            V = np.vstack([V, np.array(new_verts, dtype=np.float64)])
         F = np.vstack([F, np.array(new_faces, dtype=np.int32)])
         total_holes += len(inner_loops)
         total_tris += len(new_faces)
@@ -229,6 +332,161 @@ def _fill_interior_holes(
             "Filled %d interior hole(s) with %d total triangle(s).",
             total_holes, total_tris,
         )
+
+    return V, F
+
+
+_BOUNDARY_GAP_PROXIMITY_MM: float = 5.0
+
+
+def _stitch_boundary_gaps(
+    V: np.ndarray,
+    F: np.ndarray,
+    proximity_mm: float = _BOUNDARY_GAP_PROXIMITY_MM,
+    max_passes: int = 3,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Weld secondary boundary loops that are junction gaps into the main boundary.
+
+    Secondary loops whose vertices lie close to the main boundary are caused by
+    narrow gaps at appendage junctions (e.g. thumb–forearm).  Filling these as
+    interior holes encloses the appendage, bypassing it in the boundary loop and
+    producing extreme conformal distortion.  Welding collapses the gap vertices
+    onto their nearest main-boundary counterparts, merging the two loops into one
+    and preserving the appendage as part of the outer boundary.
+
+    A secondary loop is classified as a gap loop when at least 2 of its vertices
+    are within ``proximity_mm`` of the main boundary.  Loops that do not meet this
+    criterion are true interior holes and are left for ``_fill_interior_holes``.
+
+    Parameters
+    ----------
+    V:
+        Vertex positions, shape (N, 3), float64 (mm).
+    F:
+        Face indices, shape (M, 3), int32.
+    proximity_mm:
+        Distance threshold for classifying a secondary loop as a gap.
+    max_passes:
+        Maximum number of weld–repair iterations.
+
+    Returns
+    -------
+    (V, F) — unchanged if no gap loops are found; otherwise the welded mesh
+    after degenerate-face removal, winding fix, and largest-component selection.
+    """
+    F = F.copy()
+
+    for _ in range(max_passes):
+        loops = _find_boundary_loops(F)
+        if len(loops) <= 1:
+            break
+
+        main_loop = loops[0]
+        secondary_loops = loops[1:]
+
+        main_positions = V[main_loop]
+        tree = _KDTree(main_positions)
+
+        welded_any = False
+
+        for sec_loop in secondary_loops:
+            sec_positions = V[sec_loop]
+            dists, nearest_idx = tree.query(sec_positions)
+
+            close_mask = dists < proximity_mm
+            n_close = int(close_mask.sum())
+
+            if n_close < 2:
+                continue
+
+            welded_any = True
+            for i, v_sec in enumerate(sec_loop):
+                if close_mask[i]:
+                    v_main = main_loop[nearest_idx[i]]
+                    F[F == v_sec] = v_main
+
+        if not welded_any:
+            break
+
+        non_degenerate = np.array(
+            [len(np.unique(face)) == 3 for face in F],
+            dtype=bool,
+        )
+        F = F[non_degenerate]
+
+        if F.shape[0] == 0:
+            raise ValueError(
+                "_stitch_boundary_gaps: all faces became degenerate after welding — "
+                "the proximity threshold may be too large for this mesh."
+            )
+
+        tmp = trimesh.Trimesh(vertices=V, faces=F, process=False)
+        trimesh.repair.fix_winding(tmp)
+        F = np.asarray(tmp.faces, dtype=np.int32)
+
+        components = trimesh.Trimesh(vertices=V, faces=F, process=False).split(
+            only_watertight=False
+        )
+        if components:
+            lc = max(components, key=lambda m: len(m.faces))
+            used = np.unique(lc.faces)
+            remap = np.full(V.shape[0], -1, dtype=np.int32)
+            remap[used] = np.arange(len(used), dtype=np.int32)
+            V = V[used]
+            F = remap[np.asarray(lc.faces, dtype=np.int32)]
+
+    return V, F
+
+
+def _remove_sliver_faces(
+    V: np.ndarray,
+    F: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Remove faces with aspect ratio exceeding ``_SLIVER_AR_THRESHOLD``.
+
+    BPA mesh reconstruction occasionally produces elongated sliver triangles
+    at mesh boundaries where point density drops.  These degrade SLIM
+    convergence and create distortion hotspots.
+
+    After removal, takes the largest connected component and removes orphan
+    vertices.  Does **not** fill holes — the caller should call
+    ``_fill_interior_holes()`` afterwards.
+
+    Returns ``(V, F)`` unchanged if no slivers exist.
+    """
+    ar = _compute_face_aspect_ratios(V, F)
+    sliver_mask = ar > _SLIVER_AR_THRESHOLD
+    n_slivers = int(sliver_mask.sum())
+
+    if n_slivers == 0:
+        return V, F
+
+    logger.info(
+        "Removing %d sliver face(s) with aspect ratio > %.1f "
+        "(max AR: %.2f).",
+        n_slivers, _SLIVER_AR_THRESHOLD, float(ar[sliver_mask].max()),
+    )
+
+    F = F[~sliver_mask]
+
+    if F.shape[0] == 0:
+        raise ValueError(
+            "Zero faces remain after sliver removal — the entire mesh "
+            "consists of degenerate triangles."
+        )
+
+    used = np.unique(F)
+    remap = np.full(V.shape[0], -1, dtype=np.int32)
+    remap[used] = np.arange(len(used), dtype=np.int32)
+    V, F = V[used], remap[F]
+
+    components = trimesh.Trimesh(vertices=V, faces=F, process=False).split(
+        only_watertight=False
+    )
+    if components:
+        lc = max(components, key=lambda m: len(m.vertices))
+        V = np.asarray(lc.vertices, dtype=np.float64)
+        F = np.asarray(lc.faces, dtype=np.int32)
 
     return V, F
 
@@ -323,10 +581,21 @@ def clean_mesh(mesh: trimesh.Trimesh) -> tuple[np.ndarray, np.ndarray]:
             V = np.asarray(lc.vertices, dtype=np.float64)
             F = np.asarray(lc.faces, dtype=np.int32)
 
-    # Both remove_non_manifold_edges() and the pinch-vertex repair above can
-    # leave interior holes that break the single-boundary disk topology
-    # required for harmonic/Tutte UV initialisation.  Fill them with centroid
-    # fan triangulation as the last cleanup step.
+    # BPA reconstruction can produce elongated sliver triangles at mesh
+    # edges.  Remove them before hole filling so the Delaunay filler can
+    # patch the resulting gaps with well-conditioned triangles.
+    V, F = _remove_sliver_faces(V, F)
+
+    # Narrow gaps at appendage junctions (e.g. thumb–forearm) appear as
+    # secondary boundary loops whose vertices are close to the main boundary.
+    # Weld those gap vertices onto the main boundary before hole filling so
+    # the appendage perimeter remains part of the outer boundary loop rather
+    # than being enclosed by a hole-fill patch.
+    V, F = _stitch_boundary_gaps(V, F)
+
+    # Non-manifold removal, pinch repair, and sliver removal can all leave
+    # interior holes that break the single-boundary disk topology required
+    # for harmonic/Tutte UV initialisation.  Fill them as the last step.
     V, F = _fill_interior_holes(V, F)
 
     return V, F

@@ -509,6 +509,49 @@ class TestFillInteriorHoles:
             f"Expected 1 boundary loop after fill, got {len(loops)}"
         )
 
+    def test_large_hole_steiner_points(self):
+        """Large-diameter hole with widely-spaced boundary → Steiner points inserted,
+        filled triangle edges bounded relative to boundary spacing."""
+        from analysis.receptive_field_mapping.surface.slim_helpers import (
+            _fill_hole_delaunay, _compute_face_aspect_ratios,
+        )
+        # Create a large circular hole (radius=10) with only 8 boundary vertices.
+        # Boundary spacing ≈ 7.6mm, diameter = 20mm → ratio ≈ 2.6.
+        # With a smaller radius but same vertex count, the ratio grows and
+        # Steiner points become necessary.
+        n = 8
+        V, loop = self._ring_V_loop(n, radius=10.0)
+
+        # Boundary edge length ~ 2*R*sin(pi/N) ≈ 7.65
+        # Diameter = 20.  Ratio = 20/7.65 ≈ 2.6 → below default factor 3.0.
+        # Use a sparser ring to trigger Steiner insertion: radius=50, N=8.
+        V_big = V * 5.0  # radius=50, boundary_edge ≈ 38, diameter=100 → ratio ≈ 2.6
+        # Still not enough. Use very sparse: 6 vertices on a large circle.
+        n2 = 6
+        V2, loop2 = self._ring_V_loop(n2, radius=50.0)
+        # boundary_edge ≈ 50, diameter=100, ratio=2.0 → below threshold.
+        # Need diameter >> 3 * median_edge.  Use: 10 verts on R=50.
+        n3 = 10
+        V3, loop3 = self._ring_V_loop(n3, radius=50.0)
+        # boundary_edge ≈ 2*50*sin(pi/10) ≈ 30.9, diameter=100 → ratio ≈ 3.2 → triggers.
+
+        new_verts, new_faces = _fill_hole_delaunay(V3, loop3, n_extra_verts=0)
+
+        assert len(new_verts) >= 1, (
+            "Expected Steiner interior points for large-diameter hole"
+        )
+        assert len(new_faces) > n3, (
+            f"Expected more faces than boundary vertices ({n3}) due to Steiner points, "
+            f"got {len(new_faces)}"
+        )
+
+        V_all = np.vstack([V3] + [nv.reshape(1, 3) for nv in new_verts])
+        F_all = np.array(new_faces, dtype=np.int32)
+        ar = _compute_face_aspect_ratios(V_all, F_all)
+        assert ar.max() < 10.0, (
+            f"Max AR {ar.max():.2f} >= 10 after Steiner fill"
+        )
+
     def test_nonconvex_hole(self):
         """Concave hole boundary: no filled triangles outside the boundary polygon."""
         from analysis.receptive_field_mapping.surface.slim_helpers import _fill_hole_delaunay
@@ -555,3 +598,276 @@ class TestFillInteriorHoles:
         assert len(new_faces) == n, (
             f"Degenerate plane fallback should produce {n} fan faces, got {len(new_faces)}"
         )
+
+
+# ===========================================================================
+# TestSliverRemoval
+# ===========================================================================
+
+class TestSliverRemoval:
+    """Tests for _remove_sliver_faces and its integration in clean_mesh."""
+
+    def test_sliver_faces_removed(self):
+        """Mesh with injected sliver → sliver removed, good faces kept."""
+        from analysis.receptive_field_mapping.surface.slim_helpers import (
+            _remove_sliver_faces, _compute_face_aspect_ratios,
+        )
+        # Build a small planar mesh with one good triangle and one sliver.
+        V = np.array([
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.5, 0.8, 0.0],
+            [20.0, 0.01, 0.0],  # far away → sliver with verts 1, 3, 2
+        ], dtype=np.float64)
+        F = np.array([
+            [0, 1, 2],    # good triangle (AR ~ 1.5)
+            [1, 3, 2],    # sliver: long edges to vertex 3, short edge 1-2
+        ], dtype=np.int32)
+
+        ar_before = _compute_face_aspect_ratios(V, F)
+        assert ar_before.max() > 10.0, "Test setup: expected at least one sliver"
+
+        V_out, F_out = _remove_sliver_faces(V, F)
+
+        ar_after = _compute_face_aspect_ratios(V_out, F_out)
+        assert ar_after.max() <= 10.0, (
+            f"Sliver not removed: max AR {ar_after.max():.2f}"
+        )
+        assert F_out.shape[0] < F.shape[0], "Expected fewer faces after sliver removal"
+
+    def test_no_slivers_noop(self):
+        """Clean mesh (all AR < 10) → V, F unchanged."""
+        from analysis.receptive_field_mapping.surface.slim_helpers import (
+            _remove_sliver_faces,
+        )
+        V = np.array([
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.5, 0.8, 0.0],
+            [0.0, 1.0, 0.0],
+        ], dtype=np.float64)
+        F = np.array([[0, 1, 2], [0, 2, 3]], dtype=np.int32)
+
+        V_out, F_out = _remove_sliver_faces(V, F)
+
+        np.testing.assert_array_equal(V_out, V)
+        np.testing.assert_array_equal(F_out, F)
+
+    def test_sliver_removal_preserves_connectivity(self):
+        """Removing a sliver that could fragment mesh → largest component kept."""
+        from analysis.receptive_field_mapping.surface.slim_helpers import (
+            _remove_sliver_faces, _compute_face_aspect_ratios,
+        )
+        # Two triangles connected by a sliver "bridge".  Removing the sliver
+        # should keep the largest component.
+        V = np.array([
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.5, 0.8, 0.0],
+            [10.0, 0.01, 0.0],  # sliver vertex
+            [11.0, 0.0, 0.0],
+            [10.5, 0.8, 0.0],
+        ], dtype=np.float64)
+        F = np.array([
+            [0, 1, 2],    # good triangle A
+            [1, 3, 2],    # sliver bridge
+            [3, 4, 5],    # good triangle B (disconnected after sliver removal)
+        ], dtype=np.int32)
+
+        V_out, F_out = _remove_sliver_faces(V, F)
+
+        assert F_out.shape[0] >= 1, "At least one component should survive"
+        ar = _compute_face_aspect_ratios(V_out, F_out)
+        assert ar.max() <= 10.0, f"Sliver survived: max AR {ar.max():.2f}"
+
+
+# ===========================================================================
+# TestStitchBoundaryGaps
+# ===========================================================================
+
+class TestStitchBoundaryGaps:
+    """Tests for _stitch_boundary_gaps."""
+
+    def test_no_secondary_loops_noop(self):
+        """Single-boundary disk mesh: V and F returned unchanged."""
+        from analysis.receptive_field_mapping.surface.slim_helpers import (
+            _stitch_boundary_gaps, _find_boundary_loops,
+        )
+        # Build a simple disk: outer ring of 16 vertices + centre, triangulated.
+        N = 16
+        angles = np.linspace(0, 2 * np.pi, N, endpoint=False)
+        outer = np.column_stack([
+            np.cos(angles), np.sin(angles), np.zeros(N),
+        ]).astype(np.float64)
+        centre = np.array([[0.0, 0.0, 0.0]], dtype=np.float64)
+        V = np.vstack([outer, centre])
+        # Fan triangles from centre to each edge of the ring.
+        c = N
+        F = np.array(
+            [[c, i, (i + 1) % N] for i in range(N)],
+            dtype=np.int32,
+        )
+
+        loops_before = _find_boundary_loops(F)
+        assert len(loops_before) == 1, "Test setup: expected single boundary loop"
+
+        V_out, F_out = _stitch_boundary_gaps(V, F)
+
+        np.testing.assert_array_equal(V_out, V)
+        np.testing.assert_array_equal(F_out, F)
+
+    def test_gap_welded_into_main_boundary(self):
+        """Two rectangular patches sharing a narrow gap: after stitching, single boundary loop."""
+        from analysis.receptive_field_mapping.surface.slim_helpers import (
+            _stitch_boundary_gaps, _find_boundary_loops,
+        )
+        # Main rectangle: vertices 0-3, split into 2 triangles.
+        #   0 --- 1
+        #   |   / |
+        #   | /   |
+        #   3 --- 2
+        # Appendage rectangle: vertices 4-7, hanging off the right side with a
+        # narrow gap (< 5 mm) between vertex 1 & vertex 4, and vertex 2 & vertex 5.
+        #
+        # Main boundary vertices at x=1.0; appendage boundary at x=1.003 (gap = 3 mm).
+        #
+        # Layout (all z=0):
+        #   main:        (0,0) (1,0) (1,1) (0,1)   → vids 0,1,2,3
+        #   appendage:   (1.003,0) (1.003,1) (2,0) (2,1) → vids 4,5,6,7
+        #
+        # After stitching, vid 4 should collapse onto vid 1 and vid 5 onto vid 2,
+        # merging the two rectangles into a single connected boundary loop.
+
+        V = np.array([
+            [0.0,   0.0, 0.0],   # 0
+            [1.0,   0.0, 0.0],   # 1  (main boundary, right side)
+            [1.0,   1.0, 0.0],   # 2  (main boundary, right side)
+            [0.0,   1.0, 0.0],   # 3
+            [1.003, 0.0, 0.0],   # 4  (appendage boundary, left side — gap 3 mm from vid 1)
+            [1.003, 1.0, 0.0],   # 5  (appendage boundary, left side — gap 3 mm from vid 2)
+            [2.0,   0.0, 0.0],   # 6
+            [2.0,   1.0, 0.0],   # 7
+        ], dtype=np.float64)
+
+        # Two separate rectangles: each split into 2 triangles with consistent winding.
+        F = np.array([
+            [0, 1, 2],  # main rect tri 1
+            [0, 2, 3],  # main rect tri 2
+            [4, 6, 7],  # appendage tri 1
+            [4, 7, 5],  # appendage tri 2
+        ], dtype=np.int32)
+
+        loops_before = _find_boundary_loops(F)
+        assert len(loops_before) == 2, (
+            f"Test setup: expected 2 boundary loops, got {len(loops_before)}"
+        )
+
+        V_out, F_out = _stitch_boundary_gaps(V, F, proximity_mm=5.0)
+
+        loops_after = _find_boundary_loops(F_out)
+        assert len(loops_after) == 1, (
+            f"Expected 1 boundary loop after stitching, got {len(loops_after)}: {loops_after}"
+        )
+
+    def test_true_interior_hole_not_welded(self):
+        """Mesh with an interior hole far from boundary: hole is preserved after stitching."""
+        from analysis.receptive_field_mapping.surface.slim_helpers import (
+            _stitch_boundary_gaps, _find_boundary_loops,
+        )
+        # Build a donut: outer ring (radius=20) and inner ring (radius=5).
+        # All inner vertices are >10 mm from the outer boundary → not welded.
+        n_out = 24
+        n_in = 8
+        angles_out = np.linspace(0, 2 * np.pi, n_out, endpoint=False)
+        angles_in = np.linspace(0, 2 * np.pi, n_in, endpoint=False)
+
+        outer = np.column_stack([
+            20.0 * np.cos(angles_out),
+            20.0 * np.sin(angles_out),
+            np.zeros(n_out),
+        ])
+        inner = np.column_stack([
+            5.0 * np.cos(angles_in),
+            5.0 * np.sin(angles_in),
+            np.zeros(n_in),
+        ])
+        V = np.vstack([outer, inner]).astype(np.float64)
+
+        # Build an annular mesh by pairing outer and inner ring vertices.
+        # For each sector i, use 2 triangles:
+        #   (outer[i], outer[i+1], inner[j])  and  (inner[j], outer[i+1], inner[j+1])
+        # where j = i * n_in // n_out (rough alignment).
+        F_list = []
+        for i in range(n_out):
+            o0 = i
+            o1 = (i + 1) % n_out
+            j = (i * n_in) // n_out
+            j1 = ((i + 1) * n_in) // n_out % n_in
+            i0 = n_out + j
+            i1 = n_out + j1
+            F_list.append([o0, o1, i0])
+            if i0 != i1:
+                F_list.append([i0, o1, i1])
+
+        F = np.array(F_list, dtype=np.int32)
+
+        loops_before = _find_boundary_loops(F)
+        assert len(loops_before) == 2, (
+            f"Test setup: expected 2 boundary loops (outer + inner hole), got {len(loops_before)}"
+        )
+
+        # Min distance from inner ring to outer boundary:
+        # outer radius = 20, inner radius = 5 → min gap = 20 - 5 = 15 mm >> 5 mm threshold.
+        V_out, F_out = _stitch_boundary_gaps(V, F, proximity_mm=5.0)
+
+        loops_after = _find_boundary_loops(F_out)
+        assert len(loops_after) == 2, (
+            f"Expected 2 boundary loops (hole preserved), got {len(loops_after)}"
+        )
+
+    def test_degenerate_faces_removed(self):
+        """Welding that creates faces with 2+ identical vertices: degenerate faces removed."""
+        from analysis.receptive_field_mapping.surface.slim_helpers import (
+            _stitch_boundary_gaps, _find_boundary_loops,
+        )
+        # Build a mesh where the gap is exactly 1 vertex wide on each side so
+        # welding will collapse one triangle into a degenerate (two identical vids).
+        #
+        # Main triangle: vids 0, 1, 2 at (0,0), (1,0), (0.5, 1).
+        # Gap vertex: vid 3 at (1.001, 0) — 1 mm from vid 1.
+        # A second triangle using the gap vertex: [3, 4, 5].
+        # Only 1 close vertex (vid 3 near vid 1) → but we need >= 2 close vertices
+        # to trigger stitching.  Add vid 6 at (0.499, 1.001) close to vid 2.
+        # Secondary loop boundary: 3, 4, 5, 6 (with face [3,4,5] and [3,5,6]).
+
+        V = np.array([
+            [0.0,   0.0,  0.0],   # 0 — main
+            [1.0,   0.0,  0.0],   # 1 — main (boundary)
+            [0.5,   1.0,  0.0],   # 2 — main (boundary)
+            [1.001, 0.0,  0.0],   # 3 — gap, 1 mm from vid 1
+            [1.5,   0.0,  0.0],   # 4 — appendage
+            [1.5,   1.0,  0.0],   # 5 — appendage
+            [0.501, 1.0,  0.0],   # 6 — gap, 1 mm from vid 2
+        ], dtype=np.float64)
+
+        F = np.array([
+            [0, 1, 2],   # main triangle
+            [3, 4, 5],   # appendage tri 1
+            [3, 5, 6],   # appendage tri 2 — vid 3 near vid 1, vid 6 near vid 2
+        ], dtype=np.int32)
+
+        loops_before = _find_boundary_loops(F)
+        assert len(loops_before) >= 2, (
+            f"Test setup: expected >= 2 boundary loops, got {len(loops_before)}"
+        )
+
+        V_out, F_out = _stitch_boundary_gaps(V, F, proximity_mm=5.0)
+
+        # All faces in F_out must be non-degenerate (3 distinct vertex IDs).
+        for face in F_out:
+            assert len(np.unique(face)) == 3, (
+                f"Degenerate face found after stitching: {face}"
+            )
+
+        # Mesh must still have faces.
+        assert F_out.shape[0] > 0, "All faces removed after stitching"
