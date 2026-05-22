@@ -11,6 +11,7 @@ from .rf_population_map_renderer import (
     compute_interpolated_grid,
     render_population_rf_map,
     render_population_rf_composite,
+    render_population_rf_standalone_interpolated,
 )
 from .rf_population_grid_metrics_renderer import (
     render_grid_metric_heatmap,
@@ -35,6 +36,7 @@ __all__ = [
     "compute_interpolated_grid",
     "render_population_rf_map",
     "render_population_rf_composite",
+    "render_population_rf_standalone_interpolated",
     # rf_population_grid_metrics_renderer
     "render_grid_metric_heatmap",
     "run_population_rf_grid_metrics_visualization",

@@ -249,6 +249,7 @@ def render_population_rf_map(
         ax.yaxis.label.set_color('white')
         for spine in ax.spines.values():
             spine.set_edgecolor('white')
+        ax.set_aspect('equal')
 
     # --- Panel 1: scatter ---
     ax_scatter = axes[0]
@@ -318,6 +319,87 @@ def render_population_rf_map(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(str(output_path), dpi=200, bbox_inches='tight', facecolor=fig.get_facecolor())
     logger.info("Saved population RF map: %s", output_path)
+    plt.close(fig)
+
+
+def render_population_rf_standalone_interpolated(
+    u_grid: np.ndarray,
+    v_grid: np.ndarray,
+    interp_grid: np.ndarray,
+    boundary_u: np.ndarray | None,
+    boundary_v: np.ndarray | None,
+    title: str,
+    output_path: Path,
+    vmin: float = 0.0,
+    vmax: float = 1.0,
+) -> None:
+    """Render a single-panel interpolated population RF heatmap and save as PNG.
+
+    Parameters
+    ----------
+    u_grid:
+        (R, C) U-coordinate meshgrid (axis 0 = U dimension).
+    v_grid:
+        (R, C) V-coordinate meshgrid.
+    interp_grid:
+        (R, C) interpolated heatmap values; NaN outside the mesh.
+    boundary_u:
+        U coordinates of the boundary polyline. If not None, boundary_v must
+        also be not None.
+    boundary_v:
+        V coordinates of the boundary polyline. Must have the same length as
+        boundary_u.
+    title:
+        Figure title string.
+    output_path:
+        Destination PNG file path.
+    vmin:
+        Colour scale lower bound.
+    vmax:
+        Colour scale upper bound.
+    """
+    if (boundary_u is None) != (boundary_v is None):
+        raise ValueError(
+            "render_population_rf_standalone_interpolated: boundary_u and boundary_v "
+            "must both be None or both be provided."
+        )
+
+    matplotlib.use('Agg')
+
+    norm = Normalize(vmin=vmin, vmax=vmax)
+
+    fig, ax = plt.subplots(1, 1, figsize=(6, 6), facecolor='black')
+    fig.suptitle(title, color='white', fontsize=9, y=1.01)
+
+    ax.set_facecolor('black')
+    ax.tick_params(colors='white')
+    ax.xaxis.label.set_color('white')
+    ax.yaxis.label.set_color('white')
+    for spine in ax.spines.values():
+        spine.set_edgecolor('white')
+    ax.set_aspect('equal')
+
+    im = ax.pcolormesh(
+        u_grid, v_grid, interp_grid,
+        cmap='jet', norm=norm, shading='auto',
+    )
+
+    if boundary_u is not None:
+        closed_u = np.append(boundary_u, boundary_u[0])
+        closed_v = np.append(boundary_v, boundary_v[0])
+        ax.plot(closed_u, closed_v, color='white', linewidth=1.5, zorder=6)
+
+    cbar = plt.colorbar(im, ax=ax, label='Mean IFF / spike', shrink=0.8)
+    cbar.ax.yaxis.set_tick_params(color='white')
+    cbar.ax.yaxis.label.set_color('white')
+    plt.setp(cbar.ax.yaxis.get_ticklabels(), color='white')
+
+    ax.set_xlabel('U')
+    ax.set_ylabel('V')
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(str(output_path), dpi=150, bbox_inches='tight', facecolor='black')
+    logger.info("Saved standalone interpolated RF heatmap: %s", output_path)
     plt.close(fig)
 
 
@@ -413,6 +495,7 @@ def render_population_rf_composite(
         ax.yaxis.label.set_color('white')
         for spine in ax.spines.values():
             spine.set_edgecolor('white')
+        ax.set_aspect('equal')
 
         ax.set_xlim(uv_xlim)
         ax.set_ylim(uv_ylim)

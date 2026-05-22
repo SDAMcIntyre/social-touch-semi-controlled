@@ -34,6 +34,7 @@ from analysis.receptive_field_mapping.rendering.rf_population_map_renderer impor
     compute_interpolated_grid,
     render_population_rf_map,
     render_population_rf_composite,
+    render_population_rf_standalone_interpolated,
 )
 from analysis.pipeline.shared_constants import session_id_from_path
 
@@ -249,6 +250,10 @@ def run_population_response_field_extraction(
         session_vmax = max(finite_maxima)
 
         output_dir.mkdir(parents=True, exist_ok=True)
+        aggregated_dir = output_dir / "aggregated"
+        aggregated_dir.mkdir(parents=True, exist_ok=True)
+        inspection_dir = output_dir / "inspection"
+        inspection_dir.mkdir(parents=True, exist_ok=True)
         produced: List[Path] = []
         gesture_boundaries: dict = {}
         per_gesture_grids: dict = {}
@@ -258,7 +263,7 @@ def run_population_response_field_extraction(
                 f"{session_id} | {gtype} | {n_touches} touches | "
                 f"threshold={threshold} ({min_overlap_pct:.0f}%)"
             )
-            png_path = output_dir / f'{session_id}_rf_population_{gtype}.png'
+            png_path = aggregated_dir / f'{session_id}_rf_population_{gtype}.png'
 
             print(f"[Population Response Fields] {session_id}: rendering '{gtype}'...")
             grid_u, grid_v, grid_z = compute_interpolated_grid(
@@ -269,7 +274,7 @@ def run_population_response_field_extraction(
             boundary = (
                 compute_inflection_boundary(
                     grid_u, grid_v, grid_z, inflection_sigma,
-                    snapshot_dir=output_dir, snapshot_label=gtype,
+                    snapshot_dir=inspection_dir, snapshot_label=gtype,
                 )
                 if inflection_sigma is not None
                 else None
@@ -289,6 +294,18 @@ def run_population_response_field_extraction(
             )
             produced.append(png_path)
             print(f"[Population Response Fields] {session_id}: saved {png_path.name}")
+            standalone_path = output_dir / f'{session_id}_rf_population_{gtype}_interpolated.png'
+            render_population_rf_standalone_interpolated(
+                u_grid=grid_u,
+                v_grid=grid_v,
+                interp_grid=grid_z,
+                boundary_u=boundary.contour_uv[:, 0] if boundary is not None else None,
+                boundary_v=boundary.contour_uv[:, 1] if boundary is not None else None,
+                title=title,
+                output_path=standalone_path,
+            )
+            produced.append(standalone_path)
+            print(f"[Population Response Fields] {session_id}: saved {standalone_path.name}")
 
         vertex_data_npz = _save_response_fields_npz(
             output_dir=output_dir,
@@ -350,9 +367,13 @@ def run_population_response_field_extraction(
     )
 
     for sd in composite_queue:
+        aggregated_dir = sd.output_dir / "aggregated"
+        aggregated_dir.mkdir(parents=True, exist_ok=True)
+        inspection_dir = sd.output_dir / "inspection"
+        inspection_dir.mkdir(parents=True, exist_ok=True)
         for panel_type in ('scatter', 'interpolated'):
             composite_path = (
-                sd.output_dir / f'{sd.session_id}_rf_population_{panel_type}_composite.png'
+                aggregated_dir / f'{sd.session_id}_rf_population_{panel_type}_composite.png'
             )
             print(
                 f"[Population Response Fields] {sd.session_id}: "
@@ -371,7 +392,7 @@ def run_population_response_field_extraction(
                     inflection_boundaries[gtype] = (
                         compute_inflection_boundary(
                             grid_u_g, grid_v_g, grid_z_g, inflection_sigma,
-                            snapshot_dir=sd.output_dir, snapshot_label=f"{sd.session_id}_{gtype}_composite",
+                            snapshot_dir=inspection_dir, snapshot_label=f"{sd.session_id}_{gtype}_composite",
                         )
                         if inflection_sigma is not None
                         else None
