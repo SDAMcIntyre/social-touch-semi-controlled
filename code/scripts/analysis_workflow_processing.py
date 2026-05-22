@@ -148,6 +148,11 @@ def precompute_forearm_slim_uv_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
     n_iter: int = 40,
+    save_diagnostics: bool = False,
+    interactive: bool = False,
+    clean_steps: dict | None = None,
+    mesh_method: str = "bpa",
+    max_edge_mm: float | None = None,
 ) -> List[Path]:
     """Precompute and cache SLIM UV maps for all sessions.
 
@@ -196,16 +201,44 @@ def precompute_forearm_slim_uv_flow(
             output_paths=[cache_path],
             force=force_processing,
         ):
-            print(f"[SLIM UV] {session_id}: up-to-date, skipping.")
-            results.append(cache_path)
-            continue
+            # Staleness check: if the cached mesh_method differs from the
+            # requested one, force recompute even though the file is current.
+            _force_for_method_change = False
+            if cache_path.exists():
+                try:
+                    import numpy as _np
+                    _cached_data = _np.load(cache_path, allow_pickle=False)
+                    _cached_method = str(_cached_data.get('mesh_method', _np.array("bpa")))
+                    if _cached_method != mesh_method:
+                        print(
+                            f"[SLIM UV] {session_id}: mesh_method changed "
+                            f"({_cached_method!r} → {mesh_method!r}) — forcing recompute."
+                        )
+                        _force_for_method_change = True
+                except Exception as _exc:
+                    print(
+                        f"[SLIM UV] {session_id}: could not read cached mesh_method "
+                        f"({_exc}) — forcing recompute."
+                    )
+                    _force_for_method_change = True
+            if not _force_for_method_change:
+                print(f"[SLIM UV] {session_id}: up-to-date, skipping.")
+                results.append(cache_path)
+                continue
 
-        print(f"[SLIM UV] {session_id}: computing SLIM UV map (n_iter={n_iter})...")
+        camera_settings_dir = db_path / '4_analysed' / 'rf_camera_settings'
+        print(f"[SLIM UV] {session_id}: computing SLIM UV map (n_iter={n_iter}, mesh_method={mesh_method!r})...")
         result = _precompute(
             forearm_ply_path=forearm_ply_path,
             rf_maps_npz=rf_maps_npz,
             cache_path=cache_path,
             n_iter=n_iter,
+            save_diagnostics=save_diagnostics,
+            camera_settings_dir=camera_settings_dir if save_diagnostics else None,
+            interactive=interactive,
+            clean_steps=clean_steps,
+            mesh_method=mesh_method,
+            max_edge_mm=max_edge_mm,
         )
         print(f"[SLIM UV] {session_id}: cached → {result.name}")
         results.append(result)
@@ -299,9 +332,9 @@ def map_population_rf_grid_flow(
     neuron_mode: str = "iff",
     per_gesture_type: bool = True,
     vertex_threshold_ratio: float = 0.25,
-    features: dict = None,
+    features: Optional[dict] = None,
     compute_baseline: bool = True,
-    grid_groups: dict = None,
+    grid_groups: Optional[dict] = None,
 ) -> List[Path]:
     """Systematic RF population mapping via feature-space grid sweep.
 
@@ -704,11 +737,11 @@ def render_touch_feature_radar_flow(
 def touch_clustering_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
-    cluster_groups: dict = None,
-    feature_combinations: dict = None,
-    clustering_profiles: dict = None,
-    reduction: dict = None,
-    evaluation: dict = None,
+    cluster_groups: Optional[dict] = None,
+    feature_combinations: Optional[dict] = None,
+    clustering_profiles: Optional[dict] = None,
+    reduction: Optional[dict] = None,
+    evaluation: Optional[dict] = None,
 ) -> List[Path]:
     """
     Stage 2: Global clustering on pooled feature CSVs.
@@ -1136,6 +1169,15 @@ def _build_pipeline_stages(dag_handler: DagConfigHandler, items_to_process) -> l
             "func": precompute_forearm_slim_uv_flow,
             "params": lambda: {
                 "n_iter": int(dag_handler.get_task_options("precompute_forearm_slim_uv").get("n_iter", 40)),
+                "save_diagnostics": bool(dag_handler.get_task_options("precompute_forearm_slim_uv").get("save_diagnostics", False)),
+                "interactive": bool(dag_handler.get_task_options("precompute_forearm_slim_uv").get("interactive", False)),
+                "clean_steps": dag_handler.get_task_options("precompute_forearm_slim_uv").get("clean_steps"),
+                "mesh_method": str(dag_handler.get_task_options("precompute_forearm_slim_uv").get("mesh_method", "bpa")),
+                **(
+                    {"max_edge_mm": float(dag_handler.get_task_options("precompute_forearm_slim_uv")["max_edge_mm"])}
+                    if dag_handler.get_task_options("precompute_forearm_slim_uv").get("max_edge_mm") is not None
+                    else {}
+                ),
             },
         },
         {
