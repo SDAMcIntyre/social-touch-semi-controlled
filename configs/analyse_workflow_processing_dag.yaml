@@ -5,9 +5,9 @@
 parameters:
   # List of directories containing Kinect session config files to scan.
   # Paths are relative to configs/kinect_configs/.
-  kinect_configs: [valid_configs_ST14-04, valid_configs_ST15-01, 
-      valid_configs_ST16-02, valid_configs_ST16-03, valid_configs_ST16-05, 
-      valid_configs_ST18-01, valid_configs_ST18-04]
+  kinect_configs: [valid_configs_ST13-01, valid_configs_ST14-04, 
+      valid_configs_ST15-01, valid_configs_ST16-02, valid_configs_ST16-03, 
+      valid_configs_ST16-05, valid_configs_ST18-01, valid_configs_ST18-04]
 
 tasks:
   # ============================================================
@@ -110,6 +110,28 @@ tasks:
       projection_method: cylindrical_unwrap
     depends_on: [set_rf_camera_settings]
 
+  # Per-session SLIM UV config GUI: opens an interactive PyQt5/PyVista viewer
+  # per session that lets the researcher pick mesh_method, clean_steps,
+  # n_iter, and max_edge_mm, preview the result, and save a per-session
+  # slim_uv_config.yaml consumed by precompute_forearm_slim_uv below.
+  # Saves to 4_analysed/forearm_slim_uv/<session_id>/slim_uv_config.yaml.
+  configure_forearm_slim_uv:
+    category: viewer_required
+    enabled: true
+    options:
+      # DAG-level defaults applied to sessions that have no per-session YAML.
+      mesh_method: delaunay
+      max_edge_mm: 0.0  # 0.0 means auto (3.0 × mean nearest-neighbour distance)
+      n_iter: 40
+      save_diagnostics: true
+      clean_steps:
+        remove_non_manifold: true
+        repair_pinch_vertices: true
+        remove_slivers: true
+        stitch_boundary_gaps: true
+        fill_interior_holes: true
+    depends_on: [map_single_touch_rf]
+
   # Precompute SLIM UV map per session. Caches the UV next to the forearm PLY.
   # Requires map_single_touch_rf output (single_touch_rf_maps.npz) to compute the
   # IFF-weighted centroid used as the UV origin (center_vid).
@@ -136,12 +158,13 @@ tasks:
       # Mesh construction method: "bpa" (Ball Pivoting Algorithm, default) or
       # "delaunay" (2.5D Delaunay triangulation — manifold, no non-manifold cleanup needed).
       # Switching this value triggers automatic recompute (staleness detection).
-      mesh_method: bpa
+      mesh_method: delaunay
       # Maximum edge length in mm for Delaunay mesh filtering (delaunay only).
       # When absent, defaults to 3.0 × mean nearest-neighbour distance (auto).
       # max_edge_mm: 12.0
     depends_on:
     - map_single_touch_rf
+    - configure_forearm_slim_uv
 
   # Render per-session 2D population RF heatmap PNGs projected via SLIM UV.
   # Produces one PNG per gesture subset (all, tap, stroke_proximal, stroke_distal)

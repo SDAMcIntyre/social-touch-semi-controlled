@@ -24,6 +24,7 @@ from .pipelines.rf_cluster_gui_launchers import (
     launch_gallery_viewer,
     launch_rf_camera_settings_viewer,
     launch_rf_surface_viewer,
+    launch_slim_uv_config_viewer,
 )
 from .metrics.rf_metrics import RFMetrics, compute_rf_metrics
 from .surface.rf_projection import project_to_2d
@@ -52,6 +53,7 @@ __all__ = [
     "launch_gallery_viewer",
     "launch_rf_camera_settings_viewer",
     "launch_rf_surface_viewer",
+    "launch_slim_uv_config_viewer",
     "RFMetrics",
     "compute_rf_metrics",
     "run_simple_rf_mapping",
