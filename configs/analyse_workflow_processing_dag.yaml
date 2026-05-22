@@ -119,6 +119,10 @@ tasks:
     category: viewer_required
     enabled: true
     options:
+      # When false (default), sessions that already have slim_uv_config.yaml
+      # are skipped; the GUI only opens for sessions missing a config.
+      # Set true to re-open the GUI for every session.
+      force_processing: false
       # DAG-level defaults applied to sessions that have no per-session YAML.
       mesh_method: delaunay
       max_edge_mm: 0.0  # 0.0 means auto (3.0 × mean nearest-neighbour distance)
