@@ -12,12 +12,17 @@ import pandas as pd
 
 _bracket_re = re.compile(r'\[([^\[\]]+)\]')
 
-from analysis.receptive_field_mapping.rf_data_loader import (
+from analysis.receptive_field_mapping.data.rf_data_loader import (
     load_forearm_vertices,
     resolve_forearm_ply,
 )
 from analysis.touch_analytics.pipeline_shared import session_id_from_path
 from analysis.touch_analytics.preparation.grouping import group_touches
+from analysis.pipeline.shared_constants import (
+    NERVE_SPIKE_COL,
+    CONTACT_POINTS_COL,
+    NERVE_FREQ_COL,
+)
 
 
 SIGNAL_COLUMNS = [
@@ -26,8 +31,8 @@ SIGNAL_COLUMNS = [
     'contact_location_x',
     'contact_location_y',
     'contact_location_z',
-    'Nerve_freq',
-    'Nerve_spike',
+    NERVE_FREQ_COL,
+    NERVE_SPIKE_COL,
     'trial_id',
     'single_touch_id',
 ]
@@ -38,7 +43,7 @@ _REQUIRED_COLUMNS = [
     'single_touch_id',
     'gesture_type',
     'time',
-    'contact_points',
+    CONTACT_POINTS_COL,
     'contact_location_x',
     'contact_location_y',
     'contact_location_z',
@@ -118,7 +123,7 @@ def load_preparation_viewer_data(
             ['contact_location_x', 'contact_location_y', 'contact_location_z']
         ].to_numpy(dtype=np.float64)
 
-        cp_strings = group['contact_points'].ffill().fillna('[]').values
+        cp_strings = group[CONTACT_POINTS_COL].ffill().fillna('[]').values
         frame_contact_pts: list[np.ndarray] = []
         for s in cp_strings:
             matches = _bracket_re.findall(str(s))

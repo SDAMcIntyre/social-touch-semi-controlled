@@ -342,6 +342,46 @@ class DagConfigModel:
         self._dirty = True
 
     # ------------------------------------------------------------------
+    # Radar groups — CRUD for render_touch_feature_radar radar_groups entries
+    # ------------------------------------------------------------------
+
+    def get_radar_group_spec(self, task_name: str, group_name: str) -> dict:
+        """Return a copy of the full spec dict for *group_name* in *task_name*.
+
+        Raises ``ValueError`` if ``radar_groups`` is absent in the task options,
+        or ``KeyError`` if the named group does not exist.
+        """
+        opts = self._get_task(task_name).get("options", {}) or {}
+        groups = opts.get("radar_groups")
+        if groups is None:
+            raise ValueError(
+                f"Task '{task_name}' has no 'radar_groups' key in its options"
+            )
+        spec = groups.get(group_name)
+        if spec is None:
+            raise KeyError(
+                f"Radar group '{group_name}' not found in task '{task_name}'"
+            )
+        return dict(spec)
+
+    def set_radar_group_spec(self, task_name: str, group_name: str, spec: dict) -> None:
+        """Write (or overwrite) the full spec dict for *group_name* in *task_name*.
+
+        Raises ``ValueError`` if ``radar_groups`` is absent in the task options.
+        """
+        task = self._get_task(task_name)
+        opts = task.get("options")
+        if opts is None:
+            task["options"] = {}
+            opts = task["options"]
+        if "radar_groups" not in opts or opts["radar_groups"] is None:
+            raise ValueError(
+                f"Task '{task_name}' has no 'radar_groups' key in its options"
+            )
+        opts["radar_groups"][group_name] = spec
+        self._dirty = True
+
+    # ------------------------------------------------------------------
     # Grid groups — CRUD for map_population_rf_grid grid_groups entries
     # ------------------------------------------------------------------
 
