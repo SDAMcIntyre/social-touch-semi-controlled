@@ -5,9 +5,11 @@
 parameters:
   # List of directories containing Kinect session config files to scan.
   # Paths are relative to configs/kinect_configs/.
-  kinect_configs: [valid_configs_ST13-01, valid_configs_ST13-02, valid_configs_ST13-03, valid_configs_ST14-01, 
-      valid_configs_ST14-02, valid_configs_ST14-04, valid_configs_ST15-01, valid_configs_ST16-02, valid_configs_ST16-03, 
-      valid_configs_ST16-05, valid_configs_ST18-01, valid_configs_ST18-04]
+  kinect_configs: [valid_configs_ST13-01, valid_configs_ST13-02, 
+      valid_configs_ST13-03, valid_configs_ST14-01, valid_configs_ST14-02, 
+      valid_configs_ST14-04, valid_configs_ST15-01, valid_configs_ST16-02, 
+      valid_configs_ST16-03, valid_configs_ST16-05, valid_configs_ST18-01, 
+      valid_configs_ST18-04]
 
 tasks:
   # ============================================================
@@ -108,8 +110,33 @@ tasks:
       # Must be false for unattended / batch processing.
       show_interactive: false
       projection_method: cylindrical_unwrap
-      save_diagnostics: true
     depends_on: [set_rf_camera_settings]
+
+  # Per-session SLIM UV config GUI: opens an interactive PyQt5/PyVista viewer
+  # per session that lets the researcher pick mesh_method, clean_steps,
+  # n_iter, and max_edge_mm, preview the result, and save a per-session
+  # slim_uv_config.yaml consumed by precompute_forearm_slim_uv below.
+  # Saves to 4_analysed/forearm_slim_uv/<session_id>/slim_uv_config.yaml.
+  configure_forearm_slim_uv:
+    category: viewer_required
+    enabled: true
+    options:
+      # When false (default), sessions that already have slim_uv_config.yaml
+      # are skipped; the GUI only opens for sessions missing a config.
+      # Set true to re-open the GUI for every session.
+      force_processing: false
+      # DAG-level defaults applied to sessions that have no per-session YAML.
+      mesh_method: bpa
+      max_edge_mm: 0.0  # 0.0 means auto (3.0 × mean nearest-neighbour distance)
+      n_iter: 40
+      save_diagnostics: true
+      clean_steps:
+        remove_non_manifold: true
+        repair_pinch_vertices: true
+        remove_slivers: true
+        stitch_boundary_gaps: true
+        fill_interior_holes: true
+    depends_on: [map_single_touch_rf]
 
   # Precompute SLIM UV map per session. Caches the UV next to the forearm PLY.
   # Requires map_single_touch_rf output (single_touch_rf_maps.npz) to compute the
@@ -121,14 +148,35 @@ tasks:
     options:
       force_processing: false
       n_iter: 40
+      save_diagnostics: true
+      # When true, open a step-by-step PyQt5/PyVista viewer per session
+      # after the SLIM precompute. Useful for diagnosing stitching/cleaning
+      # issues. Blocks the pipeline until the window is closed.
+      interactive: false
+      # Toggle individual mesh cleaning steps (all default to true).
+      # Steps 1-3 (largest component, fix winding, remove orphans) always run.
+      clean_steps:
+        remove_non_manifold: true
+        repair_pinch_vertices: false
+        remove_slivers: false
+        stitch_boundary_gaps: false
+        fill_interior_holes: true
+      # Mesh construction method: "bpa" (Ball Pivoting Algorithm, default) or
+      # "delaunay" (2.5D Delaunay triangulation — manifold, no non-manifold cleanup needed).
+      # Switching this value triggers automatic recompute (staleness detection).
+      mesh_method: delaunay
+      # Maximum edge length in mm for Delaunay mesh filtering (delaunay only).
+      # When absent, defaults to 3.0 × mean nearest-neighbour distance (auto).
+      # max_edge_mm: 12.0
     depends_on:
     - map_single_touch_rf
+    - configure_forearm_slim_uv
 
   # Render per-session 2D population RF heatmap PNGs projected via SLIM UV.
   # Produces one PNG per gesture subset (all, tap, stroke_proximal, stroke_distal)
   # with a session-wide consistent colour scale.
-  # Output: 4_analysed/population_rf_maps/<session_id>/
-  visualize_population_rf_maps:
+  # Output: 4_analysed/population_response_fields/<session_id>/
+  extract_population_rf_response_field_boundaries:
     category: processing
     enabled: true
     options:
@@ -136,13 +184,26 @@ tasks:
       neuron_mode: iff
       min_overlap_pct: 25
       median_filter_size: 5
-    depends_on: [map_single_touch_rf, set_rf_camera_settings, precompute_forearm_slim_uv]
+      inflection_sigma: 5.0
+      heatmap_space: linear
+    depends_on: [map_single_touch_rf, precompute_forearm_slim_uv]
+
+  # Aggregate inflection boundary metrics across sessions and render comparison visuals.
+  # Reads per-session NPZ files from extract_population_rf_response_field_boundaries.
+  # Produces: session_rf_boundary_summary.csv, contour overlay PNGs, metric panel PNGs,
+  # session-x-gesture heatmap PNGs under 4_analysed/session_rf_boundary_comparison/
+  compare_session_rf_boundaries:
+    category: processing
+    enabled: true
+    options:
+      force_processing: false
+    depends_on: [extract_population_rf_response_field_boundaries]
 
   # Stage 2b (Feature Extraction): Per-session feature extraction. Each enabled feature extracts to its own folder.
   # Output: 4_analysed/touch_features/<feature>/<session>_touch_summary.csv
   touch_feature_extraction:
     category: processing
-    enabled: false
+    enabled: true
     options:
       force_processing: false
       # Each key is an aggregation family. StatisticalExtractor auto-discovers all numeric
@@ -171,12 +232,29 @@ tasks:
           pre_iff_window_ms: 250
     depends_on: [touch_series_transforms]
 
+  render_touch_feature_radar:
+    category: processing
+    enabled: false
+    options:
+      force_processing: false
+      radar_groups:
+        canonical_iff:
+          enabled: true
+          features:
+            contact_area:
+            - mean_during_iff
+            contact_depth:
+            - mean_during_iff
+            hand_velocity_amplitude:
+            - mean_during_iff
+    depends_on: [touch_feature_extraction]
+
   # Population RF grid: sweep N-D feature space, average single-touch RFs per cell.
   # Depends on: map_single_touch_rf (RF maps), touch_feature_extraction (feature CSVs).
   # Output: 4_analysed/population_rf_grid/<session_id>/
   map_population_rf_grid:
     category: processing
-    enabled: true
+    enabled: false
     options:
       force_processing: false
       grid_groups:
@@ -205,14 +283,15 @@ tasks:
           compute_baseline: true
           features:
             contact_depth_mean: {min: 0.0, max: 10.0, step: 0.1, span: 0.2}
-            hand_velocity_amplitude_mean: {min: 0.0, max: 500.0, step: 5.0, span: 10.0}
+            hand_velocity_amplitude_mean: {min: 0.0, max: 500.0, step: 5.0, span: 
+                10.0}
     depends_on: [map_single_touch_rf, touch_feature_extraction]
 
   # Reduces per-gesture-type population RF grid NPZ files to scalar metric CSVs.
   # Output: 4_analysed/population_rf_grid_metrics/<session_id>/
   reduce_population_rf_grid:
     category: processing
-    enabled: true
+    enabled: false
     options:
       force_processing: false
       projection_method: tangent_plane
@@ -242,7 +321,7 @@ tasks:
     category: processing
     enabled: true
     options:
-      force_processing: false
+      force_processing: true
       neuron_mode: iff
       vertex_threshold_ratio: 0.25
       metric_name: mean_iff
@@ -253,7 +332,8 @@ tasks:
           max: 500
           step: 25
           span: 50
-    depends_on: [map_single_touch_rf, touch_feature_extraction, set_rf_camera_settings]
+    depends_on: [map_single_touch_rf, touch_feature_extraction, 
+        set_rf_camera_settings]
 
   # Stages 3–5 (Reduction + Clustering + Evaluation): Global clustering on pooled feature CSVs.
   # Each cluster_group defines which data types / aggregations to use and its own clustering_methods.

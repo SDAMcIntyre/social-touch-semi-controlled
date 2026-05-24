@@ -53,7 +53,7 @@ _stub(
 # Imports under test
 # ---------------------------------------------------------------------------
 
-from analysis.receptive_field_mapping.rf_session_comparison_renderer import (  # noqa: E402
+from analysis.receptive_field_mapping.rendering.rf_session_comparison_renderer import (  # noqa: E402
     _cluster_session_rows,
     _nan_safe_correlation_distance,
 )

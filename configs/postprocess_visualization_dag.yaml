@@ -13,11 +13,11 @@
 # ==============================================================================
 
 parameters:
-  kinect_configs: valid_configs_ST14-01
+  kinect_configs: valid_configs_ST14-04
 
 tasks:
   view_forearm_stage_inspector:
-    enabled: false
+    enabled: true
     description: "Launch ForearmStageInspector: single window with session and stage
       dropdowns to inspect forearm pointclouds at Raw, PCA-Calibrated, and RF-Centered
       stages. Optional Delaunay mesh overlay. Runs once per batch (session-level)."

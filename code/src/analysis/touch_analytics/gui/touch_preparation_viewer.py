@@ -30,6 +30,7 @@ from analysis.touch_analytics.gui.preparation_viewer_data import (
     PreparationTouchData,
     PreparationViewerData,
 )
+from analysis.pipeline.shared_constants import NERVE_SPIKE_COL
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +46,7 @@ _DEFAULT_SIGNALS = [
     'contact_area',
     'contact_location_x',
     'Nerve_freq',
-    'Nerve_spike',
+    NERVE_SPIKE_COL,
     'trial_id',
     'single_touch_id',
 ]
@@ -57,7 +58,7 @@ _SIGNAL_LABELS = {
     'contact_location_y': 'Loc Y',
     'contact_location_z': 'Loc Z',
     'Nerve_freq': 'Freq',
-    'Nerve_spike': 'Spikes',
+    NERVE_SPIKE_COL: 'Spikes',
     'trial_id': 'Trial',
     'single_touch_id': 'Touch',
 }
@@ -313,7 +314,7 @@ class TouchPreparationViewer(QMainWindow):
             self._axes.append(ax)
 
             vals = touch.signals[col]
-            if col == 'Nerve_spike':
+            if col == NERVE_SPIKE_COL:
                 spike_times = t[vals > 0]
                 ax.vlines(spike_times, 0, 1, color='black', linewidth=0.5)
                 ax.set_ylim(-0.1, 1.1)
