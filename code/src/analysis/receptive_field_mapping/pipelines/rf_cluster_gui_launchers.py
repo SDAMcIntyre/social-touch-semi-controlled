@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from analysis.receptive_field_mapping.rf_data_loader import resolve_forearm_ply
+from analysis.receptive_field_mapping.data.rf_data_loader import resolve_forearm_ply
 from analysis.touch_analytics.pipeline_shared import session_id_from_path
 
 from .rf_cluster_pipeline import _resolve_explorer_session_paths
@@ -40,7 +40,7 @@ def precompute_explorer_caches(
         excessive peak memory (each session may allocate ~1–2 GB during CSV
         read and contact-point array construction).
     """
-    from analysis.receptive_field_mapping.rf_explorer_data import load_explorer_data
+    from analysis.receptive_field_mapping.data.rf_explorer_data import load_explorer_data
 
     session_specs = _resolve_explorer_session_paths(input_items)
     n = len(session_specs)
@@ -81,7 +81,7 @@ def launch_feature_space_explorer(
         List of ``(aggregated_csv_path, database_path)`` tuples, one per
         session — the same format used throughout the analysis pipeline.
     """
-    from analysis.receptive_field_mapping.rf_explorer_data import load_explorer_data
+    from analysis.receptive_field_mapping.data.rf_explorer_data import load_explorer_data
     from analysis.receptive_field_mapping.gui import RFFeatureSpaceExplorer
     from PyQt5.QtWidgets import QApplication
 
@@ -130,7 +130,7 @@ def launch_touch_playback_explorer(
         List of ``(aggregated_csv_path, database_path)`` tuples, one per
         session — the same format used throughout the analysis pipeline.
     """
-    from analysis.receptive_field_mapping.touch_playback_data import load_playback_data
+    from analysis.receptive_field_mapping.data.touch_playback_data import load_playback_data
     from analysis.receptive_field_mapping.gui import TouchPlaybackExplorer
     from PyQt5.QtWidgets import QApplication
 
@@ -258,7 +258,7 @@ def launch_touch_population_explorer(
         ``run_single_touch_rf_mapping`` was run.  Passed to the viewer so it
         can label the RF heatmap axis correctly.
     """
-    from analysis.receptive_field_mapping.touch_population_data import (
+    from analysis.receptive_field_mapping.data.touch_population_data import (
         load_population_data,
         load_population_rf_data,
         PopulationRFData,
@@ -336,13 +336,60 @@ def launch_gallery_viewer(
         (``"tap"``, ``"stroke_proximal"``, ``"stroke_distal"``) to load the correct
         per-type artifact tree.  ``None`` loads the flat artifact tree.
     """
-    from analysis.receptive_field_mapping.rf_gallery_data import load_gallery_data
+    from analysis.receptive_field_mapping.data.rf_gallery_data import load_gallery_data
     from analysis.receptive_field_mapping.gui import RFClusterGalleryViewer
     from PyQt5.QtWidgets import QApplication
 
     gallery_data = load_gallery_data(output_dir, combo_name, clusterer_name, gesture_type)
     app = QApplication.instance() or QApplication(sys.argv)
     viewer = RFClusterGalleryViewer(gallery_data)
+    viewer.show()
+    app.exec_()
+
+
+def launch_rf_surface_viewer(
+    input_items: List[Tuple[Path, Path]],
+    neuron_mode: str = "iff",
+) -> None:
+    """Launch the RF Surface Viewer for all sessions in input_items.
+
+    Resolves the per-session ``_population_response_fields.npz`` produced by
+    ``run_population_response_field_extraction`` and opens the ``RFSurfaceViewer`` window.
+    Raises ``ValueError`` if the NPZ is absent for any session (fail-fast).
+    Blocks until the user closes the window.
+
+    Parameters
+    ----------
+    input_items:
+        List of ``(aggregated_csv_path, database_path)`` tuples.
+    neuron_mode:
+        Accepted for interface consistency; the NPZ is mode-agnostic.
+    """
+    from analysis.receptive_field_mapping.gui.rf_surface_viewer import RFSurfaceViewer
+    from PyQt5.QtWidgets import QApplication
+
+    n = len(input_items)
+    if n == 0:
+        raise ValueError("launch_rf_surface_viewer: no sessions to display.")
+
+    sessions: List[Tuple[str, Path]] = []
+    for csv_path, database_path in input_items:
+        session_id = session_id_from_path(csv_path)
+        npz_path = (
+            database_path / "4_analysed" / "population_response_fields"
+            / session_id / f"{session_id}_population_response_fields.npz"
+        )
+        if not npz_path.exists():
+            raise ValueError(
+                f"launch_rf_surface_viewer: vertex NPZ not found for session "
+                f"'{session_id}': {npz_path}"
+            )
+        sessions.append((session_id, npz_path))
+
+    print(f"[RF Surface Viewer] Launching viewer for {n} session(s)...")
+
+    app = QApplication.instance() or QApplication(sys.argv)
+    viewer = RFSurfaceViewer(sessions=sessions)
     viewer.show()
     app.exec_()
 
@@ -373,6 +420,76 @@ def launch_rf_camera_settings_viewer(
     viewer = RFCameraSettingsViewer(
         sessions=session_specs,
         output_dir=output_dir,
+    )
+    viewer.show()
+    app.exec_()
+
+
+def launch_slim_uv_config_viewer(
+    input_items: List[Tuple[Path, Path]],
+    dag_defaults: dict,
+) -> None:
+    """Launch the SLIM UV per-session config GUI for all sessions in input_items.
+
+    For each session, resolves the forearm PLY path, the single-touch RF maps
+    NPZ path, and the per-session ``forearm_slim_uv`` output directory; then
+    opens the ``SlimUvConfigViewer`` window.  Blocks until the user closes
+    the window.  Per-session ``slim_uv_config.yaml`` files are written to
+    ``4_analysed/forearm_slim_uv/<session_id>/`` on "Accept".
+
+    Parameters
+    ----------
+    input_items:
+        List of ``(aggregated_csv_path, database_path)`` tuples — the same
+        shape used throughout the analysis pipeline.
+    dag_defaults:
+        DAG-level defaults forwarded to ``make_default_config`` when a session
+        has no existing per-session config.  Expected keys: ``mesh_method``,
+        ``max_edge_mm``, ``clean_steps``, ``n_iter``, ``save_diagnostics``.
+
+    Notes
+    -----
+    Missing ``rf_maps_npz`` is **not** raised here — the path is still passed
+    to the GUI so the user can configure the session.  The error surfaces at
+    "Process" time inside the worker thread with a clear message.  Missing
+    ``forearm_ply_path`` **is** raised eagerly: without the raw point cloud
+    the GUI has nothing to display.
+    """
+    from analysis.receptive_field_mapping.gui.slim_uv_config_viewer import SlimUvConfigViewer
+    from PyQt5.QtWidgets import QApplication
+
+    n = len(input_items)
+    if n == 0:
+        raise ValueError("launch_slim_uv_config_viewer: no sessions to display.")
+
+    sessions: list[dict] = []
+    for csv_path, database_path in input_items:
+        session_id = session_id_from_path(csv_path)
+        forearm_ply_path = resolve_forearm_ply(csv_path.parent, session_id)
+        if forearm_ply_path is None:
+            raise FileNotFoundError(
+                f"launch_slim_uv_config_viewer: forearm PLY not found "
+                f"for session '{session_id}' in {csv_path.parent} — "
+                "run forearm extraction first."
+            )
+        rf_maps_npz = (
+            database_path / '4_analysed' / 'single_touch_rf_maps'
+            / session_id / 'single_touch_rf_maps.npz'
+        )
+        output_dir = database_path / '4_analysed' / 'forearm_slim_uv'
+        sessions.append({
+            "session_id": session_id,
+            "forearm_ply_path": forearm_ply_path,
+            "rf_maps_npz": rf_maps_npz,
+            "output_dir": output_dir,
+        })
+
+    print(f"[SLIM UV Config] Launching viewer for {n} session(s)...")
+
+    app = QApplication.instance() or QApplication(sys.argv)
+    viewer = SlimUvConfigViewer(
+        sessions=sessions,
+        dag_defaults=dag_defaults,
     )
     viewer.show()
     app.exec_()

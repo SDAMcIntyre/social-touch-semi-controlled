@@ -15,8 +15,8 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 
-from analysis.receptive_field_mapping.rf_data_loader import resolve_forearm_ply
-from analysis.receptive_field_mapping.touch_playback_data import (
+from analysis.receptive_field_mapping.data.rf_data_loader import resolve_forearm_ply
+from analysis.receptive_field_mapping.data.touch_playback_data import (
     PlaybackData,
     TouchEvent,
     load_playback_data,

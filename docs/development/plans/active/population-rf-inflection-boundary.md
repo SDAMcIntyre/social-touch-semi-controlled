@@ -286,3 +286,14 @@ persist metrics
 - Related module: `code/src/analysis/receptive_field_mapping/rf_population_map_renderer.py` — current rendering pipeline
 - Knowledge base: `docs/development/knowledge-base/note-3d-to-2d-surface-projection-algorithms.md`
 - Knowledge base: `docs/development/knowledge-base/note-analysis-pipeline-coordinate-spaces.md`
+
+---
+
+## Follow-on
+
+**2026-05-20** — Plan `extract-population-rf-response-field-boundaries` renamed the DAG task
+(`visualize_population_rf_maps` → `extract_population_rf_response_field_boundaries`), the pipeline
+module (`rf_population_map_pipeline.py` → `rf_population_response_field_pipeline.py`), the
+orchestrator function, the output folder (`population_rf_maps/` → `population_response_fields/`),
+and the sentinel and NPZ filenames. All boundary fields added by this plan continue to be persisted
+unchanged under the new names.

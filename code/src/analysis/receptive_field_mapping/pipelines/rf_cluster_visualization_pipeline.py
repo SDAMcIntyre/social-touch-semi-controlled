@@ -11,8 +11,8 @@ from typing import List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from analysis.receptive_field_mapping.rf_cluster_visualizer import render_forearm_heatmap, RFRenderContext
-from analysis.receptive_field_mapping.rf_extraction_io import (
+from analysis.receptive_field_mapping.rendering.rf_cluster_visualizer import render_forearm_heatmap, RFRenderContext
+from analysis.receptive_field_mapping.data.rf_extraction_io import (
     RF_CAMERA_SETTINGS_FILENAME,
     description_summary_line,
     load_cluster_session_data,

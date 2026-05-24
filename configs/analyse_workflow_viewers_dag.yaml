@@ -6,7 +6,11 @@
 parameters:
   # List of directories containing Kinect session config files to scan.
   # Paths are relative to configs/kinect_configs/.
-  kinect_configs: valid_configs_ST18-04
+  kinect_configs: [valid_configs_ST13-01, valid_configs_ST13-02, 
+      valid_configs_ST13-03, valid_configs_ST14-01, valid_configs_ST14-02, 
+      valid_configs_ST14-04, valid_configs_ST15-01, valid_configs_ST16-02, 
+      valid_configs_ST16-03, valid_configs_ST16-05, valid_configs_ST18-01, 
+      valid_configs_ST18-04]
 
 tasks:
   # ============================================================
@@ -93,4 +97,17 @@ tasks:
     options:
       force_processing: false
       cluster_groups: [pressure_velocity_mean_cartesian_binning]
+    depends_on: []
+
+  # RF Surface Viewer: interactive 3D surface where Z = mean IFF intensity,
+  # coloured by jet colormap. Loads _population_response_fields.npz produced
+  # by extract_population_rf_response_field_boundaries. Session and gesture-type selectable via
+  # combo boxes.
+  # Output: interactive GUI (no files written)
+  explore_rf_surface:
+    category: viewer
+    enabled: false
+    options:
+      force_processing: false
+      neuron_mode: iff
     depends_on: []

@@ -25,6 +25,21 @@ from .forearm_slim_uv import (
     precompute_forearm_slim_uv,
     load_slim_uv_cache,
     barycentric_uv_lookup,
+    uv_points_to_xyz,
+)
+from .slim_uv_config_io import (
+    SlimUvConfig,
+    SlimUvCleanSteps,
+    load_slim_uv_config,
+    save_slim_uv_config,
+    config_path_for_session,
+    config_hash,
+    make_default_config,
+    DEFAULT_CLEAN_STEPS,
+    DEFAULT_MESH_METHOD,
+    DEFAULT_MAX_EDGE_MM,
+    DEFAULT_N_ITER,
+    DEFAULT_SAVE_DIAGNOSTICS,
 )
 from .rf_projection import (
     project_tangent_plane,
@@ -59,6 +74,20 @@ __all__ = [
     "precompute_forearm_slim_uv",
     "load_slim_uv_cache",
     "barycentric_uv_lookup",
+    "uv_points_to_xyz",
+    # slim_uv_config_io
+    "SlimUvConfig",
+    "SlimUvCleanSteps",
+    "load_slim_uv_config",
+    "save_slim_uv_config",
+    "config_path_for_session",
+    "config_hash",
+    "make_default_config",
+    "DEFAULT_CLEAN_STEPS",
+    "DEFAULT_MESH_METHOD",
+    "DEFAULT_MAX_EDGE_MM",
+    "DEFAULT_N_ITER",
+    "DEFAULT_SAVE_DIAGNOSTICS",
     # rf_projection
     "project_tangent_plane",
     "project_cylindrical_unwrap",

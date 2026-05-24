@@ -71,7 +71,7 @@ _SRC = _REPO_ROOT / "code" / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
-from analysis.receptive_field_mapping._slim_helpers import (  # noqa: E402
+from analysis.receptive_field_mapping.surface.slim_helpers import (  # noqa: E402
     clean_mesh,
     boundary_loop,
     canonicalise_uv,
@@ -382,7 +382,7 @@ def build_mesh(ply_path: Path, method: str) -> trimesh.Trimesh:
     """
     if method == "bpa":
         # Import lazily so the delaunay path has no dep on the analysis package.
-        from analysis.receptive_field_mapping.rf_surface_utils import (
+        from analysis.receptive_field_mapping.surface.rf_surface_utils import (
             load_or_build_forearm_mesh,
         )
         mesh = load_or_build_forearm_mesh(ply_path)
