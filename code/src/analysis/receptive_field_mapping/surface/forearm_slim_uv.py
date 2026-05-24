@@ -24,6 +24,7 @@ import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 from scipy.spatial import KDTree
@@ -34,6 +35,10 @@ from analysis.receptive_field_mapping.data.rf_data_loader import (
 )
 from .rf_surface_utils import load_or_build_forearm_mesh, _VALID_MESH_METHODS
 from .slim_helpers import clean_mesh, boundary_loop, flatten_slim
+from .slim_uv_config_io import (
+    config_hash as _compute_config_hash,
+    make_default_config,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +59,7 @@ class SlimUvCache:
     rf_npz_mtime: float    # single-touch RF maps NPZ mtime at cache-write time
     centroid_3d: np.ndarray  # (3,) float64 — IFF-weighted centroid
     mesh_method: str = "bpa"  # mesh construction method used ("bpa" or "delaunay")
+    config_hash: str = ""  # SHA-256 of the full SLIM UV config parameter set
 
 
 # ---------------------------------------------------------------------------
@@ -83,12 +89,222 @@ def _transfer_ply_colors(
 
 
 # ---------------------------------------------------------------------------
-# Interactive step-by-step viewer
+# Reusable processing core
 # ---------------------------------------------------------------------------
 
-def _launch_slim_steps_viewer(
+def run_slim_pipeline_core(
+    forearm_ply_path: Path,
+    rf_maps_npz: Path,
     *,
-    session_id: str,
+    mesh_method: str = "bpa",
+    max_edge_mm: float | None = None,
+    clean_steps: dict | None = None,
+    n_iter: int = 40,
+    collect_diagnostics: bool = True,
+    clean_diag_out: dict | None = None,
+    slim_diag_out: dict | None = None,
+    partial_out: dict | None = None,
+) -> dict[str, Any]:
+    """Run mesh-build → clean → centroid → SLIM flatten and return raw results.
+
+    Pure-data function shared by the batch ``precompute_forearm_slim_uv`` and
+    the interactive GUI worker thread. Does **not** write any files, launch
+    viewers, or load camera settings — those are caller concerns.
+
+    Raises loudly on any failure (no silent fallbacks). When ``collect_diagnostics``
+    is ``False`` the returned ``clean_diag`` and ``slim_diag`` are ``None``.
+
+    The caller may pass ``clean_diag_out`` / ``slim_diag_out`` to receive the
+    in-progress diagnostics even if ``flatten_slim`` raises — these are mutated
+    in place by ``clean_mesh`` / ``flatten_slim``. ``partial_out`` is similarly
+    populated with pre-flatten arrays (``V_raw``, ``F_raw``, ``V_clean``,
+    ``F_clean``, ``centroid_3d``, ``bloop_pre``, ``raw_mesh_colors``,
+    ``clean_mesh_colors``) before ``flatten_slim`` runs.
+
+    Returns a dict with keys: ``V_raw``, ``F_raw``, ``clean_diag``, ``V_clean``,
+    ``F_clean``, ``V_final``, ``F_final``, ``uv_final``, ``centroid_3d``,
+    ``center_vid``, ``bloop_pre``, ``slim_diag``, ``raw_mesh_colors``,
+    ``clean_mesh_colors``.
+    """
+    # Validate mesh_method.
+    if mesh_method not in _VALID_MESH_METHODS:
+        raise ValueError(
+            f"Unknown mesh_method {mesh_method!r}. "
+            f"Valid options are: {_VALID_MESH_METHODS}"
+        )
+
+    # 2. Build mesh.
+    raw_mesh = load_or_build_forearm_mesh(
+        forearm_ply_path,
+        mesh_method=mesh_method,
+        max_edge_mm=max_edge_mm,
+    )
+    if raw_mesh is None:
+        raise ValueError(
+            f"load_or_build_forearm_mesh returned None for {forearm_ply_path}. "
+            "The PLY may be empty, too sparse, or not a forearm segmentation."
+        )
+    V_raw = np.asarray(raw_mesh.vertices, dtype=np.float64)
+    F_raw = np.asarray(raw_mesh.faces, dtype=np.int32)
+
+    # 3. Clean mesh.
+    if clean_diag_out is not None:
+        clean_diag_out.setdefault("clean_steps", [])
+        clean_diag: dict | None = clean_diag_out
+    else:
+        clean_diag = {"clean_steps": []} if collect_diagnostics else None
+    V, F = clean_mesh(raw_mesh, diagnostics=clean_diag, clean_steps=clean_steps)
+    logger.info(
+        "Cleaned mesh: %d vertices, %d faces (source: %s)",
+        V.shape[0], F.shape[0], forearm_ply_path.name,
+    )
+
+    # 4. Load single-touch RF maps NPZ.
+    if not rf_maps_npz.exists():
+        raise FileNotFoundError(
+            f"Single-touch RF maps NPZ not found: {rf_maps_npz}\n"
+            "Run 'map_single_touch_rf' before 'precompute_forearm_slim_uv'."
+        )
+
+    npz = np.load(rf_maps_npz, allow_pickle=True)
+    rf_data: dict = npz["rf_data"].item()
+
+    if not rf_data:
+        raise ValueError(
+            f"No touches in {rf_maps_npz} — cannot determine forearm "
+            "hotspot centroid."
+        )
+
+    # 5. Load raw PLY vertices to resolve NPZ vertex indices to 3D positions.
+    raw_verts = load_forearm_vertices(forearm_ply_path)
+    if raw_verts is None:
+        raise ValueError(
+            f"load_forearm_vertices returned None for {forearm_ply_path}. "
+            "The PLY may be empty or unreadable."
+        )
+    n_verts = len(raw_verts)
+
+    # 5b. Load PLY vertex colours and transfer to raw / cleaned mesh vertices.
+    ply_colors_uint8 = load_forearm_vertex_colors(forearm_ply_path)
+    if ply_colors_uint8 is not None:
+        raw_mesh_colors = _transfer_ply_colors(raw_verts, ply_colors_uint8, V_raw)
+        clean_mesh_colors = _transfer_ply_colors(raw_verts, ply_colors_uint8, V)
+    else:
+        raw_mesh_colors = None
+        clean_mesh_colors = None
+
+    # 6. Aggregate per-vertex mean IFF across all touches.
+    #    Pattern mirrors touch_population_explorer.py:654-684.
+    iff_sum = np.zeros(n_verts, dtype=np.float64)
+    touch_count = np.zeros(n_verts, dtype=np.int64)
+
+    for pairs in rf_data.values():
+        for vertex_idx, mean_iff in pairs:
+            idx = int(vertex_idx)
+            if idx < 0 or idx >= n_verts:
+                # Out-of-bounds index — skip silently (safety guard).
+                continue
+            iff_sum[idx] += float(mean_iff)
+            touch_count[idx] += 1
+
+    contacted_mask = touch_count > 0
+    contacted_indices = np.where(contacted_mask)[0]
+
+    if len(contacted_indices) == 0:
+        raise ValueError(
+            f"No contacted vertices found in {rf_maps_npz} — cannot determine "
+            "forearm hotspot centroid."
+        )
+
+    per_vertex_mean_iff = iff_sum[contacted_indices] / touch_count[contacted_indices]
+
+    # 7. Compute IFF-weighted 3D centroid.
+    total_weight = per_vertex_mean_iff.sum()
+    if total_weight == 0.0:
+        raise ValueError(
+            f"All aggregated per-vertex IFF values are zero in {rf_maps_npz}. "
+            "Cannot compute IFF-weighted centroid — check that the neuron was "
+            "responding during the recorded touches."
+        )
+
+    contacted_positions = raw_verts[contacted_indices]
+    centroid_3d = np.average(contacted_positions, weights=per_vertex_mean_iff, axis=0)
+
+    # 8. KDTree → nearest cleaned-mesh vertex.
+    tree = KDTree(V)
+    _, center_vid = tree.query(centroid_3d)
+    center_vid = int(center_vid)
+
+    # 9. Boundary loop.
+    bloop = boundary_loop(F)
+
+    # 10. Fail-fast if centroid maps to a boundary vertex.
+    boundary_set = set(int(v) for v in bloop)
+    if center_vid in boundary_set:
+        raise ValueError(
+            f"IFF-weighted centroid maps to mesh boundary vertex {center_vid}. "
+            "The forearm mesh boundary does not cover the neuron hotspot — "
+            "consider re-extracting the forearm PLY with a larger skin region."
+        )
+
+    # 11. SLIM flattening.
+    logger.info(
+        "Running SLIM (n_iter=%d, center_vid=%d) for %s ...",
+        n_iter, center_vid, forearm_ply_path.name,
+    )
+    V_clean = V.copy()
+    F_clean = F.copy()
+    bloop_pre = bloop.copy()
+    if slim_diag_out is not None:
+        slim_diag: dict | None = slim_diag_out
+    else:
+        slim_diag = {} if collect_diagnostics else None
+    if partial_out is not None:
+        partial_out.update({
+            "V_raw": V_raw,
+            "F_raw": F_raw,
+            "V_clean": V_clean,
+            "F_clean": F_clean,
+            "centroid_3d": centroid_3d,
+            "center_vid": center_vid,
+            "bloop_pre": bloop_pre,
+            "raw_mesh_colors": raw_mesh_colors,
+            "clean_mesh_colors": clean_mesh_colors,
+        })
+    # flatten_slim raises RuntimeError on Tutte-init failure; let it propagate so
+    # the caller can launch a diagnostic viewer (slim_diag already holds the
+    # tutte_fail_* keys populated by flatten_slim before raising).
+    V_final, F_final, uv_final = flatten_slim(
+        V, F, bloop,
+        center_vid=center_vid,
+        n_iter=n_iter,
+        diagnostics=slim_diag,
+    )
+
+    return {
+        "V_raw": V_raw,
+        "F_raw": F_raw,
+        "clean_diag": clean_diag,
+        "V_clean": V_clean,
+        "F_clean": F_clean,
+        "V_final": V_final,
+        "F_final": F_final,
+        "uv_final": uv_final,
+        "centroid_3d": centroid_3d,
+        "center_vid": center_vid,
+        "bloop_pre": bloop_pre,
+        "slim_diag": slim_diag,
+        "raw_mesh_colors": raw_mesh_colors,
+        "clean_mesh_colors": clean_mesh_colors,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Step-list construction (shared with GUI worker)
+# ---------------------------------------------------------------------------
+
+def build_slim_steps(
+    *,
     V_raw: np.ndarray,
     F_raw: np.ndarray,
     clean_diag: dict,
@@ -103,26 +319,30 @@ def _launch_slim_steps_viewer(
     raw_mesh_colors: np.ndarray | None,
     clean_mesh_colors: np.ndarray | None,
     mesh_method: str = "bpa",
-) -> None:
-    """Build the step list and open a blocking SlimUvStepsViewer.
+) -> list:
+    """Build the ordered list of :class:`SlimStep` snapshots for the viewer.
 
     When ``slim_diag`` contains ``tutte_fail_uv`` (flatten_slim raised), the
-    viewer is built in *failure* mode: cleaning + boundary steps as usual,
+    list is built in *failure* mode: cleaning + boundary steps as usual,
     followed by flipped-triangle diagnostics on the failing Tutte init. In
     that case ``V_final``/``F_final``/``uv_final`` are ignored and may be
     ``None``.
     """
-    import sys
-    from PyQt5.QtWidgets import QApplication
-    from analysis.receptive_field_mapping.gui.slim_uv_steps_viewer import (
-        SlimStep,
-        SlimUvStepsViewer,
-    )
+    from analysis.receptive_field_mapping.gui.slim_uv_steps_viewer import SlimStep
     from .slim_helpers import compute_face_distortion, _identify_flipped_triangles
 
     failure_mode = "tutte_fail_uv" in slim_diag
 
-    steps: list[SlimStep] = []
+    steps: list = []
+
+    # 0. Raw point cloud (PLY vertices before meshing).
+    steps.append(SlimStep(
+        label="Raw point cloud",
+        info=f"{V_raw.shape[0]} points",
+        V=V_raw,
+        F=np.empty((0, 3), dtype=np.int64),
+        vertex_colors=raw_mesh_colors,
+    ))
 
     # 1. Raw mesh.
     steps.append(SlimStep(
@@ -310,6 +530,55 @@ def _launch_slim_steps_viewer(
             scalar_bar_title="log2(area)",
         ))
 
+    return steps
+
+
+# ---------------------------------------------------------------------------
+# Interactive step-by-step viewer
+# ---------------------------------------------------------------------------
+
+def _launch_slim_steps_viewer(
+    *,
+    session_id: str,
+    V_raw: np.ndarray,
+    F_raw: np.ndarray,
+    clean_diag: dict,
+    V_clean: np.ndarray,
+    F_clean: np.ndarray,
+    centroid_3d: np.ndarray,
+    bloop_pre: np.ndarray,
+    slim_diag: dict,
+    V_final: np.ndarray | None,
+    F_final: np.ndarray | None,
+    uv_final: np.ndarray | None,
+    raw_mesh_colors: np.ndarray | None,
+    clean_mesh_colors: np.ndarray | None,
+    mesh_method: str = "bpa",
+) -> None:
+    """Build the step list and open a blocking SlimUvStepsViewer."""
+    import sys
+    from PyQt5.QtWidgets import QApplication
+    from analysis.receptive_field_mapping.gui.slim_uv_steps_viewer import (
+        SlimUvStepsViewer,
+    )
+
+    steps = build_slim_steps(
+        V_raw=V_raw,
+        F_raw=F_raw,
+        clean_diag=clean_diag,
+        V_clean=V_clean,
+        F_clean=F_clean,
+        centroid_3d=centroid_3d,
+        bloop_pre=bloop_pre,
+        slim_diag=slim_diag,
+        V_final=V_final,
+        F_final=F_final,
+        uv_final=uv_final,
+        raw_mesh_colors=raw_mesh_colors,
+        clean_mesh_colors=clean_mesh_colors,
+        mesh_method=mesh_method,
+    )
+
     app = QApplication.instance() or QApplication(sys.argv)
     viewer = SlimUvStepsViewer(session_id=session_id, steps=steps)
     viewer.show()
@@ -386,159 +655,70 @@ def precompute_forearm_slim_uv(
             forearm_ply_path.stem + "_slim_uv.npz"
         )
 
-    # 1b. Validate mesh_method.
-    if mesh_method not in _VALID_MESH_METHODS:
-        raise ValueError(
-            f"Unknown mesh_method {mesh_method!r}. "
-            f"Valid options are: {_VALID_MESH_METHODS}"
-        )
-
-    # 2. Build mesh.
-    raw_mesh = load_or_build_forearm_mesh(
-        forearm_ply_path,
-        mesh_method=mesh_method,
-        max_edge_mm=max_edge_mm,
-    )
-    if raw_mesh is None:
-        raise ValueError(
-            f"load_or_build_forearm_mesh returned None for {forearm_ply_path}. "
-            "The PLY may be empty, too sparse, or not a forearm segmentation."
-        )
-    V_raw = np.asarray(raw_mesh.vertices, dtype=np.float64)
-    F_raw = np.asarray(raw_mesh.faces, dtype=np.int32)
-
-    # 3. Clean mesh.
-    clean_diag: dict | None = {"clean_steps": []} if interactive else None
-    V, F = clean_mesh(raw_mesh, diagnostics=clean_diag, clean_steps=clean_steps)
-    logger.info(
-        "Cleaned mesh: %d vertices, %d faces (source: %s)",
-        V.shape[0], F.shape[0], forearm_ply_path.name,
-    )
-
-    # 4. Load single-touch RF maps NPZ.
-    if not rf_maps_npz.exists():
-        raise FileNotFoundError(
-            f"Single-touch RF maps NPZ not found: {rf_maps_npz}\n"
-            "Run 'map_single_touch_rf' before 'precompute_forearm_slim_uv'."
-        )
-
-    npz = np.load(rf_maps_npz, allow_pickle=True)
-    rf_data: dict = npz["rf_data"].item()
-
-    if not rf_data:
-        raise ValueError(
-            f"No touches in {rf_maps_npz} — cannot determine forearm "
-            "hotspot centroid."
-        )
-
-    # 5. Load raw PLY vertices to resolve NPZ vertex indices to 3D positions.
-    raw_verts = load_forearm_vertices(forearm_ply_path)
-    if raw_verts is None:
-        raise ValueError(
-            f"load_forearm_vertices returned None for {forearm_ply_path}. "
-            "The PLY may be empty or unreadable."
-        )
-    n_verts = len(raw_verts)
-
-    # 5b. Load PLY vertex colours and transfer to raw / cleaned mesh vertices.
-    ply_colors_uint8 = load_forearm_vertex_colors(forearm_ply_path)
-    if ply_colors_uint8 is not None:
-        raw_mesh_colors = _transfer_ply_colors(raw_verts, ply_colors_uint8, V_raw)
-        clean_mesh_colors = _transfer_ply_colors(raw_verts, ply_colors_uint8, V)
-    else:
-        raw_mesh_colors = None
-        clean_mesh_colors = None
-
-    # 6. Aggregate per-vertex mean IFF across all touches.
-    #    Pattern mirrors touch_population_explorer.py:654-684.
-    iff_sum = np.zeros(n_verts, dtype=np.float64)
-    touch_count = np.zeros(n_verts, dtype=np.int64)
-
-    for pairs in rf_data.values():
-        for vertex_idx, mean_iff in pairs:
-            idx = int(vertex_idx)
-            if idx < 0 or idx >= n_verts:
-                # Out-of-bounds index — skip silently (safety guard).
-                continue
-            iff_sum[idx] += float(mean_iff)
-            touch_count[idx] += 1
-
-    contacted_mask = touch_count > 0
-    contacted_indices = np.where(contacted_mask)[0]
-
-    if len(contacted_indices) == 0:
-        raise ValueError(
-            f"No contacted vertices found in {rf_maps_npz} — cannot determine "
-            "forearm hotspot centroid."
-        )
-
-    per_vertex_mean_iff = iff_sum[contacted_indices] / touch_count[contacted_indices]
-
-    # 7. Compute IFF-weighted 3D centroid.
-    total_weight = per_vertex_mean_iff.sum()
-    if total_weight == 0.0:
-        raise ValueError(
-            f"All aggregated per-vertex IFF values are zero in {rf_maps_npz}. "
-            "Cannot compute IFF-weighted centroid — check that the neuron was "
-            "responding during the recorded touches."
-        )
-
-    contacted_positions = raw_verts[contacted_indices]
-    centroid_3d = np.average(contacted_positions, weights=per_vertex_mean_iff, axis=0)
-
-    # 8. KDTree → nearest cleaned-mesh vertex.
-    tree = KDTree(V)
-    _, center_vid = tree.query(centroid_3d)
-    center_vid = int(center_vid)
-
-    # 9. Boundary loop.
-    bloop = boundary_loop(F)
-
-    # 10. Fail-fast if centroid maps to a boundary vertex.
-    boundary_set = set(int(v) for v in bloop)
-    if center_vid in boundary_set:
-        raise ValueError(
-            f"IFF-weighted centroid maps to mesh boundary vertex {center_vid}. "
-            "The forearm mesh boundary does not cover the neuron hotspot — "
-            "consider re-extracting the forearm PLY with a larger skin region."
-        )
-
-    # 11. SLIM flattening.
-    logger.info(
-        "Running SLIM (n_iter=%d, center_vid=%d) for %s ...",
-        n_iter, center_vid, forearm_ply_path.name,
-    )
-    V_clean = V.copy()
-    F_clean = F.copy()
-    center_vid_pre = center_vid
-    bloop_pre = bloop.copy()
-    slim_diag: dict | None = {} if (save_diagnostics or interactive) else None
+    # 2-11. Run the shared processing core. Pass out-dicts so partial diagnostics
+    # and the pre-flatten arrays survive a flatten_slim RuntimeError (used by
+    # the interactive diagnostic viewer).
+    collect_diag = bool(save_diagnostics or interactive)
+    clean_diag_capture: dict | None = {"clean_steps": []} if interactive else None
+    slim_diag_capture: dict | None = {} if collect_diag else None
+    partial_capture: dict = {}
     try:
-        V, F, uv = flatten_slim(V, F, bloop, center_vid=center_vid, n_iter=n_iter, diagnostics=slim_diag)
+        result = run_slim_pipeline_core(
+            forearm_ply_path,
+            rf_maps_npz,
+            mesh_method=mesh_method,
+            max_edge_mm=max_edge_mm,
+            clean_steps=clean_steps,
+            n_iter=n_iter,
+            collect_diagnostics=collect_diag,
+            clean_diag_out=clean_diag_capture,
+            slim_diag_out=slim_diag_capture,
+            partial_out=partial_capture,
+        )
     except RuntimeError as exc:
-        if interactive and slim_diag is not None and "tutte_fail_uv" in slim_diag:
+        if (
+            interactive
+            and slim_diag_capture is not None
+            and "tutte_fail_uv" in slim_diag_capture
+            and partial_capture
+        ):
             logger.warning(
                 "flatten_slim failed; launching diagnostic viewer before re-raising: %s",
                 exc,
             )
             _launch_slim_steps_viewer(
                 session_id=cache_path.parent.name,
-                V_raw=V_raw,
-                F_raw=F_raw,
-                clean_diag=clean_diag,
-                V_clean=V_clean,
-                F_clean=F_clean,
-                centroid_3d=centroid_3d,
-                bloop_pre=bloop_pre,
-                slim_diag=slim_diag,
+                V_raw=partial_capture["V_raw"],
+                F_raw=partial_capture["F_raw"],
+                clean_diag=clean_diag_capture,
+                V_clean=partial_capture["V_clean"],
+                F_clean=partial_capture["F_clean"],
+                centroid_3d=partial_capture["centroid_3d"],
+                bloop_pre=partial_capture["bloop_pre"],
+                slim_diag=slim_diag_capture,
                 V_final=None,
                 F_final=None,
                 uv_final=None,
-                raw_mesh_colors=raw_mesh_colors,
-                clean_mesh_colors=clean_mesh_colors,
+                raw_mesh_colors=partial_capture["raw_mesh_colors"],
+                clean_mesh_colors=partial_capture["clean_mesh_colors"],
                 mesh_method=mesh_method,
             )
         raise
+
+    V_raw = result["V_raw"]
+    F_raw = result["F_raw"]
+    clean_diag = result["clean_diag"]
+    V_clean = result["V_clean"]
+    F_clean = result["F_clean"]
+    V = result["V_final"]
+    F = result["F_final"]
+    uv = result["uv_final"]
+    centroid_3d = result["centroid_3d"]
+    center_vid_pre = result["center_vid"]
+    bloop_pre = result["bloop_pre"]
+    slim_diag = result["slim_diag"]
+    raw_mesh_colors = result["raw_mesh_colors"]
+    clean_mesh_colors = result["clean_mesh_colors"]
 
     # 12. Re-derive center_vid and boundary after potential mesh trimming inside
     #     flatten_slim.  In the common (no-trim) case these are unchanged.
@@ -547,6 +727,8 @@ def precompute_forearm_slim_uv(
     bloop = boundary_loop(F)
 
     # 12b. Recompute colours for the (possibly trimmed) final mesh.
+    raw_verts = load_forearm_vertices(forearm_ply_path)
+    ply_colors_uint8 = load_forearm_vertex_colors(forearm_ply_path)
     if ply_colors_uint8 is not None:
         final_mesh_colors = _transfer_ply_colors(raw_verts, ply_colors_uint8, V)
     else:
@@ -556,6 +738,28 @@ def precompute_forearm_slim_uv(
     ply_mtime = forearm_ply_path.stat().st_mtime
     rf_npz_mtime = rf_maps_npz.stat().st_mtime
     phash = _ply_hash(forearm_ply_path)
+
+    # 13b. Compute config hash from current parameters for staleness detection.
+    session_id_for_hash = cache_path.parent.name or "unknown"
+    clean_steps_dict = (
+        dict(clean_steps) if clean_steps is not None
+        else {
+            "remove_non_manifold": True,
+            "repair_pinch_vertices": True,
+            "remove_slivers": True,
+            "stitch_boundary_gaps": True,
+            "fill_interior_holes": True,
+        }
+    )
+    cfg = make_default_config(
+        session_id=session_id_for_hash,
+        mesh_method=mesh_method,
+        max_edge_mm=float(max_edge_mm) if max_edge_mm is not None else 0.0,
+        n_iter=n_iter,
+        save_diagnostics=bool(save_diagnostics),
+        clean_steps=clean_steps_dict,
+    )
+    cfg_hash = _compute_config_hash(cfg)
 
     # 14. Write cache.
     np.savez(
@@ -570,6 +774,7 @@ def precompute_forearm_slim_uv(
         rf_npz_mtime=np.float64(rf_npz_mtime),
         centroid_3d=centroid_3d.astype(np.float64),
         mesh_method=np.array(mesh_method, dtype='U16'),
+        config_hash=np.array(cfg_hash, dtype='U64'),
     )
 
     logger.info("SLIM UV cache written → %s", cache_path)
@@ -697,6 +902,7 @@ def load_slim_uv_cache(
         )
 
     # 4. Build dataclass.
+    # Backward-compat: caches written before config_hash field default to empty string.
     cache = SlimUvCache(
         V=data['V'],
         F=data['F'],
@@ -708,6 +914,7 @@ def load_slim_uv_cache(
         rf_npz_mtime=float(data['rf_npz_mtime']),
         centroid_3d=data['centroid_3d'],
         mesh_method=str(data.get('mesh_method', np.array("bpa"))),
+        config_hash=str(data['config_hash']) if 'config_hash' in data.files else "",
     )
 
     # 5. Optional PLY staleness check.

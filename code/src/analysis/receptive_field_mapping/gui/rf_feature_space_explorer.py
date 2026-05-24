@@ -34,7 +34,7 @@ from PyQt5.QtWidgets import (
 )
 from pyvistaqt import QtInteractor
 
-from analysis.receptive_field_mapping.rf_explorer_data import ExplorerData
+from analysis.receptive_field_mapping.data.rf_explorer_data import ExplorerData
 
 from analysis.pipeline.shared_constants import GESTURE_TYPES
 
