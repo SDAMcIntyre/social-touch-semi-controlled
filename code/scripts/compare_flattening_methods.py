@@ -69,12 +69,12 @@ from flatten_forearm_sandbox import (  # noqa: E402
     show_mesh_inspector,
 )
 
-from analysis.receptive_field_mapping._slim_helpers import (  # noqa: E402
+from analysis.receptive_field_mapping.surface.slim_helpers import (  # noqa: E402
     flatten_slim,
     compute_face_distortion,
 )
 
-from analysis.receptive_field_mapping.rf_projection import (  # noqa: E402
+from analysis.receptive_field_mapping.surface.rf_projection import (  # noqa: E402
     project_tangent_plane,
     project_cylindrical_unwrap,
 )
