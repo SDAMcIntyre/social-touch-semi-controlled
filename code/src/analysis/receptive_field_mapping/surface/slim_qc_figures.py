@@ -32,7 +32,11 @@ from matplotlib.collections import PolyCollection
 from matplotlib.figure import Figure
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 — registers "3d" projection
 
-from .slim_helpers import compute_face_distortion, _find_boundary_loops
+from .slim_helpers import (
+    compute_face_distortion,
+    _compute_face_aspect_ratios,
+    _find_boundary_loops,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -44,10 +48,21 @@ def plot_slim_uv_panel(
     F: np.ndarray,
     uv: np.ndarray,
     center_vid: int,
+    vertex_colors: np.ndarray | None = None,
+    cam_settings: dict | None = None,
 ) -> Figure:
     """1 × 2 figure: 3D mesh (left) and SLIM UV flattening (right)."""
     fig = Figure(figsize=(14, 7))
     FigureCanvasAgg(fig)
+
+    face_rgba = vertex_colors[F].mean(axis=1) if vertex_colors is not None else None
+
+    if cam_settings is not None:
+        from .tangent_plane_alignment import camera_settings_to_rotation
+        R = camera_settings_to_rotation(cam_settings)
+        cam_elev, cam_azim = _rotation_matrix_to_elev_azim(R)
+    else:
+        cam_elev, cam_azim = _compute_skin_normal_view(V, F)
 
     # Left — 3D mesh
     ax3d = fig.add_subplot(121, projection="3d")
@@ -57,7 +72,11 @@ def plot_slim_uv_panel(
         edgecolor="none",
         shade=True,
     )
-    surf.set_facecolors("steelblue")
+    if face_rgba is not None:
+        surf.set_facecolors(face_rgba)
+    else:
+        surf.set_facecolors("steelblue")
+    ax3d.view_init(elev=cam_elev, azim=cam_azim)
     c3d = V[center_vid]
     ax3d.scatter(c3d[0], c3d[1], c3d[2], color="red", s=60, zorder=10)
     ax3d.set_title("Forearm mesh (3D)")
@@ -68,7 +87,10 @@ def plot_slim_uv_panel(
     # Right — SLIM UV
     ax2d = fig.add_subplot(122)
     polys = uv[F]
-    pc = PolyCollection(polys, facecolors="steelblue", edgecolors="none", alpha=0.6)
+    if face_rgba is not None:
+        pc = PolyCollection(polys, facecolors=face_rgba, edgecolors="none", alpha=0.6)
+    else:
+        pc = PolyCollection(polys, facecolors="steelblue", edgecolors="none", alpha=0.6)
     ax2d.add_collection(pc)
     tri = matplotlib.tri.Triangulation(uv[:, 0], uv[:, 1], F)
     ax2d.triplot(tri, color="white", linewidth=0.25, alpha=0.5)
@@ -153,6 +175,8 @@ def save_slim_qc_figures(
     uv: np.ndarray,
     center_vid: int,
     cache_path: Path,
+    vertex_colors: np.ndarray | None = None,
+    cam_settings: dict | None = None,
 ) -> tuple[Path, Path]:
     """Save the UV and distortion QC figures at 300 DPI next to *cache_path*.
 
@@ -166,17 +190,24 @@ def save_slim_qc_figures(
         Interior vertex placed at the UV origin.
     cache_path:
         Path to the ``.npz`` cache file; figures are saved alongside it.
+    vertex_colors:
+        Per-vertex RGBA colours, shape (N_v, 4) float [0, 1].  When
+        ``None``, figures fall back to flat ``steelblue`` colouring.
+    cam_settings:
+        RF camera settings dict (keys: camera_position, focal_point,
+        up_vector) or ``None``.  When provided the 3D mesh panel uses this
+        viewpoint; otherwise a skin-normal view is computed automatically.
 
     Returns
     -------
     (qc_path, distortion_path)
         Paths to the two written PNG files.
     """
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    qc_path = cache_path.with_name(f"{cache_path.stem}_qc_{timestamp}.png")
-    dist_path = cache_path.with_name(f"{cache_path.stem}_distortion_{timestamp}.png")
+    qc_path = cache_path.with_name(f"{cache_path.stem}_qc.png")
+    dist_path = cache_path.with_name(f"{cache_path.stem}_distortion.png")
 
-    fig_uv = plot_slim_uv_panel(V, F, uv, center_vid)
+    fig_uv = plot_slim_uv_panel(V, F, uv, center_vid, vertex_colors=vertex_colors,
+                                cam_settings=cam_settings)
     fig_uv.tight_layout()
     fig_uv.savefig(qc_path, dpi=300)
 
@@ -224,17 +255,6 @@ def _rotation_matrix_to_elev_azim(R: np.ndarray) -> tuple[float, float]:
     return elev, azim
 
 
-def _compute_face_aspect_ratios(V: np.ndarray, F: np.ndarray) -> np.ndarray:
-    """Per-face aspect ratio: longest edge / shortest edge (>= 1.0)."""
-    p0, p1, p2 = V[F[:, 0]], V[F[:, 1]], V[F[:, 2]]
-    e0 = np.linalg.norm(p1 - p0, axis=1)
-    e1 = np.linalg.norm(p2 - p1, axis=1)
-    e2 = np.linalg.norm(p0 - p2, axis=1)
-    longest = np.maximum(np.maximum(e0, e1), e2)
-    shortest = np.minimum(np.minimum(e0, e1), e2).clip(1e-15)
-    return longest / shortest
-
-
 def _plot_mesh_3d(
     ax: Axes3D,
     V: np.ndarray,
@@ -245,9 +265,10 @@ def _plot_mesh_3d(
     overlay_fn: Callable[[Axes3D], None] | None = None,
     edgecolor: str = "none",
     linewidth: float = 0.0,
+    vertex_colors: np.ndarray | None = None,
 ) -> None:
     """Render a triangular mesh into *ax* from the given view angle."""
-    ax.plot_trisurf(
+    surf = ax.plot_trisurf(
         V[:, 0], V[:, 1], V[:, 2],
         triangles=F,
         color="lightsteelblue",
@@ -255,6 +276,9 @@ def _plot_mesh_3d(
         linewidth=linewidth,
         alpha=0.85,
     )
+    if vertex_colors is not None:
+        face_colors = vertex_colors[F].mean(axis=1)
+        surf.set_facecolors(face_colors)
     ax.view_init(elev=elev, azim=azim)
     ax.set_title(title, fontsize=9)
     ax.set_xticks([])
@@ -272,14 +296,17 @@ def _plot_step1_raw_mesh(
     cam_elev: float,
     cam_azim: float,
     cam_label: str,
+    vertex_colors: np.ndarray | None = None,
 ) -> Figure:
     """Step 1 — raw BPA mesh: skin-normal view (left) + camera view (right)."""
     fig = Figure(figsize=(10, 4.5))
     FigureCanvasAgg(fig)
     ax_left = fig.add_subplot(1, 2, 1, projection="3d")
     ax_right = fig.add_subplot(1, 2, 2, projection="3d")
-    _plot_mesh_3d(ax_left, V_raw, F_raw, elev, azim, "Step 1 — raw mesh (skin-normal view)")
-    _plot_mesh_3d(ax_right, V_raw, F_raw, cam_elev, cam_azim, f"Step 1 — raw mesh ({cam_label})")
+    _plot_mesh_3d(ax_left, V_raw, F_raw, elev, azim, "Step 1 — raw mesh (skin-normal view)",
+                  vertex_colors=vertex_colors)
+    _plot_mesh_3d(ax_right, V_raw, F_raw, cam_elev, cam_azim, f"Step 1 — raw mesh ({cam_label})",
+                  vertex_colors=vertex_colors)
     fig.tight_layout()
     return fig
 
@@ -292,6 +319,7 @@ def _plot_step2_cleaned_mesh(
     cam_elev: float,
     cam_azim: float,
     cam_label: str,
+    vertex_colors: np.ndarray | None = None,
 ) -> Figure:
     """Step 2 — cleaned mesh: 2x2 layout with wireframe and aspect-ratio heatmap."""
     n_loops = len(_find_boundary_loops(F))
@@ -313,11 +341,13 @@ def _plot_step2_cleaned_mesh(
         ax_tl, V, F, elev, azim,
         "Step 2 — cleaned mesh (skin-normal view)",
         edgecolor="gray", linewidth=0.15,
+        vertex_colors=vertex_colors,
     )
     _plot_mesh_3d(
         ax_tr, V, F, cam_elev, cam_azim,
         f"Step 2 — cleaned mesh ({cam_label})",
         edgecolor="gray", linewidth=0.15,
+        vertex_colors=vertex_colors,
     )
 
     # Bottom-left: face aspect-ratio heatmap (2D UV-space proxy: use XY projection)
@@ -373,6 +403,7 @@ def _plot_step3_centroid_boundary(
     cam_elev: float,
     cam_azim: float,
     cam_label: str,
+    vertex_colors: np.ndarray | None = None,
 ) -> Figure:
     """Step 3 — centroid (red) and boundary loop (yellow) overlays."""
     def _overlay(ax: Axes3D) -> None:
@@ -389,11 +420,13 @@ def _plot_step3_centroid_boundary(
         ax_left, V, F, elev, azim,
         "Step 3 — centroid + boundary (skin-normal view)",
         overlay_fn=_overlay,
+        vertex_colors=vertex_colors,
     )
     _plot_mesh_3d(
         ax_right, V, F, cam_elev, cam_azim,
         f"Step 3 — centroid + boundary ({cam_label})",
         overlay_fn=_overlay,
+        vertex_colors=vertex_colors,
     )
     fig.tight_layout()
     return fig
@@ -406,46 +439,73 @@ def _plot_step4_uv_init(
     init_method: str,
     elev: float,
     azim: float,
+    vertex_colors: np.ndarray | None = None,
 ) -> Figure:
-    """Step 4 — UV initialisation: 3D mesh coloured by init-u (left) + 2D UV scatter (right)."""
+    """Step 4 — UV initialisation: skin colors (top) + viridis init-u (bottom).
+
+    When *vertex_colors* is provided the figure is 2×2: the top row shows the
+    mesh with real skin colours (3D + 2D UV) and the bottom row shows the
+    viridis init-u analytical view.  Without colours, falls back to the
+    original 1×2 viridis-only layout.
+    """
     p0, p1, p2 = uv_init[F[:, 0]], uv_init[F[:, 1]], uv_init[F[:, 2]]
     cross = (p1[:, 0] - p0[:, 0]) * (p2[:, 1] - p0[:, 1]) - (
         p1[:, 1] - p0[:, 1]
     ) * (p2[:, 0] - p0[:, 0])
     n_flipped = int(np.sum(cross < 0) if np.any(cross > 0) else np.sum(cross > 0))
 
-    fig = Figure(figsize=(10, 4.5))
-    FigureCanvasAgg(fig)
-    ax3d = fig.add_subplot(1, 2, 1, projection="3d")
-    ax2d = fig.add_subplot(1, 2, 2)
-
     u_vals = uv_init[:, 0]
     u_norm = (u_vals - u_vals.min()) / max(float(u_vals.max() - u_vals.min()), 1e-15)
     face_u = u_norm[F].mean(axis=1)
-    surf = ax3d.plot_trisurf(
-        V[:, 0], V[:, 1], V[:, 2],
-        triangles=F,
-        edgecolor="none",
-        alpha=0.9,
-    )
-    surf.set_array(face_u)
-    surf.set_cmap("viridis")
-    ax3d.view_init(elev=elev, azim=azim)
-    ax3d.set_title("Step 4 — mesh coloured by init-u", fontsize=9)
-    ax3d.set_xticks([])
-    ax3d.set_yticks([])
-    ax3d.set_zticks([])
-
     polys_2d = uv_init[F]
-    pc2d = PolyCollection(polys_2d, array=face_u, cmap="viridis", edgecolors="white", linewidths=0.15)
-    ax2d.add_collection(pc2d)
+
+    has_colors = vertex_colors is not None
+    fig = Figure(figsize=(10, 9 if has_colors else 4.5))
+    FigureCanvasAgg(fig)
+
+    if has_colors:
+        face_rgba = vertex_colors[F].mean(axis=1)
+
+        ax_tl = fig.add_subplot(2, 2, 1, projection="3d")
+        surf_tl = ax_tl.plot_trisurf(
+            V[:, 0], V[:, 1], V[:, 2], triangles=F, edgecolor="none", alpha=0.9,
+        )
+        surf_tl.set_facecolors(face_rgba)
+        ax_tl.view_init(elev=elev, azim=azim)
+        ax_tl.set_title("Step 4 — mesh (skin colours)", fontsize=9)
+        ax_tl.set_xticks([]); ax_tl.set_yticks([]); ax_tl.set_zticks([])
+
+        ax_tr = fig.add_subplot(2, 2, 2)
+        pc_tr = PolyCollection(polys_2d, facecolors=face_rgba, edgecolors="white", linewidths=0.15)
+        ax_tr.add_collection(pc_tr)
+        ax_tr.autoscale_view()
+        ax_tr.set_aspect("equal")
+        ax_tr.set_title("Step 4 — UV init (skin colours)", fontsize=9)
+        ax_tr.set_xlabel("u"); ax_tr.set_ylabel("v")
+
+        ax_bl = fig.add_subplot(2, 2, 3, projection="3d")
+        ax_br = fig.add_subplot(2, 2, 4)
+    else:
+        ax_bl = fig.add_subplot(1, 2, 1, projection="3d")
+        ax_br = fig.add_subplot(1, 2, 2)
+
+    surf_bl = ax_bl.plot_trisurf(
+        V[:, 0], V[:, 1], V[:, 2], triangles=F, edgecolor="none", alpha=0.9,
+    )
+    surf_bl.set_array(face_u)
+    surf_bl.set_cmap("viridis")
+    ax_bl.view_init(elev=elev, azim=azim)
+    ax_bl.set_title("Step 4 — mesh coloured by init-u", fontsize=9)
+    ax_bl.set_xticks([]); ax_bl.set_yticks([]); ax_bl.set_zticks([])
+
+    pc_br = PolyCollection(polys_2d, array=face_u, cmap="viridis", edgecolors="white", linewidths=0.15)
+    ax_br.add_collection(pc_br)
     tri_2d = matplotlib.tri.Triangulation(uv_init[:, 0], uv_init[:, 1], F)
-    ax2d.triplot(tri_2d, color="white", linewidth=0.15, alpha=0.4)
-    ax2d.autoscale_view()
-    ax2d.set_aspect("equal")
-    ax2d.set_title("Step 4 — UV init (2D)", fontsize=9)
-    ax2d.set_xlabel("u")
-    ax2d.set_ylabel("v")
+    ax_br.triplot(tri_2d, color="white", linewidth=0.15, alpha=0.4)
+    ax_br.autoscale_view()
+    ax_br.set_aspect("equal")
+    ax_br.set_title("Step 4 — UV init (2D)", fontsize=9)
+    ax_br.set_xlabel("u"); ax_br.set_ylabel("v")
 
     ann = f"init method: {init_method}   flipped faces: {n_flipped}"
     fig.text(0.5, 0.02, ann, ha="center", va="bottom", fontsize=8)
@@ -458,38 +518,68 @@ def _plot_step5_slim_final(
     F: np.ndarray,
     uv_final: np.ndarray,
     trimmed: bool,
+    vertex_colors: np.ndarray | None = None,
 ) -> Figure:
-    """Step 5 — init UV (left) vs final SLIM UV (right), both colormapped meshes."""
-    fig = Figure(figsize=(10, 4.5))
-    FigureCanvasAgg(fig)
-    ax_left = fig.add_subplot(1, 2, 1)
-    ax_right = fig.add_subplot(1, 2, 2)
+    """Step 5 — init UV vs final SLIM UV: skin colours (top) + viridis (bottom).
 
+    When *vertex_colors* is provided the figure is 2×2: the top row shows the
+    UV layouts with real skin colours and the bottom row shows the viridis
+    face-u analytical view.  Without colours, falls back to the original
+    1×2 viridis-only layout.
+    """
     u_vals = uv_init[:, 0]
     u_norm = (u_vals - u_vals.min()) / max(float(u_vals.max() - u_vals.min()), 1e-15)
     face_u = u_norm[F].mean(axis=1)
 
     polys_init = uv_init[F]
-    pc_left = PolyCollection(polys_init, array=face_u, cmap="viridis", edgecolors="white", linewidths=0.15)
-    ax_left.add_collection(pc_left)
-    tri_init = matplotlib.tri.Triangulation(uv_init[:, 0], uv_init[:, 1], F)
-    ax_left.triplot(tri_init, color="white", linewidth=0.15, alpha=0.4)
-    ax_left.autoscale_view()
-    ax_left.set_aspect("equal")
-    ax_left.set_title("Step 5 — UV init", fontsize=9)
-    ax_left.set_xlabel("u")
-    ax_left.set_ylabel("v")
-
     polys_final = uv_final[F]
-    pc_right = PolyCollection(polys_final, array=face_u, cmap="viridis", edgecolors="white", linewidths=0.15)
-    ax_right.add_collection(pc_right)
+
+    has_colors = vertex_colors is not None
+    fig = Figure(figsize=(10, 9 if has_colors else 4.5))
+    FigureCanvasAgg(fig)
+
+    if has_colors:
+        face_rgba = vertex_colors[F].mean(axis=1)
+
+        ax_tl = fig.add_subplot(2, 2, 1)
+        pc_tl = PolyCollection(polys_init, facecolors=face_rgba, edgecolors="white", linewidths=0.15)
+        ax_tl.add_collection(pc_tl)
+        ax_tl.autoscale_view()
+        ax_tl.set_aspect("equal")
+        ax_tl.set_title("Step 5 — UV init (skin colours)", fontsize=9)
+        ax_tl.set_xlabel("u"); ax_tl.set_ylabel("v")
+
+        ax_tr = fig.add_subplot(2, 2, 2)
+        pc_tr = PolyCollection(polys_final, facecolors=face_rgba, edgecolors="white", linewidths=0.15)
+        ax_tr.add_collection(pc_tr)
+        ax_tr.autoscale_view()
+        ax_tr.set_aspect("equal")
+        ax_tr.set_title("Step 5 — SLIM UV final (skin colours)", fontsize=9)
+        ax_tr.set_xlabel("u"); ax_tr.set_ylabel("v")
+
+        ax_bl = fig.add_subplot(2, 2, 3)
+        ax_br = fig.add_subplot(2, 2, 4)
+    else:
+        ax_bl = fig.add_subplot(1, 2, 1)
+        ax_br = fig.add_subplot(1, 2, 2)
+
+    pc_bl = PolyCollection(polys_init, array=face_u, cmap="viridis", edgecolors="white", linewidths=0.15)
+    ax_bl.add_collection(pc_bl)
+    tri_init = matplotlib.tri.Triangulation(uv_init[:, 0], uv_init[:, 1], F)
+    ax_bl.triplot(tri_init, color="white", linewidth=0.15, alpha=0.4)
+    ax_bl.autoscale_view()
+    ax_bl.set_aspect("equal")
+    ax_bl.set_title("Step 5 — UV init", fontsize=9)
+    ax_bl.set_xlabel("u"); ax_bl.set_ylabel("v")
+
+    pc_br = PolyCollection(polys_final, array=face_u, cmap="viridis", edgecolors="white", linewidths=0.15)
+    ax_br.add_collection(pc_br)
     tri_final = matplotlib.tri.Triangulation(uv_final[:, 0], uv_final[:, 1], F)
-    ax_right.triplot(tri_final, color="white", linewidth=0.15, alpha=0.4)
-    ax_right.autoscale_view()
-    ax_right.set_aspect("equal")
-    ax_right.set_title("Step 5 — SLIM UV final", fontsize=9)
-    ax_right.set_xlabel("u")
-    ax_right.set_ylabel("v")
+    ax_br.triplot(tri_final, color="white", linewidth=0.15, alpha=0.4)
+    ax_br.autoscale_view()
+    ax_br.set_aspect("equal")
+    ax_br.set_title("Step 5 — SLIM UV final", fontsize=9)
+    ax_br.set_xlabel("u"); ax_br.set_ylabel("v")
 
     trimmed_label = "mesh trimmed: yes" if trimmed else "mesh trimmed: no"
     fig.text(0.5, 0.02, trimmed_label, ha="center", va="bottom", fontsize=8)
@@ -513,6 +603,8 @@ def save_slim_diagnostic_figures(
     slim_diag: dict,
     uv_final: np.ndarray,
     cam_settings: dict | None,
+    raw_mesh_colors: np.ndarray | None = None,
+    clean_mesh_colors: np.ndarray | None = None,
 ) -> list[Path]:
     """Build and save 6 step-numbered diagnostic PNGs.
 
@@ -539,6 +631,10 @@ def save_slim_diagnostic_figures(
     cam_settings:
         RF camera settings dict (keys: camera_position, focal_point,
         up_vector) or None when unavailable.
+    raw_mesh_colors:
+        Per-vertex RGBA colours for V_raw, shape (N_raw, 4) float [0, 1].
+    clean_mesh_colors:
+        Per-vertex RGBA colours for V, shape (N_clean, 4) float [0, 1].
 
     Returns
     -------
@@ -566,30 +662,42 @@ def save_slim_diagnostic_figures(
     V_trim: np.ndarray = slim_diag["V_trimmed"]
     F_trim: np.ndarray = slim_diag["F_trimmed"]
 
+    # Compute colours for the potentially trimmed mesh (steps 4-5).
+    trim_colors = clean_mesh_colors
+    if trimmed and clean_mesh_colors is not None:
+        from scipy.spatial import KDTree
+        _, idx = KDTree(V).query(V_trim)
+        trim_colors = clean_mesh_colors[idx]
+
     paths: list[Path] = []
 
-    fig1 = _plot_step1_raw_mesh(V_raw, F_raw, raw_elev, raw_azim, cam_elev, cam_azim, cam_label)
+    fig1 = _plot_step1_raw_mesh(V_raw, F_raw, raw_elev, raw_azim, cam_elev, cam_azim, cam_label,
+                                vertex_colors=raw_mesh_colors)
     p1 = diag_dir / "step1_raw_mesh.png"
     fig1.savefig(p1, dpi=200)
     paths.append(p1)
 
-    fig2 = _plot_step2_cleaned_mesh(V, F, elev, azim, cam_elev, cam_azim, cam_label)
+    fig2 = _plot_step2_cleaned_mesh(V, F, elev, azim, cam_elev, cam_azim, cam_label,
+                                    vertex_colors=clean_mesh_colors)
     p2 = diag_dir / "step2_cleaned_mesh.png"
     fig2.savefig(p2, dpi=200)
     paths.append(p2)
 
-    fig3 = _plot_step3_centroid_boundary(V, F, center_vid, boundary, elev, azim, cam_elev, cam_azim, cam_label)
+    fig3 = _plot_step3_centroid_boundary(V, F, center_vid, boundary, elev, azim, cam_elev, cam_azim, cam_label,
+                                         vertex_colors=clean_mesh_colors)
     p3 = diag_dir / "step3_centroid_boundary.png"
     fig3.savefig(p3, dpi=200)
     paths.append(p3)
 
     trim_elev, trim_azim = _compute_skin_normal_view(V_trim, F_trim)
-    fig4 = _plot_step4_uv_init(V_trim, F_trim, init_uv, init_method, trim_elev, trim_azim)
+    fig4 = _plot_step4_uv_init(V_trim, F_trim, init_uv, init_method, trim_elev, trim_azim,
+                               vertex_colors=trim_colors)
     p4 = diag_dir / "step4_uv_initialization.png"
     fig4.savefig(p4, dpi=200)
     paths.append(p4)
 
-    fig5 = _plot_step5_slim_final(init_uv, F_trim, uv_final, trimmed)
+    fig5 = _plot_step5_slim_final(init_uv, F_trim, uv_final, trimmed,
+                                  vertex_colors=trim_colors)
     p5 = diag_dir / "step5_slim_uv_final.png"
     fig5.savefig(p5, dpi=200)
     paths.append(p5)

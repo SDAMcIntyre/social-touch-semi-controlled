@@ -16,12 +16,12 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from analysis.receptive_field_mapping.rf_data_loader import (
+from analysis.receptive_field_mapping.data.rf_data_loader import (
     load_forearm_vertices,
     parse_contact_points,
     resolve_forearm_ply,
 )
-from analysis.receptive_field_mapping.rf_extraction_io import (
+from analysis.receptive_field_mapping.data.rf_extraction_io import (
     save_cluster_session_data,
     save_extraction_summary,
     save_forearm_vertices,

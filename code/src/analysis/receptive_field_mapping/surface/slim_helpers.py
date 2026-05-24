@@ -102,6 +102,20 @@ _HOLE_FILL_EDGE_FACTOR: float = 3.0
 median boundary edge length."""
 
 
+_MAX_HOLE_FILL_AREA_MM2: float = 200.0
+"""Maximum 2D polygon area (mm^2), measured on the best-fit plane of the loop,
+of a boundary loop that will be filled. Loops larger than this are treated as
+genuine missing surface (empty space) and left unfilled.
+
+Reference scale: a typical forearm mesh covers roughly 20 000 mm^2. 200 mm^2 (~1 %)
+is large enough to cover real topological defects produced by non-manifold-edge
+removal and pinch repair but small enough to reject session-wide voids.
+
+Tune by enabling the interactive viewer (precompute_forearm_slim_uv interactive=True)
+and inspecting which loops are highlighted as 'rejected' on the Interior hole filling
+step."""
+
+
 def _fill_hole_delaunay(
     V: np.ndarray,
     loop: list[int],
@@ -265,11 +279,30 @@ def _fill_hole_delaunay(
     return new_verts, new_faces
 
 
+def _hole_polygon_area_mm2(V: np.ndarray, loop: list[int]) -> float:
+    """Polygon area (mm^2) of a closed boundary loop, measured on its best-fit plane.
+
+    Projects loop vertices to 2D via the same SVD basis used by
+    ``_fill_hole_delaunay``, then applies the shoelace formula. Returns 0.0 if
+    the plane is degenerate (collinear loop).
+    """
+    pts3d = V[loop]
+    centered = pts3d - pts3d.mean(axis=0)
+    _, S, Vt = np.linalg.svd(centered, full_matrices=False)
+    if S[1] < 1e-10:
+        return 0.0
+    pts2d = np.column_stack([centered @ Vt[0], centered @ Vt[1]])
+    x, y = pts2d[:, 0], pts2d[:, 1]
+    return 0.5 * float(np.abs(
+        np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1))
+    ))
+
+
 def _fill_interior_holes(
     V: np.ndarray,
     F: np.ndarray,
     max_passes: int = 5,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, list[np.ndarray]]:
     """Fill non-largest boundary loops with centroid fan triangulation.
 
     Interior holes left by ``remove_non_manifold_edges()`` break the
@@ -277,13 +310,22 @@ def _fill_interior_holes(
     This function closes each inner hole by inserting a centroid vertex and
     fanning triangles around the loop.  Winding is fixed afterwards.
 
+    Loops whose projected polygon area exceeds ``_MAX_HOLE_FILL_AREA_MM2`` are
+    treated as genuine missing surface (empty space) and skipped — their
+    boundary vertex positions are returned in ``rejected_loops`` so callers
+    can highlight them in diagnostics overlays.
+
     Iterates up to ``max_passes`` because filling can occasionally create
     new small boundary anomalies that require an additional pass.
 
-    Returns ``(V, F)`` — may have new vertices appended to V.
+    Returns ``(V, F, rejected_loops)`` — V may have new vertices appended;
+    ``rejected_loops`` is a list of (N, 3) float64 arrays of skipped-loop
+    vertex positions.
     """
     total_holes = 0
     total_tris = 0
+    rejected_loops: list[np.ndarray] = []
+    rejected_keys: set[tuple[int, ...]] = set()
 
     for _pass in range(max_passes):
         loops = _find_boundary_loops(F)
@@ -293,8 +335,24 @@ def _fill_interior_holes(
         inner_loops = loops[1:]
         new_verts: list[np.ndarray] = []
         new_faces: list[list[int]] = []
+        n_rejected_this_pass = 0
 
         for loop in inner_loops:
+            area = _hole_polygon_area_mm2(V, loop)
+            if area > _MAX_HOLE_FILL_AREA_MM2:
+                key = tuple(sorted(int(v) for v in loop))
+                if key not in rejected_keys:
+                    rejected_keys.add(key)
+                    rejected_loops.append(V[loop].copy())
+                    logger.warning(
+                        "Interior hole skipped: %d boundary vertices, "
+                        "projected area %.1f mm^2 exceeds threshold %.1f mm^2 "
+                        "— treating as empty space, not filling.",
+                        len(loop), area, _MAX_HOLE_FILL_AREA_MM2,
+                    )
+                n_rejected_this_pass += 1
+                continue
+
             if len(loop) > 4:
                 lv, lf = _fill_hole_delaunay(V, loop, n_extra_verts=len(new_verts))
                 method = "Delaunay"
@@ -309,17 +367,18 @@ def _fill_interior_holes(
             new_verts.extend(lv)
             new_faces.extend(lf)
             logger.debug(
-                "Hole (%d verts) filled via %s: %d new triangle(s).",
-                len(loop), method, len(lf),
+                "Hole (%d verts, area %.1f mm^2) filled via %s: %d new triangle(s).",
+                len(loop), area, method, len(lf),
             )
 
         if not new_faces:
+            # No fillable loops left this pass — done, even if some were rejected.
             break
 
         if new_verts:
             V = np.vstack([V, np.array(new_verts, dtype=np.float64)])
         F = np.vstack([F, np.array(new_faces, dtype=np.int32)])
-        total_holes += len(inner_loops)
+        total_holes += len(inner_loops) - n_rejected_this_pass
         total_tris += len(new_faces)
 
         tmp = trimesh.Trimesh(vertices=V, faces=F, process=False)
@@ -327,16 +386,26 @@ def _fill_interior_holes(
         V = np.asarray(tmp.vertices, dtype=np.float64)
         F = np.asarray(tmp.faces, dtype=np.int32)
 
-    if total_holes > 0:
+    if total_holes > 0 or rejected_loops:
         logger.info(
-            "Filled %d interior hole(s) with %d total triangle(s).",
-            total_holes, total_tris,
+            "Filled %d interior hole(s) with %d total triangle(s); "
+            "rejected %d oversize loop(s).",
+            total_holes, total_tris, len(rejected_loops),
         )
 
-    return V, F
+    return V, F, rejected_loops
 
 
 _BOUNDARY_GAP_PROXIMITY_MM: float = 5.0
+_BOUNDARY_GAP_MAX_CLOSE_RATIO: float = 0.25
+"""Upper bound on the fraction of a secondary loop's vertices that may be close
+to the main boundary for the loop to be classified as a junction gap.
+
+A genuine junction gap's secondary loop consists mostly of the appendage perimeter
+(which is far from the main boundary), with only a few gap-edge vertices nearby
+(typically < 15% of the loop).  A small interior-hole artifact near the boundary
+will have a much higher close ratio (> 50%).  Loops exceeding this threshold are
+treated as interior holes and left for ``_fill_interior_holes``."""
 
 
 def _stitch_boundary_gaps(
@@ -354,9 +423,11 @@ def _stitch_boundary_gaps(
     onto their nearest main-boundary counterparts, merging the two loops into one
     and preserving the appendage as part of the outer boundary.
 
-    A secondary loop is classified as a gap loop when at least 2 of its vertices
-    are within ``proximity_mm`` of the main boundary.  Loops that do not meet this
-    criterion are true interior holes and are left for ``_fill_interior_holes``.
+    A secondary loop is classified as a junction gap when at least 2 of its
+    vertices are within ``proximity_mm`` of the main boundary AND the fraction of
+    close vertices does not exceed ``_BOUNDARY_GAP_MAX_CLOSE_RATIO``.  The ratio
+    guard prevents welding small interior-hole artifacts that lie entirely near the
+    boundary (high close ratio) — those are left for ``_fill_interior_holes``.
 
     Parameters
     ----------
@@ -376,7 +447,7 @@ def _stitch_boundary_gaps(
     """
     F = F.copy()
 
-    for _ in range(max_passes):
+    for pass_idx in range(max_passes):
         loops = _find_boundary_loops(F)
         if len(loops) <= 1:
             break
@@ -384,20 +455,60 @@ def _stitch_boundary_gaps(
         main_loop = loops[0]
         secondary_loops = loops[1:]
 
+        print(
+            f"[stitch] pass {pass_idx}: main loop={len(main_loop)} verts, "
+            f"{len(secondary_loops)} secondary loop(s)."
+        )
+        logger.info(
+            "_stitch_boundary_gaps pass %d: main loop=%d verts, %d secondary loop(s).",
+            pass_idx,
+            len(main_loop),
+            len(secondary_loops),
+        )
+
         main_positions = V[main_loop]
         tree = _KDTree(main_positions)
 
         welded_any = False
 
-        for sec_loop in secondary_loops:
+        for loop_idx, sec_loop in enumerate(secondary_loops):
             sec_positions = V[sec_loop]
             dists, nearest_idx = tree.query(sec_positions)
 
             close_mask = dists < proximity_mm
             n_close = int(close_mask.sum())
+            close_ratio = n_close / len(sec_loop)
 
-            if n_close < 2:
+            if n_close < 2 or close_ratio > _BOUNDARY_GAP_MAX_CLOSE_RATIO:
+                print(
+                    f"[stitch]   loop {loop_idx}: size={len(sec_loop)}, "
+                    f"n_close={n_close} (ratio={close_ratio:.2f}) → SKIP"
+                )
+                logger.info(
+                    "  secondary loop %d: size=%d, n_close=%d (ratio=%.2f) → skip"
+                    " (n_close<2 or ratio>%.2f, treating as interior hole).",
+                    loop_idx,
+                    len(sec_loop),
+                    n_close,
+                    close_ratio,
+                    _BOUNDARY_GAP_MAX_CLOSE_RATIO,
+                )
                 continue
+
+            print(
+                f"[stitch]   loop {loop_idx}: size={len(sec_loop)}, "
+                f"n_close={n_close} (ratio={close_ratio:.2f}), "
+                f"min_dist={float(dists[close_mask].min()):.2f} mm → WELD"
+            )
+            logger.info(
+                "  secondary loop %d: size=%d, n_close=%d (ratio=%.2f), min_dist=%.2f mm"
+                " → welding as junction gap.",
+                loop_idx,
+                len(sec_loop),
+                n_close,
+                close_ratio,
+                float(dists[close_mask].min()),
+            )
 
             welded_any = True
             for i, v_sec in enumerate(sec_loop):
@@ -412,6 +523,13 @@ def _stitch_boundary_gaps(
             [len(np.unique(face)) == 3 for face in F],
             dtype=bool,
         )
+        n_degen = int((~non_degenerate).sum())
+        if n_degen:
+            logger.info(
+                "_stitch_boundary_gaps pass %d: removed %d degenerate face(s) after welding.",
+                pass_idx,
+                n_degen,
+            )
         F = F[non_degenerate]
 
         if F.shape[0] == 0:
@@ -491,7 +609,44 @@ def _remove_sliver_faces(
     return V, F
 
 
-def clean_mesh(mesh: trimesh.Trimesh) -> tuple[np.ndarray, np.ndarray]:
+def _record_clean_step(
+    diagnostics: dict | None,
+    label: str,
+    V: np.ndarray,
+    F: np.ndarray,
+    info: str = "",
+    overlay_points: dict[str, np.ndarray] | None = None,
+) -> None:
+    """Append a (V, F, label, info, overlay_points) snapshot to diagnostics["clean_steps"].
+
+    ``overlay_points`` is an optional dict of ``{label: (N, 3) array}`` matching
+    ``SlimStep.overlay_points`` — used to highlight features like rejected
+    interior-hole loops in the interactive viewer.
+    """
+    if diagnostics is None:
+        return
+    loops = _find_boundary_loops(F)
+    loop_sizes = [len(l) for l in loops]
+    if loop_sizes:
+        loop_info = (
+            f"{len(loop_sizes)} boundary loop(s) "
+            f"(main={loop_sizes[0]}, others={loop_sizes[1:]})"
+        )
+    else:
+        loop_info = "0 boundary loops (closed surface)"
+    full_info = f"{V.shape[0]} verts, {F.shape[0]} faces; {loop_info}"
+    if info:
+        full_info = f"{info}; {full_info}"
+    diagnostics.setdefault("clean_steps", []).append(
+        (V.copy(), F.copy(), label, full_info, overlay_points)
+    )
+
+
+def clean_mesh(
+    mesh: trimesh.Trimesh,
+    diagnostics: dict | None = None,
+    clean_steps: dict | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
     """Keep the largest connected component, fix winding, drop orphan vertices.
 
     Parameters
@@ -499,6 +654,17 @@ def clean_mesh(mesh: trimesh.Trimesh) -> tuple[np.ndarray, np.ndarray]:
     mesh:
         Input trimesh (may have multiple components, flipped faces, or
         unreferenced vertices).
+    diagnostics:
+        When provided, intermediate ``(V, F, label, info)`` tuples are appended
+        to ``diagnostics["clean_steps"]`` at each sub-step boundary.  Used by
+        the interactive step-by-step viewer.  When ``None`` no snapshots are
+        captured and behaviour is unchanged.
+    clean_steps:
+        Optional dict of boolean toggles for individual cleaning steps.
+        Recognised keys (all default to ``True``):
+        ``remove_non_manifold``, ``repair_pinch_vertices``,
+        ``remove_slivers``, ``stitch_boundary_gaps``, ``fill_interior_holes``.
+        Steps 1-3 (largest component, fix winding, remove orphans) always run.
 
     Returns
     -------
@@ -513,6 +679,12 @@ def clean_mesh(mesh: trimesh.Trimesh) -> tuple[np.ndarray, np.ndarray]:
         If the mesh has zero faces after cleaning (completely degenerate
         input or wrong PLY file).
     """
+    _steps = clean_steps or {}
+    do_non_manifold = _steps.get("remove_non_manifold", True)
+    do_pinch = _steps.get("repair_pinch_vertices", True)
+    do_slivers = _steps.get("remove_slivers", True)
+    do_stitch = _steps.get("stitch_boundary_gaps", True)
+    do_fill = _steps.get("fill_interior_holes", True)
     # Split into connected components; keep the one with the most vertices.
     components = mesh.split(only_watertight=False)
     if len(components) == 0:
@@ -526,28 +698,55 @@ def clean_mesh(mesh: trimesh.Trimesh) -> tuple[np.ndarray, np.ndarray]:
     # Fix face winding for consistent outward normals.
     trimesh.repair.fix_winding(largest)
 
+    V_step = np.asarray(largest.vertices, dtype=np.float64)
+    F_step = np.asarray(largest.faces, dtype=np.int32)
+    _record_clean_step(
+        diagnostics, "Largest component + winding fix",
+        V_step, F_step,
+        info=f"kept {len(components)}→1 component",
+    )
+
     # Remove vertices that are not referenced by any face.
     largest.remove_unreferenced_vertices()
 
+    _record_clean_step(
+        diagnostics, "Orphan vertices removed",
+        np.asarray(largest.vertices, dtype=np.float64),
+        np.asarray(largest.faces, dtype=np.int32),
+    )
+
     # libigl LSCM/harmonic/ARAP require a strictly manifold mesh.
     # BPA output frequently has non-manifold edges; clean via Open3D.
-    o3d_mesh = o3d.geometry.TriangleMesh(
-        vertices=o3d.utility.Vector3dVector(largest.vertices),
-        triangles=o3d.utility.Vector3iVector(largest.faces),
-    )
-    o3d_mesh.remove_duplicated_vertices()
-    o3d_mesh.remove_duplicated_triangles()
-    o3d_mesh.remove_degenerate_triangles()
-    o3d_mesh.remove_non_manifold_edges()
+    if do_non_manifold:
+        o3d_mesh = o3d.geometry.TriangleMesh(
+            vertices=o3d.utility.Vector3dVector(largest.vertices),
+            triangles=o3d.utility.Vector3iVector(largest.faces),
+        )
+        o3d_mesh.remove_duplicated_vertices()
+        o3d_mesh.remove_duplicated_triangles()
+        o3d_mesh.remove_degenerate_triangles()
+        o3d_mesh.remove_non_manifold_edges()
 
-    V = np.asarray(o3d_mesh.vertices, dtype=np.float64)
-    F = np.asarray(o3d_mesh.triangles, dtype=np.int32)
+        V = np.asarray(o3d_mesh.vertices, dtype=np.float64)
+        F = np.asarray(o3d_mesh.triangles, dtype=np.int32)
 
-    if F.shape[0] == 0:
-        raise ValueError(
-            "Zero faces remain after cleaning the mesh. "
-            "Check that PLY_PATH points to a segmented forearm cloud, "
-            "not a raw scan or an empty file."
+        if F.shape[0] == 0:
+            raise ValueError(
+                "Zero faces remain after cleaning the mesh. "
+                "Check that PLY_PATH points to a segmented forearm cloud, "
+                "not a raw scan or an empty file."
+            )
+
+        _record_clean_step(
+            diagnostics, "Non-manifold edges removed (open3d)",
+            V, F,
+        )
+    else:
+        V = np.asarray(largest.vertices, dtype=np.float64)
+        F = np.asarray(largest.faces, dtype=np.int32)
+        _record_clean_step(
+            diagnostics, "Non-manifold edges removed (open3d)",
+            V, F, info="SKIPPED (disabled)",
         )
 
     # libigl LSCM fails on "pinch" boundary vertices — vertices that appear as
@@ -555,48 +754,116 @@ def clean_mesh(mesh: trimesh.Trimesh) -> tuple[np.ndarray, np.ndarray]:
     # face winding near BPA seam edges.  Remove faces around pinch vertices and
     # re-take the largest connected component.  Small holes that remain are OK
     # for LSCM (it does not require single-loop boundary topology).
-    import igl as _igl
-    for _ in range(10):
-        BF_pre, _, _ = _igl.boundary_facets(F.astype(np.int64))
-        source_counts: dict = {}
-        for _e in BF_pre:
-            _u = int(_e[0])
-            source_counts[_u] = source_counts.get(_u, 0) + 1
-        pinch = np.array([u for u, c in source_counts.items() if c > 1], dtype=np.int32)
-        if len(pinch) == 0:
-            break
-        bad_mask = np.any(np.isin(F, pinch), axis=1)
-        F = F[~bad_mask]
-        if F.shape[0] == 0:
-            raise ValueError("Mesh became empty during pinch-vertex repair.")
-        used = np.unique(F)
-        remap = np.full(V.shape[0], -1, dtype=np.int32)
-        remap[used] = np.arange(len(used), dtype=np.int32)
-        V, F = V[used], remap[F]
-        components = trimesh.Trimesh(vertices=V, faces=F, process=False).split(
-            only_watertight=False
+    if do_pinch:
+        import igl as _igl
+        pinch_passes = 0
+        pinch_removed_faces = 0
+        for _ in range(10):
+            BF_pre, _, _ = _igl.boundary_facets(F.astype(np.int64))
+            source_counts: dict = {}
+            for _e in BF_pre:
+                _u = int(_e[0])
+                source_counts[_u] = source_counts.get(_u, 0) + 1
+            pinch = np.array([u for u, c in source_counts.items() if c > 1], dtype=np.int32)
+            if len(pinch) == 0:
+                break
+            bad_mask = np.any(np.isin(F, pinch), axis=1)
+            pinch_removed_faces += int(bad_mask.sum())
+            F = F[~bad_mask]
+            if F.shape[0] == 0:
+                raise ValueError("Mesh became empty during pinch-vertex repair.")
+            used = np.unique(F)
+            remap = np.full(V.shape[0], -1, dtype=np.int32)
+            remap[used] = np.arange(len(used), dtype=np.int32)
+            V, F = V[used], remap[F]
+            components = trimesh.Trimesh(vertices=V, faces=F, process=False).split(
+                only_watertight=False
+            )
+            if components:
+                lc = max(components, key=lambda m: len(m.vertices))
+                V = np.asarray(lc.vertices, dtype=np.float64)
+                F = np.asarray(lc.faces, dtype=np.int32)
+            pinch_passes += 1
+
+        _record_clean_step(
+            diagnostics, "Pinch-vertex repair",
+            V, F,
+            info=f"{pinch_passes} pass(es), removed {pinch_removed_faces} face(s)",
         )
-        if components:
-            lc = max(components, key=lambda m: len(m.vertices))
-            V = np.asarray(lc.vertices, dtype=np.float64)
-            F = np.asarray(lc.faces, dtype=np.int32)
+    else:
+        _record_clean_step(
+            diagnostics, "Pinch-vertex repair",
+            V, F, info="SKIPPED (disabled)",
+        )
 
     # BPA reconstruction can produce elongated sliver triangles at mesh
     # edges.  Remove them before hole filling so the Delaunay filler can
     # patch the resulting gaps with well-conditioned triangles.
-    V, F = _remove_sliver_faces(V, F)
+    if do_slivers:
+        n_faces_before = F.shape[0]
+        V, F = _remove_sliver_faces(V, F)
+        _record_clean_step(
+            diagnostics, "Sliver-face removal (AR > 10)",
+            V, F,
+            info=f"removed {n_faces_before - F.shape[0]} sliver face(s)",
+        )
+    else:
+        _record_clean_step(
+            diagnostics, "Sliver-face removal (AR > 10)",
+            V, F, info="SKIPPED (disabled)",
+        )
 
     # Narrow gaps at appendage junctions (e.g. thumb–forearm) appear as
     # secondary boundary loops whose vertices are close to the main boundary.
     # Weld those gap vertices onto the main boundary before hole filling so
     # the appendage perimeter remains part of the outer boundary loop rather
     # than being enclosed by a hole-fill patch.
-    V, F = _stitch_boundary_gaps(V, F)
+    if do_stitch:
+        loops_before = _find_boundary_loops(F)
+        V, F = _stitch_boundary_gaps(V, F)
+        loops_after = _find_boundary_loops(F)
+        n_welded = max(0, (len(loops_before) - len(loops_after)))
+        _record_clean_step(
+            diagnostics, "Boundary-gap stitching",
+            V, F,
+            info=(
+                f"loops {len(loops_before)}→{len(loops_after)} "
+                f"({n_welded} secondary loop(s) welded)"
+            ),
+        )
+    else:
+        _record_clean_step(
+            diagnostics, "Boundary-gap stitching",
+            V, F, info="SKIPPED (disabled)",
+        )
 
     # Non-manifold removal, pinch repair, and sliver removal can all leave
     # interior holes that break the single-boundary disk topology required
     # for harmonic/Tutte UV initialisation.  Fill them as the last step.
-    V, F = _fill_interior_holes(V, F)
+    if do_fill:
+        loops_pre_fill = _find_boundary_loops(F)
+        n_faces_before_fill = F.shape[0]
+        n_loops_before_fill = len(loops_pre_fill)
+        V, F, rejected_loops = _fill_interior_holes(V, F)
+        overlay = None
+        if rejected_loops:
+            overlay = {"rejected_hole": np.vstack(rejected_loops)}
+        n_filled = max(0, n_loops_before_fill - 1 - len(rejected_loops))
+        _record_clean_step(
+            diagnostics, "Interior hole filling",
+            V, F,
+            info=(
+                f"filled {n_filled} interior hole(s), "
+                f"rejected {len(rejected_loops)} oversize loop(s), "
+                f"added {F.shape[0] - n_faces_before_fill} face(s)"
+            ),
+            overlay_points=overlay,
+        )
+    else:
+        _record_clean_step(
+            diagnostics, "Interior hole filling",
+            V, F, info="SKIPPED (disabled)",
+        )
 
     return V, F
 
@@ -650,6 +917,27 @@ def _has_flipped_triangles(uv: np.ndarray, F: np.ndarray) -> bool:
         p1[:, 1] - p0[:, 1]
     ) * (p2[:, 0] - p0[:, 0])
     return bool(np.any(cross > 0) and np.any(cross < 0))
+
+
+def _identify_flipped_triangles(uv: np.ndarray, F: np.ndarray) -> np.ndarray:
+    """Return (M,) bool array — True for faces whose signed area disagrees with
+    the mesh majority.
+
+    A consistently-wound mesh has all signed areas of one sign; the minority
+    sign marks the flipped subset. Returns all-False when every triangle agrees
+    (nothing to highlight) or when the mesh is empty.
+    """
+    if len(F) == 0:
+        return np.zeros(0, dtype=bool)
+    p0, p1, p2 = uv[F[:, 0]], uv[F[:, 1]], uv[F[:, 2]]
+    cross = (p1[:, 0] - p0[:, 0]) * (p2[:, 1] - p0[:, 1]) - (
+        p1[:, 1] - p0[:, 1]
+    ) * (p2[:, 0] - p0[:, 0])
+    n_pos = int(np.sum(cross > 0))
+    n_neg = int(np.sum(cross < 0))
+    if n_pos == 0 or n_neg == 0:
+        return np.zeros(len(F), dtype=bool)
+    return (cross < 0) if n_pos >= n_neg else (cross > 0)
 
 
 def _tutte_uniform_map(
@@ -761,16 +1049,22 @@ def flatten_slim(
     uv_init = igl.harmonic(V, F, boundary.astype(np.int32), boundary_uv, 1).astype(
         np.float64
     )
-    if np.any(np.isnan(uv_init)):
-        raise RuntimeError(
-            "Harmonic initialisation produced NaN — mesh may be degenerate."
-        )
 
     _init_method = "harmonic"
+    _harmonic_nan = np.any(np.isnan(uv_init))
+
+    if _harmonic_nan:
+        logger.warning(
+            "Cotangent-harmonic initialisation produced NaN (mesh likely has "
+            "near-degenerate faces) — falling back to Tutte (uniform-weight "
+            "Laplacian) initialisation."
+        )
+        _init_method = "tutte"
+        uv_init = _tutte_uniform_map(F, V.shape[0], boundary, boundary_uv)
 
     # Cotangent-harmonic can flip on ill-conditioned forearm topologies.
     # Fall back to the Tutte (uniform-weight) map.
-    if _has_flipped_triangles(uv_init, F):
+    if not _harmonic_nan and _has_flipped_triangles(uv_init, F):
         logger.warning(
             "Cotangent-harmonic initialisation produced flipped triangles — "
             "falling back to Tutte (uniform-weight Laplacian) initialisation."
@@ -791,6 +1085,13 @@ def flatten_slim(
             n_flip = len(flipped_fi)
 
             if n_flip > _TRIM_FLIP_MAX:
+                if diagnostics is not None:
+                    diagnostics["tutte_fail_V"] = V.copy()
+                    diagnostics["tutte_fail_F"] = F.copy()
+                    diagnostics["tutte_fail_uv"] = uv_init.copy()
+                    diagnostics["tutte_fail_flipped"] = (cross < 0)
+                    diagnostics["tutte_fail_round"] = int(_trim_round)
+                    diagnostics["tutte_fail_n_flipped"] = int(n_flip)
                 raise RuntimeError(
                     f"Tutte fallback has {n_flip} flipped triangle(s) — too many "
                     f"to repair by trimming (limit: {_TRIM_FLIP_MAX}).  The mesh "
@@ -831,7 +1132,7 @@ def flatten_slim(
             V = np.asarray(lc.vertices, dtype=np.float64)
             F = np.asarray(lc.faces, dtype=np.int32)
 
-            V, F = _fill_interior_holes(V, F)
+            V, F, _ = _fill_interior_holes(V, F)
 
             boundary = boundary_loop(F)
             boundary_uv = _setup_boundary_uv(boundary)
@@ -848,6 +1149,14 @@ def flatten_slim(
             uv_init = _tutte_uniform_map(F, V.shape[0], boundary, boundary_uv)
         else:
             if _has_flipped_triangles(uv_init, F):
+                if diagnostics is not None:
+                    flipped_mask = _identify_flipped_triangles(uv_init, F)
+                    diagnostics["tutte_fail_V"] = V.copy()
+                    diagnostics["tutte_fail_F"] = F.copy()
+                    diagnostics["tutte_fail_uv"] = uv_init.copy()
+                    diagnostics["tutte_fail_flipped"] = flipped_mask
+                    diagnostics["tutte_fail_round"] = int(_TRIM_MAX_ROUNDS)
+                    diagnostics["tutte_fail_n_flipped"] = int(flipped_mask.sum())
                 raise RuntimeError(
                     f"Tutte fallback still has flipped triangles after "
                     f"{_TRIM_MAX_ROUNDS} trim rounds — the mesh topology is too "

@@ -19,29 +19,29 @@ from typing import List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from analysis.receptive_field_mapping.rf_cluster_visualizer import (
+from analysis.receptive_field_mapping.rendering.rf_cluster_visualizer import (
     RFRenderContext,
     render_forearm_heatmap,
 )
-from analysis.receptive_field_mapping.rf_data_loader import (
+from analysis.receptive_field_mapping.data.rf_data_loader import (
     resolve_forearm_ply,
 )
-from analysis.receptive_field_mapping.rf_extraction_io import (
+from analysis.receptive_field_mapping.data.rf_extraction_io import (
     RF_CAMERA_SETTINGS_FILENAME,
     load_rf_camera_settings,
 )
-from analysis.receptive_field_mapping.rf_projection import (
+from analysis.receptive_field_mapping.surface.rf_projection import (
     _compute_local_radius,
     fit_cylinder_axis,
     project_to_2d,
 )
-from analysis.receptive_field_mapping.rf_simple_diagnostics import (
+from analysis.receptive_field_mapping.rendering.rf_simple_diagnostics import (
     run_diagnostics,
 )
-from analysis.receptive_field_mapping.tangent_plane_alignment import (
+from analysis.receptive_field_mapping.surface.tangent_plane_alignment import (
     camera_settings_to_rotation,
 )
-from analysis.receptive_field_mapping.touch_population_data import (
+from analysis.receptive_field_mapping.data.touch_population_data import (
     load_population_data,
 )
 from analysis.pipeline.shared_constants import session_id_from_path

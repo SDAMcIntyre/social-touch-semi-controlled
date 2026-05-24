@@ -459,7 +459,7 @@ class TestFillInteriorHoles:
         F = F_all[(r > 0.15) & (r < 1.95)]
         assert len(F) > 0, "Test mesh setup failed"
 
-        V_out, F_out = _fill_interior_holes(V, F)
+        V_out, F_out, _rejected = _fill_interior_holes(V, F)
 
         # Inner hole had 3 boundary vertices → centroid-fan → 1 new vert, 3 new faces.
         n_new_verts = V_out.shape[0] - V.shape[0]
@@ -717,56 +717,86 @@ class TestStitchBoundaryGaps:
         np.testing.assert_array_equal(F_out, F)
 
     def test_gap_welded_into_main_boundary(self):
-        """Two rectangular patches sharing a narrow gap: after stitching, single boundary loop."""
+        """Junction gap loop (low close-ratio): after stitching, single boundary loop.
+
+        Main body: fan-triangulated disk with 20 boundary vertices (radius=20).
+        Appendage: strip with 10 boundary vertices — 2 gap verts within 3 mm of the
+        main boundary, 8 far away.  ratio = 2/10 = 0.20 < 0.25 → welded.
+        The main loop (20 verts) is larger than the appendage loop (10 verts) so
+        _find_boundary_loops correctly identifies the disk as the main boundary.
+        """
         from analysis.receptive_field_mapping.surface.slim_helpers import (
             _stitch_boundary_gaps, _find_boundary_loops,
         )
-        # Main rectangle: vertices 0-3, split into 2 triangles.
-        #   0 --- 1
-        #   |   / |
-        #   | /   |
-        #   3 --- 2
-        # Appendage rectangle: vertices 4-7, hanging off the right side with a
-        # narrow gap (< 5 mm) between vertex 1 & vertex 4, and vertex 2 & vertex 5.
-        #
-        # Main boundary vertices at x=1.0; appendage boundary at x=1.003 (gap = 3 mm).
-        #
-        # Layout (all z=0):
-        #   main:        (0,0) (1,0) (1,1) (0,1)   → vids 0,1,2,3
-        #   appendage:   (1.003,0) (1.003,1) (2,0) (2,1) → vids 4,5,6,7
-        #
-        # After stitching, vid 4 should collapse onto vid 1 and vid 5 onto vid 2,
-        # merging the two rectangles into a single connected boundary loop.
+        # --- Main body: fan disk with 20 boundary verts (radius=20 mm) + centre ---
+        N_main = 20
+        angles = np.linspace(0, 2 * np.pi, N_main, endpoint=False)
+        # Place one boundary vertex exactly at (20, 0, 0) = vid 0 so the appendage
+        # gap verts can be placed at (20.003, ...) — 3 mm away.
+        main_outer = np.column_stack([
+            20.0 * np.cos(angles),
+            20.0 * np.sin(angles),
+            np.zeros(N_main),
+        ]).astype(np.float64)
+        main_centre = np.array([[0.0, 0.0, 0.0]], dtype=np.float64)
+        V_main = np.vstack([main_outer, main_centre])  # vids 0..N_main-1, then N_main
+        c = N_main  # centre vid
+        F_main = np.array(
+            [[c, i, (i + 1) % N_main] for i in range(N_main)],
+            dtype=np.int32,
+        )
 
-        V = np.array([
-            [0.0,   0.0, 0.0],   # 0
-            [1.0,   0.0, 0.0],   # 1  (main boundary, right side)
-            [1.0,   1.0, 0.0],   # 2  (main boundary, right side)
-            [0.0,   1.0, 0.0],   # 3
-            [1.003, 0.0, 0.0],   # 4  (appendage boundary, left side — gap 3 mm from vid 1)
-            [1.003, 1.0, 0.0],   # 5  (appendage boundary, left side — gap 3 mm from vid 2)
-            [2.0,   0.0, 0.0],   # 6
-            [2.0,   1.0, 0.0],   # 7
+        # --- Appendage: 10-vertex strip, 2 gap verts close to vid 0 of main body ---
+        # Gap verts at vid N_main+1 = (20.003, -1) and vid N_main+2 = (20.003, 1).
+        # Both are ~3 mm from vid 0 = (20.0, 0.0).
+        # Remaining 8 appendage boundary verts are at x=30 (10 mm away → not close).
+        base = N_main + 1  # offset for appendage vertex IDs
+        appendage_verts = np.array([
+            [20.003, -1.0, 0.0],  # base+0  gap vert A (~3.2 mm from vid 0)
+            [25.0,   -4.0, 0.0],  # base+1  appendage
+            [30.0,   -4.0, 0.0],  # base+2  appendage
+            [30.0,   -2.0, 0.0],  # base+3  appendage
+            [30.0,    0.0, 0.0],  # base+4  appendage
+            [30.0,    2.0, 0.0],  # base+5  appendage
+            [30.0,    4.0, 0.0],  # base+6  appendage
+            [25.0,    4.0, 0.0],  # base+7  appendage
+            [20.003,  1.0, 0.0],  # base+8  gap vert B (~3.2 mm from vid 0)
+            [25.0,    0.0, 0.0],  # base+9  interior helper (not on boundary)
         ], dtype=np.float64)
-
-        # Two separate rectangles: each split into 2 triangles with consistent winding.
-        F = np.array([
-            [0, 1, 2],  # main rect tri 1
-            [0, 2, 3],  # main rect tri 2
-            [4, 6, 7],  # appendage tri 1
-            [4, 7, 5],  # appendage tri 2
+        # Appendage boundary loop (9 verts on perimeter, base+9 is interior):
+        # base+0 → base+1 → base+2 → base+3 → base+4 → base+5 → base+6 → base+7 → base+8
+        # n_close = 2 (base+0 and base+8), ratio = 2/9 ≈ 0.22 < 0.25 → welded.
+        F_app = np.array([
+            [base+0, base+1, base+9],
+            [base+1, base+2, base+9],
+            [base+2, base+3, base+9],
+            [base+3, base+4, base+9],
+            [base+4, base+5, base+9],
+            [base+5, base+6, base+9],
+            [base+6, base+7, base+9],
+            [base+7, base+8, base+9],
         ], dtype=np.int32)
+
+        V = np.vstack([V_main, appendage_verts])
+        F = np.vstack([F_main, F_app])
 
         loops_before = _find_boundary_loops(F)
         assert len(loops_before) == 2, (
             f"Test setup: expected 2 boundary loops, got {len(loops_before)}"
+        )
+        main_size, sec_size = len(loops_before[0]), len(loops_before[1])
+        assert main_size > sec_size, (
+            f"Test setup: main loop ({main_size}) must be larger than secondary ({sec_size})"
+        )
+        assert sec_size >= 9, (
+            f"Test setup: secondary loop too small ({sec_size}); need >= 9 for ratio guard"
         )
 
         V_out, F_out = _stitch_boundary_gaps(V, F, proximity_mm=5.0)
 
         loops_after = _find_boundary_loops(F_out)
         assert len(loops_after) == 1, (
-            f"Expected 1 boundary loop after stitching, got {len(loops_after)}: {loops_after}"
+            f"Expected 1 boundary loop after stitching, got {len(loops_after)}"
         )
 
     def test_true_interior_hole_not_welded(self):
@@ -826,34 +856,50 @@ class TestStitchBoundaryGaps:
         )
 
     def test_degenerate_faces_removed(self):
-        """Welding that creates faces with 2+ identical vertices: degenerate faces removed."""
+        """Welding that creates faces with 2+ identical vertices: degenerate faces removed.
+
+        Both gap vertices are very close to the SAME main-boundary vertex, so they both
+        map to it after welding.  The face that shares both gap vertices becomes
+        [main, main, other] — degenerate — and must be removed.  The secondary loop
+        has 9 boundary vertices (n_close=2, ratio=2/9≈0.22 < 0.25) so it passes
+        the ratio guard and is welded.
+        """
         from analysis.receptive_field_mapping.surface.slim_helpers import (
             _stitch_boundary_gaps, _find_boundary_loops,
         )
-        # Build a mesh where the gap is exactly 1 vertex wide on each side so
-        # welding will collapse one triangle into a degenerate (two identical vids).
-        #
-        # Main triangle: vids 0, 1, 2 at (0,0), (1,0), (0.5, 1).
-        # Gap vertex: vid 3 at (1.001, 0) — 1 mm from vid 1.
-        # A second triangle using the gap vertex: [3, 4, 5].
-        # Only 1 close vertex (vid 3 near vid 1) → but we need >= 2 close vertices
-        # to trigger stitching.  Add vid 6 at (0.499, 1.001) close to vid 2.
-        # Secondary loop boundary: 3, 4, 5, 6 (with face [3,4,5] and [3,5,6]).
+        # Main triangle: vids 0,1,2.
+        # Appendage: vids 3-11 (9 boundary verts).
+        #   vid 3 = (1.001, 0.000) — 1 mm from main vid 1 = (1.0, 0.0)
+        #   vid 4 = (1.001, 0.002) — ~2.2 mm from main vid 1 (both collapse onto vid 1)
+        #   Face [3,4,5] → after welding → [1,1,5] → DEGENERATE → removed.
+        #   vids 5-11: appendage perimeter far from main (x ≥ 1.5 or y ≥ 0.5).
 
         V = np.array([
-            [0.0,   0.0,  0.0],   # 0 — main
-            [1.0,   0.0,  0.0],   # 1 — main (boundary)
-            [0.5,   1.0,  0.0],   # 2 — main (boundary)
-            [1.001, 0.0,  0.0],   # 3 — gap, 1 mm from vid 1
-            [1.5,   0.0,  0.0],   # 4 — appendage
-            [1.5,   1.0,  0.0],   # 5 — appendage
-            [0.501, 1.0,  0.0],   # 6 — gap, 1 mm from vid 2
+            [0.0,   0.0,  0.0],  # 0  main
+            [1.0,   0.0,  0.0],  # 1  main boundary vertex
+            [0.5,   1.0,  0.0],  # 2  main boundary vertex
+            [1.001, 0.0,  0.0],  # 3  gap vert A — 1 mm from vid 1
+            [1.001, 0.002,0.0],  # 4  gap vert B — ~2.2 mm from vid 1
+            [1.5,   0.0,  0.0],  # 5  appendage
+            [2.0,   0.0,  0.0],  # 6  appendage
+            [2.0,   0.5,  0.0],  # 7  appendage
+            [2.0,   1.0,  0.0],  # 8  appendage
+            [1.5,   1.0,  0.0],  # 9  appendage
+            [1.5,   0.5,  0.0],  # 10 appendage
+            [1.001, 0.5,  0.0],  # 11 appendage
         ], dtype=np.float64)
 
+        # Main: 1 triangle.
+        # Appendage: triangulated strip — face [3,4,5] will become degenerate after weld.
         F = np.array([
-            [0, 1, 2],   # main triangle
-            [3, 4, 5],   # appendage tri 1
-            [3, 5, 6],   # appendage tri 2 — vid 3 near vid 1, vid 6 near vid 2
+            [0, 1, 2],    # main triangle
+            [3, 4, 5],    # appendage — both 3 and 4 map to vid 1 → degenerate after weld
+            [4, 6, 5],    # appendage
+            [4, 7, 6],    # appendage
+            [4, 8, 7],    # appendage
+            [4, 9, 8],    # appendage
+            [4, 10, 9],   # appendage
+            [4, 11, 10],  # appendage
         ], dtype=np.int32)
 
         loops_before = _find_boundary_loops(F)
@@ -863,11 +909,10 @@ class TestStitchBoundaryGaps:
 
         V_out, F_out = _stitch_boundary_gaps(V, F, proximity_mm=5.0)
 
-        # All faces in F_out must be non-degenerate (3 distinct vertex IDs).
+        # All remaining faces must be non-degenerate.
         for face in F_out:
             assert len(np.unique(face)) == 3, (
-                f"Degenerate face found after stitching: {face}"
+                f"Degenerate face survived stitching: {face}"
             )
 
-        # Mesh must still have faces.
         assert F_out.shape[0] > 0, "All faces removed after stitching"
