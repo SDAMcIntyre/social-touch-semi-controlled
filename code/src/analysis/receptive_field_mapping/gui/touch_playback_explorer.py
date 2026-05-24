@@ -39,7 +39,7 @@ from PyQt5.QtWidgets import (
 )
 from pyvistaqt import QtInteractor
 
-from analysis.receptive_field_mapping.touch_playback_data import PlaybackData, TouchEvent
+from analysis.receptive_field_mapping.data.touch_playback_data import PlaybackData, TouchEvent
 
 logger = logging.getLogger(__name__)
 

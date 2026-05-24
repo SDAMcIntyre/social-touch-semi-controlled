@@ -242,3 +242,14 @@ inflection-boundary tests and pipeline tests remain unchanged.
 - Claude Code plan: `.claude/plans/in-addition-to-images-sunny-charm.md`
 - Related module: `code/src/analysis/receptive_field_mapping/rf_population_grid_pipeline.py` (NPZ pattern)
 - Knowledge base: `note-analysis-pipeline-coordinate-spaces.md` (units are mm throughout)
+
+---
+
+## Follow-on
+
+**2026-05-20** — Plan `extract-population-rf-response-field-boundaries` renamed the NPZ file
+(`{session_id}_rf_population_vertex_data.npz` → `{session_id}_population_response_fields.npz`)
+and expanded its schema: all nine `InflectionBoundary` fields are now persisted (up from three),
+and four new 3D-world (mm) boundary fields are added (`boundary_contour_xyz_{gtype}`,
+`boundary_centroid_xyz_{gtype}`, `boundary_perimeter_xyz_mm_{gtype}`,
+`boundary_area_xyz_mm2_{gtype}`) via barycentric interpolation on the SLIM mesh.

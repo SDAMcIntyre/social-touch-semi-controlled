@@ -1,14 +1,21 @@
 """Receptive field mapping.
 
-Cluster-based spike-count pipeline (rf_cluster_pipeline / rf_cluster_visualizer).
+Cluster-based spike-count pipeline split across four focused modules:
+- ``pipelines/rf_cluster_pipeline``                — extraction orchestration
+- ``pipelines/rf_cluster_metrics_pipeline``        — RF metrics computation
+- ``pipelines/rf_cluster_visualization_pipeline``  — heatmap rendering
+- ``pipelines/rf_cluster_gui_launchers``           — GUI launcher functions
+
 Simple per-neuron spike-position pipeline (rf_simple_pipeline).
 """
 
-from .rf_cluster_pipeline import (
+from .pipelines.rf_cluster_pipeline import (
     run_cluster_rf_extraction,
-    run_cluster_rf_metrics_computation,
     run_cluster_rf_mapping,
-    run_cluster_rf_visualization,
+)
+from .pipelines.rf_cluster_metrics_pipeline import run_cluster_rf_metrics_computation
+from .pipelines.rf_cluster_visualization_pipeline import run_cluster_rf_visualization
+from .pipelines.rf_cluster_gui_launchers import (
     precompute_explorer_caches,
     launch_feature_space_explorer,
     launch_single_touch_rf_explorer,
@@ -16,17 +23,21 @@ from .rf_cluster_pipeline import (
     launch_touch_population_explorer,
     launch_gallery_viewer,
     launch_rf_camera_settings_viewer,
+    launch_rf_surface_viewer,
+    launch_slim_uv_config_viewer,
 )
-from .rf_metrics import RFMetrics, compute_rf_metrics
-from .rf_projection import project_to_2d
-from .rf_simple_pipeline import run_simple_rf_mapping
-from .rf_single_touch_pipeline import run_single_touch_rf_mapping
-from .rf_population_grid_pipeline import run_population_rf_grid, PopulationRFGridConfig
-from .rf_population_grid_metrics_pipeline import run_population_rf_grid_metrics, PopulationRFGridMetricsConfig
-from .rf_population_grid_metrics_renderer import run_population_rf_grid_metrics_visualization
-from .rf_session_comparison_renderer import run_session_comparison_visualization
-from .rf_baseline_deviation import BaselineDeviationMetrics, compute_baseline_deviation
-from .rf_population_map_pipeline import run_population_rf_maps
+from .metrics.rf_metrics import RFMetrics, compute_rf_metrics
+from .surface.rf_projection import project_to_2d
+from .pipelines.rf_simple_pipeline import run_simple_rf_mapping
+from .pipelines.rf_single_touch_pipeline import run_single_touch_rf_mapping
+from .pipelines.rf_population_grid_pipeline import run_population_rf_grid, PopulationRFGridConfig
+from .pipelines.rf_population_grid_metrics_pipeline import run_population_rf_grid_metrics, PopulationRFGridMetricsConfig
+from .rendering.rf_population_grid_metrics_renderer import run_population_rf_grid_metrics_visualization
+from .rendering.rf_session_comparison_renderer import run_session_comparison_visualization
+from .metrics.rf_baseline_deviation import BaselineDeviationMetrics, compute_baseline_deviation
+from .pipelines.rf_population_response_field_pipeline import run_population_response_field_extraction
+from .pipelines.rf_session_boundary_comparison_pipeline import run_session_rf_boundary_comparison
+from .pipelines.rf_touch_feature_radar_pipeline import run_touch_feature_radar
 
 __all__ = [
     "project_to_2d",
@@ -41,6 +52,8 @@ __all__ = [
     "launch_touch_population_explorer",
     "launch_gallery_viewer",
     "launch_rf_camera_settings_viewer",
+    "launch_rf_surface_viewer",
+    "launch_slim_uv_config_viewer",
     "RFMetrics",
     "compute_rf_metrics",
     "run_simple_rf_mapping",
@@ -53,5 +66,7 @@ __all__ = [
     "run_session_comparison_visualization",
     "BaselineDeviationMetrics",
     "compute_baseline_deviation",
-    "run_population_rf_maps",
+    "run_population_response_field_extraction",
+    "run_session_rf_boundary_comparison",
+    "run_touch_feature_radar",
 ]
