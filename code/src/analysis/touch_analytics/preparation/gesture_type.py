@@ -3,10 +3,12 @@ import logging
 import numpy as np
 import pandas as pd
 
+from analysis.pipeline.shared_constants import TOUCH_ID_COLS
+
 _log = logging.getLogger(__name__)
 
 _KNOWN_TYPES = {'tap', 'stroke'}
-_GROUP_COLS = ['block_order_id', 'trial_id', 'single_touch_id']
+_GROUP_COLS = list(TOUCH_ID_COLS)  # ['block_order_id', 'trial_id', 'single_touch_id']
 _CONTACT_LOCATION_COLS = ['contact_location_x', 'contact_location_y', 'contact_location_z']
 
 

@@ -27,8 +27,10 @@ from .feature_extraction import get_feature_extractor, AGGREGATION_NAMES
 from .pipeline_shared import SHARED_COLUMNS, _TqdmLineWrapper, filter_enabled_profiles, session_id_from_path
 from .preparation.interpolation import interpolate_touch_columns
 from .representation.feature_characterization.statistical import _EXCLUDE_FROM_AGGREGATION
+from analysis.pipeline.shared_constants import TOUCH_ID_COLS, NERVE_SPIKE_COL
 
-TOUCH_KEYS = ['block_order_id', 'trial_id', 'single_touch_id']
+# Backward-compat alias — use TOUCH_ID_COLS from analysis.pipeline.shared_constants directly.
+TOUCH_KEYS = list(TOUCH_ID_COLS)
 
 _PANDAS_NATIVE_AGGS = frozenset({'mean', 'median', 'std', 'min', 'max'})
 
@@ -257,10 +259,10 @@ def _extract_session(
         else:
             df['block_order_id'] = None
 
-    has_nerve_data = 'Nerve_spike' in df.columns
+    has_nerve_data = NERVE_SPIKE_COL in df.columns
     if not has_nerve_data:
         logging.warning(
-            f"'Nerve_spike' column missing in {input_file.name}. "
+            f"'{NERVE_SPIKE_COL}' column missing in {input_file.name}. "
             "'spike_elicited' will be 0."
         )
 
@@ -433,8 +435,8 @@ def _extract_statistical_batch(
         meta_spec['contact_location_y'] = 'mean'
     if 'contact_location_z' in df.columns:
         meta_spec['contact_location_z'] = 'mean'
-    if has_nerve_data and 'Nerve_spike' in df.columns:
-        meta_spec['Nerve_spike'] = 'max'
+    if has_nerve_data and NERVE_SPIKE_COL in df.columns:
+        meta_spec[NERVE_SPIKE_COL] = 'max'
 
     meta_df = g.agg(meta_spec).reset_index() if meta_spec else g.size().reset_index(name='_n').drop(columns=['_n'])
     meta_df.rename(columns={
@@ -442,9 +444,9 @@ def _extract_statistical_batch(
         'contact_location_y': 'mean_contact_y',
         'contact_location_z': 'mean_contact_z',
     }, inplace=True)
-    if 'Nerve_spike' in meta_df.columns:
-        meta_df['spike_elicited'] = meta_df['Nerve_spike'].clip(0, 1).fillna(0).astype(int)
-        meta_df.drop(columns=['Nerve_spike'], inplace=True)
+    if NERVE_SPIKE_COL in meta_df.columns:
+        meta_df['spike_elicited'] = meta_df[NERVE_SPIKE_COL].clip(0, 1).fillna(0).astype(int)
+        meta_df.drop(columns=[NERVE_SPIKE_COL], inplace=True)
     else:
         meta_df['spike_elicited'] = 0
     if 'type_metadata' not in meta_df.columns:
@@ -499,7 +501,7 @@ def _extract_all_touches(
         )
 
         spike_elicited = (
-            1 if has_nerve_data and group['Nerve_spike'].max() == 1 else 0
+            1 if has_nerve_data and group[NERVE_SPIKE_COL].max() == 1 else 0
         )
 
         shared = {

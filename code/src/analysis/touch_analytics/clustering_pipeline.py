@@ -42,11 +42,14 @@ from .pipeline_shared import (
 )
 from .reduction import ReductionPipeline
 from .evaluation import compute_internal_metrics, bootstrap_stability
+from analysis.pipeline.shared_constants import (
+    GESTURE_TYPES,  # re-exported for backward compatibility
+    TOUCH_ID_COLS_WITH_SESSION,
+)
 
 # Columns that uniquely identify a single touch across feature CSVs
-_TOUCH_ID_COLS = ['block_order_id', 'trial_id', 'single_touch_id', 'session_id']
-
-GESTURE_TYPES = ['tap', 'stroke_proximal', 'stroke_distal']
+# (backward-compat alias — use TOUCH_ID_COLS_WITH_SESSION from shared_constants)
+_TOUCH_ID_COLS = list(TOUCH_ID_COLS_WITH_SESSION)
 
 # Maps cluster-group data-type names to the column name prefix(es) written by
 # StatisticalExtractor.  Column names match the raw input columns directly
