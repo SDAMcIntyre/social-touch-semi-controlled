@@ -40,7 +40,7 @@ _stub("analysis.receptive_field_mapping.touch_population_data",
 _stub("utils")
 _stub("utils.should_process_task", should_process_task=lambda **kw: True)
 
-from analysis.receptive_field_mapping.rf_population_grid_pipeline import (  # noqa: E402
+from analysis.receptive_field_mapping.pipelines.rf_population_grid_pipeline import (  # noqa: E402
     PopulationRFGridConfig,
     build_feature_grid,
     compute_cell_rf,

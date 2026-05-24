@@ -36,12 +36,12 @@ from scipy.spatial import cKDTree
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 
-from analysis.receptive_field_mapping.rf_data_loader import (
+from analysis.receptive_field_mapping.data.rf_data_loader import (
     load_forearm_vertices,
     parse_contact_points,
 )
-from analysis.receptive_field_mapping.rf_surface_utils import build_delaunay_mesh
-from analysis.receptive_field_mapping.tangent_plane_alignment import (
+from analysis.receptive_field_mapping.surface.rf_surface_utils import build_delaunay_mesh
+from analysis.receptive_field_mapping.surface.tangent_plane_alignment import (
     compute_tangent_plane_rotation,
 )
 
