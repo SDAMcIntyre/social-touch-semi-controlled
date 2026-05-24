@@ -10,7 +10,10 @@ import numpy as np
 from scipy.spatial import KDTree
 
 from analysis.receptive_field_mapping.data.rf_data_loader import resolve_forearm_ply
-from analysis.receptive_field_mapping.surface.forearm_slim_uv import load_slim_uv_cache
+from analysis.receptive_field_mapping.surface.forearm_slim_uv import (
+    load_slim_uv_cache,
+    uv_points_to_xyz,
+)
 from analysis.receptive_field_mapping.data.touch_population_data import (
     load_population_data,
     load_population_rf_data,
@@ -29,8 +32,11 @@ from analysis.receptive_field_mapping.metrics.rf_inflection_boundary import (
 )
 from analysis.receptive_field_mapping.rendering.rf_population_map_renderer import (
     compute_interpolated_grid,
+    compute_standalone_figwidth,
     render_population_rf_map,
     render_population_rf_composite,
+    render_population_rf_standalone_interpolated,
+    render_population_rf_colorbar,
 )
 from analysis.pipeline.shared_constants import session_id_from_path
 
@@ -50,22 +56,24 @@ class _SessionCompositeData:
     sentinel: Path
     produced: List[Path] = field(default_factory=list)
     gesture_boundaries: dict = field(default_factory=dict)
+    per_gesture_grids: dict = field(default_factory=dict)
     vertex_data_npz: Path | None = None
 
 
-def run_population_rf_maps(
+def run_population_response_field_extraction(
     session_configs: list,
     neuron_mode: str,
     min_overlap_pct: float = 25.0,
     force_processing: bool = False,
     median_filter_size: int | None = None,
     inflection_sigma: float | None = None,
+    heatmap_space: str = "linear",
 ) -> None:
     """Render per-session 2D population RF heatmap PNGs projected via SLIM UV.
 
     For each session config, produces one PNG per gesture subset (all, tap,
     stroke_proximal, stroke_distal) plus two composite PNGs (scatter and
-    interpolated) under ``4_analysed/population_rf_maps/{session_id}/``.
+    interpolated) under ``4_analysed/population_response_fields/{session_id}/``.
 
     Composites use a global colour scale and UV axis range across all sessions
     so they are directly comparable.
@@ -94,14 +102,14 @@ def run_population_rf_maps(
         database_path = Path(database_path)
 
         session_id = session_id_from_path(csv_path)
-        output_dir = database_path / '4_analysed' / 'population_rf_maps' / session_id
-        sentinel = output_dir / f'{session_id}_rf_population_maps_done.json'
+        output_dir = database_path / '4_analysed' / 'population_response_fields' / session_id
+        sentinel = output_dir / f'{session_id}_population_response_fields_done.json'
 
         if sentinel.exists() and not force_processing:
-            print(f"[Population RF Maps] {session_id}: up-to-date, skipping.")
+            print(f"[Population Response Fields] {session_id}: up-to-date, skipping.")
             continue
 
-        print(f"[Population RF Maps] {session_id}: processing...")
+        print(f"[Population Response Fields] {session_id}: processing...")
 
         # --- Resolve paths ---
         series_csv_path = (
@@ -110,14 +118,14 @@ def run_population_rf_maps(
         )
         if not series_csv_path.exists():
             raise FileNotFoundError(
-                f"[Population RF Maps] {session_id}: series-augmented CSV not found — "
+                f"[Population Response Fields] {session_id}: series-augmented CSV not found — "
                 f"run 'touch_series_transforms' first: {series_csv_path}"
             )
 
         forearm_ply_path = resolve_forearm_ply(csv_path.parent, session_id)
         if forearm_ply_path is None:
             raise FileNotFoundError(
-                f"[Population RF Maps] {session_id}: forearm PLY not found in "
+                f"[Population Response Fields] {session_id}: forearm PLY not found in "
                 f"{csv_path.parent} — RF-centred PLY must exist."
             )
 
@@ -127,7 +135,7 @@ def run_population_rf_maps(
         )
         if not npz_path.exists():
             raise FileNotFoundError(
-                f"[Population RF Maps] {session_id}: single_touch_rf_maps.npz not found: "
+                f"[Population Response Fields] {session_id}: single_touch_rf_maps.npz not found: "
                 f"{npz_path}. Enable 'map_single_touch_rf' in the DAG config and re-run."
             )
 
@@ -137,7 +145,7 @@ def run_population_rf_maps(
         )
         if not slim_cache_path.exists():
             raise FileNotFoundError(
-                f"[Population RF Maps] {session_id}: SLIM UV cache not found: "
+                f"[Population Response Fields] {session_id}: SLIM UV cache not found: "
                 f"{slim_cache_path}. Enable 'precompute_forearm_slim_uv' in the DAG "
                 f"config and re-run to generate the cache."
             )
@@ -166,7 +174,7 @@ def run_population_rf_maps(
         _ERROR_THRESHOLD_MM = 5.0
         if max_dist_mm > _ERROR_THRESHOLD_MM:
             raise ValueError(
-                f"[Population RF Maps] {session_id}: KDTree nearest-neighbour "
+                f"[Population Response Fields] {session_id}: KDTree nearest-neighbour "
                 f"mapping from SLIM vertices to original forearm vertices has a "
                 f"maximum distance of {max_dist_mm:.3f} mm (threshold: "
                 f"{_ERROR_THRESHOLD_MM} mm). The SLIM mesh and forearm PLY are "
@@ -176,7 +184,7 @@ def run_population_rf_maps(
         if max_dist_mm > _WARN_THRESHOLD_MM:
             n_over = int((distances > _WARN_THRESHOLD_MM).sum())
             logger.info(
-                "[Population RF Maps] %s: %d / %d SLIM vertices are >%.0f mm "
+                "[Population Response Fields] %s: %d / %d SLIM vertices are >%.0f mm "
                 "from the nearest raw PLY vertex (max=%.3f mm) — expected for "
                 "hole-fill centroid vertices.",
                 session_id, n_over, len(slim_V),
@@ -198,7 +206,7 @@ def run_population_rf_maps(
             n_gesture_touches = len(gesture_touch_indices)
             if n_gesture_touches == 0:
                 logger.warning(
-                    "[Population RF Maps] %s: no touches for gesture type '%s' — skipping.",
+                    "[Population Response Fields] %s: no touches for gesture type '%s' — skipping.",
                     session_id, gtype,
                 )
                 continue
@@ -224,7 +232,7 @@ def run_population_rf_maps(
 
         if not results:
             logger.warning(
-                "[Population RF Maps] %s: no gesture subsets had touches — no PNGs produced.",
+                "[Population Response Fields] %s: no gesture subsets had touches — no PNGs produced.",
                 session_id,
             )
             output_dir.mkdir(parents=True, exist_ok=True)
@@ -239,13 +247,23 @@ def run_population_rf_maps(
         ]
         if not finite_maxima:
             raise ValueError(
-                f"[Population RF Maps] {session_id}: all heatmaps are empty or "
+                f"[Population Response Fields] {session_id}: all heatmaps are empty or "
                 f"below-threshold — no valid colour scale can be determined. "
                 f"Check upstream RF data."
             )
         session_vmax = max(finite_maxima)
+        finite_minima = [
+            float(np.nanmin(h[np.isfinite(h) & (h > 0)]))
+            for (h, _, _) in results.values()
+            if np.any(np.isfinite(h) & (h > 0))
+        ]
+        session_vmin = min(finite_minima) if finite_minima else session_vmax * 1e-3
 
         output_dir.mkdir(parents=True, exist_ok=True)
+        aggregated_dir = output_dir / "aggregated"
+        aggregated_dir.mkdir(parents=True, exist_ok=True)
+        inspection_dir = output_dir / "inspection"
+        inspection_dir.mkdir(parents=True, exist_ok=True)
         produced: List[Path] = []
         gesture_boundaries: dict = {}
         per_gesture_grids: dict = {}
@@ -255,9 +273,9 @@ def run_population_rf_maps(
                 f"{session_id} | {gtype} | {n_touches} touches | "
                 f"threshold={threshold} ({min_overlap_pct:.0f}%)"
             )
-            png_path = output_dir / f'{session_id}_rf_population_{gtype}.png'
+            png_path = aggregated_dir / f'{session_id}_rf_population_{gtype}.png'
 
-            print(f"[Population RF Maps] {session_id}: rendering '{gtype}'...")
+            print(f"[Population Response Fields] {session_id}: rendering '{gtype}'...")
             grid_u, grid_v, grid_z = compute_interpolated_grid(
                 forearm_uv, slim_faces, slim_V, slim_heatmap,
                 median_filter_size=median_filter_size,
@@ -266,7 +284,7 @@ def run_population_rf_maps(
             boundary = (
                 compute_inflection_boundary(
                     grid_u, grid_v, grid_z, inflection_sigma,
-                    snapshot_dir=output_dir, snapshot_label=gtype,
+                    snapshot_dir=inspection_dir, snapshot_label=gtype,
                 )
                 if inflection_sigma is not None
                 else None
@@ -276,6 +294,7 @@ def run_population_rf_maps(
                 forearm_uv=forearm_uv,
                 heatmap_val=slim_heatmap,
                 vmax=session_vmax,
+                vmin=session_vmin,
                 title=title,
                 output_path=png_path,
                 forearm_faces=slim_faces,
@@ -283,11 +302,12 @@ def run_population_rf_maps(
                 median_filter_size=median_filter_size,
                 precomputed_grid=(grid_u, grid_v, grid_z),
                 inflection_boundary=boundary,
+                heatmap_space=heatmap_space,
             )
             produced.append(png_path)
-            print(f"[Population RF Maps] {session_id}: saved {png_path.name}")
+            print(f"[Population Response Fields] {session_id}: saved {png_path.name}")
 
-        vertex_data_npz = _save_vertex_data_npz(
+        vertex_data_npz = _save_response_fields_npz(
             output_dir=output_dir,
             session_id=session_id,
             forearm_uv=forearm_uv,
@@ -306,7 +326,7 @@ def run_population_rf_maps(
             vertex_data_npz=vertex_data_npz,
         )
         print(
-            f"[Population RF Maps] {session_id}: done — {len(produced)} PNG(s) written."
+            f"[Population Response Fields] {session_id}: done — {len(produced)} PNG(s) written."
         )
 
         composite_queue.append(_SessionCompositeData(
@@ -321,6 +341,7 @@ def run_population_rf_maps(
             sentinel=sentinel,
             produced=produced,
             gesture_boundaries=gesture_boundaries,
+            per_gesture_grids=per_gesture_grids,
             vertex_data_npz=vertex_data_npz,
         ))
 
@@ -328,7 +349,26 @@ def run_population_rf_maps(
     if not composite_queue:
         return
 
+    # Pre-compute all standalone titles and measure the longest to get a shared
+    # figure width, so every *_interpolated.png has identical pixel dimensions.
+    standalone_titles: dict[tuple[str, str], str] = {}
+    for sd in composite_queue:
+        for gtype, (_, n_touches, threshold) in sd.results.items():
+            standalone_titles[(sd.session_id, gtype)] = (
+                f"{sd.session_id} | {gtype} | {n_touches} touches | "
+                f"threshold={threshold} ({sd.min_overlap_pct:.0f}%)"
+            )
+    longest_title = max(standalone_titles.values(), key=len) if standalone_titles else ""
+    standalone_figwidth = compute_standalone_figwidth(longest_title) if longest_title else 6.0
+
     global_vmax = max(sd.session_vmax for sd in composite_queue)
+    _all_grid_positive = [
+        float(grid_z[np.isfinite(grid_z) & (grid_z > 0)].min())
+        for sd in composite_queue
+        for _, (_, _, grid_z) in sd.per_gesture_grids.items()
+        if np.any(np.isfinite(grid_z) & (grid_z > 0))
+    ]
+    global_vmin = min(_all_grid_positive) if _all_grid_positive else global_vmax * 1e-3
     all_u = np.concatenate([sd.forearm_uv[:, 0] for sd in composite_queue])
     all_v = np.concatenate([sd.forearm_uv[:, 1] for sd in composite_queue])
     uv_margin = 0.02
@@ -341,18 +381,22 @@ def run_population_rf_maps(
     del all_u, all_v
 
     print(
-        f"[Population RF Maps] Rendering composites: global_vmax={global_vmax:.2f}, "
+        f"[Population Response Fields] Rendering composites: global_vmax={global_vmax:.2f}, "
         f"U=[{global_uv_xlim[0]:.1f}, {global_uv_xlim[1]:.1f}], "
         f"V=[{global_uv_ylim[0]:.1f}, {global_uv_ylim[1]:.1f}]"
     )
 
     for sd in composite_queue:
+        aggregated_dir = sd.output_dir / "aggregated"
+        aggregated_dir.mkdir(parents=True, exist_ok=True)
+        inspection_dir = sd.output_dir / "inspection"
+        inspection_dir.mkdir(parents=True, exist_ok=True)
         for panel_type in ('scatter', 'interpolated'):
             composite_path = (
-                sd.output_dir / f'{sd.session_id}_rf_population_{panel_type}_composite.png'
+                aggregated_dir / f'{sd.session_id}_rf_population_{panel_type}_composite.png'
             )
             print(
-                f"[Population RF Maps] {sd.session_id}: "
+                f"[Population Response Fields] {sd.session_id}: "
                 f"rendering '{panel_type}' composite..."
             )
             if panel_type == 'interpolated':
@@ -368,7 +412,7 @@ def run_population_rf_maps(
                     inflection_boundaries[gtype] = (
                         compute_inflection_boundary(
                             grid_u_g, grid_v_g, grid_z_g, inflection_sigma,
-                            snapshot_dir=sd.output_dir, snapshot_label=f"{sd.session_id}_{gtype}_composite",
+                            snapshot_dir=inspection_dir, snapshot_label=f"{sd.session_id}_{gtype}_composite",
                         )
                         if inflection_sigma is not None
                         else None
@@ -380,6 +424,7 @@ def run_population_rf_maps(
                 forearm_uv=sd.forearm_uv,
                 results=sd.results,
                 vmax=global_vmax,
+                vmin=global_vmin,
                 session_id=sd.session_id,
                 panel_type=panel_type,
                 output_path=composite_path,
@@ -391,18 +436,46 @@ def run_population_rf_maps(
                 median_filter_size=median_filter_size,
                 precomputed_grids=precomputed_grids,
                 inflection_boundaries=inflection_boundaries,
+                heatmap_space=heatmap_space,
             )
             sd.produced.append(composite_path)
             print(
-                f"[Population RF Maps] {sd.session_id}: saved {composite_path.name}"
+                f"[Population Response Fields] {sd.session_id}: saved {composite_path.name}"
             )
+
+        for gtype, (grid_u, grid_v, grid_z) in sd.per_gesture_grids.items():
+            boundary = sd.gesture_boundaries.get(gtype)
+            standalone_path = sd.output_dir / f'{sd.session_id}_rf_population_{gtype}_interpolated.png'
+            render_population_rf_standalone_interpolated(
+                u_grid=grid_u,
+                v_grid=grid_v,
+                interp_grid=grid_z,
+                forearm_uv=sd.forearm_uv,
+                boundary_u=boundary.contour_uv[:, 0] if boundary is not None else None,
+                boundary_v=boundary.contour_uv[:, 1] if boundary is not None else None,
+                output_path=standalone_path,
+                vmax=global_vmax,
+                vmin=global_vmin,
+                title=standalone_titles[(sd.session_id, gtype)],
+                figwidth=standalone_figwidth,
+                xlim=global_uv_xlim,
+                ylim=global_uv_ylim,
+                heatmap_space=heatmap_space,
+            )
+            sd.produced.append(standalone_path)
+            print(f"[Population Response Fields] {sd.session_id}: saved {standalone_path.name}")
+
+        colorbar_path = sd.output_dir / f'{sd.session_id}_rf_population_colorbar.png'
+        render_population_rf_colorbar(output_path=colorbar_path, vmax=global_vmax, vmin=global_vmin, heatmap_space=heatmap_space)
+        sd.produced.append(colorbar_path)
+        print(f"[Population Response Fields] {sd.session_id}: saved {colorbar_path.name}")
 
         _write_sentinel(sd.sentinel, sd.session_id, produced=sd.produced,
                         inflection_boundaries=sd.gesture_boundaries,
                         vertex_data_npz=sd.vertex_data_npz)
 
 
-def _save_vertex_data_npz(
+def _save_response_fields_npz(
     output_dir: Path,
     session_id: str,
     forearm_uv: np.ndarray,
@@ -415,7 +488,7 @@ def _save_vertex_data_npz(
     gesture_boundaries: dict,
     inflection_sigma: float | None,
 ) -> Path:
-    npz_path = output_dir / f'{session_id}_rf_population_vertex_data.npz'
+    npz_path = output_dir / f'{session_id}_population_response_fields.npz'
 
     data_dict: dict = {
         'forearm_uv': forearm_uv.astype(np.float64),
@@ -441,11 +514,46 @@ def _save_vertex_data_npz(
         boundary = gesture_boundaries.get(gtype)
         if boundary is not None:
             data_dict[f'boundary_contour_uv_{gtype}'] = boundary.contour_uv.astype(np.float64)
-            data_dict[f'boundary_area_uv_{gtype}'] = np.float64(boundary.area_uv)
             data_dict[f'boundary_centroid_uv_{gtype}'] = np.array(boundary.centroid_uv, dtype=np.float64)
+            data_dict[f'boundary_perimeter_uv_{gtype}'] = np.float64(boundary.perimeter_uv)
+            data_dict[f'boundary_area_uv_{gtype}'] = np.float64(boundary.area_uv)
+            data_dict[f'boundary_circularity_{gtype}'] = np.float64(boundary.circularity)
+            data_dict[f'boundary_pca_major_uv_{gtype}'] = np.float64(boundary.pca_major_uv)
+            data_dict[f'boundary_pca_minor_uv_{gtype}'] = np.float64(boundary.pca_minor_uv)
+            data_dict[f'boundary_pca_orientation_deg_{gtype}'] = np.float64(boundary.pca_orientation_deg)
+            data_dict[f'boundary_mean_iff_on_contour_{gtype}'] = np.float64(boundary.mean_iff_on_contour)
+
+            contour_xyz = uv_points_to_xyz(
+                boundary.contour_uv, forearm_uv, forearm_faces, forearm_V,
+            )
+            centroid_uv_arr = np.array(boundary.centroid_uv, dtype=np.float64).reshape(1, 2)
+            centroid_xyz = uv_points_to_xyz(
+                centroid_uv_arr, forearm_uv, forearm_faces, forearm_V,
+            )[0]
+
+            contour_xyz_closed = np.vstack([contour_xyz, contour_xyz[:1]])
+            perimeter_xyz_mm = float(
+                np.sum(np.linalg.norm(np.diff(contour_xyz_closed, axis=0), axis=1))
+            )
+
+            c = centroid_xyz
+            edges_i = contour_xyz[:-1] - c
+            edges_j = contour_xyz[1:] - c
+            closing_i = contour_xyz[-1] - c
+            closing_j = contour_xyz[0] - c
+            cross_vecs = np.vstack([
+                np.cross(edges_i, edges_j),
+                np.cross(closing_i, closing_j).reshape(1, 3),
+            ])
+            area_xyz_mm2 = 0.5 * float(np.sum(np.linalg.norm(cross_vecs, axis=1)))
+
+            data_dict[f'boundary_contour_xyz_{gtype}'] = contour_xyz.astype(np.float64)
+            data_dict[f'boundary_centroid_xyz_{gtype}'] = centroid_xyz.astype(np.float64)
+            data_dict[f'boundary_perimeter_xyz_mm_{gtype}'] = np.float64(perimeter_xyz_mm)
+            data_dict[f'boundary_area_xyz_mm2_{gtype}'] = np.float64(area_xyz_mm2)
 
     np.savez(npz_path, **data_dict)
-    logger.info("[Population RF Maps] %s: saved vertex data NPZ → %s", session_id, npz_path.name)
+    logger.info("[Population Response Fields] %s: saved response fields NPZ → %s", session_id, npz_path.name)
     return npz_path
 
 

@@ -10,7 +10,7 @@ _SRC = Path(__file__).parent.parent / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
-from analysis.receptive_field_mapping.rf_extraction_io import (
+from analysis.receptive_field_mapping.data.rf_extraction_io import (
     load_cluster_session_data,
     load_extraction_summary,
     load_forearm_vertices_artifact,

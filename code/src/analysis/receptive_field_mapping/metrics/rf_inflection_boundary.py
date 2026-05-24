@@ -458,6 +458,7 @@ def _render_step_uv(
     )
     ax.set_xlabel("U")
     ax.set_ylabel("V")
+    ax.set_aspect("equal")
     ax.set_title("UV-space contour")
 
     fig.suptitle("Step 5 — Pixel-to-UV conversion", fontsize=10)
@@ -530,7 +531,7 @@ def compute_inflection_boundary(
     grid_u: np.ndarray,
     grid_v: np.ndarray,
     grid_z: np.ndarray,
-    gaussian_sigma: float = 2.0,
+    gaussian_sigma: float = 4.0,
     snapshot_dir: pathlib.Path | None = None,
     snapshot_label: str = "",
 ) -> InflectionBoundary | None:
