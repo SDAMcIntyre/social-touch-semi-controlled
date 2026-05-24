@@ -52,7 +52,7 @@ _stub("analysis.receptive_field_mapping")
 # Imports under test (after stubs are in place)
 # ---------------------------------------------------------------------------
 
-from analysis.receptive_field_mapping.rf_population_heatmap import (  # noqa: E402
+from analysis.receptive_field_mapping.data.rf_population_heatmap import (  # noqa: E402
     apply_vertex_threshold,
     build_gesture_touch_indices,
     compute_rf_heatmap,

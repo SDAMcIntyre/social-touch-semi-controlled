@@ -56,6 +56,9 @@ def run_session_rf_boundary_comparison(
     df.to_csv(csv_path, index=False)
     logger.info("[Session RF Boundary Comparison] wrote %s", csv_path.name)
 
+    metric_limits = _global_metric_limits(df, PANEL_METRICS)
+    uv_limits = _global_uv_limits(contour_data)
+
     for gtype, contours in contour_data.items():
         if not contours:
             continue
@@ -65,6 +68,7 @@ def run_session_rf_boundary_comparison(
             centroids=centroids,
             gesture_type=gtype,
             output_path=contour_overlays_dir / f'contour_overlay_{gtype}.png',
+            uv_limits=uv_limits,
         )
 
     for gtype in df['gesture_type'].unique():
@@ -74,6 +78,7 @@ def run_session_rf_boundary_comparison(
             gesture_type=gtype,
             metrics=PANEL_METRICS,
             output_path=metric_panels_dir / f'metric_panels_{gtype}.png',
+            metric_limits=metric_limits,
         )
 
     for metric in PANEL_METRICS:
@@ -85,6 +90,56 @@ def run_session_rf_boundary_comparison(
         )
 
     _write_sentinel(sentinel_path, n_sessions=len(session_configs))
+
+
+def _global_metric_limits(
+    df: pd.DataFrame,
+    metrics: list[str],
+) -> dict[str, tuple[float, float]]:
+    """Per-metric (lo, hi) over every (session, gesture) row, with a 5% margin.
+
+    Positive-only metrics are anchored at 0 so bar baselines stay visible.
+    Metrics with no finite values raise — fail-fast per pipeline convention.
+    """
+    limits: dict[str, tuple[float, float]] = {}
+    for m in metrics:
+        col = df[m].to_numpy(dtype=float)
+        finite = col[np.isfinite(col)]
+        if finite.size == 0:
+            raise ValueError(
+                f"_global_metric_limits: metric '{m}' has no finite values across "
+                f"any session × gesture row — cannot determine shared limits."
+            )
+        lo = float(finite.min())
+        hi = float(finite.max())
+        if lo == hi:
+            pad = abs(lo) * 0.05 if lo != 0.0 else 1.0
+            limits[m] = (lo - pad, hi + pad)
+            continue
+        span = hi - lo
+        margin = 0.05 * span
+        lo_out = lo - margin if lo < 0.0 else 0.0
+        hi_out = hi + margin if hi > 0.0 else 0.0
+        limits[m] = (lo_out, hi_out)
+    return limits
+
+
+def _global_uv_limits(
+    contour_data: dict[str, dict[str, np.ndarray]],
+) -> tuple[tuple[float, float], tuple[float, float]] | None:
+    """(xlim, ylim) covering every contour across every session × gesture, with margin."""
+    all_pts: list[np.ndarray] = []
+    for gtype_contours in contour_data.values():
+        for contour in gtype_contours.values():
+            all_pts.append(contour)
+    if not all_pts:
+        return None
+    pts = np.vstack(all_pts)
+    u_min, u_max = float(pts[:, 0].min()), float(pts[:, 0].max())
+    v_min, v_max = float(pts[:, 1].min()), float(pts[:, 1].max())
+    u_margin = 0.05 * (u_max - u_min) if u_max > u_min else 1.0
+    v_margin = 0.05 * (v_max - v_min) if v_max > v_min else 1.0
+    return (u_min - u_margin, u_max + u_margin), (v_min - v_margin, v_max + v_margin)
 
 
 def _load_boundary_metrics_from_npz(
