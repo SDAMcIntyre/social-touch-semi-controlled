@@ -175,6 +175,29 @@ From `note-mesh-parameterization-interior-pin-foldovers.md`:
 
 **Dependencies:** Phase 1
 
+### Phase 4: Sliver triangle removal
+**Goal:** Remove high-aspect-ratio BPA triangles before hole filling so the Delaunay filler
+can patch the resulting gaps with well-conditioned triangles.
+**Started:** 2026-05-21
+
+- [x] Move `_compute_face_aspect_ratios` from `slim_qc_figures.py` to `slim_helpers.py`
+- [x] Add `_SLIVER_AR_THRESHOLD = 10.0` constant to `slim_helpers.py`
+- [x] Implement `_remove_sliver_faces(V, F)` in `slim_helpers.py`:
+  compute per-face AR, remove faces exceeding threshold, orphan-vertex cleanup,
+  take largest connected component; `ValueError` if zero faces remain
+- [x] Insert `_remove_sliver_faces` call in `clean_mesh()` between pinch repair and hole fill
+- [x] Update `slim_qc_figures.py` to import `_compute_face_aspect_ratios` from `slim_helpers`
+- [x] Add `TestSliverRemoval` class to `test_forearm_slim_uv.py`:
+  `test_sliver_faces_removed`, `test_no_slivers_noop`, `test_sliver_removal_preserves_connectivity`
+- [x] Run test suite: 20/20 pass
+
+**Files Modified:**
+- `code/src/analysis/receptive_field_mapping/surface/slim_helpers.py` — new functions + constant + call in `clean_mesh`
+- `code/src/analysis/receptive_field_mapping/surface/slim_qc_figures.py` — import change
+- `code/tests/test_forearm_slim_uv.py` — new test class
+
+**Dependencies:** Phase 1 (Delaunay hole filling)
+
 ---
 
 ## Testing Plan
@@ -185,6 +208,11 @@ From `note-mesh-parameterization-interior-pin-foldovers.md`:
   result has exactly 1 boundary loop, mesh vertex count is reasonable
 - [x] `test_nonconvex_hole` — concave hole boundary produces no triangles outside the polygon
 - [x] `test_degenerate_plane_fallback` — nearly collinear boundary vertices fall back to centroid-fan
+
+### Sliver Removal Tests
+- [x] `test_sliver_faces_removed` — mesh with injected sliver (AR >> 10) → removed, good faces kept
+- [x] `test_no_slivers_noop` — clean mesh → V, F returned unchanged
+- [x] `test_sliver_removal_preserves_connectivity` — sliver removal + fragmentation → largest component kept
 
 ### Integration Tests
 - [x] Existing `TestFlattenSlim` tests pass unchanged
@@ -234,6 +262,8 @@ No data migrations. No public API changes. Cached `.npz` files will be regenerat
 | Best-fit plane degeneracy (collinear boundary) | Low | Low | SVD singular-value check; fall back to centroid-fan with logged warning |
 | Hole filling changes break SLIM convergence | Low | High | Run all 12 sessions; compare distortion statistics before/after |
 | matplotlib 3D wireframe rendering slow for large meshes | Low | Low | Use thin `linewidth=0.15` and light gray color; meshes are <15k faces |
+| Sliver removal fragments mesh into multiple components | Low | Med | `_remove_sliver_faces` takes largest component after removal |
+| AR threshold 10.0 removes non-problematic faces | Low | Low | Data: 9/11 sessions have max AR < 10; only 28 faces exceed threshold across all sessions |
 
 ---
 
@@ -244,6 +274,7 @@ No data migrations. No public API changes. Cached `.npz` files will be regenerat
 | Phase 1: Delaunay hole filling | ~45 min | None |
 | Phase 2: Step 2 diagnostic | ~30 min | None (parallel) |
 | Phase 3: Testing | ~30 min | Phase 1 |
+| Phase 4: Sliver triangle removal | ~30 min | Phase 1 |
 
 ---
 

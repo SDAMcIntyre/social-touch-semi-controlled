@@ -35,12 +35,12 @@ from PyQt5.QtWidgets import (
 from pyvistaqt import QtInteractor
 
 from analysis.receptive_field_mapping.gui.rf_feature_space_explorer import DraggableFilterRect
-from analysis.receptive_field_mapping.rf_population_heatmap import (
+from analysis.receptive_field_mapping.data.rf_population_heatmap import (
     apply_vertex_threshold,
     compute_rf_heatmap,
     compute_unique_touch_count,
 )
-from analysis.receptive_field_mapping.touch_population_data import PopulationData, PopulationRFData
+from analysis.receptive_field_mapping.data.touch_population_data import PopulationData, PopulationRFData
 
 logger = logging.getLogger(__name__)
 

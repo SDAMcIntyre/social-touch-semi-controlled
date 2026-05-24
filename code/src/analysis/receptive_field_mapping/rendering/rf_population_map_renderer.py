@@ -9,7 +9,7 @@ import matplotlib
 import matplotlib.pyplot as plt
 import matplotlib.tri as mtri
 import numpy as np
-from matplotlib.colors import Normalize
+from matplotlib.colors import LogNorm, Normalize
 from scipy.ndimage import generic_filter
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components
@@ -187,10 +187,10 @@ def _draw_inflection_boundary(
     centroid_uv: tuple[float, float],
 ) -> None:
     closed = np.vstack([contour_uv, contour_uv[0]])
-    ax.plot(closed[:, 0], closed[:, 1], color='#9b59b6', linewidth=1.5, zorder=6)
+    ax.plot(closed[:, 0], closed[:, 1], color='violet', linewidth=1.5, zorder=6)
     ax.plot(
         centroid_uv[0], centroid_uv[1],
-        color='#9b59b6', marker='+', markersize=8, zorder=7,
+        color='violet', marker='+', markersize=8, zorder=7,
     )
 
 
@@ -200,11 +200,13 @@ def render_population_rf_map(
     forearm_V: np.ndarray,
     heatmap_val: np.ndarray,
     vmax: float,
+    vmin: float,
     title: str,
     output_path: Path,
     median_filter_size: int | None = None,
     precomputed_grid: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None,
     inflection_boundary: InflectionBoundary | None = None,
+    heatmap_space: str = "linear",
 ) -> None:
     """Render a two-panel population RF heatmap (scatter + interpolated) and save as PNG.
 
@@ -232,9 +234,9 @@ def render_population_rf_map(
     """
     matplotlib.use('Agg')
 
-    norm = Normalize(vmin=0.0, vmax=vmax)
+    norm = LogNorm(vmin=vmin, vmax=vmax) if heatmap_space == "log" else Normalize(vmin=vmin, vmax=vmax)
 
-    valid_mask = np.isfinite(heatmap_val) & (heatmap_val >= 0.0)
+    valid_mask = np.isfinite(heatmap_val) & (heatmap_val > 0.0)
     valid_uv = forearm_uv[valid_mask]
     valid_vals = heatmap_val[valid_mask]
 
@@ -300,8 +302,9 @@ def render_population_rf_map(
             median_filter_size=median_filter_size,
         )
 
+    display_z = np.where(grid_z > 0, grid_z, np.nan)
     im = ax_hm.pcolormesh(
-        grid_u, grid_v, grid_z,
+        grid_u, grid_v, display_z,
         cmap='jet', norm=norm, shading='auto',
     )
 
@@ -322,18 +325,61 @@ def render_population_rf_map(
     plt.close(fig)
 
 
+def compute_standalone_figwidth(
+    longest_title: str,
+    fontsize: float = 9.0,
+    min_width: float = 6.0,
+    dpi: float = 150.0,
+) -> float:
+    """Return the figure width (inches) needed to display ``longest_title`` without clipping.
+
+    Creates a temporary figure to measure the rendered text extent, then adds a
+    small margin. Pass the result as ``figwidth`` to every
+    ``render_population_rf_standalone_interpolated`` call in the same batch so
+    all output images share the same pixel width.
+
+    Parameters
+    ----------
+    longest_title:
+        The longest title string that will appear across all sessions.
+    fontsize:
+        Font size used by ``fig.suptitle`` in the renderer (default 9 pt).
+    min_width:
+        Minimum figure width regardless of title length (default 6 in).
+    dpi:
+        DPI used for rendering (default 150).
+    """
+    matplotlib.use('Agg')
+    fig = plt.figure(figsize=(50, 1), dpi=dpi)
+    txt = fig.text(0.5, 0.5, longest_title, fontsize=fontsize, ha='center', va='center')
+    fig.canvas.draw()
+    bb = txt.get_window_extent(renderer=fig.canvas.get_renderer())
+    text_width_in = bb.width / dpi
+    plt.close(fig)
+    return max(min_width, text_width_in + 0.4)
+
+
 def render_population_rf_standalone_interpolated(
     u_grid: np.ndarray,
     v_grid: np.ndarray,
     interp_grid: np.ndarray,
+    forearm_uv: np.ndarray,
     boundary_u: np.ndarray | None,
     boundary_v: np.ndarray | None,
-    title: str,
     output_path: Path,
-    vmin: float = 0.0,
-    vmax: float = 1.0,
+    vmax: float,
+    vmin: float,
+    title: str,
+    figwidth: float,
+    xlim: tuple[float, float] | None = None,
+    ylim: tuple[float, float] | None = None,
+    heatmap_space: str = "linear",
 ) -> None:
     """Render a single-panel interpolated population RF heatmap and save as PNG.
+
+    ``figwidth`` must be the same value for every session in a batch (compute it
+    once with ``compute_standalone_figwidth`` before rendering) so that all
+    output images share identical pixel dimensions.
 
     Parameters
     ----------
@@ -343,20 +389,30 @@ def render_population_rf_standalone_interpolated(
         (R, C) V-coordinate meshgrid.
     interp_grid:
         (R, C) interpolated heatmap values; NaN outside the mesh.
+    forearm_uv:
+        (V, 2) UV coordinates of all forearm vertices, used to draw the
+        background point cloud.
     boundary_u:
         U coordinates of the boundary polyline. If not None, boundary_v must
         also be not None.
     boundary_v:
         V coordinates of the boundary polyline. Must have the same length as
         boundary_u.
-    title:
-        Figure title string.
     output_path:
         Destination PNG file path.
+    vmax:
+        Colour scale upper bound (session-wide max).
+    title:
+        Figure title string. Use the same title format across sessions.
+    figwidth:
+        Figure width in inches — must be identical across all sessions in a
+        batch. Compute via ``compute_standalone_figwidth`` before rendering.
     vmin:
         Colour scale lower bound.
-    vmax:
-        Colour scale upper bound.
+    xlim:
+        UV U-axis limits shared across sessions.
+    ylim:
+        UV V-axis limits shared across sessions.
     """
     if (boundary_u is None) != (boundary_v is None):
         raise ValueError(
@@ -366,10 +422,10 @@ def render_population_rf_standalone_interpolated(
 
     matplotlib.use('Agg')
 
-    norm = Normalize(vmin=vmin, vmax=vmax)
+    norm = LogNorm(vmin=vmin, vmax=vmax) if heatmap_space == "log" else Normalize(vmin=vmin, vmax=vmax)
 
-    fig, ax = plt.subplots(1, 1, figsize=(6, 6), facecolor='black')
-    fig.suptitle(title, color='white', fontsize=9, y=1.01)
+    fig, ax = plt.subplots(1, 1, figsize=(figwidth, 6), facecolor='black')
+    fig.suptitle(title, color='white', fontsize=9)
 
     ax.set_facecolor('black')
     ax.tick_params(colors='white')
@@ -379,27 +435,72 @@ def render_population_rf_standalone_interpolated(
         spine.set_edgecolor('white')
     ax.set_aspect('equal')
 
+    stride_bg = max(1, len(forearm_uv) // 5000)
+    ax.scatter(
+        forearm_uv[::stride_bg, 0], forearm_uv[::stride_bg, 1],
+        c='#404040', s=4, alpha=0.5, linewidths=0, rasterized=True,
+    )
+
+    display_grid = np.where(interp_grid > 0, interp_grid, np.nan)
     im = ax.pcolormesh(
-        u_grid, v_grid, interp_grid,
+        u_grid, v_grid, display_grid,
         cmap='jet', norm=norm, shading='auto',
     )
 
     if boundary_u is not None:
         closed_u = np.append(boundary_u, boundary_u[0])
         closed_v = np.append(boundary_v, boundary_v[0])
-        ax.plot(closed_u, closed_v, color='white', linewidth=1.5, zorder=6)
-
-    cbar = plt.colorbar(im, ax=ax, label='Mean IFF / spike', shrink=0.8)
-    cbar.ax.yaxis.set_tick_params(color='white')
-    cbar.ax.yaxis.label.set_color('white')
-    plt.setp(cbar.ax.yaxis.get_ticklabels(), color='white')
+        ax.plot(closed_u, closed_v, color='violet', linewidth=1.5, zorder=6)
 
     ax.set_xlabel('U')
     ax.set_ylabel('V')
 
+    if xlim is not None:
+        ax.set_xlim(xlim)
+    if ylim is not None:
+        ax.set_ylim(ylim)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(str(output_path), dpi=150, facecolor='black')
+    logger.info("Saved standalone interpolated RF heatmap: %s", output_path)
+    plt.close(fig)
+
+
+def render_population_rf_colorbar(
+    output_path: Path,
+    vmax: float,
+    vmin: float,
+    heatmap_space: str = "linear",
+) -> None:
+    """Render a standalone vertical colorbar PNG for population RF heatmaps.
+
+    Parameters
+    ----------
+    output_path:
+        Destination PNG file path.
+    vmax:
+        Colour scale upper bound (session-wide max).
+    vmin:
+        Colour scale lower bound.
+    """
+    matplotlib.use('Agg')
+
+    norm = LogNorm(vmin=vmin, vmax=vmax) if heatmap_space == "log" else Normalize(vmin=vmin, vmax=vmax)
+    sm = plt.cm.ScalarMappable(cmap='jet', norm=norm)
+    sm.set_array([])
+
+    fig, ax = plt.subplots(figsize=(1.2, 4), facecolor='black')
+    ax.set_visible(False)
+
+    cbar = fig.colorbar(sm, ax=ax, fraction=1.0, label='Mean IFF / spike')
+    cbar.ax.yaxis.set_tick_params(color='white')
+    cbar.ax.yaxis.label.set_color('white')
+    plt.setp(cbar.ax.yaxis.get_ticklabels(), color='white')
+    cbar.outline.set_edgecolor('white')
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(str(output_path), dpi=150, bbox_inches='tight', facecolor='black')
-    logger.info("Saved standalone interpolated RF heatmap: %s", output_path)
+    logger.info("Saved population RF colorbar: %s", output_path)
     plt.close(fig)
 
 
@@ -412,6 +513,7 @@ def render_population_rf_composite(
     forearm_V: np.ndarray,
     results: dict[str, tuple[np.ndarray, int, int]],
     vmax: float,
+    vmin: float,
     session_id: str,
     panel_type: str,
     output_path: Path,
@@ -421,6 +523,7 @@ def render_population_rf_composite(
     median_filter_size: int | None = None,
     precomputed_grids: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]] | None = None,
     inflection_boundaries: dict[str, InflectionBoundary | None] | None = None,
+    heatmap_space: str = "linear",
 ) -> None:
     """Render a multi-panel composite (one panel per gesture type) and save as PNG.
 
@@ -466,7 +569,7 @@ def render_population_rf_composite(
         )
 
     n_panels = len(ordered_gtypes)
-    norm = Normalize(vmin=0.0, vmax=vmax)
+    norm = LogNorm(vmin=vmin, vmax=vmax) if heatmap_space == "log" else Normalize(vmin=vmin, vmax=vmax)
     stride = max(1, len(forearm_uv) // 5000)
 
     fig, axes = plt.subplots(1, n_panels, figsize=(7 * n_panels, 6), facecolor='black')
@@ -500,7 +603,7 @@ def render_population_rf_composite(
         ax.set_xlim(uv_xlim)
         ax.set_ylim(uv_ylim)
 
-        valid_mask = np.isfinite(heatmap_val) & (heatmap_val >= 0.0)
+        valid_mask = np.isfinite(heatmap_val) & (heatmap_val > 0.0)
         valid_uv = forearm_uv[valid_mask]
         valid_vals = heatmap_val[valid_mask]
 
@@ -525,8 +628,9 @@ def render_population_rf_composite(
                     forearm_uv, forearm_faces, forearm_V, heatmap_val, grid_u, grid_v,
                     median_filter_size=median_filter_size,
                 )
+            display_z = np.where(grid_z > 0, grid_z, np.nan)
             ax.pcolormesh(
-                grid_u, grid_v, grid_z,
+                grid_u, grid_v, display_z,
                 cmap='jet', norm=norm, shading='auto',
             )
             if (

@@ -12,7 +12,7 @@ import pandas as pd
 
 _bracket_re = re.compile(r'\[([^\[\]]+)\]')
 
-from analysis.receptive_field_mapping.rf_data_loader import (
+from analysis.receptive_field_mapping.data.rf_data_loader import (
     load_forearm_vertices,
     resolve_forearm_ply,
 )

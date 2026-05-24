@@ -412,6 +412,7 @@ def extract_population_rf_response_field_boundaries_flow(
     min_overlap_pct: float = 25.0,
     median_filter_size: int | None = None,
     inflection_sigma: float | None = None,
+    heatmap_space: str = "linear",
 ) -> None:
     """Render per-session 2D population RF heatmap PNGs projected via SLIM UV.
 
@@ -431,6 +432,7 @@ def extract_population_rf_response_field_boundaries_flow(
         force_processing=force_processing,
         median_filter_size=median_filter_size,
         inflection_sigma=inflection_sigma,
+        heatmap_space=heatmap_space,
     )
 
 
@@ -1329,6 +1331,7 @@ def _build_pipeline_stages(dag_handler: DagConfigHandler, items_to_process) -> l
             "params": lambda: {
                 "neuron_mode": dag_handler.get_task_options("extract_population_rf_response_field_boundaries").get("neuron_mode", "iff"),
                 "min_overlap_pct": float(dag_handler.get_task_options("extract_population_rf_response_field_boundaries").get("min_overlap_pct", 25.0)),
+                "heatmap_space": dag_handler.get_task_options("extract_population_rf_response_field_boundaries").get("heatmap_space", "linear"),
                 **(
                     {"median_filter_size": int(dag_handler.get_task_options("extract_population_rf_response_field_boundaries")["median_filter_size"])}
                     if dag_handler.get_task_options("extract_population_rf_response_field_boundaries").get("median_filter_size") is not None

@@ -1,14 +1,23 @@
 """Pipeline orchestrator for per-session touch feature radar plots.
 
 Discovers feature extraction CSVs, computes per-gesture statistics with
-session-wide min-max normalization, and delegates rendering to
+min-max normalization, and delegates rendering to
 ``rf_touch_feature_radar_renderer``.
 
-Outputs per group and session
-(in ``4_analysed/touch_feature_radar/{group_name}/{session_id}/``):
-  - ``{session_id}_radar_{gesture_name}.png``  — one per gesture type present
-  - ``{session_id}_radar_composite.png``        — overlay when ≥2 gesture types present
-  - ``radar_sentinel.json``                     — idempotency sentinel
+Two normalization scopes are produced for each group:
+
+- **session** — min/max computed within each session independently.
+- **global** — min/max computed across all sessions, making sessions directly
+  comparable on a shared scale.
+
+Output layout per group and session::
+
+    4_analysed/touch_feature_radar/{group_name}/session/{session_id}/
+        {session_id}_radar_{gesture_name}.png
+        radar_sentinel.json
+
+    4_analysed/touch_feature_radar/{group_name}/global/{session_id}/
+        {session_id}_radar_{gesture_name}.png
 """
 
 import json
@@ -27,7 +36,6 @@ from analysis.pipeline.shared_constants import (
 from analysis.receptive_field_mapping.rendering.rf_touch_feature_radar_renderer import (
     GESTURE_COLORS,
     render_gesture_radar,
-    render_gesture_radar_composite,
 )
 from analysis.touch_analytics.clustering_pipeline import DATA_TYPE_TO_COLUMNS
 from utils.should_process_task import should_process_task
@@ -39,22 +47,22 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 #: Mapping from data type name (as used in ``features`` spec) to a short
-#: human-readable label for radar axis annotations.
+#: human-readable label with physical unit for radar axis annotations.
 _DISPLAY_NAMES: dict[str, str] = {
-    "contact_area":            "Contact Area",
-    "contact_depth":           "Depth",
-    "hand_velocity":           "Hand Velocity",
-    "hand_velocity_amplitude": "Hand Velocity",
-    "hand_acceleration":       "Hand Accel.",
-    "pressure":                "Pressure",
-    "hand_position":           "Hand Position",
+    "contact_area":            "Contact Area (mm²)",
+    "contact_depth":           "Depth (mm)",
+    "hand_velocity":           "Hand Velocity (mm/s)",
+    "hand_velocity_amplitude": "Hand Velocity (mm/s)",
+    "hand_acceleration":       "Hand Accel. (mm/s²)",
+    "pressure":                "Pressure (N/mm²)",
+    "hand_position":           "Hand Position (mm)",
     "mos_strain":              "Strain",
-    "mos_stress_kpa":          "Stress",
-    "mos_strain_rate":         "Strain Rate",
-    "mos_elastic_energy_mj":   "Elastic E.",
-    "mos_impulse_mns":         "Impulse",
+    "mos_stress_kpa":          "Stress (kPa)",
+    "mos_strain_rate":         "Strain Rate (1/s)",
+    "mos_elastic_energy_mj":   "Elastic E. (mJ)",
+    "mos_impulse_mns":         "Impulse (mN·s)",
     "mechanics_of_solids":     "MoS",
-    "location":                "Location",
+    "location":                "Location (mm)",
 }
 
 # ---------------------------------------------------------------------------
@@ -302,71 +310,66 @@ def _resolve_radar_columns(
 # ---------------------------------------------------------------------------
 
 
-def _compute_session_stats(df: pd.DataFrame, resolved_cols: list[str]) -> dict:
-    """Compute session-wide min-max normalised statistics per gesture type.
+def _normalize_features(
+    raw: np.ndarray,
+    col_min: np.ndarray,
+    col_max: np.ndarray,
+) -> np.ndarray:
+    """Min-max normalize *raw* using externally supplied bounds.
 
-    Normalization is computed across **all** rows (session-wide), so all
-    gesture-type subsets share the same [0, 1] scale and are directly
-    comparable.
+    Zero-variance columns (where ``col_max == col_min``) are set to 0.0.
+    """
+    col_range = col_max - col_min
+    safe_range = np.where(col_range == 0.0, 1.0, col_range)
+    return np.where(col_range == 0.0, 0.0, (raw - col_min) / safe_range)
+
+
+def _compute_gesture_stats(
+    normalized: np.ndarray,
+    raw: np.ndarray,
+    gesture_types: np.ndarray,
+) -> dict:
+    """Compute per-gesture median / Q25 / Q75 on already-normalised data.
 
     Parameters
     ----------
-    df:
-        Feature summary DataFrame (all rows for the session).
-    resolved_cols:
-        Resolved column names (one per feature axis).
+    normalized:
+        2-D array of shape ``(n_touches, n_features)`` in [0, 1].
+    raw:
+        2-D array of same shape — un-normalised feature values.
+    gesture_types:
+        1-D string array of length ``n_touches`` (the ``gesture_type`` column).
 
     Returns
     -------
     dict
-        Mapping of gesture name → ``{"medians": np.ndarray, "q25": np.ndarray,
-        "q75": np.ndarray}``.  Includes an ``"all"`` key for all rows combined.
-        Gesture types with fewer than 2 rows are omitted (logged at INFO level).
+        Mapping of gesture name → ``{"medians", "q25", "q75", "raw_medians"}``.
+        Includes ``"all"`` for all rows combined.
+        Gesture types with fewer than 2 rows are omitted.
     """
-    # --- Session-wide min-max normalisation ---
-    raw = df[resolved_cols].to_numpy(dtype=float)  # shape: (n_touches, n_features)
-    col_min = np.nanmin(raw, axis=0)
-    col_max = np.nanmax(raw, axis=0)
-    col_range = col_max - col_min
-
-    # Zero-variance guard: if max == min, set normalized value to 0.0
-    safe_range = np.where(col_range == 0.0, 1.0, col_range)
-    normalized = np.where(
-        col_range == 0.0,
-        0.0,
-        (raw - col_min) / safe_range,
-    )
-
     results: dict = {}
 
-    subsets: list[tuple[str, pd.Series | None]] = [("all", None)] + [
-        (gtype, df["gesture_type"] == gtype) for gtype in GESTURE_TYPES
+    subsets: list[tuple[str, np.ndarray | None]] = [("all", None)] + [
+        (gtype, gesture_types == gtype) for gtype in GESTURE_TYPES
     ]
 
     for name, mask in subsets:
-        if mask is None:
-            rows = normalized
-        else:
-            row_indices = mask.to_numpy()
-            rows = normalized[row_indices]
+        norm_rows = normalized if mask is None else normalized[mask]
+        raw_rows = raw if mask is None else raw[mask]
 
-        n_rows = len(rows)
-        if n_rows < 2:
+        if len(norm_rows) < 2:
             logger.info(
-                "[Touch Feature Radar] Gesture '%s' has %d row(s) — need ≥2 to compute "
-                "statistics; skipping.",
-                name, n_rows,
+                "[Touch Feature Radar] Gesture '%s' has %d row(s) — need ≥2 to "
+                "compute statistics; skipping.",
+                name, len(norm_rows),
             )
             continue
 
-        medians = np.nanmedian(rows, axis=0)
-        q25 = np.nanpercentile(rows, 25, axis=0)
-        q75 = np.nanpercentile(rows, 75, axis=0)
-
         results[name] = {
-            "medians": medians,
-            "q25": q25,
-            "q75": q75,
+            "medians": np.nanmedian(norm_rows, axis=0),
+            "q25": np.nanpercentile(norm_rows, 25, axis=0),
+            "q75": np.nanpercentile(norm_rows, 75, axis=0),
+            "raw_medians": np.nanmedian(raw_rows, axis=0),
         }
 
     return results
@@ -393,6 +396,45 @@ def _write_sentinel(sentinel: Path, session_id: str, produced: list[Path]) -> No
 # ---------------------------------------------------------------------------
 
 
+def _render_radar_pngs(
+    stats: dict,
+    display_labels: list[str],
+    axis_max_values: np.ndarray,
+    session_id: str,
+    group_name: str,
+    scope_label: str,
+    output_dir: Path,
+) -> list[Path]:
+    """Render per-gesture radar PNGs into *output_dir* and return produced paths."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    produced: list[Path] = []
+
+    for gesture_name, gstats in stats.items():
+        color = GESTURE_COLORS.get(gesture_name, "#ffffff")
+        title = f"{session_id} | {gesture_name} | {scope_label}"
+        out_path = output_dir / f"{session_id}_radar_{gesture_name}.png"
+
+        render_gesture_radar(
+            labels=display_labels,
+            medians=gstats["medians"],
+            q25=gstats["q25"],
+            q75=gstats["q75"],
+            title=title,
+            color=color,
+            out_path=out_path,
+            axis_max_values=axis_max_values,
+            raw_medians=gstats["raw_medians"],
+        )
+        produced.append(out_path)
+        print(
+            f"[Touch Feature Radar] {group_name} ({scope_label}) / {session_id}: "
+            f"saved {out_path.name}",
+            flush=True,
+        )
+
+    return produced
+
+
 def run_touch_feature_radar(
     session_configs: list,
     radar_groups: dict,
@@ -400,12 +442,14 @@ def run_touch_feature_radar(
 ) -> None:
     """Render per-session touch feature radar plots for each enabled radar group.
 
-    For each enabled group and each session, produces one radar PNG per gesture
-    type present (≥2 touches) plus a composite overlay PNG when ≥2 gesture
-    types are available.
+    Two normalization scopes are produced:
+
+    - **session** — min/max computed within each session independently;
+      idempotency via ``should_process_task`` sentinel.
+    - **global** — min/max computed across all sessions (always recomputed).
 
     Outputs are written to
-    ``{db}/4_analysed/touch_feature_radar/{group_name}/{session_id}/``.
+    ``{db}/4_analysed/touch_feature_radar/{group_name}/{scope}/{session_id}/``.
 
     Parameters
     ----------
@@ -458,126 +502,131 @@ def run_touch_feature_radar(
             flush=True,
         )
 
+        # =================================================================
+        # Pass 1 — Load all sessions, resolve columns, collect raw matrices
+        # =================================================================
+        session_data: list[dict] = []
+        resolved_cols: list[str] | None = None
+        display_labels: list[str] | None = None
+
         for csv_path, database_path in session_configs:
             csv_path = Path(csv_path)
             database_path = Path(database_path)
-
             session_id = session_id_from_path(csv_path)
-            output_dir = (
-                database_path
-                / "4_analysed"
-                / "touch_feature_radar"
-                / group_name
-                / session_id
-            )
-            sentinel = output_dir / "radar_sentinel.json"
 
-            # --- Idempotency check ---
-            # Use the first aggregation folder's CSV as the representative input.
-            feature_csv = _find_feature_csv(database_path, agg_folders[0], session_id)
-            if not should_process_task(
-                output_paths=sentinel,
-                input_paths=feature_csv,
-                force=force_processing,
-            ):
-                logger.info(
-                    "[Touch Feature Radar] %s / %s: outputs up-to-date — skipping.",
-                    group_name,
-                    session_id,
-                )
-                continue
-
-            print(
-                f"[Touch Feature Radar] {group_name} / {session_id}: processing...",
-                flush=True,
-            )
-
-            # --- Load + merge feature CSV(s) ---
             df = _load_and_merge_feature_csvs(database_path, agg_folders, session_id)
 
-            # --- Validate gesture_type column ---
             if "gesture_type" not in df.columns:
                 raise ValueError(
-                    f"[Touch Feature Radar] {session_id}: 'gesture_type' column not found "
-                    f"in merged feature DataFrame for group '{group_name}'. "
+                    f"[Touch Feature Radar] {session_id}: 'gesture_type' column not "
+                    f"found in merged feature DataFrame for group '{group_name}'. "
                     f"Available columns: {list(df.columns)}"
                 )
 
-            # --- Resolve feature columns and display labels ---
-            resolved_cols, display_labels = _resolve_radar_columns(df, features_spec)
+            cols, labels = _resolve_radar_columns(df, features_spec)
+            if resolved_cols is None:
+                resolved_cols, display_labels = cols, labels
 
-            # --- Compute per-gesture statistics ---
-            stats = _compute_session_stats(df, resolved_cols)
+            raw = df[cols].to_numpy(dtype=float)
+            gesture_types = df["gesture_type"].to_numpy()
 
-            if not stats:
-                logger.info(
-                    "[Touch Feature Radar] %s / %s: no gesture type has ≥2 touches — "
-                    "no PNGs produced.",
-                    group_name,
-                    session_id,
-                )
-                output_dir.mkdir(parents=True, exist_ok=True)
-                _write_sentinel(sentinel, session_id, produced=[])
-                continue
+            session_data.append({
+                "session_id": session_id,
+                "database_path": database_path,
+                "raw": raw,
+                "gesture_types": gesture_types,
+                "feature_csv": _find_feature_csv(
+                    database_path, agg_folders[0], session_id
+                ),
+            })
 
-            # --- Render outputs ---
-            output_dir.mkdir(parents=True, exist_ok=True)
-            produced: list[Path] = []
-
-            # Individual per-gesture radar plots
-            for gesture_name, gstats in stats.items():
-                color = GESTURE_COLORS.get(gesture_name, "#ffffff")
-                title = f"{session_id} | {gesture_name} | touch feature radar"
-                out_path = output_dir / f"{session_id}_radar_{gesture_name}.png"
-
-                render_gesture_radar(
-                    labels=display_labels,
-                    medians=gstats["medians"],
-                    q25=gstats["q25"],
-                    q75=gstats["q75"],
-                    title=title,
-                    color=color,
-                    out_path=out_path,
-                )
-                produced.append(out_path)
-                print(
-                    f"[Touch Feature Radar] {group_name} / {session_id}: "
-                    f"saved {out_path.name}",
-                    flush=True,
-                )
-
-            # Composite overlay when ≥2 gesture types (excluding "all")
-            non_all_gesture_names = [g for g in stats if g != "all"]
-            if len(non_all_gesture_names) >= 2:
-                composite_stats: dict[str, dict] = {}
-                for gesture_name, gstats in stats.items():
-                    if gesture_name == "all":
-                        continue
-                    composite_stats[gesture_name] = {
-                        "medians": gstats["medians"],
-                        "q25": gstats["q25"],
-                        "q75": gstats["q75"],
-                        "color": GESTURE_COLORS.get(gesture_name, "#ffffff"),
-                    }
-
-                composite_path = output_dir / f"{session_id}_radar_composite.png"
-                render_gesture_radar_composite(
-                    labels=display_labels,
-                    gesture_stats=composite_stats,
-                    title=f"{session_id} | all gesture types | touch feature radar",
-                    out_path=composite_path,
-                )
-                produced.append(composite_path)
-                print(
-                    f"[Touch Feature Radar] {group_name} / {session_id}: "
-                    f"saved {composite_path.name}",
-                    flush=True,
-                )
-
-            # --- Write sentinel ---
-            _write_sentinel(sentinel, session_id, produced=produced)
-            print(
-                f"[Touch Feature Radar] {group_name} / {session_id}: "
-                f"done — {len(produced)} PNG(s) written.",
-                flush=True,
+        if not session_data:
+            logger.info(
+                "[Touch Feature Radar] Group '%s': no sessions to process.",
+                group_name,
             )
+            continue
+
+        # Global min/max across all sessions
+        all_raw = np.vstack([s["raw"] for s in session_data])
+        global_min = np.nanmin(all_raw, axis=0)
+        global_max = np.nanmax(all_raw, axis=0)
+
+        # =================================================================
+        # Pass 2 — Render both normalization scopes per session
+        # =================================================================
+        for entry in session_data:
+            session_id = entry["session_id"]
+            database_path = entry["database_path"]
+            raw = entry["raw"]
+            gesture_types = entry["gesture_types"]
+            base_dir = (
+                database_path / "4_analysed" / "touch_feature_radar" / group_name
+            )
+
+            # --- Session-normalized scope (idempotency via sentinel) ---
+            session_dir = base_dir / "session" / session_id
+            session_sentinel = session_dir / "radar_sentinel.json"
+
+            session_skip = not should_process_task(
+                output_paths=session_sentinel,
+                input_paths=entry["feature_csv"],
+                force=force_processing,
+            )
+            if session_skip:
+                logger.info(
+                    "[Touch Feature Radar] %s (session) / %s: up-to-date — skipping.",
+                    group_name, session_id,
+                )
+            else:
+                session_min = np.nanmin(raw, axis=0)
+                session_max = np.nanmax(raw, axis=0)
+                norm_session = _normalize_features(raw, session_min, session_max)
+                stats_session = _compute_gesture_stats(
+                    norm_session, raw, gesture_types,
+                )
+
+                if not stats_session:
+                    logger.info(
+                        "[Touch Feature Radar] %s (session) / %s: no gesture type has "
+                        "≥2 touches — no PNGs produced.",
+                        group_name, session_id,
+                    )
+                    session_dir.mkdir(parents=True, exist_ok=True)
+                    _write_sentinel(session_sentinel, session_id, produced=[])
+                else:
+                    produced = _render_radar_pngs(
+                        stats_session, display_labels, session_max,
+                        session_id, group_name, "session", session_dir,
+                    )
+                    _write_sentinel(session_sentinel, session_id, produced=produced)
+                    print(
+                        f"[Touch Feature Radar] {group_name} (session) / {session_id}: "
+                        f"done — {len(produced)} PNG(s) written.",
+                        flush=True,
+                    )
+
+            # --- Global-normalized scope (always recomputed) ---
+            global_dir = base_dir / "global" / session_id
+            norm_global = _normalize_features(raw, global_min, global_max)
+            stats_global = _compute_gesture_stats(
+                norm_global, raw, gesture_types,
+            )
+
+            if not stats_global:
+                logger.info(
+                    "[Touch Feature Radar] %s (global) / %s: no gesture type has "
+                    "≥2 touches — no PNGs produced.",
+                    group_name, session_id,
+                )
+                global_dir.mkdir(parents=True, exist_ok=True)
+            else:
+                produced = _render_radar_pngs(
+                    stats_global, display_labels, global_max,
+                    session_id, group_name, "global", global_dir,
+                )
+                print(
+                    f"[Touch Feature Radar] {group_name} (global) / {session_id}: "
+                    f"done — {len(produced)} PNG(s) written.",
+                    flush=True,
+                )

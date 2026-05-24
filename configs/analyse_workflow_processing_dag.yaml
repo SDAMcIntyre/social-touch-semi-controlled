@@ -5,9 +5,11 @@
 parameters:
   # List of directories containing Kinect session config files to scan.
   # Paths are relative to configs/kinect_configs/.
-  kinect_configs: [valid_configs_ST13-01, valid_configs_ST14-04, 
-      valid_configs_ST15-01, valid_configs_ST16-02, valid_configs_ST16-03, 
-      valid_configs_ST16-05, valid_configs_ST18-01, valid_configs_ST18-04]
+  kinect_configs: [valid_configs_ST13-01, valid_configs_ST13-02, 
+      valid_configs_ST13-03, valid_configs_ST14-01, valid_configs_ST14-02, 
+      valid_configs_ST14-04, valid_configs_ST15-01, valid_configs_ST16-02, 
+      valid_configs_ST16-03, valid_configs_ST16-05, valid_configs_ST18-01, 
+      valid_configs_ST18-04]
 
 tasks:
   # ============================================================
@@ -124,7 +126,7 @@ tasks:
       # Set true to re-open the GUI for every session.
       force_processing: false
       # DAG-level defaults applied to sessions that have no per-session YAML.
-      mesh_method: delaunay
+      mesh_method: bpa
       max_edge_mm: 0.0  # 0.0 means auto (3.0 × mean nearest-neighbour distance)
       n_iter: 40
       save_diagnostics: true
@@ -144,13 +146,13 @@ tasks:
     category: processing
     enabled: true
     options:
-      force_processing: true
+      force_processing: false
       n_iter: 40
       save_diagnostics: true
       # When true, open a step-by-step PyQt5/PyVista viewer per session
       # after the SLIM precompute. Useful for diagnosing stitching/cleaning
       # issues. Blocks the pipeline until the window is closed.
-      interactive: true
+      interactive: false
       # Toggle individual mesh cleaning steps (all default to true).
       # Steps 1-3 (largest component, fix winding, remove orphans) always run.
       clean_steps:
@@ -178,11 +180,12 @@ tasks:
     category: processing
     enabled: true
     options:
-      force_processing: false
+      force_processing: true
       neuron_mode: iff
       min_overlap_pct: 25
       median_filter_size: 5
       inflection_sigma: 5.0
+      heatmap_space: linear
     depends_on: [map_single_touch_rf, precompute_forearm_slim_uv]
 
   # Aggregate inflection boundary metrics across sessions and render comparison visuals.
@@ -316,9 +319,9 @@ tasks:
   # Output: 4_analysed/session_comparison/session_comparison_heatmaps/<metric>/
   visualize_session_comparison:
     category: processing
-    enabled: false
+    enabled: true
     options:
-      force_processing: false
+      force_processing: true
       neuron_mode: iff
       vertex_threshold_ratio: 0.25
       metric_name: mean_iff
