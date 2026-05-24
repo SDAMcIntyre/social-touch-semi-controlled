@@ -153,6 +153,31 @@ All 12 sessions tested end-to-end:
 
 ---
 
+## Addendum: Boundary-Gap Stitching (2026-05-21)
+
+`_fill_interior_holes()` classifies **all** non-largest boundary loops as interior holes and fills
+them. This is correct for true interior holes (created by non-manifold removal deep inside the mesh)
+but incorrect for junction gaps — narrow strips of missing faces where an appendage (thumb, finger)
+connects to the forearm body. When a junction gap loop is filled, the appendage perimeter is
+converted from boundary to interior, causing the main boundary loop to bypass the appendage entirely.
+
+**Root cause in ST14-02:** 10 secondary boundary loops at the thumb–forearm junction were being
+filled as interior holes. This caused `_fill_interior_holes()` to enclose the thumb, making the
+main boundary loop skip it. The result was extreme conformal distortion (sigma1/sigma2 >> 3.0 vs
+~1.175 in sessions where the boundary correctly traces around the thumb), flipped triangles during
+harmonic init, and mesh trimming.
+
+**Fix:** `_stitch_boundary_gaps(V, F, proximity_mm=5.0, max_passes=3)` was added to `clean_mesh()`
+**before** `_fill_interior_holes()`. It uses a KDTree proximity query (5 mm threshold) on
+main-boundary vertex positions. For each secondary loop where >= 2 vertices are within 5 mm of the
+main boundary, close secondary vertex IDs are replaced with their nearest main-boundary counterpart
+in the face array. Degenerate faces (2+ vertices collapse to the same ID) are removed, winding is
+fixed, and the largest connected component is kept. Up to 3 iterative passes are applied because
+welding can reveal new boundary configurations. Secondary loops that are far from the main boundary
+(true interior holes) are not welded and proceed to `_fill_interior_holes()` unchanged.
+
+---
+
 ## Related notes
 
 - [note-mesh-parameterization-interior-pin-foldovers.md](note-mesh-parameterization-interior-pin-foldovers.md) — why interior pins cause vortex foldovers; Tutte fallback design

@@ -40,9 +40,16 @@ from analysis.receptive_field_mapping import (
     run_session_rf_boundary_comparison,
     run_touch_feature_radar,
     launch_rf_camera_settings_viewer,
+    launch_slim_uv_config_viewer,
 )
 from analysis.receptive_field_mapping.data.rf_data_loader import resolve_forearm_ply
 from analysis.receptive_field_mapping.data.rf_extraction_io import load_rf_camera_settings
+from analysis.receptive_field_mapping.surface.slim_uv_config_io import (
+    config_path_for_session,
+    load_slim_uv_config,
+    make_default_config,
+    config_hash as compute_config_hash,
+)
 from analysis.touch_analytics.pipeline_shared import session_id_from_path
 
 from analysis.pipeline import collect_unique_session_dirs, discover_input_items, run_pipeline_stages
@@ -143,11 +150,92 @@ def map_receptive_fields_simple_flow(
     )
 
 
+@flow(name="configure_forearm_slim_uv")
+def configure_forearm_slim_uv_flow(
+    input_items: List[Tuple[Path, Path]],
+    force_processing: bool = False,
+    interactive: bool = True,
+    mesh_method: str = "bpa",
+    max_edge_mm: float = 0.0,
+    n_iter: int = 40,
+    save_diagnostics: bool = True,
+    clean_steps: dict | None = None,
+) -> None:
+    """Launch the per-session SLIM UV config GUI for sessions missing a config.
+
+    For each session, checks whether ``4_analysed/forearm_slim_uv/<session_id>/
+    slim_uv_config.yaml`` already exists. Sessions that already have a config
+    are skipped (unless ``force_processing`` is True, which forces the GUI for
+    every session). The GUI saves per-session YAML configs consumed by
+    ``precompute_forearm_slim_uv_flow``.
+
+    When ``interactive`` is False the flow is a no-op: sessions without a
+    config will simply fall back to DAG defaults in the precompute step.
+    """
+    if not input_items:
+        return
+
+    if not interactive:
+        print(
+            "[SLIM UV Config] interactive=false — skipping GUI; sessions "
+            "without a per-session YAML will use DAG defaults."
+        )
+        return
+
+    database_path = input_items[0][1]
+    output_dir = database_path / '4_analysed' / 'forearm_slim_uv'
+
+    if force_processing:
+        missing_items = list(input_items)
+        print(
+            f"[SLIM UV Config] force_processing=true — launching viewer for "
+            f"all {len(missing_items)} session(s)."
+        )
+    else:
+        missing_items = []
+        for csv_path, db_path in input_items:
+            session_id = session_id_from_path(csv_path)
+            cfg_path = config_path_for_session(
+                db_path / '4_analysed' / 'forearm_slim_uv',
+                session_id,
+            )
+            if not cfg_path.exists():
+                missing_items.append((csv_path, db_path))
+
+        if not missing_items:
+            print(
+                f"[SLIM UV Config] All {len(input_items)} session(s) already "
+                "have slim_uv_config.yaml — skipping. "
+                "Set force_processing=true to re-open."
+            )
+            return
+
+        print(
+            f"[SLIM UV Config] {len(missing_items)}/{len(input_items)} "
+            "session(s) missing per-session config — launching viewer."
+        )
+
+    dag_defaults = {
+        "mesh_method": mesh_method,
+        "max_edge_mm": float(max_edge_mm),
+        "n_iter": int(n_iter),
+        "save_diagnostics": bool(save_diagnostics),
+        "clean_steps": clean_steps or {},
+    }
+
+    launch_slim_uv_config_viewer(missing_items, dag_defaults)
+
+
 @flow(name="precompute_forearm_slim_uv")
 def precompute_forearm_slim_uv_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
     n_iter: int = 40,
+    save_diagnostics: bool = False,
+    interactive: bool = False,
+    clean_steps: dict | None = None,
+    mesh_method: str = "bpa",
+    max_edge_mm: float | None = None,
 ) -> List[Path]:
     """Precompute and cache SLIM UV maps for all sessions.
 
@@ -158,6 +246,11 @@ def precompute_forearm_slim_uv_flow(
 
     The UV origin (center_vid) is placed at the IFF-weighted centroid of all
     single-touch RF maps, giving a neuroscientifically meaningful anchor point.
+
+    Per-session ``slim_uv_config.yaml`` files written by
+    ``configure_forearm_slim_uv_flow`` override the DAG-level params on a
+    session-by-session basis.  Missing per-session YAML legitimately falls
+    back to DAG defaults (designed behaviour per the plan).
     """
     from analysis.receptive_field_mapping.surface.forearm_slim_uv import (
         precompute_forearm_slim_uv as _precompute,
@@ -191,21 +284,92 @@ def precompute_forearm_slim_uv_flow(
         output_dir.mkdir(parents=True, exist_ok=True)
         cache_path = output_dir / f"{session_id}_slim_uv.npz"
 
+        cfg_path = config_path_for_session(
+            db_path / '4_analysed' / 'forearm_slim_uv', session_id,
+        )
+        if cfg_path.exists():
+            cfg = load_slim_uv_config(cfg_path)
+            logging.info(
+                f"[SLIM UV] {session_id}: using per-session config from {cfg_path}"
+            )
+            session_mesh_method = cfg.mesh_method
+            session_max_edge_mm = None if cfg.max_edge_mm == 0.0 else cfg.max_edge_mm
+            session_clean_steps = cfg.clean_steps.to_dict()
+            session_n_iter = cfg.n_iter
+            session_save_diagnostics = cfg.save_diagnostics
+        else:
+            logging.info(
+                f"[SLIM UV] {session_id}: no per-session config; using DAG defaults"
+            )
+            session_mesh_method = mesh_method
+            session_max_edge_mm = (
+                None if (max_edge_mm is None or max_edge_mm == 0.0) else max_edge_mm
+            )
+            session_clean_steps = clean_steps or None
+            session_n_iter = n_iter
+            session_save_diagnostics = save_diagnostics
+
+        # Build the expected config hash for staleness comparison against the NPZ.
+        make_default_kwargs: dict = {
+            "mesh_method": session_mesh_method,
+            "max_edge_mm": (
+                0.0 if session_max_edge_mm is None else float(session_max_edge_mm)
+            ),
+            "n_iter": int(session_n_iter),
+            "save_diagnostics": bool(session_save_diagnostics),
+        }
+        if session_clean_steps:
+            make_default_kwargs["clean_steps"] = session_clean_steps
+        expected_cfg = make_default_config(session_id, **make_default_kwargs)
+        expected_hash = compute_config_hash(expected_cfg)
+
         if not should_process_task(
             input_paths=[forearm_ply_path, rf_maps_npz],
             output_paths=[cache_path],
             force=force_processing,
         ):
-            print(f"[SLIM UV] {session_id}: up-to-date, skipping.")
-            results.append(cache_path)
-            continue
+            _force_for_config_change = False
+            if cache_path.exists():
+                try:
+                    import numpy as _np
+                    _cached_data = _np.load(cache_path, allow_pickle=False)
+                    _cached_hash = (
+                        str(_cached_data['config_hash'])
+                        if 'config_hash' in _cached_data.files else ""
+                    )
+                    if _cached_hash != expected_hash:
+                        print(
+                            f"[SLIM UV] {session_id}: config_hash changed "
+                            f"({_cached_hash!r} → {expected_hash!r}) — forcing recompute."
+                        )
+                        _force_for_config_change = True
+                except Exception as _exc:
+                    print(
+                        f"[SLIM UV] {session_id}: could not read cached config_hash "
+                        f"({_exc}) — forcing recompute."
+                    )
+                    _force_for_config_change = True
+            if not _force_for_config_change:
+                print(f"[SLIM UV] {session_id}: up-to-date, skipping.")
+                results.append(cache_path)
+                continue
 
-        print(f"[SLIM UV] {session_id}: computing SLIM UV map (n_iter={n_iter})...")
+        camera_settings_dir = db_path / '4_analysed' / 'rf_camera_settings'
+        print(
+            f"[SLIM UV] {session_id}: computing SLIM UV map "
+            f"(n_iter={session_n_iter}, mesh_method={session_mesh_method!r})..."
+        )
         result = _precompute(
             forearm_ply_path=forearm_ply_path,
             rf_maps_npz=rf_maps_npz,
             cache_path=cache_path,
-            n_iter=n_iter,
+            n_iter=session_n_iter,
+            save_diagnostics=session_save_diagnostics,
+            camera_settings_dir=camera_settings_dir if session_save_diagnostics else None,
+            interactive=interactive,
+            clean_steps=session_clean_steps,
+            mesh_method=session_mesh_method,
+            max_edge_mm=session_max_edge_mm,
         )
         print(f"[SLIM UV] {session_id}: cached → {result.name}")
         results.append(result)
@@ -248,6 +412,7 @@ def extract_population_rf_response_field_boundaries_flow(
     min_overlap_pct: float = 25.0,
     median_filter_size: int | None = None,
     inflection_sigma: float | None = None,
+    heatmap_space: str = "linear",
 ) -> None:
     """Render per-session 2D population RF heatmap PNGs projected via SLIM UV.
 
@@ -267,6 +432,7 @@ def extract_population_rf_response_field_boundaries_flow(
         force_processing=force_processing,
         median_filter_size=median_filter_size,
         inflection_sigma=inflection_sigma,
+        heatmap_space=heatmap_space,
     )
 
 
@@ -299,9 +465,9 @@ def map_population_rf_grid_flow(
     neuron_mode: str = "iff",
     per_gesture_type: bool = True,
     vertex_threshold_ratio: float = 0.25,
-    features: dict = None,
+    features: Optional[dict] = None,
     compute_baseline: bool = True,
-    grid_groups: dict = None,
+    grid_groups: Optional[dict] = None,
 ) -> List[Path]:
     """Systematic RF population mapping via feature-space grid sweep.
 
@@ -683,19 +849,19 @@ def touch_feature_extraction_flow(
 def render_touch_feature_radar_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
-    aggregation: str = "mean_during_iff",
+    radar_groups: dict = None,
 ) -> None:
     """
     Stage 2c: Per-session radar plots of touch feature distributions.
     Writes one PNG per gesture type + composite to
-    ``4_analysed/touch_feature_radar/<session_id>/``.
+    ``4_analysed/touch_feature_radar/<group_name>/<session_id>/``.
     """
     print(f"[Batch Analysis] Rendering touch feature radar plots for {len(input_items)} item(s)...")
     if not input_items:
         return
     run_touch_feature_radar(
         session_configs=input_items,
-        aggregation=aggregation,
+        radar_groups=radar_groups,
         force_processing=force_processing,
     )
 
@@ -704,11 +870,11 @@ def render_touch_feature_radar_flow(
 def touch_clustering_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
-    cluster_groups: dict = None,
-    feature_combinations: dict = None,
-    clustering_profiles: dict = None,
-    reduction: dict = None,
-    evaluation: dict = None,
+    cluster_groups: Optional[dict] = None,
+    feature_combinations: Optional[dict] = None,
+    clustering_profiles: Optional[dict] = None,
+    reduction: Optional[dict] = None,
+    evaluation: Optional[dict] = None,
 ) -> List[Path]:
     """
     Stage 2: Global clustering on pooled feature CSVs.
@@ -1132,10 +1298,31 @@ def _build_pipeline_stages(dag_handler: DagConfigHandler, items_to_process) -> l
             },
         },
         {
+            "name": "configure_forearm_slim_uv",
+            "func": configure_forearm_slim_uv_flow,
+            "params": lambda: {
+                "interactive": bool(dag_handler.get_task_options("configure_forearm_slim_uv").get("interactive", True)),
+                "mesh_method": str(dag_handler.get_task_options("configure_forearm_slim_uv").get("mesh_method", "bpa")),
+                "max_edge_mm": float(dag_handler.get_task_options("configure_forearm_slim_uv").get("max_edge_mm", 0.0)),
+                "n_iter": int(dag_handler.get_task_options("configure_forearm_slim_uv").get("n_iter", 40)),
+                "save_diagnostics": bool(dag_handler.get_task_options("configure_forearm_slim_uv").get("save_diagnostics", True)),
+                "clean_steps": dag_handler.get_task_options("configure_forearm_slim_uv").get("clean_steps"),
+            },
+        },
+        {
             "name": "precompute_forearm_slim_uv",
             "func": precompute_forearm_slim_uv_flow,
             "params": lambda: {
                 "n_iter": int(dag_handler.get_task_options("precompute_forearm_slim_uv").get("n_iter", 40)),
+                "save_diagnostics": bool(dag_handler.get_task_options("precompute_forearm_slim_uv").get("save_diagnostics", False)),
+                "interactive": bool(dag_handler.get_task_options("precompute_forearm_slim_uv").get("interactive", False)),
+                "clean_steps": dag_handler.get_task_options("precompute_forearm_slim_uv").get("clean_steps"),
+                "mesh_method": str(dag_handler.get_task_options("precompute_forearm_slim_uv").get("mesh_method", "bpa")),
+                **(
+                    {"max_edge_mm": float(dag_handler.get_task_options("precompute_forearm_slim_uv")["max_edge_mm"])}
+                    if dag_handler.get_task_options("precompute_forearm_slim_uv").get("max_edge_mm") is not None
+                    else {}
+                ),
             },
         },
         {
@@ -1144,6 +1331,7 @@ def _build_pipeline_stages(dag_handler: DagConfigHandler, items_to_process) -> l
             "params": lambda: {
                 "neuron_mode": dag_handler.get_task_options("extract_population_rf_response_field_boundaries").get("neuron_mode", "iff"),
                 "min_overlap_pct": float(dag_handler.get_task_options("extract_population_rf_response_field_boundaries").get("min_overlap_pct", 25.0)),
+                "heatmap_space": dag_handler.get_task_options("extract_population_rf_response_field_boundaries").get("heatmap_space", "linear"),
                 **(
                     {"median_filter_size": int(dag_handler.get_task_options("extract_population_rf_response_field_boundaries")["median_filter_size"])}
                     if dag_handler.get_task_options("extract_population_rf_response_field_boundaries").get("median_filter_size") is not None
@@ -1174,7 +1362,7 @@ def _build_pipeline_stages(dag_handler: DagConfigHandler, items_to_process) -> l
             "name": "render_touch_feature_radar",
             "func": render_touch_feature_radar_flow,
             "params": lambda: {
-                "aggregation": dag_handler.get_task_options("render_touch_feature_radar").get("aggregation", "mean_during_iff"),
+                "radar_groups": dag_handler.get_task_options("render_touch_feature_radar").get("radar_groups"),
             },
         },
         {
