@@ -423,3 +423,73 @@ def launch_rf_camera_settings_viewer(
     )
     viewer.show()
     app.exec_()
+
+
+def launch_slim_uv_config_viewer(
+    input_items: List[Tuple[Path, Path]],
+    dag_defaults: dict,
+) -> None:
+    """Launch the SLIM UV per-session config GUI for all sessions in input_items.
+
+    For each session, resolves the forearm PLY path, the single-touch RF maps
+    NPZ path, and the per-session ``forearm_slim_uv`` output directory; then
+    opens the ``SlimUvConfigViewer`` window.  Blocks until the user closes
+    the window.  Per-session ``slim_uv_config.yaml`` files are written to
+    ``4_analysed/forearm_slim_uv/<session_id>/`` on "Accept".
+
+    Parameters
+    ----------
+    input_items:
+        List of ``(aggregated_csv_path, database_path)`` tuples — the same
+        shape used throughout the analysis pipeline.
+    dag_defaults:
+        DAG-level defaults forwarded to ``make_default_config`` when a session
+        has no existing per-session config.  Expected keys: ``mesh_method``,
+        ``max_edge_mm``, ``clean_steps``, ``n_iter``, ``save_diagnostics``.
+
+    Notes
+    -----
+    Missing ``rf_maps_npz`` is **not** raised here — the path is still passed
+    to the GUI so the user can configure the session.  The error surfaces at
+    "Process" time inside the worker thread with a clear message.  Missing
+    ``forearm_ply_path`` **is** raised eagerly: without the raw point cloud
+    the GUI has nothing to display.
+    """
+    from analysis.receptive_field_mapping.gui.slim_uv_config_viewer import SlimUvConfigViewer
+    from PyQt5.QtWidgets import QApplication
+
+    n = len(input_items)
+    if n == 0:
+        raise ValueError("launch_slim_uv_config_viewer: no sessions to display.")
+
+    sessions: list[dict] = []
+    for csv_path, database_path in input_items:
+        session_id = session_id_from_path(csv_path)
+        forearm_ply_path = resolve_forearm_ply(csv_path.parent, session_id)
+        if forearm_ply_path is None:
+            raise FileNotFoundError(
+                f"launch_slim_uv_config_viewer: forearm PLY not found "
+                f"for session '{session_id}' in {csv_path.parent} — "
+                "run forearm extraction first."
+            )
+        rf_maps_npz = (
+            database_path / '4_analysed' / 'single_touch_rf_maps'
+            / session_id / 'single_touch_rf_maps.npz'
+        )
+        output_dir = database_path / '4_analysed' / 'forearm_slim_uv'
+        sessions.append({
+            "session_id": session_id,
+            "forearm_ply_path": forearm_ply_path,
+            "rf_maps_npz": rf_maps_npz,
+            "output_dir": output_dir,
+        })
+
+    print(f"[SLIM UV Config] Launching viewer for {n} session(s)...")
+
+    app = QApplication.instance() or QApplication(sys.argv)
+    viewer = SlimUvConfigViewer(
+        sessions=sessions,
+        dag_defaults=dag_defaults,
+    )
+    viewer.show()
+    app.exec_()

@@ -62,14 +62,14 @@ _stub("analysis.receptive_field_mapping.rf_data_loader",
 # Imports under test (after stubs are in place)
 # ---------------------------------------------------------------------------
 
-from analysis.receptive_field_mapping.rf_grid_cell_metrics import (  # noqa: E402
+from analysis.receptive_field_mapping.metrics.rf_grid_cell_metrics import (  # noqa: E402
     compute_boundary_shape_metrics,
     compute_distribution_metrics,
     compute_grid_cell_metrics,
     compute_iff_intensity_metrics,
     compute_topographic_metrics,
 )
-from analysis.receptive_field_mapping.rf_population_grid_metrics_pipeline import (  # noqa: E402
+from analysis.receptive_field_mapping.pipelines.rf_population_grid_metrics_pipeline import (  # noqa: E402
     _build_metrics_dataframe,
 )
 
@@ -324,7 +324,7 @@ class TestComputeGridCellMetrics:
         assert result["gaussian_converged"] is False
 
     def test_all_nan_rf_map_keys_consistent_with_empty_row(self) -> None:
-        from analysis.receptive_field_mapping.rf_grid_cell_metrics import _empty_row_dict
+        from analysis.receptive_field_mapping.metrics.rf_grid_cell_metrics import _empty_row_dict
 
         V = 10
         rf_map = np.full(V, np.nan)

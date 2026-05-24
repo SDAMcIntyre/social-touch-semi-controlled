@@ -11,7 +11,7 @@ from typing import List, Optional, Tuple
 
 import pandas as pd
 
-from analysis.receptive_field_mapping.rf_extraction_io import (
+from analysis.receptive_field_mapping.data.rf_extraction_io import (
     RF_CAMERA_SETTINGS_FILENAME,
     load_forearm_vertices_artifact,
     load_neuron_touches,
@@ -19,7 +19,7 @@ from analysis.receptive_field_mapping.rf_extraction_io import (
     metrics_computation_is_up_to_date,
     save_metrics_computation_summary,
 )
-from analysis.receptive_field_mapping.rf_metrics import (
+from analysis.receptive_field_mapping.metrics.rf_metrics import (
     compute_rf_metrics,
     metrics_to_dict,
     metrics_to_row,
