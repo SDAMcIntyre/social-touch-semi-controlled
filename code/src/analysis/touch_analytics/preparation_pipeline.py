@@ -26,10 +26,11 @@ from .preparation.loader import load_session_csv
 from .preparation.block_id import ensure_block_id_column
 from .preparation.interpolation import interpolate_touch_columns
 from .preparation.gesture_type import assign_gesture_type
+from analysis.pipeline.shared_constants import GESTURE_TYPES
 
 
 _DROP_COLUMNS = ['frame_index', 'green_levels', 'time_nerve', 'time_kinect', 'trial_on']
-_GESTURE_TYPES = ('tap', 'stroke_proximal', 'stroke_distal')
+_GESTURE_TYPES = GESTURE_TYPES  # backward-compat alias
 
 
 def _count_gesture_types(df: pd.DataFrame) -> dict[str, int]:

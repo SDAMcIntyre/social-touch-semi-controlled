@@ -132,47 +132,83 @@ def explore_single_touch_rf_flow(
     launch_single_touch_rf_explorer(input_items, neuron_mode=neuron_mode)
 
 
+def _discover_processed_groups(output_dir: Path) -> dict:
+    """Scan *output_dir* for completed RF cluster extraction artifacts.
+
+    Returns ``{combo_name: {clusterer_name: {'per_type': bool, 'gesture_types': list}}}``.
+    Only entries whose ``extraction_summary.json`` sentinel exists are included.
+    """
+    from analysis.pipeline import GESTURE_TYPES
+
+    groups: dict = {}
+    if not output_dir.is_dir():
+        return groups
+
+    for combo_dir in sorted(output_dir.iterdir()):
+        if not combo_dir.is_dir():
+            continue
+        clusterers: dict = {}
+        for clusterer_dir in sorted(combo_dir.iterdir()):
+            if not clusterer_dir.is_dir():
+                continue
+            if (clusterer_dir / "extraction_summary.json").is_file():
+                clusterers[clusterer_dir.name] = {
+                    "per_type": False,
+                    "gesture_types": [],
+                }
+                continue
+            found_types = [
+                gt for gt in GESTURE_TYPES
+                if (clusterer_dir / gt).is_dir()
+                and (clusterer_dir / gt / "extraction_summary.json").is_file()
+            ]
+            if found_types:
+                clusterers[clusterer_dir.name] = {
+                    "per_type": True,
+                    "gesture_types": found_types,
+                }
+        if clusterers:
+            groups[combo_dir.name] = clusterers
+
+    return groups
+
+
 @flow(name="explore_rf_gallery")
 def explore_rf_gallery_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
     cluster_groups: list = None,
-    cluster_group_defs: dict = None,
 ) -> None:
     """
     Launch the RF Cluster Gallery Viewer for each enabled cluster group / clusterer pair.
 
-    Reads extraction artifacts produced by ``visualize_receptive_fields_clustered`` — one
-    interactive PyQt5 window per combo/clusterer pair, opened sequentially.
-    ``force_processing`` is accepted for interface consistency but is a no-op:
-    the viewer is stateless and always launches fresh.
+    Discovers available groups and clusterers from disk by scanning the extraction
+    output directory for ``extraction_summary.json`` sentinels.  The *cluster_groups*
+    list (from the viewer DAG config) selects which groups to open.
     """
     print(f"[Batch Analysis] Launching RF Gallery Viewer for {len(input_items)} item(s)...")
     if not input_items:
         return
 
-    if cluster_groups is None or cluster_group_defs is None:
+    if cluster_groups is None:
         raise ValueError(
-            "explore_rf_gallery_flow: 'cluster_groups' and 'cluster_group_defs' are required."
+            "explore_rf_gallery_flow: 'cluster_groups' is required."
         )
 
     database_path = input_items[0][1]
     output_dir = database_path / '4_analysed' / 'receptive_field_maps_clustered'
+    available = _discover_processed_groups(output_dir)
 
     for combo_name in cluster_groups:
-        if combo_name not in cluster_group_defs:
+        if combo_name not in available:
             raise ValueError(
-                f"explore_rf_gallery_flow: group '{combo_name}' not found in cluster_group_defs."
+                f"explore_rf_gallery_flow: group '{combo_name}' not found on disk. "
+                f"Scanned: {output_dir}\n"
+                f"Available processed groups: {sorted(available.keys())}"
             )
-        group_spec = cluster_group_defs[combo_name]
-        per_type = group_spec.get('per_type_clustering', False)
-        clustering_methods = group_spec.get('clustering_methods', {})
-        for clusterer_name, clusterer_cfg in clustering_methods.items():
-            if not clusterer_cfg.get('enabled', True):
-                continue
-            if per_type:
-                from analysis.touch_analytics.clustering_pipeline import GESTURE_TYPES
-                for gesture_type in GESTURE_TYPES:
+        for clusterer_name, info in available[combo_name].items():
+            if info["per_type"]:
+                for gesture_type in info["gesture_types"]:
                     print(
                         f"[RF Gallery] Launching viewer for "
                         f"{combo_name}/{clusterer_name}/{gesture_type}..."
@@ -210,9 +246,9 @@ def explore_rf_surface_flow(
 ) -> None:
     """Interactive 3D RF surface viewer: Z = mean IFF, coloured by jet colormap.
 
-    Loads the per-session ``_rf_population_vertex_data.npz`` produced by
-    ``visualize_population_rf_maps`` and presents a rotatable 3D surface showing
-    RF topography. Requires ``visualize_population_rf_maps`` to have run first.
+    Loads the per-session ``_population_response_fields.npz`` produced by
+    ``extract_population_rf_response_field_boundaries`` and presents a rotatable 3D surface showing
+    RF topography. Requires ``extract_population_rf_response_field_boundaries`` to have run first.
     """
     print(f"[Batch Analysis] Launching RF surface viewer for {len(input_items)} item(s)...")
     if not input_items:
@@ -263,9 +299,6 @@ def main():
     if not items_to_process:
         logging.warning("No input files found. Exiting.")
         return
-
-    _clustering_options = dag_handler.get_task_options("touch_clustering") or {}
-    _cluster_group_defs = _clustering_options.get("cluster_groups") or {}
 
     task_names = [
         "precompute_explorer_caches",
@@ -325,7 +358,6 @@ def main():
             "func": explore_rf_gallery_flow,
             "params": lambda: {
                 "cluster_groups": dag_handler.get_task_options("explore_rf_gallery").get("cluster_groups"),
-                "cluster_group_defs": _cluster_group_defs,
             },
         },
         {

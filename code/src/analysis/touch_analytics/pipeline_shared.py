@@ -9,6 +9,11 @@ clustering_pipeline.py, and comparing_pipeline.py.
 import sys
 from pathlib import Path
 
+from analysis.pipeline.shared_constants import (  # noqa: F401 — backward-compat re-exports
+    session_id_from_path,
+    filter_enabled_profiles,
+)
+
 
 # Columns written by the orchestrator (not the extractor)
 SHARED_COLUMNS = [
@@ -83,14 +88,5 @@ class _TqdmLineWrapper:
         return False
 
 
-def filter_enabled_profiles(profiles: dict) -> dict:
-    """Return only profiles without ``enabled: false``."""
-    return {k: v for k, v in profiles.items() if v.get('enabled', True)}
-
-
-def session_id_from_path(p: Path) -> str:
-    """Return the session ID prefix from a touch-summary CSV filename."""
-    name = p.name
-    if '_semicontrolled_' in name:
-        return name.split('_semicontrolled_')[0]
-    return p.stem
+# filter_enabled_profiles and session_id_from_path are imported above from
+# analysis.pipeline.shared_constants and re-exported for backward compatibility.
