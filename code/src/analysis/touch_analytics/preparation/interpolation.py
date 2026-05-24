@@ -16,6 +16,11 @@ clamp guards against any residual linear undershoot.
 import pandas as pd
 
 from .grouping import group_touches
+from analysis.pipeline.shared_constants import (
+    NERVE_SPIKE_COL,
+    CONTACT_POINTS_COL,
+    NERVE_FREQ_COL,
+)
 
 
 # All Kinect-sampled columns that receive linear NaN-gap interpolation.
@@ -37,9 +42,9 @@ INTERPOLATED_COLUMNS = [
     'contact_location_z',
 ]
 
-ALREADY_1KHZ = ['Nerve_spike', 'Nerve_freq', 'Nerve_TTL', 'time']
+ALREADY_1KHZ = [NERVE_SPIKE_COL, NERVE_FREQ_COL, 'Nerve_TTL', 'time']
 
-BINARY_FFILL = ['led_on', 'contact_detected', 'contact_points']
+BINARY_FFILL = ['led_on', 'contact_detected', CONTACT_POINTS_COL]
 
 # Kinect-derived columns that are present only at ~30 Hz sample rows.
 # Forward-filled to 1 kHz before grouping so that every intermediate row

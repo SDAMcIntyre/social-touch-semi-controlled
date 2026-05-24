@@ -34,11 +34,13 @@ from PyQt5.QtWidgets import (
 )
 from pyvistaqt import QtInteractor
 
-from analysis.receptive_field_mapping.rf_explorer_data import ExplorerData
+from analysis.receptive_field_mapping.data.rf_explorer_data import ExplorerData
+
+from analysis.pipeline.shared_constants import GESTURE_TYPES
 
 logger = logging.getLogger(__name__)
 
-_GESTURE_TYPES = ["tap", "stroke_proximal", "stroke_distal", "stroke_unknown"]
+_GESTURE_TYPES_WITH_UNKNOWN_WITH_UNKNOWN = (*GESTURE_TYPES, 'stroke_unknown')
 
 _GESTURE_COLORS = {
     "tap": "tab:blue",
@@ -429,7 +431,7 @@ class RFFeatureSpaceExplorer(QMainWindow):
         bar.setContentsMargins(4, 2, 4, 2)
 
         self._checkboxes: dict[str, QCheckBox] = {}
-        for gtype in _GESTURE_TYPES:
+        for gtype in _GESTURE_TYPES_WITH_UNKNOWN:
             cb = QCheckBox(gtype)
             cb.setChecked(True)
             cb.stateChanged.connect(self._on_checkbox_changed)
@@ -458,13 +460,13 @@ class RFFeatureSpaceExplorer(QMainWindow):
                 if cb.isChecked():
                     checked_types.add(gtype)
         else:
-            checked_types = set(_GESTURE_TYPES)
+            checked_types = set(_GESTURE_TYPES_WITH_UNKNOWN)
 
         unique_types = np.unique(self._data.gesture_types)
 
         vel_amp = np.abs(self._data.velocity_signed)
 
-        for gtype in _GESTURE_TYPES:
+        for gtype in _GESTURE_TYPES_WITH_UNKNOWN:
             if gtype not in unique_types or gtype not in checked_types:
                 continue
             mask = self._data.gesture_types == gtype
@@ -479,7 +481,7 @@ class RFFeatureSpaceExplorer(QMainWindow):
                 label=gtype,
             )
 
-        other_types = [t for t in unique_types if t not in _GESTURE_TYPES]
+        other_types = [t for t in unique_types if t not in _GESTURE_TYPES_WITH_UNKNOWN]
         for gtype in other_types:
             mask = self._data.gesture_types == gtype
             self._ax.scatter(

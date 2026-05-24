@@ -38,15 +38,15 @@ from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components
 from scipy.spatial import Delaunay, KDTree, QhullError
 
-from analysis.receptive_field_mapping.rf_extraction_io import (
+from analysis.receptive_field_mapping.data.rf_extraction_io import (
     description_summary_line,
     load_delaunay_thresholds,
     load_session_cameras,
     save_delaunay_thresholds,
     save_session_cameras,
 )
-from analysis.receptive_field_mapping.rf_gallery_data import GalleryCell, GalleryData
-from analysis.receptive_field_mapping.rf_surface_utils import (
+from analysis.receptive_field_mapping.data.rf_gallery_data import GalleryCell, GalleryData
+from analysis.receptive_field_mapping.surface.rf_surface_utils import (
     build_delaunay_mesh,
     map_scalars_to_mesh,
     mesh_to_pyvista,

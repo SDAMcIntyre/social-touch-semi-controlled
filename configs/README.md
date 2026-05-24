@@ -26,7 +26,8 @@ They map directly to the top-level workflow scripts in `code/scripts/`:
 | `preprocess_workflow_kinect_visualisation_dag.yaml` | `preprocess_workflow_kinect_visualisation.py` |
 | `postprocess_workflow_kinect_auto_dag.yaml` | `postprocess_workflow_kinect_auto.py` |
 | `merging_pipeline_neuron_to_kinect_auto_dag.yaml` | `merging_pipeline_neuron_to_kinect_auto.py` |
-| `analyse_workflow_dag.yaml` | `analysis_workflow.py` |
+| `analyse_workflow_processing_dag.yaml` | `analysis_workflow_processing.py` |
+| `analyse_workflow_viewers_dag.yaml` | `analysis_workflow_viewers.py` |
 
 ## `_dag_templates/`
 

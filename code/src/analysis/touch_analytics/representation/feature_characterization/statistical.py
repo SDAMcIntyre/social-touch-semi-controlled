@@ -2,6 +2,7 @@
 import pandas as pd
 import numpy as np
 from .base import FeatureExtractor
+from analysis.pipeline.shared_constants import NERVE_SPIKE_COL
 
 try:
     from scipy.stats import skew as _scipy_skew
@@ -21,7 +22,7 @@ _EXCLUDE_FROM_AGGREGATION = frozenset({
     # Source metadata
     'source_block_file', 'contact_area_metadata',
     # Nerve event marker (binary, not a continuous signal)
-    'Nerve_spike',
+    NERVE_SPIKE_COL,
     # Raw sticker positions (consumed by hand_position transform)
     'sticker_blue_position_x', 'sticker_blue_position_y', 'sticker_blue_position_z',
     'sticker_green_position_x', 'sticker_green_position_y', 'sticker_green_position_z',
