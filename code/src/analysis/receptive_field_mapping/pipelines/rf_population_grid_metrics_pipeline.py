@@ -6,13 +6,13 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from analysis.receptive_field_mapping.rf_baseline_deviation import compute_baseline_deviation
-from analysis.receptive_field_mapping.rf_data_loader import load_forearm_vertices
-from analysis.receptive_field_mapping.rf_extraction_io import (
+from analysis.receptive_field_mapping.metrics.rf_baseline_deviation import compute_baseline_deviation
+from analysis.receptive_field_mapping.data.rf_data_loader import load_forearm_vertices
+from analysis.receptive_field_mapping.data.rf_extraction_io import (
     RF_CAMERA_SETTINGS_FILENAME,
     load_rf_camera_rotation,
 )
-from analysis.receptive_field_mapping.rf_grid_cell_metrics import compute_grid_cell_metrics
+from analysis.receptive_field_mapping.metrics.rf_grid_cell_metrics import compute_grid_cell_metrics
 from utils.should_process_task import should_process_task
 
 logger = logging.getLogger(__name__)

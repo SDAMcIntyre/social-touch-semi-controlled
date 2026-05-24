@@ -69,6 +69,14 @@ _OPTION_ENUMS: dict[str, list[tuple[str, object]]] = {
         ("tangent_plane", "tangent_plane"),
         ("cylindrical_unwrap", "cylindrical_unwrap"),
     ],
+    "mesh_method": [
+        ("Delaunay (default)", "delaunay"),
+        ("Ball Pivoting Algorithm", "bpa"),
+    ],
+    "heatmap_space": [
+        ("Linear (default)", "linear"),
+        ("Logarithmic", "log"),
+    ],
 }
 
 

@@ -19,11 +19,11 @@ import numpy as np
 import open3d as o3d
 import pandas as pd
 
-from analysis.receptive_field_mapping.rf_mapping_config import (
+from analysis.receptive_field_mapping.config import (
     GroupedSpatialData,
     SelectivityDBSCANConfig,
 )
-from analysis.receptive_field_mapping.rf_mapping_engine import RFMappingEngine
+from analysis.receptive_field_mapping.engine import RFMappingEngine
 from preprocessing.forearm_extraction.registration.csv_spatial_transformer import (
     parse_contact_points,
     transform_spatial_columns_in_place,

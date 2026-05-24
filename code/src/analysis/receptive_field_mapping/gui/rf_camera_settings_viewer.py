@@ -27,11 +27,11 @@ from PyQt5.QtWidgets import (
 )
 from pyvistaqt import QtInteractor
 
-from analysis.receptive_field_mapping.rf_extraction_io import (
+from analysis.receptive_field_mapping.data.rf_extraction_io import (
     load_rf_camera_settings,
     save_rf_camera_settings,
 )
-from analysis.receptive_field_mapping.touch_population_data import (
+from analysis.receptive_field_mapping.data.touch_population_data import (
     ViewerSessionData,
     load_viewer_session_data,
 )
