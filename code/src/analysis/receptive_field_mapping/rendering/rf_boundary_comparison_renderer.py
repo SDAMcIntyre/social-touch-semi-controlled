@@ -37,6 +37,7 @@ def render_boundary_contour_overlay(
     centroids: dict[str, np.ndarray],
     gesture_type: str,
     output_path: Path,
+    uv_limits: tuple[tuple[float, float], tuple[float, float]] | None = None,
 ) -> None:
     if not contours:
         raise ValueError("render_boundary_contour_overlay: contours dict is empty")
@@ -67,6 +68,9 @@ def render_boundary_contour_overlay(
     ax.set_title(f'RF Boundary Contour Overlay — {gesture_type}')
     ax.legend(fontsize=7, loc='upper right')
     ax.set_aspect('equal')
+    if uv_limits is not None:
+        ax.set_xlim(*uv_limits[0])
+        ax.set_ylim(*uv_limits[1])
     fig.tight_layout()
     fig.savefig(output_path, dpi=120)
     plt.close(fig)
@@ -77,6 +81,7 @@ def render_boundary_metric_panels(
     gesture_type: str,
     metrics: list[str],
     output_path: Path,
+    metric_limits: dict[str, tuple[float, float]] | None = None,
 ) -> None:
     n_metrics = len(metrics)
     if n_metrics == 0:
@@ -97,6 +102,8 @@ def render_boundary_metric_panels(
         ax.set_xticklabels(session_ids, rotation=45, ha='right', fontsize=7)
         ax.set_title(metric_name, fontsize=10)
         ax.set_ylabel(metric_name, fontsize=8)
+        if metric_limits is not None and metric_name in metric_limits:
+            ax.set_ylim(*metric_limits[metric_name])
 
     for idx in range(n_metrics, len(axes)):
         axes[idx].set_visible(False)

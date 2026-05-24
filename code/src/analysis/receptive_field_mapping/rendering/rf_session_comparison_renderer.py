@@ -12,11 +12,11 @@ matplotlib.use('Agg')
 import matplotlib.gridspec as gridspec
 import matplotlib.pyplot as plt
 
-from analysis.receptive_field_mapping.rf_population_grid_pipeline import (
+from analysis.receptive_field_mapping.pipelines.rf_population_grid_pipeline import (
     run_population_rf_grid,
     PopulationRFGridConfig,
 )
-from analysis.receptive_field_mapping.rf_population_grid_metrics_pipeline import (
+from analysis.receptive_field_mapping.pipelines.rf_population_grid_metrics_pipeline import (
     run_population_rf_grid_metrics,
     PopulationRFGridMetricsConfig,
 )

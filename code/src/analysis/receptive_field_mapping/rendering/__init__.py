@@ -9,8 +9,11 @@ from .rf_2d_renderer import render_2d_heatmap
 from .rf_cluster_visualizer import RFRenderContext, render_forearm_heatmap
 from .rf_population_map_renderer import (
     compute_interpolated_grid,
+    compute_standalone_figwidth,
     render_population_rf_map,
     render_population_rf_composite,
+    render_population_rf_standalone_interpolated,
+    render_population_rf_colorbar,
 )
 from .rf_population_grid_metrics_renderer import (
     render_grid_metric_heatmap,
@@ -35,6 +38,9 @@ __all__ = [
     "compute_interpolated_grid",
     "render_population_rf_map",
     "render_population_rf_composite",
+    "compute_standalone_figwidth",
+    "render_population_rf_standalone_interpolated",
+    "render_population_rf_colorbar",
     # rf_population_grid_metrics_renderer
     "render_grid_metric_heatmap",
     "run_population_rf_grid_metrics_visualization",

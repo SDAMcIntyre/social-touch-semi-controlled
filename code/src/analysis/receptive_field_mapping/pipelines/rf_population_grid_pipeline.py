@@ -7,8 +7,8 @@ from typing import Any
 
 import numpy as np
 
-from analysis.receptive_field_mapping.rf_data_loader import load_forearm_vertices
-from analysis.receptive_field_mapping.touch_population_data import (
+from analysis.receptive_field_mapping.data.rf_data_loader import load_forearm_vertices
+from analysis.receptive_field_mapping.data.touch_population_data import (
     load_population_data,
     load_population_rf_data,
 )
