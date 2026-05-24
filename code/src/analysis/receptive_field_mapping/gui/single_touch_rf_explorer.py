@@ -28,7 +28,7 @@ from PyQt5.QtWidgets import (
 )
 from pyvistaqt import QtInteractor
 
-from analysis.receptive_field_mapping.rf_data_loader import (
+from analysis.receptive_field_mapping.data.rf_data_loader import (
     load_forearm_vertex_colors,
     load_forearm_vertices,
 )

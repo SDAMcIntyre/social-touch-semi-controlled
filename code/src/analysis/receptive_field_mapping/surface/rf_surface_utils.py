@@ -20,13 +20,68 @@ logger = logging.getLogger(__name__)
 _BPA_RADIUS_MULTIPLIERS = (1.5, 2.0, 2.5, 3.0)
 
 
+_VALID_MESH_METHODS = ("bpa", "delaunay")
+
+
+def _build_and_cache_delaunay(
+    ply_path: Path,
+    mesh_cache_path: Path,
+    max_edge_mm: Optional[float],
+) -> Optional[trimesh.Trimesh]:
+    """Load a PLY point cloud, build a 2.5D Delaunay mesh, cache it, and return it.
+
+    If *max_edge_mm* is None it is defaulted to ``3.0 * avg_nn`` where
+    ``avg_nn`` is the average nearest-neighbour distance of the cloud.
+    """
+    pcd = o3d.io.read_point_cloud(str(ply_path))
+    if pcd.is_empty():
+        return None
+
+    points = np.asarray(pcd.points)
+    if points.shape[0] < 4:
+        return None
+
+    avg_nn = float(np.mean(np.asarray(pcd.compute_nearest_neighbor_distance())))
+
+    if max_edge_mm is None:
+        max_edge_mm = 3.0 * avg_nn
+
+    mesh = build_delaunay_mesh(points, max_edge_mm=max_edge_mm)
+    if mesh is None:
+        logger.warning(
+            "Delaunay produced no triangles for %s "
+            "(avg_NN=%.3f mm, max_edge_mm=%.3f mm)",
+            ply_path, avg_nn, max_edge_mm,
+        )
+        return None
+
+    logger.info(
+        "Delaunay reconstruction: %d triangles, %d vertices "
+        "(avg_NN=%.2f mm, max_edge_mm=%.2f mm) for %s",
+        len(mesh.faces), len(mesh.vertices), avg_nn, max_edge_mm, ply_path.name,
+    )
+
+    mesh_cache_path.parent.mkdir(parents=True, exist_ok=True)
+    mesh.export(str(mesh_cache_path))
+
+    return mesh
+
+
 def load_or_build_forearm_mesh(
     forearm_ply_path: Path,
     mesh_cache_path: Path = None,
+    mesh_method: str = "bpa",
+    max_edge_mm: Optional[float] = None,
 ) -> Optional[trimesh.Trimesh]:
+    if mesh_method not in _VALID_MESH_METHODS:
+        raise ValueError(
+            f"Unknown mesh_method {mesh_method!r}. "
+            f"Valid options are: {_VALID_MESH_METHODS}"
+        )
+
     if mesh_cache_path is None:
         mesh_cache_path = forearm_ply_path.with_name(
-            forearm_ply_path.stem + "_mesh_bpa.obj"
+            forearm_ply_path.stem + f"_mesh_{mesh_method}.obj"
         )
 
     try:
@@ -35,6 +90,14 @@ def load_or_build_forearm_mesh(
         if mesh_cache_path.exists() and mesh_cache_path.stat().st_mtime >= ply_mtime:
             return trimesh.load(str(mesh_cache_path), force="mesh")
 
+        if mesh_method == "delaunay":
+            return _build_and_cache_delaunay(
+                ply_path=forearm_ply_path,
+                mesh_cache_path=mesh_cache_path,
+                max_edge_mm=max_edge_mm,
+            )
+
+        # --- BPA branch (mesh_method == "bpa") ---
         pcd = o3d.io.read_point_cloud(str(forearm_ply_path))
         if pcd.is_empty():
             return None

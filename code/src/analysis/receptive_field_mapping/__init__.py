@@ -24,6 +24,7 @@ from .pipelines.rf_cluster_gui_launchers import (
     launch_gallery_viewer,
     launch_rf_camera_settings_viewer,
     launch_rf_surface_viewer,
+    launch_slim_uv_config_viewer,
 )
 from .metrics.rf_metrics import RFMetrics, compute_rf_metrics
 from .surface.rf_projection import project_to_2d
@@ -36,6 +37,7 @@ from .rendering.rf_session_comparison_renderer import run_session_comparison_vis
 from .metrics.rf_baseline_deviation import BaselineDeviationMetrics, compute_baseline_deviation
 from .pipelines.rf_population_response_field_pipeline import run_population_response_field_extraction
 from .pipelines.rf_session_boundary_comparison_pipeline import run_session_rf_boundary_comparison
+from .pipelines.rf_touch_feature_radar_pipeline import run_touch_feature_radar
 
 __all__ = [
     "project_to_2d",
@@ -51,6 +53,7 @@ __all__ = [
     "launch_gallery_viewer",
     "launch_rf_camera_settings_viewer",
     "launch_rf_surface_viewer",
+    "launch_slim_uv_config_viewer",
     "RFMetrics",
     "compute_rf_metrics",
     "run_simple_rf_mapping",
@@ -65,4 +68,5 @@ __all__ = [
     "compute_baseline_deviation",
     "run_population_response_field_extraction",
     "run_session_rf_boundary_comparison",
+    "run_touch_feature_radar",
 ]
