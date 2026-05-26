@@ -208,7 +208,7 @@ tasks:
     category: processing
     enabled: true
     options:
-      force_processing: false
+      force_processing: true
       heatmap_space: linear
       cmap: jet
     depends_on: [extract_population_rf_response_field_boundaries]

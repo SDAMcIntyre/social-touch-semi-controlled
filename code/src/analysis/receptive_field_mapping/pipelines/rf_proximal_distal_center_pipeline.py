@@ -129,7 +129,7 @@ def run_proximal_distal_center_comparison(
             threshold = float(npz[f'threshold_{gtype}'])
             peak_uv_gtype = (
                 npz[f'boundary_peak_uv_{gtype}'].astype(np.float64)
-                if hotspot_available and f'boundary_peak_uv_{gtype}' in npz
+                if f'boundary_peak_uv_{gtype}' in npz
                 else None
             )
             gestures_with_centroid[gtype] = (grid_u, grid_v, grid_z, centroid_uv_gtype, n_touches, threshold, peak_uv_gtype)
