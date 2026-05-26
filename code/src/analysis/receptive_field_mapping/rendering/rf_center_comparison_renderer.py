@@ -27,6 +27,7 @@ def render_center_marked_heatmap(
     ylim: tuple[float, float] | None = None,
     heatmap_space: str = "linear",
     cmap: str = "jet",
+    peak_uv: np.ndarray | None = None,
 ) -> None:
     norm = LogNorm(vmin=vmin, vmax=vmax) if heatmap_space == "log" else Normalize(vmin=vmin, vmax=vmax)
 
@@ -54,6 +55,12 @@ def render_center_marked_heatmap(
         centroid_uv[0], centroid_uv[1],
         color='violet', marker='+', markersize=10, markeredgewidth=2, zorder=7,
     )
+
+    if peak_uv is not None:
+        ax.plot(
+            peak_uv[0], peak_uv[1],
+            color='red', marker='*', markersize=10, markeredgewidth=1.5, zorder=8,
+        )
 
     ax.set_xlabel('U')
     ax.set_ylabel('V')
@@ -115,4 +122,53 @@ def render_proximal_distal_aggregate(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(str(output_path), dpi=120)
     logger.info("Saved proximal-distal aggregate: %s", output_path)
+    plt.close(fig)
+
+
+def render_proximal_distal_hotspot_aggregate(
+    session_hotspots: dict[str, dict[str, np.ndarray]],
+    output_path: Path,
+    uv_limits: tuple[tuple[float, float], tuple[float, float]] | None = None,
+) -> None:
+    if not session_hotspots:
+        raise ValueError("render_proximal_distal_hotspot_aggregate: session_hotspots is empty")
+
+    try:
+        cmap_tab20 = matplotlib.colormaps['tab20']
+    except AttributeError:
+        cmap_tab20 = matplotlib.cm.get_cmap('tab20')
+
+    session_ids = sorted(session_hotspots.keys())
+    n_sessions = len(session_ids)
+
+    fig, ax = plt.subplots(figsize=(8, 7), facecolor='white')
+    ax.set_facecolor('white')
+
+    ax.axhline(0, color='lightgray', lw=0.8, zorder=0)
+    ax.axvline(0, color='lightgray', lw=0.8, zorder=0)
+
+    for i, session_id in enumerate(session_ids):
+        color = cmap_tab20(i / max(n_sessions, 1))
+        offsets = session_hotspots[session_id]
+        prox = offsets['stroke_proximal']
+        dist = offsets['stroke_distal']
+
+        ax.plot([prox[0], dist[0]], [prox[1], dist[1]], color=color, lw=1.0, zorder=2)
+        ax.plot(prox[0], prox[1], 'o', ms=6, color=color, label=session_id, zorder=3)
+        ax.plot(dist[0], dist[1], 'D', ms=6, color=color, zorder=3)
+
+    ax.set_xlabel('ΔU from stroke hotspot')
+    ax.set_ylabel('ΔV from stroke hotspot')
+    ax.set_title('Proximal vs Distal RF Hotspot Offsets')
+    ax.set_aspect('equal')
+    ax.legend(fontsize=7, loc='best')
+
+    if uv_limits is not None:
+        ax.set_xlim(*uv_limits[0])
+        ax.set_ylim(*uv_limits[1])
+
+    fig.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(str(output_path), dpi=120)
+    logger.info("Saved proximal-distal hotspot aggregate: %s", output_path)
     plt.close(fig)

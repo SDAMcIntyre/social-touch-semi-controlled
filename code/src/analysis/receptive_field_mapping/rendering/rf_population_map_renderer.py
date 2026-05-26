@@ -207,6 +207,7 @@ def render_population_rf_map(
     precomputed_grid: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None,
     inflection_boundary: InflectionBoundary | None = None,
     heatmap_space: str = "linear",
+    cmap: str = "jet",
 ) -> None:
     """Render a two-panel population RF heatmap (scatter + interpolated) and save as PNG.
 
@@ -265,7 +266,7 @@ def render_population_rf_map(
     if len(valid_uv) > 0:
         sc = ax_scatter.scatter(
             valid_uv[:, 0], valid_uv[:, 1],
-            c=valid_vals, cmap='jet', norm=norm,
+            c=valid_vals, cmap=cmap, norm=norm,
             s=20, alpha=0.9, linewidths=0, zorder=3, rasterized=True,
         )
         cbar1 = plt.colorbar(sc, ax=ax_scatter, label='Mean IFF / spike', shrink=0.8)
@@ -305,7 +306,7 @@ def render_population_rf_map(
     display_z = np.where(grid_z > 0, grid_z, np.nan)
     im = ax_hm.pcolormesh(
         grid_u, grid_v, display_z,
-        cmap='jet', norm=norm, shading='auto',
+        cmap=cmap, norm=norm, shading='auto',
     )
 
     if inflection_boundary is not None:

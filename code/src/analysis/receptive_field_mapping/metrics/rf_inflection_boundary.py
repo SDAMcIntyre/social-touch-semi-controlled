@@ -43,6 +43,9 @@ class InflectionBoundary:
     centroid_uv: tuple[float, float]
     """Polygon centroid in UV space."""
 
+    peak_uv: tuple[float, float]
+    """UV coordinates of the global response maximum (grid-cell resolution)."""
+
     pca_major_uv: float
     """PCA major axis length (2σ) in UV space."""
 
@@ -642,6 +645,9 @@ def compute_inflection_boundary(
         circularity = float("nan")
 
     centroid_uv = _compute_polygon_centroid(contour_uv)
+    peak_rc_arr = np.array([[peak_rc[0], peak_rc[1]]], dtype=float)
+    peak_uv_arr = _contour_pixels_to_uv(peak_rc_arr, grid_u, grid_v)
+    peak_uv = (float(peak_uv_arr[0, 0]), float(peak_uv_arr[0, 1]))
     pca_major, pca_minor, pca_orientation_deg = _compute_contour_pca(contour_uv)
     mean_iff = _sample_grid_along_contour(grid_z, selected)
 
@@ -677,6 +683,7 @@ def compute_inflection_boundary(
         perimeter_uv=perimeter_uv,
         circularity=circularity,
         centroid_uv=centroid_uv,
+        peak_uv=peak_uv,
         pca_major_uv=pca_major,
         pca_minor_uv=pca_minor,
         pca_orientation_deg=pca_orientation_deg,
@@ -712,6 +719,7 @@ def inflection_boundary_to_dict(boundary: InflectionBoundary) -> dict:
         "perimeter_uv": _to_json_safe(boundary.perimeter_uv),
         "circularity": _to_json_safe(boundary.circularity),
         "centroid_uv": [_to_json_safe(boundary.centroid_uv[0]), _to_json_safe(boundary.centroid_uv[1])],
+        "peak_uv": [_to_json_safe(boundary.peak_uv[0]), _to_json_safe(boundary.peak_uv[1])],
         "pca_major_uv": _to_json_safe(boundary.pca_major_uv),
         "pca_minor_uv": _to_json_safe(boundary.pca_minor_uv),
         "pca_orientation_deg": _to_json_safe(boundary.pca_orientation_deg),
