@@ -30,6 +30,10 @@ from analysis.receptive_field_mapping.metrics.rf_inflection_boundary import (
     compute_inflection_boundary,
     inflection_boundary_to_dict,
 )
+from analysis.receptive_field_mapping.metrics.rf_pca_alignment import (
+    apply_uv_alignment,
+    compute_rf_pca_alignment,
+)
 from analysis.receptive_field_mapping.rendering.rf_population_map_renderer import (
     compute_interpolated_grid,
     compute_standalone_figwidth,
@@ -58,6 +62,9 @@ class _SessionCompositeData:
     gesture_boundaries: dict = field(default_factory=dict)
     per_gesture_grids: dict = field(default_factory=dict)
     vertex_data_npz: Path | None = None
+    alignment_center: np.ndarray = field(default_factory=lambda: np.zeros(2))
+    alignment_rotation_matrix: np.ndarray = field(default_factory=lambda: np.eye(2))
+    alignment_angle_deg: float = 0.0
 
 
 def run_population_response_field_extraction(
@@ -68,12 +75,14 @@ def run_population_response_field_extraction(
     median_filter_size: int | None = None,
     inflection_sigma: float | None = None,
     heatmap_space: str = "linear",
+    cmap: str = "jet",
 ) -> None:
     """Render per-session 2D population RF heatmap PNGs projected via SLIM UV.
 
-    For each session config, produces one PNG per gesture subset (all, tap,
-    stroke_proximal, stroke_distal) plus two composite PNGs (scatter and
+    For each session config, produces one PNG per gesture subset (all, stroke,
+    tap, stroke_proximal, stroke_distal) plus two composite PNGs (scatter and
     interpolated) under ``4_analysed/population_response_fields/{session_id}/``.
+    ``stroke`` is a virtual subset combining stroke_proximal + stroke_distal.
 
     Composites use a global colour scale and UV axis range across all sessions
     so they are directly comparable.
@@ -230,6 +239,40 @@ def run_population_response_field_extraction(
 
             results[gtype] = (slim_heatmap, n_gesture_touches, threshold)
 
+        # --- Synthesize 'stroke' = stroke_proximal + stroke_distal ---
+        _sp_in = 'stroke_proximal' in results
+        _sd_in = 'stroke_distal' in results
+        if _sp_in or _sd_in:
+            parts = []
+            if _sp_in:
+                parts.append(build_gesture_touch_indices(pop_data.gesture_types, 'stroke_proximal'))
+            if _sd_in:
+                parts.append(build_gesture_touch_indices(pop_data.gesture_types, 'stroke_distal'))
+            stroke_touch_indices = np.concatenate(parts)
+
+            n_stroke_touches = len(stroke_touch_indices)
+            if n_stroke_touches > 0:
+                cp_mask = np.isin(pop_data.cp_touch_idx, stroke_touch_indices)
+                heatmap = compute_rf_heatmap(
+                    stroke_touch_indices,
+                    rf_data.rf_vertex_indices,
+                    rf_data.rf_values,
+                    n_verts,
+                )
+                unique_count = compute_unique_touch_count(
+                    pop_data.cp_vertex_idx,
+                    pop_data.cp_touch_idx,
+                    cp_mask,
+                    n_verts,
+                )
+                threshold = compute_threshold_from_ratio(min_overlap_pct, n_stroke_touches)
+                thresholded = apply_vertex_threshold(heatmap, unique_count, threshold)
+                slim_heatmap = thresholded[nearest_orig_for_slim]
+                results['stroke'] = (slim_heatmap, n_stroke_touches, threshold)
+
+        _canonical_order = ['all', 'stroke', 'tap', 'stroke_proximal', 'stroke_distal']
+        results = {k: results[k] for k in _canonical_order if k in results}
+
         if not results:
             logger.warning(
                 "[Population Response Fields] %s: no gesture subsets had touches — no PNGs produced.",
@@ -238,6 +281,22 @@ def run_population_response_field_extraction(
             output_dir.mkdir(parents=True, exist_ok=True)
             _write_sentinel(sentinel, session_id, produced=[])
             continue
+
+        if 'all' not in results:
+            raise ValueError(
+                f"[Population Response Fields] {session_id}: 'all' gesture type missing from "
+                f"results — cannot compute PCA alignment. This should not happen."
+            )
+
+        all_heatmap, _, _ = results['all']
+        alignment_center, alignment_rotation_matrix, alignment_angle_deg = compute_rf_pca_alignment(
+            forearm_uv, all_heatmap
+        )
+        logger.info(
+            "[Population Response Fields] %s: PCA alignment — center=(%.3f, %.3f) angle=%.1f°",
+            session_id, alignment_center[0], alignment_center[1], alignment_angle_deg,
+        )
+        forearm_uv = apply_uv_alignment(forearm_uv, alignment_center, alignment_rotation_matrix)
 
         # --- Render per-gesture PNGs with session-wide colour scale ---
         finite_maxima = [
@@ -303,6 +362,7 @@ def run_population_response_field_extraction(
                 precomputed_grid=(grid_u, grid_v, grid_z),
                 inflection_boundary=boundary,
                 heatmap_space=heatmap_space,
+                cmap=cmap,
             )
             produced.append(png_path)
             print(f"[Population Response Fields] {session_id}: saved {png_path.name}")
@@ -319,6 +379,9 @@ def run_population_response_field_extraction(
             min_overlap_pct=min_overlap_pct,
             gesture_boundaries=gesture_boundaries,
             inflection_sigma=inflection_sigma,
+            alignment_center=alignment_center,
+            alignment_rotation_matrix=alignment_rotation_matrix,
+            alignment_angle_deg=alignment_angle_deg,
         )
         _write_sentinel(
             sentinel, session_id, produced=produced,
@@ -343,6 +406,9 @@ def run_population_response_field_extraction(
             gesture_boundaries=gesture_boundaries,
             per_gesture_grids=per_gesture_grids,
             vertex_data_npz=vertex_data_npz,
+            alignment_center=alignment_center,
+            alignment_rotation_matrix=alignment_rotation_matrix,
+            alignment_angle_deg=alignment_angle_deg,
         ))
 
     # ---- Pass 2: render composite PNGs with global colour scale + UV limits ----
@@ -487,6 +553,9 @@ def _save_response_fields_npz(
     min_overlap_pct: float,
     gesture_boundaries: dict,
     inflection_sigma: float | None,
+    alignment_center: np.ndarray,
+    alignment_rotation_matrix: np.ndarray,
+    alignment_angle_deg: float,
 ) -> Path:
     npz_path = output_dir / f'{session_id}_population_response_fields.npz'
 
@@ -558,6 +627,10 @@ def _save_response_fields_npz(
             data_dict[f'boundary_peak_xyz_{gtype}'] = peak_xyz.astype(np.float64)
             data_dict[f'boundary_perimeter_xyz_mm_{gtype}'] = np.float64(perimeter_xyz_mm)
             data_dict[f'boundary_area_xyz_mm2_{gtype}'] = np.float64(area_xyz_mm2)
+
+    data_dict['alignment_center_uv'] = alignment_center.astype(np.float64)
+    data_dict['alignment_rotation_matrix'] = alignment_rotation_matrix.astype(np.float64)
+    data_dict['alignment_rotation_deg'] = np.float64(alignment_angle_deg)
 
     np.savez(npz_path, **data_dict)
     logger.info("[Population Response Fields] %s: saved response fields NPZ → %s", session_id, npz_path.name)
