@@ -186,6 +186,7 @@ tasks:
       median_filter_size: 5
       inflection_sigma: 5.0
       heatmap_space: linear
+      cmap: jet
     depends_on: [map_single_touch_rf, precompute_forearm_slim_uv]
 
   # Aggregate inflection boundary metrics across sessions and render comparison visuals.
@@ -197,6 +198,19 @@ tasks:
     enabled: true
     options:
       force_processing: false
+    depends_on: [extract_population_rf_response_field_boundaries]
+
+  # Compare RF center positions between proximal and distal strokes per session.
+  # Reads per-session NPZ files from extract_population_rf_response_field_boundaries.
+  # Produces per-session center-marked heatmap PNGs, aggregate PNG, and summary CSV.
+  # Output: 4_analysed/rf_center_proximal_distal/
+  compare_rf_center_proximal_distal:
+    category: processing
+    enabled: true
+    options:
+      force_processing: true
+      heatmap_space: linear
+      cmap: jet
     depends_on: [extract_population_rf_response_field_boundaries]
 
   # Stage 2b (Feature Extraction): Per-session feature extraction. Each enabled feature extracts to its own folder.

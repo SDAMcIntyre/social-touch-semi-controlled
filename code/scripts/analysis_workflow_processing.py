@@ -38,6 +38,7 @@ from analysis.receptive_field_mapping import (
     run_session_comparison_visualization,
     run_population_response_field_extraction,
     run_session_rf_boundary_comparison,
+    run_proximal_distal_center_comparison,
     run_touch_feature_radar,
     launch_rf_camera_settings_viewer,
     launch_slim_uv_config_viewer,
@@ -413,6 +414,7 @@ def extract_population_rf_response_field_boundaries_flow(
     median_filter_size: int | None = None,
     inflection_sigma: float | None = None,
     heatmap_space: str = "linear",
+    cmap: str = "jet",
 ) -> None:
     """Render per-session 2D population RF heatmap PNGs projected via SLIM UV.
 
@@ -433,6 +435,7 @@ def extract_population_rf_response_field_boundaries_flow(
         median_filter_size=median_filter_size,
         inflection_sigma=inflection_sigma,
         heatmap_space=heatmap_space,
+        cmap=cmap,
     )
 
 
@@ -455,6 +458,32 @@ def compare_session_rf_boundaries_flow(
     run_session_rf_boundary_comparison(
         session_configs=input_items,
         force_processing=force_processing,
+    )
+
+
+@flow(name="compare_rf_center_proximal_distal")
+def compare_rf_center_proximal_distal_flow(
+    input_items: List[Tuple[Path, Path]],
+    force_processing: bool = False,
+    heatmap_space: str = "linear",
+    cmap: str = "jet",
+) -> None:
+    """Compare RF center positions between proximal and distal strokes across sessions.
+
+    Reads per-session NPZ files produced by extract_population_rf_response_field_boundaries,
+    renders per-session center-marked heatmap PNGs, and produces a cross-session
+    aggregate scatter plot and summary CSV.
+    Output: 4_analysed/rf_center_proximal_distal/
+    """
+    print(f"[Batch Analysis] Comparing RF centers for {len(input_items)} item(s)...")
+    if not input_items:
+        return
+
+    run_proximal_distal_center_comparison(
+        session_configs=input_items,
+        force_processing=force_processing,
+        heatmap_space=heatmap_space,
+        cmap=cmap,
     )
 
 
@@ -1332,6 +1361,7 @@ def _build_pipeline_stages(dag_handler: DagConfigHandler, items_to_process) -> l
                 "neuron_mode": dag_handler.get_task_options("extract_population_rf_response_field_boundaries").get("neuron_mode", "iff"),
                 "min_overlap_pct": float(dag_handler.get_task_options("extract_population_rf_response_field_boundaries").get("min_overlap_pct", 25.0)),
                 "heatmap_space": dag_handler.get_task_options("extract_population_rf_response_field_boundaries").get("heatmap_space", "linear"),
+                "cmap": dag_handler.get_task_options("extract_population_rf_response_field_boundaries").get("cmap", "jet"),
                 **(
                     {"median_filter_size": int(dag_handler.get_task_options("extract_population_rf_response_field_boundaries")["median_filter_size"])}
                     if dag_handler.get_task_options("extract_population_rf_response_field_boundaries").get("median_filter_size") is not None
@@ -1348,6 +1378,14 @@ def _build_pipeline_stages(dag_handler: DagConfigHandler, items_to_process) -> l
             "name": "compare_session_rf_boundaries",
             "func": compare_session_rf_boundaries_flow,
             "params": lambda: {},
+        },
+        {
+            "name": "compare_rf_center_proximal_distal",
+            "func": compare_rf_center_proximal_distal_flow,
+            "params": lambda: {
+                "heatmap_space": dag_handler.get_task_options("compare_rf_center_proximal_distal").get("heatmap_space", "linear"),
+                "cmap": dag_handler.get_task_options("compare_rf_center_proximal_distal").get("cmap", "jet"),
+            },
         },
         {
             "name": "touch_feature_extraction",
