@@ -128,7 +128,7 @@ def run_population_response_field_extraction(
         if not series_csv_path.exists():
             raise FileNotFoundError(
                 f"[Population Response Fields] {session_id}: series-augmented CSV not found — "
-                f"run 'touch_series_transforms' first: {series_csv_path}"
+                f"run 'touch_compute_series' first: {series_csv_path}"
             )
 
         forearm_ply_path = resolve_forearm_ply(csv_path.parent, session_id)
@@ -145,7 +145,7 @@ def run_population_response_field_extraction(
         if not npz_path.exists():
             raise FileNotFoundError(
                 f"[Population Response Fields] {session_id}: single_touch_rf_maps.npz not found: "
-                f"{npz_path}. Enable 'map_single_touch_rf' in the DAG config and re-run."
+                f"{npz_path}. Enable 'spatial_map_single_touch' in the DAG config and re-run."
             )
 
         slim_cache_path = (
@@ -155,7 +155,7 @@ def run_population_response_field_extraction(
         if not slim_cache_path.exists():
             raise FileNotFoundError(
                 f"[Population Response Fields] {session_id}: SLIM UV cache not found: "
-                f"{slim_cache_path}. Enable 'precompute_forearm_slim_uv' in the DAG "
+                f"{slim_cache_path}. Enable 'spatial_precompute_slim_uv' in the DAG "
                 f"config and re-run to generate the cache."
             )
 
@@ -187,7 +187,7 @@ def run_population_response_field_extraction(
                 f"mapping from SLIM vertices to original forearm vertices has a "
                 f"maximum distance of {max_dist_mm:.3f} mm (threshold: "
                 f"{_ERROR_THRESHOLD_MM} mm). The SLIM mesh and forearm PLY are "
-                "misaligned — re-run 'precompute_forearm_slim_uv' after "
+                "misaligned — re-run 'spatial_precompute_slim_uv' after "
                 "verifying the forearm PLY."
             )
         if max_dist_mm > _WARN_THRESHOLD_MM:

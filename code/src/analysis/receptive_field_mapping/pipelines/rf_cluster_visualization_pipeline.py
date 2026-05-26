@@ -214,7 +214,7 @@ def run_cluster_rf_visualization(
                     if session_id not in all_cameras:
                         raise ValueError(
                             f"run_cluster_rf_visualization: session '{session_id}' not found in camera settings. "
-                            "Run 'set_rf_camera_settings' first."
+                            "Run 'spatial_set_camera' first."
                         )
                     session_cam = all_cameras[session_id]
                     try:

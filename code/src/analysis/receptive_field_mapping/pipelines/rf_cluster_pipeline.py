@@ -1,6 +1,6 @@
 """Cluster-based receptive field mapping — extraction pipeline.
 
-Reads clustered touch summaries from touch_clustering, traces each touch back
+Reads clustered touch summaries from stimulus_cluster_touches, traces each touch back
 to its session's aggregated CSV to extract spike-filtered contact points (with
 proper 30Hz-to-1kHz forward-fill), counts spikes per contact point, and saves
 per-cluster spike_counts.csv files. Renders per-session 3D forearm heatmap PNGs.

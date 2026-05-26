@@ -305,7 +305,7 @@ _GRID_GROUP_YAML = textwrap.dedent("""\
       kinect_configs: "test_dir"
 
     tasks:
-      map_population_rf_grid:
+      cross_map_feature_grid:
         enabled: true
         options:
           force_processing: false
@@ -332,7 +332,7 @@ def _grid_group_cfg(tmp_path: Path) -> Path:
 def test_get_grid_group_spec_returns_plain_dict(tmp_path: Path) -> None:
     model = DagConfigModel(_grid_group_cfg(tmp_path))
     spec = model.get_grid_group_spec(
-        "map_population_rf_grid", "grid_groups", "velocity_pressure_2d"
+        "cross_map_feature_grid", "grid_groups", "velocity_pressure_2d"
     )
     assert isinstance(spec, dict)
     assert spec["enabled"] is True
@@ -356,7 +356,7 @@ def test_get_grid_group_spec_missing_opt_key_raises(tmp_path: Path) -> None:
     model = DagConfigModel(_grid_group_cfg(tmp_path))
     with pytest.raises(KeyError, match="no_such_key"):
         model.get_grid_group_spec(
-            "map_population_rf_grid", "no_such_key", "velocity_pressure_2d"
+            "cross_map_feature_grid", "no_such_key", "velocity_pressure_2d"
         )
 
 
@@ -364,7 +364,7 @@ def test_get_grid_group_spec_missing_name_raises(tmp_path: Path) -> None:
     model = DagConfigModel(_grid_group_cfg(tmp_path))
     with pytest.raises(KeyError, match="no_such_group"):
         model.get_grid_group_spec(
-            "map_population_rf_grid", "grid_groups", "no_such_group"
+            "cross_map_feature_grid", "grid_groups", "no_such_group"
         )
 
 
@@ -373,18 +373,18 @@ def test_set_grid_group_spec_roundtrip(tmp_path: Path) -> None:
     cfg = _grid_group_cfg(tmp_path)
     model = DagConfigModel(cfg)
     original = model.get_grid_group_spec(
-        "map_population_rf_grid", "grid_groups", "velocity_pressure_2d"
+        "cross_map_feature_grid", "grid_groups", "velocity_pressure_2d"
     )
 
     model.set_grid_group_spec(
-        "map_population_rf_grid", "grid_groups", "velocity_pressure_2d", original
+        "cross_map_feature_grid", "grid_groups", "velocity_pressure_2d", original
     )
     assert model.dirty is True
     model.save()
 
     reloaded = DagConfigModel(cfg)
     result = reloaded.get_grid_group_spec(
-        "map_population_rf_grid", "grid_groups", "velocity_pressure_2d"
+        "cross_map_feature_grid", "grid_groups", "velocity_pressure_2d"
     )
     assert result["neuron_mode"] == original["neuron_mode"]
     assert result["per_gesture_type"] == original["per_gesture_type"]
@@ -406,10 +406,10 @@ def test_set_grid_group_spec_features_are_flow_style(tmp_path: Path) -> None:
     cfg = _grid_group_cfg(tmp_path)
     model = DagConfigModel(cfg)
     spec = model.get_grid_group_spec(
-        "map_population_rf_grid", "grid_groups", "velocity_pressure_2d"
+        "cross_map_feature_grid", "grid_groups", "velocity_pressure_2d"
     )
     model.set_grid_group_spec(
-        "map_population_rf_grid", "grid_groups", "velocity_pressure_2d", spec
+        "cross_map_feature_grid", "grid_groups", "velocity_pressure_2d", spec
     )
     model.save()
 
@@ -436,19 +436,19 @@ def test_set_grid_group_spec_new_group(tmp_path: Path) -> None:
         },
     }
     model.set_grid_group_spec(
-        "map_population_rf_grid", "grid_groups", "new_group", new_spec
+        "cross_map_feature_grid", "grid_groups", "new_group", new_spec
     )
     model.save()
 
     reloaded = DagConfigModel(cfg)
     result = reloaded.get_grid_group_spec(
-        "map_population_rf_grid", "grid_groups", "new_group"
+        "cross_map_feature_grid", "grid_groups", "new_group"
     )
     assert result["neuron_mode"] == "sa1"
     assert result["features"]["pressure_mean_during_iff"]["max"] == 1.0
 
     original_still_present = reloaded.get_grid_group_spec(
-        "map_population_rf_grid", "grid_groups", "velocity_pressure_2d"
+        "cross_map_feature_grid", "grid_groups", "velocity_pressure_2d"
     )
     assert original_still_present["neuron_mode"] == "iff"
 
@@ -461,7 +461,7 @@ def test_set_grid_group_spec_against_real_config(tmp_path: Path) -> None:
     tmp = _copy_to_tmp(real_cfg, tmp_path)
     model = DagConfigModel(tmp)
 
-    task_name = "map_population_rf_grid"
+    task_name = "cross_map_feature_grid"
     if task_name not in model.get_task_names():
         pytest.skip(f"task '{task_name}' not in config")
 

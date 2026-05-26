@@ -163,7 +163,7 @@ def run_slim_pipeline_core(
     if not rf_maps_npz.exists():
         raise FileNotFoundError(
             f"Single-touch RF maps NPZ not found: {rf_maps_npz}\n"
-            "Run 'map_single_touch_rf' before 'precompute_forearm_slim_uv'."
+            "Run 'spatial_map_single_touch' before 'spatial_precompute_slim_uv'."
         )
 
     npz = np.load(rf_maps_npz, allow_pickle=True)
@@ -609,7 +609,7 @@ def precompute_forearm_slim_uv(
         Path to the forearm point-cloud PLY file.
     rf_maps_npz:
         Path to the ``single_touch_rf_maps.npz`` produced by
-        ``map_single_touch_rf``.  Its ``rf_data`` key must contain at least
+        ``spatial_map_single_touch``.  Its ``rf_data`` key must contain at least
         one touch with at least one contacted vertex carrying a nonzero IFF.
     cache_path:
         Destination path for the ``.npz`` cache.  Defaults to
@@ -884,7 +884,7 @@ def load_slim_uv_cache(
     if not cache_path.exists():
         raise FileNotFoundError(
             f"SLIM UV cache not found: {cache_path}\n"
-            "Run 'precompute_forearm_slim_uv' first."
+            "Run 'spatial_precompute_slim_uv' first."
         )
 
     # 2. Load arrays.

@@ -38,18 +38,26 @@ _CORNER_RADIUS = 6
 _INSET = 6
 
 _CATEGORY_COLORS: dict[str, QColor] = {
-    "processing":      QColor("#d0e8ff"),
-    "viewer":          QColor("#e8d0ff"),
-    "viewer_required": QColor("#ffe0b0"),
-    "viewer_support":  QColor("#d0ffe8"),
-    "none":            QColor("#f0f0f0"),
+    "processing":           QColor("#d0e8ff"),
+    "viewer":               QColor("#e8d0ff"),
+    "viewer_required":      QColor("#ffe0b0"),
+    "viewer_support":       QColor("#d0ffe8"),
+    "none":                 QColor("#f0f0f0"),
+    "foundation":           QColor("#e0e0e0"),
+    "spatial_sensitivity":  QColor("#d0e8ff"),
+    "stimulus_sensitivity": QColor("#ffe0d0"),
+    "cross_domain":         QColor("#d0f0d0"),
 }
 _CATEGORY_BORDER_COLORS: dict[str, QColor] = {
-    "processing":      QColor("#2255aa"),
-    "viewer":          QColor("#6622aa"),
-    "viewer_required": QColor("#aa6600"),
-    "viewer_support":  QColor("#006633"),
-    "none":            QColor("#666666"),
+    "processing":           QColor("#2255aa"),
+    "viewer":               QColor("#6622aa"),
+    "viewer_required":      QColor("#aa6600"),
+    "viewer_support":       QColor("#006633"),
+    "none":                 QColor("#666666"),
+    "foundation":           QColor("#888888"),
+    "spatial_sensitivity":  QColor("#2255aa"),
+    "stimulus_sensitivity": QColor("#aa5522"),
+    "cross_domain":         QColor("#226633"),
 }
 _COLOR_BG_DISABLED = QColor("#e8e8e8")
 _COLOR_BORDER_DISABLED = QColor("#888888")

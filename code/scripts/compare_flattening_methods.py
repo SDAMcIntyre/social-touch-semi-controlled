@@ -303,7 +303,7 @@ if __name__ == "__main__":
     # The PCA rotation is used only as a stand-in for the saved per-session
     # RF-camera rotation.  It gives the projections a geometrically meaningful
     # coordinate frame (longest forearm axis = row 0) without requiring a
-    # previously run set_rf_camera_settings session.
+    # previously run spatial_set_camera session.
     rotation_matrix = _pca_rotation(V)
 
     print("Running TangentPlane projection ...")

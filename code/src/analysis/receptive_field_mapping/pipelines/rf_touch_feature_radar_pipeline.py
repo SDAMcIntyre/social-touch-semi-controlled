@@ -98,7 +98,7 @@ def _find_feature_csv(db_path: Path, aggregation: str, session_id: str) -> Path:
         raise ValueError(
             f"No touch feature CSV found for session '{session_id}' under "
             f"{feature_dir}. "
-            f"Ensure 'touch_feature_extraction' with aggregation '{aggregation}' has run."
+            f"Ensure 'stimulus_extract_features' with aggregation '{aggregation}' has run."
         )
     if len(candidates) > 1:
         raise ValueError(
@@ -284,7 +284,7 @@ def _resolve_radar_columns(
                     raise ValueError(
                         f"_resolve_radar_columns: expected column '{col}' not found "
                         f"in DataFrame. Available columns: {sorted(df.columns)}. "
-                        f"Ensure 'touch_feature_extraction' with aggregation '{agg}' "
+                        f"Ensure 'stimulus_extract_features' with aggregation '{agg}' "
                         f"has run for this session."
                     )
                 column_names.append(col)

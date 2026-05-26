@@ -1,6 +1,6 @@
 """Per-cell scalar metrics for population RF grid heatmaps.
 
-Operates on vertex-level IFF arrays ``(V,)`` produced by ``map_population_rf_grid``.
+Operates on vertex-level IFF arrays ``(V,)`` produced by ``cross_map_feature_grid``.
 Reuses ``compute_rf_metrics()`` for all spatial/shape/Gaussian metrics and adds
 IFF-specific intensity, topographic, distributional, and boundary-shape metrics.
 

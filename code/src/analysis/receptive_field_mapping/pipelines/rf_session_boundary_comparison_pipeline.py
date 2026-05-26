@@ -247,7 +247,7 @@ def _build_summary_dataframe(
         if not npz_path.exists():
             raise FileNotFoundError(
                 f"[Session RF Boundary Comparison] {session_id}: NPZ not found at "
-                f"{npz_path} — run extract_population_rf_response_field_boundaries first."
+                f"{npz_path} — run spatial_extract_boundaries first."
             )
 
         logger.info("[Session RF Boundary Comparison] loading %s", session_id)

@@ -1,4 +1,4 @@
-"""Dialog for creating or editing a grid group spec in map_population_rf_grid.
+"""Dialog for creating or editing a grid group spec in cross_map_feature_grid.
 
 The dialog composes fully-qualified feature names of the form
 ``<data_type>_<aggregation_or_extractor>`` and edits the four per-feature

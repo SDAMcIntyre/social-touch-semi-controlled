@@ -77,6 +77,16 @@ _OPTION_ENUMS: dict[str, list[tuple[str, object]]] = {
         ("Linear (default)", "linear"),
         ("Logarithmic", "log"),
     ],
+    "cmap": [
+        ("Jet", "jet"),
+        ("Nipy Spectral", "nipy_spectral"),
+        ("Rainbow", "rainbow"),
+        ("Turbo", "turbo"),
+    ],
+    "neuron_mode": [
+        ("IFF (default)", "iff"),
+        ("Spike", "spike"),
+    ],
 }
 
 
@@ -739,13 +749,13 @@ class TaskDetailPanel(QWidget):
         return box
 
     def _make_downstream_cluster_groups_section(self, key: str, val: list) -> QWidget:
-        """Checkbox per group defined in touch_clustering; checked if this task references it."""
+        """Checkbox per group defined in stimulus_cluster_touches; checked if this task references it."""
         box = QGroupBox("Cluster Groups")
         layout = QVBoxLayout(box)
         layout.setContentsMargins(6, 4, 6, 4)
         layout.setSpacing(4)
 
-        sub_lbl = QLabel("From touch_clustering:")
+        sub_lbl = QLabel("From stimulus_cluster_touches:")
         sub_font = QFont()
         sub_font.setItalic(True)
         sub_lbl.setFont(sub_font)
@@ -753,12 +763,12 @@ class TaskDetailPanel(QWidget):
         layout.addWidget(sub_lbl)
 
         try:
-            all_groups = self._model.get_profile_names("touch_clustering", "cluster_groups")
+            all_groups = self._model.get_profile_names("stimulus_cluster_touches", "cluster_groups")
         except (KeyError, AttributeError):
             all_groups = []
 
         if not all_groups:
-            info = QLabel("No cluster groups defined in touch_clustering.")
+            info = QLabel("No cluster groups defined in stimulus_cluster_touches.")
             info.setStyleSheet("color: #888;")
             layout.addWidget(info)
             return box
@@ -1308,7 +1318,7 @@ class TaskDetailPanel(QWidget):
             if self._model is None:
                 return
             try:
-                spec = self._model.get_cluster_group_spec("touch_clustering", group_name)
+                spec = self._model.get_cluster_group_spec("stimulus_cluster_touches", group_name)
             except KeyError:
                 return
             dlg = ClusterGroupReadOnlyDialog(group_name, spec, self)

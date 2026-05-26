@@ -65,7 +65,7 @@ def _compare_one_clusterer(
     if not pooled_csv.exists():
         logging.warning(
             f"[{combo_label}/{clusterer_name}] Clustered CSV not found: {pooled_csv}. "
-            "Run touch_clustering first."
+            "Run stimulus_cluster_touches first."
         )
         return
 
@@ -229,7 +229,7 @@ def run_comparing(
         List of group names to compare (new schema).  Must accompany
         *cluster_group_defs* which supplies the full group specs.
     cluster_group_defs
-        Dict mapping group_name -> group_spec (from touch_clustering config).
+        Dict mapping group_name -> group_spec (from stimulus_cluster_touches config).
         Required when *cluster_groups* is provided.
     feature_combinations
         **DEPRECATED.** Dict of combination_name -> config for directory discovery.

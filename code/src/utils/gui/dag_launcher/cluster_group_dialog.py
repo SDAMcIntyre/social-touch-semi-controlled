@@ -1,4 +1,4 @@
-"""Dialog for creating or editing a cluster group spec in touch_clustering."""
+"""Dialog for creating or editing a cluster group spec in stimulus_cluster_touches."""
 
 from __future__ import annotations
 
@@ -535,8 +535,8 @@ class ClusterGroupDialog(QDialog):
 class ClusterGroupReadOnlyDialog(QDialog):
     """Read-only detail view of a cluster group spec.
 
-    Opened via the 'Details…' button in downstream task panels (touch_comparing,
-    map_receptive_fields_clustered) to inspect a group defined in touch_clustering.
+    Opened via the 'Details…' button in downstream task panels (stimulus_compare_clusters,
+    cross_render_cluster_rf) to inspect a group defined in stimulus_cluster_touches.
     """
 
     def __init__(self, name: str, spec: dict, parent: QWidget | None = None) -> None:

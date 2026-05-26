@@ -5,7 +5,7 @@ For each session, reads all single touches from the prepared CSV via
 using the same pattern as the Touch Playback Explorer, and saves results as
 a single sparse ``.npz`` file per session.
 
-Depends on: ``touch_preparation`` (reads ``<session>_prepared.csv``).
+Depends on: ``touch_prepare_sessions`` (reads ``<session>_prepared.csv``).
 """
 
 import json
@@ -123,7 +123,7 @@ def run_single_touch_rf_mapping(
         accumulated per vertex.
     preparation_dir:
         Directory containing ``<session>_prepared.csv`` files produced by
-        ``touch_preparation``.  If ``None``, raises ``ValueError`` immediately
+        ``touch_prepare_sessions``.  If ``None``, raises ``ValueError`` immediately
         since prepared CSVs are a hard dependency.
 
     Returns
@@ -139,7 +139,7 @@ def run_single_touch_rf_mapping(
     if preparation_dir is None:
         raise ValueError(
             "run_single_touch_rf_mapping: 'preparation_dir' is required — "
-            "this task depends on touch_preparation output."
+            "this task depends on touch_prepare_sessions output."
         )
 
     preparation_dir = Path(preparation_dir)
@@ -171,7 +171,7 @@ def run_single_touch_rf_mapping(
         if not prepared_csv.exists():
             raise ValueError(
                 f"[Single-Touch RF] {session_id}: prepared CSV not found at "
-                f"{prepared_csv}. Run touch_preparation first."
+                f"{prepared_csv}. Run touch_prepare_sessions first."
             )
 
         # --- Resolve forearm PLY ---

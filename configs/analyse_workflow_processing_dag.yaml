@@ -5,10 +5,10 @@
 parameters:
   # List of directories containing Kinect session config files to scan.
   # Paths are relative to configs/kinect_configs/.
-  kinect_configs: [valid_configs_ST13-01, valid_configs_ST13-02, 
-      valid_configs_ST13-03, valid_configs_ST14-01, valid_configs_ST14-02, 
-      valid_configs_ST14-04, valid_configs_ST15-01, valid_configs_ST16-02, 
-      valid_configs_ST16-03, valid_configs_ST16-05, valid_configs_ST18-01, 
+  kinect_configs: [valid_configs_ST13-01, valid_configs_ST13-02,
+      valid_configs_ST13-03, valid_configs_ST14-01, valid_configs_ST14-02,
+      valid_configs_ST14-04, valid_configs_ST15-01, valid_configs_ST16-02,
+      valid_configs_ST16-03, valid_configs_ST16-05, valid_configs_ST18-01,
       valid_configs_ST18-04]
 
 tasks:
@@ -17,8 +17,8 @@ tasks:
   # ============================================================
 
   # Block/trial structure summary. No dependencies.
-  summarize_session_blocks:
-    category: processing
+  touch_summarize_blocks:
+    category: foundation
     enabled: true
     options:
       force_processing: false
@@ -27,8 +27,8 @@ tasks:
   # Stage 1 (Preparation): Per-session block-ID synthesis and NaN-gap interpolation.
   # Produces a cleaned CSV with no NaN gaps in touch columns within each touch group.
   # Output: 4_analysed/preparation/<session>_prepared.csv
-  touch_preparation:
-    category: processing
+  touch_prepare_sessions:
+    category: foundation
     enabled: true
     options:
       force_processing: false
@@ -38,23 +38,23 @@ tasks:
     depends_on: []
 
   # Per-touch RF mapping: accumulate per-vertex neuron values for every single touch.
-  # Reads the prepared CSV produced by touch_preparation and saves sparse vertex-value
+  # Reads the prepared CSV produced by touch_prepare_sessions and saves sparse vertex-value
   # pairs per touch as an .npz file.
   # Output: 4_analysed/single_touch_rf_maps/<session_id>/single_touch_rf_maps.npz
-  map_single_touch_rf:
-    category: processing
+  spatial_map_single_touch:
+    category: spatial_sensitivity
     enabled: true
     options:
       force_processing: false
       neuron_mode: iff
-    depends_on: [touch_preparation]
+    depends_on: [touch_prepare_sessions]
 
   # Stage 2a (Series Transforms): Per-session kinematics, pressure, and MoS computation.
   # Adds hand_velocity_x/y/z, hand_acceleration_x/y/z, pressure, and (when enabled) MoS
   # columns to each session CSV.
   # Output: 4_analysed/series_transforms/<session>_series_augmented.csv
-  touch_series_transforms:
-    category: processing
+  touch_compute_series:
+    category: foundation
     enabled: true
     options:
       force_processing: false
@@ -83,26 +83,26 @@ tasks:
         hand_velocity_signed:
           enabled: true
           drop_used_inputs: false
-    depends_on: [touch_preparation]
+    depends_on: [touch_prepare_sessions]
 
   # RF Camera Settings: interactively set camera orientation per session.
-  # Required before running visualize_receptive_fields_clustered,
-  # reduce_population_rf_grid, and any other downstream RF projection task.
+  # Required before running cross_render_cluster_rf,
+  # cross_extract_grid_metrics, and any other downstream RF projection task.
   # Saves to 4_analysed/rf_camera_settings/rf_camera_settings.json.
   # Output: interactive GUI + rf_camera_settings.json
-  set_rf_camera_settings:
+  spatial_set_camera:
     category: viewer_required
     enabled: true
     options:
       force_processing: false
-    depends_on: [touch_series_transforms]
+    depends_on: [touch_compute_series]
 
   # Simple RF mapping: raw spike-position CSV + forearm heatmap per session.
   # No dependency on clustering or extraction, but requires camera settings
   # for rendering (load_rf_camera_rotation raises if absent).
   # Output: 4_analysed/receptive_field_maps_simple/<session_id>/
-  map_receptive_fields_simple:
-    category: processing
+  spatial_map_baseline:
+    category: spatial_sensitivity
     enabled: true
     options:
       force_processing: false
@@ -110,14 +110,14 @@ tasks:
       # Must be false for unattended / batch processing.
       show_interactive: false
       projection_method: cylindrical_unwrap
-    depends_on: [set_rf_camera_settings]
+    depends_on: [spatial_set_camera]
 
   # Per-session SLIM UV config GUI: opens an interactive PyQt5/PyVista viewer
   # per session that lets the researcher pick mesh_method, clean_steps,
   # n_iter, and max_edge_mm, preview the result, and save a per-session
-  # slim_uv_config.yaml consumed by precompute_forearm_slim_uv below.
+  # slim_uv_config.yaml consumed by spatial_precompute_slim_uv below.
   # Saves to 4_analysed/forearm_slim_uv/<session_id>/slim_uv_config.yaml.
-  configure_forearm_slim_uv:
+  spatial_configure_slim_uv:
     category: viewer_required
     enabled: true
     options:
@@ -136,14 +136,14 @@ tasks:
         remove_slivers: true
         stitch_boundary_gaps: true
         fill_interior_holes: true
-    depends_on: [map_single_touch_rf]
+    depends_on: [spatial_map_single_touch]
 
   # Precompute SLIM UV map per session. Caches the UV next to the forearm PLY.
-  # Requires map_single_touch_rf output (single_touch_rf_maps.npz) to compute the
+  # Requires spatial_map_single_touch output (single_touch_rf_maps.npz) to compute the
   # IFF-weighted centroid used as the UV origin (center_vid).
   # Enable when using projection_method: slim in downstream RF tasks.
-  precompute_forearm_slim_uv:
-    category: processing
+  spatial_precompute_slim_uv:
+    category: spatial_sensitivity
     enabled: true
     options:
       force_processing: false
@@ -169,15 +169,15 @@ tasks:
       # When absent, defaults to 3.0 × mean nearest-neighbour distance (auto).
       # max_edge_mm: 12.0
     depends_on:
-    - map_single_touch_rf
-    - configure_forearm_slim_uv
+    - spatial_map_single_touch
+    - spatial_configure_slim_uv
 
   # Render per-session 2D population RF heatmap PNGs projected via SLIM UV.
   # Produces one PNG per gesture subset (all, tap, stroke_proximal, stroke_distal)
   # with a session-wide consistent colour scale.
   # Output: 4_analysed/population_response_fields/<session_id>/
-  extract_population_rf_response_field_boundaries:
-    category: processing
+  spatial_extract_boundaries:
+    category: spatial_sensitivity
     enabled: true
     options:
       force_processing: true
@@ -187,36 +187,36 @@ tasks:
       inflection_sigma: 5.0
       heatmap_space: linear
       cmap: jet
-    depends_on: [map_single_touch_rf, precompute_forearm_slim_uv]
+    depends_on: [spatial_map_single_touch, spatial_precompute_slim_uv]
 
   # Aggregate inflection boundary metrics across sessions and render comparison visuals.
-  # Reads per-session NPZ files from extract_population_rf_response_field_boundaries.
+  # Reads per-session NPZ files from spatial_extract_boundaries.
   # Produces: session_rf_boundary_summary.csv, contour overlay PNGs, metric panel PNGs,
   # session-x-gesture heatmap PNGs under 4_analysed/session_rf_boundary_comparison/
-  compare_session_rf_boundaries:
-    category: processing
+  spatial_compare_boundaries:
+    category: spatial_sensitivity
     enabled: true
     options:
       force_processing: false
-    depends_on: [extract_population_rf_response_field_boundaries]
+    depends_on: [spatial_extract_boundaries]
 
   # Compare RF center positions between proximal and distal strokes per session.
-  # Reads per-session NPZ files from extract_population_rf_response_field_boundaries.
+  # Reads per-session NPZ files from spatial_extract_boundaries.
   # Produces per-session center-marked heatmap PNGs, aggregate PNG, and summary CSV.
   # Output: 4_analysed/rf_center_proximal_distal/
-  compare_rf_center_proximal_distal:
-    category: processing
+  spatial_compare_rf_centers:
+    category: spatial_sensitivity
     enabled: true
     options:
       force_processing: true
       heatmap_space: linear
       cmap: jet
-    depends_on: [extract_population_rf_response_field_boundaries]
+    depends_on: [spatial_extract_boundaries]
 
   # Stage 2b (Feature Extraction): Per-session feature extraction. Each enabled feature extracts to its own folder.
   # Output: 4_analysed/touch_features/<feature>/<session>_touch_summary.csv
-  touch_feature_extraction:
-    category: processing
+  stimulus_extract_features:
+    category: stimulus_sensitivity
     enabled: true
     options:
       force_processing: false
@@ -244,10 +244,10 @@ tasks:
         mean_before_iff:
           enabled: true
           pre_iff_window_ms: 250
-    depends_on: [touch_series_transforms]
+    depends_on: [touch_compute_series]
 
-  render_touch_feature_radar:
-    category: processing
+  stimulus_render_radar:
+    category: stimulus_sensitivity
     enabled: false
     options:
       force_processing: false
@@ -261,13 +261,13 @@ tasks:
             - mean_during_iff
             hand_velocity_amplitude:
             - mean_during_iff
-    depends_on: [touch_feature_extraction]
+    depends_on: [stimulus_extract_features]
 
   # Population RF grid: sweep N-D feature space, average single-touch RFs per cell.
-  # Depends on: map_single_touch_rf (RF maps), touch_feature_extraction (feature CSVs).
+  # Depends on: spatial_map_single_touch (RF maps), stimulus_extract_features (feature CSVs).
   # Output: 4_analysed/population_rf_grid/<session_id>/
-  map_population_rf_grid:
-    category: processing
+  cross_map_feature_grid:
+    category: cross_domain
     enabled: false
     options:
       force_processing: false
@@ -297,24 +297,24 @@ tasks:
           compute_baseline: true
           features:
             contact_depth_mean: {min: 0.0, max: 10.0, step: 0.1, span: 0.2}
-            hand_velocity_amplitude_mean: {min: 0.0, max: 500.0, step: 5.0, span: 
+            hand_velocity_amplitude_mean: {min: 0.0, max: 500.0, step: 5.0, span:
                 10.0}
-    depends_on: [map_single_touch_rf, touch_feature_extraction]
+    depends_on: [spatial_map_single_touch, stimulus_extract_features]
 
   # Reduces per-gesture-type population RF grid NPZ files to scalar metric CSVs.
   # Output: 4_analysed/population_rf_grid_metrics/<session_id>/
-  reduce_population_rf_grid:
-    category: processing
+  cross_extract_grid_metrics:
+    category: cross_domain
     enabled: false
     options:
       force_processing: false
       projection_method: tangent_plane
-    depends_on: [map_population_rf_grid, set_rf_camera_settings]
+    depends_on: [cross_map_feature_grid, spatial_set_camera]
 
   # Renders per-IFF-metric heatmap PNGs from population RF grid metrics CSVs.
   # Output: 4_analysed/population_rf_grid_metrics_heatmaps/<metric>/
-  visualize_population_rf_grid_metrics:
-    category: processing
+  cross_render_grid_metrics:
+    category: cross_domain
     enabled: true
     options:
       force_processing: false
@@ -325,14 +325,14 @@ tasks:
       - hotspot_area_mm2
       - threshold_area_mm2
       - convex_hull_area_mm2
-    depends_on: [reduce_population_rf_grid]
+    depends_on: [cross_extract_grid_metrics]
 
   # Cross-session comparison heatmap: 1D population RF grid + per-gesture heatmap PNGs.
   # Renders one PNG per gesture type with sessions on Y-axis, velocity bins on X-axis,
   # and color encoding a configurable RF metric (default: mean_iff).
   # Output: 4_analysed/session_comparison/session_comparison_heatmaps/<metric>/
-  visualize_session_comparison:
-    category: processing
+  cross_render_sessions:
+    category: cross_domain
     enabled: true
     options:
       force_processing: true
@@ -346,14 +346,14 @@ tasks:
           max: 500
           step: 25
           span: 50
-    depends_on: [map_single_touch_rf, touch_feature_extraction, 
-        set_rf_camera_settings]
+    depends_on: [spatial_map_single_touch, stimulus_extract_features,
+        spatial_set_camera]
 
   # Stages 3–5 (Reduction + Clustering + Evaluation): Global clustering on pooled feature CSVs.
   # Each cluster_group defines which data types / aggregations to use and its own clustering_methods.
   # Output: 4_analysed/touch_clusters/<group_name>/<clusterer>/
-  touch_clustering:
-    category: processing
+  stimulus_cluster_touches:
+    category: stimulus_sensitivity
     enabled: false
     options:
       force_processing: false
@@ -529,13 +529,13 @@ tasks:
           n_rounds: 20
           subsample_fraction: 0.8
           score: adjusted_rand_index
-    depends_on: [touch_feature_extraction]
+    depends_on: [stimulus_extract_features]
 
   # Post-pipeline analysis: Statistical comparison of sensor measurements across strata.
-  # Discovers clustered CSVs on disk — references cluster_groups by name from touch_clustering.
+  # Discovers clustered CSVs on disk — references cluster_groups by name from stimulus_cluster_touches.
   # Output: 4_analysed/touch_comparisons/<group_name>/<clusterer>/
-  touch_comparing:
-    category: processing
+  stimulus_compare_clusters:
+    category: stimulus_sensitivity
     enabled: false
     options:
       force_processing: false
@@ -556,41 +556,41 @@ tasks:
           sensor_col: session_id
       min_instances_per_sensor: 5
       min_sensor_types: 2
-    depends_on: [touch_clustering]
+    depends_on: [stimulus_cluster_touches]
 
-  # Consumes output from touch_feature_extraction
-  analyse_ap_efficacy:
-    category: processing
+  # Consumes output from stimulus_extract_features
+  stimulus_analyse_efficacy:
+    category: stimulus_sensitivity
     enabled: false
     options:
       force_processing: false
-    depends_on: [touch_feature_extraction]
+    depends_on: [stimulus_extract_features]
 
   # Step 1 of split pipeline: CSV parsing, spike counting, artifact writing.
   # Idempotent against clustered CSV mtime; does not re-run on vis-param changes.
-  extract_receptive_fields_clustered:
-    category: processing
+  cross_extract_cluster_rf:
+    category: cross_domain
     enabled: false
     options:
       force_processing: false
       cluster_groups: [pressure_velocity_mean_cartesian_binning]
-    depends_on: [touch_clustering]
+    depends_on: [stimulus_cluster_touches]
 
   # Step 2a of split pipeline: RF metrics computation (centroid, hull area, Gaussian fit).
   # Re-runs only when projection_method changes or force=true. Independent of rendering params.
-  compute_receptive_field_metrics:
-    category: processing
+  cross_compute_cluster_metrics:
+    category: cross_domain
     enabled: false
     options:
       force_processing: false
       cluster_groups: [pressure_velocity_mean_cartesian_binning]
       projection_method: cylindrical_unwrap
-    depends_on: [extract_receptive_fields_clustered, set_rf_camera_settings]
+    depends_on: [cross_extract_cluster_rf, spatial_set_camera]
 
   # Step 2b of split pipeline: 2D heatmap rendering.
   # Re-runs only when disjoint_mask_distance_mm changes or force=true. Independent of metrics params.
-  visualize_receptive_fields_clustered:
-    category: processing
+  cross_render_cluster_rf:
+    category: cross_domain
     enabled: false
     options:
       force_processing: false
@@ -602,24 +602,4 @@ tasks:
       # enabled: false → skip camera assignment.
       camera_angle_mode:
         enabled: false
-    depends_on: [extract_receptive_fields_clustered, set_rf_camera_settings]
-
-  # ============================================================
-  # Legacy / Deprecated
-  # ============================================================
-
-  # DEPRECATED: Cluster-based RF mapping (monolithic). Calls extraction then visualization in
-  # one step and may launch a blocking GUI. Use extract_receptive_fields_clustered +
-  # visualize_receptive_fields_clustered instead.
-  # Output: 4_analysed/receptive_field_maps_clustered/<combination>/<clusterer>/
-  map_receptive_fields_clustered:
-    category: processing
-    enabled: false
-    options:
-      force_processing: false
-      camera_angle_mode:
-        enabled: true
-      cluster_groups: [kinematics_simple_mean, pressure_velocity_mean]
-      projection_method: cylindrical_unwrap
-      disjoint_mask_distance_mm: 8.0
-    depends_on: [touch_clustering, set_rf_camera_settings]
+    depends_on: [cross_extract_cluster_rf, spatial_set_camera]

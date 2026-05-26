@@ -59,7 +59,7 @@ from analysis.pipeline import collect_unique_session_dirs, discover_input_items,
 
 def _collect_unified_files(input_items: List[Tuple[Path, Path]]) -> List[Path]:
     """
-    Reconstruct expected paths of touch-summary CSVs written by touch_feature_extraction.
+    Reconstruct expected paths of touch-summary CSVs written by stimulus_extract_features.
     Scans all extraction profile subdirectories under '4_analysed/unified_touches/'.
     Returns deduplicated list of existing paths.
     """
@@ -88,8 +88,8 @@ def _collect_unified_files(input_items: List[Tuple[Path, Path]]) -> List[Path]:
 
 # --- Processing Flows ---
 
-@flow(name="summarize_session_blocks")
-def summarize_session_blocks_flow(
+@flow(name="touch_summarize_blocks")
+def touch_summarize_blocks_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
 ) -> List[Path]:
@@ -124,8 +124,8 @@ def summarize_session_blocks_flow(
         return []
 
 
-@flow(name="map_receptive_fields_simple")
-def map_receptive_fields_simple_flow(
+@flow(name="spatial_map_baseline")
+def spatial_map_baseline_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
     show_interactive: bool = False,
@@ -151,8 +151,8 @@ def map_receptive_fields_simple_flow(
     )
 
 
-@flow(name="configure_forearm_slim_uv")
-def configure_forearm_slim_uv_flow(
+@flow(name="spatial_configure_slim_uv")
+def spatial_configure_slim_uv_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
     interactive: bool = True,
@@ -227,8 +227,8 @@ def configure_forearm_slim_uv_flow(
     launch_slim_uv_config_viewer(missing_items, dag_defaults)
 
 
-@flow(name="precompute_forearm_slim_uv")
-def precompute_forearm_slim_uv_flow(
+@flow(name="spatial_precompute_slim_uv")
+def spatial_precompute_slim_uv_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
     n_iter: int = 40,
@@ -241,7 +241,7 @@ def precompute_forearm_slim_uv_flow(
     """Precompute and cache SLIM UV maps for all sessions.
 
     For each session, loads the forearm PLY (via load_or_build_forearm_mesh)
-    and the single-touch RF maps NPZ (from map_single_touch_rf output), runs
+    and the single-touch RF maps NPZ (from spatial_map_single_touch output), runs
     SLIM, and caches the UV map as
     ``4_analysed/forearm_slim_uv/<session_id>/<session_id>_slim_uv.npz``.
 
@@ -249,7 +249,7 @@ def precompute_forearm_slim_uv_flow(
     single-touch RF maps, giving a neuroscientifically meaningful anchor point.
 
     Per-session ``slim_uv_config.yaml`` files written by
-    ``configure_forearm_slim_uv_flow`` override the DAG-level params on a
+    ``spatial_configure_slim_uv_flow`` override the DAG-level params on a
     session-by-session basis.  Missing per-session YAML legitimately falls
     back to DAG defaults (designed behaviour per the plan).
     """
@@ -378,8 +378,8 @@ def precompute_forearm_slim_uv_flow(
     return results
 
 
-@flow(name="map_single_touch_rf")
-def map_single_touch_rf_flow(
+@flow(name="spatial_map_single_touch")
+def spatial_map_single_touch_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
     neuron_mode: str = "iff",
@@ -387,7 +387,7 @@ def map_single_touch_rf_flow(
 ) -> List[Path]:
     """Per-touch RF mapping: accumulate per-vertex neuron values for every single touch.
 
-    Reads the prepared CSV produced by ``touch_preparation`` via
+    Reads the prepared CSV produced by ``touch_prepare_sessions`` via
     ``load_playback_data()``, accumulates IFF or spike values per forearm vertex
     for each touch event, and saves results as a sparse ``.npz`` file.
     Output: ``4_analysed/single_touch_rf_maps/<session_id>/``
@@ -405,8 +405,8 @@ def map_single_touch_rf_flow(
     )
 
 
-@flow(name="extract_population_rf_response_field_boundaries")
-def extract_population_rf_response_field_boundaries_flow(
+@flow(name="spatial_extract_boundaries")
+def spatial_extract_boundaries_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
     neuron_mode: str = "iff",
@@ -439,14 +439,14 @@ def extract_population_rf_response_field_boundaries_flow(
     )
 
 
-@flow(name="compare_session_rf_boundaries")
-def compare_session_rf_boundaries_flow(
+@flow(name="spatial_compare_boundaries")
+def spatial_compare_boundaries_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
 ) -> None:
     """Aggregate RF boundary metrics across sessions and render comparison visuals.
 
-    Reads per-session NPZ files produced by extract_population_rf_response_field_boundaries,
+    Reads per-session NPZ files produced by spatial_extract_boundaries,
     builds a summary CSV, and renders UV contour overlays, per-gesture metric panels,
     and session-x-gesture heatmaps.
     Output: 4_analysed/session_rf_boundary_comparison/
@@ -461,8 +461,8 @@ def compare_session_rf_boundaries_flow(
     )
 
 
-@flow(name="compare_rf_center_proximal_distal")
-def compare_rf_center_proximal_distal_flow(
+@flow(name="spatial_compare_rf_centers")
+def spatial_compare_rf_centers_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
     heatmap_space: str = "linear",
@@ -470,7 +470,7 @@ def compare_rf_center_proximal_distal_flow(
 ) -> None:
     """Compare RF center positions between proximal and distal strokes across sessions.
 
-    Reads per-session NPZ files produced by extract_population_rf_response_field_boundaries,
+    Reads per-session NPZ files produced by spatial_extract_boundaries,
     renders per-session center-marked heatmap PNGs, and produces a cross-session
     aggregate scatter plot and summary CSV.
     Output: 4_analysed/rf_center_proximal_distal/
@@ -487,8 +487,8 @@ def compare_rf_center_proximal_distal_flow(
     )
 
 
-@flow(name="map_population_rf_grid")
-def map_population_rf_grid_flow(
+@flow(name="cross_map_feature_grid")
+def cross_map_feature_grid_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
     neuron_mode: str = "iff",
@@ -518,13 +518,13 @@ def map_population_rf_grid_flow(
             if cfg.get("enabled", True)
         }
         if not enabled_groups:
-            logging.info("map_population_rf_grid_flow: all grid groups are disabled — skipping.")
+            logging.info("cross_map_feature_grid_flow: all grid groups are disabled — skipping.")
             return []
     else:
         # Backward compat: wrap flat params into a single anonymous group.
         if features is None:
             raise ValueError(
-                "map_population_rf_grid_flow: 'features' config is required — "
+                "cross_map_feature_grid_flow: 'features' config is required — "
                 "define at least one feature in the DAG config."
             )
         enabled_groups = {None: {
@@ -548,13 +548,13 @@ def map_population_rf_grid_flow(
         )
         if not series_csv_path.exists():
             raise ValueError(
-                f"map_population_rf_grid_flow: series-augmented CSV not found for "
+                f"cross_map_feature_grid_flow: series-augmented CSV not found for "
                 f"session '{session_id}': {series_csv_path}"
             )
         forearm_ply_path = resolve_forearm_ply(csv_path.parent, session_id)
         if forearm_ply_path is None:
             raise ValueError(
-                f"map_population_rf_grid_flow: forearm PLY not found for "
+                f"cross_map_feature_grid_flow: forearm PLY not found for "
                 f"session '{session_id}' in {csv_path.parent}"
             )
         npz_path = (
@@ -563,8 +563,8 @@ def map_population_rf_grid_flow(
         )
         if not npz_path.exists():
             raise ValueError(
-                f"map_population_rf_grid_flow: single_touch_rf_maps.npz not found for "
-                f"session '{session_id}': {npz_path}. Run map_single_touch_rf first."
+                f"cross_map_feature_grid_flow: single_touch_rf_maps.npz not found for "
+                f"session '{session_id}': {npz_path}. Run spatial_map_single_touch first."
             )
         resolved_items.append({
             "series_csv_path": series_csv_path,
@@ -594,8 +594,8 @@ def map_population_rf_grid_flow(
     return all_results
 
 
-@flow(name="reduce_population_rf_grid")
-def reduce_population_rf_grid_flow(
+@flow(name="cross_extract_grid_metrics")
+def cross_extract_grid_metrics_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
     projection_method: str = "tangent_plane",
@@ -603,7 +603,7 @@ def reduce_population_rf_grid_flow(
 ) -> List[Path]:
     """Reduce per-gesture-type population RF grid NPZ files to scalar metric CSVs.
 
-    Reads NPZ files produced by ``map_population_rf_grid`` and computes per-cell
+    Reads NPZ files produced by ``cross_map_feature_grid`` and computes per-cell
     scalar descriptors (IFF intensity, topographic, distributional, shape metrics).
     Output: ``4_analysed/population_rf_grid_metrics/<session_id>/`` (flat, backward compat)
     or ``4_analysed/population_rf_grid_metrics/<group_name>/<session_id>/`` (when grid_group_defs).
@@ -638,7 +638,7 @@ def reduce_population_rf_grid_flow(
             forearm_ply_path = resolve_forearm_ply(csv_path.parent, session_id)
             if forearm_ply_path is None:
                 raise ValueError(
-                    f"reduce_population_rf_grid_flow: forearm PLY not found for "
+                    f"cross_extract_grid_metrics_flow: forearm PLY not found for "
                     f"session '{session_id}' in {csv_path.parent}"
                 )
             if group_name is not None:
@@ -647,14 +647,14 @@ def reduce_population_rf_grid_flow(
                 grid_dir = db_path / '4_analysed' / 'population_rf_grid' / session_id
             if not grid_dir.exists():
                 raise ValueError(
-                    f"reduce_population_rf_grid_flow: population_rf_grid directory not found "
-                    f"for session '{session_id}': {grid_dir}. Run map_population_rf_grid first."
+                    f"cross_extract_grid_metrics_flow: population_rf_grid directory not found "
+                    f"for session '{session_id}': {grid_dir}. Run cross_map_feature_grid first."
                 )
             npz_files = list(grid_dir.glob("population_rf_grid_*.npz"))
             if not npz_files:
                 raise ValueError(
-                    f"reduce_population_rf_grid_flow: no NPZ files found for session "
-                    f"'{session_id}' in {grid_dir}. Run map_population_rf_grid first."
+                    f"cross_extract_grid_metrics_flow: no NPZ files found for session "
+                    f"'{session_id}' in {grid_dir}. Run cross_map_feature_grid first."
                 )
             resolved_items.append({
                 "forearm_ply_path": forearm_ply_path,
@@ -673,8 +673,8 @@ def reduce_population_rf_grid_flow(
     return all_results
 
 
-@flow(name="visualize_population_rf_grid_metrics")
-def visualize_population_rf_grid_metrics_flow(
+@flow(name="cross_render_grid_metrics")
+def cross_render_grid_metrics_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
     extracted_features: list = None,
@@ -682,7 +682,7 @@ def visualize_population_rf_grid_metrics_flow(
 ) -> None:
     """Render per-metric heatmap PNGs from population RF grid metrics CSVs.
 
-    Reads CSVs produced by ``reduce_population_rf_grid`` and renders one PNG
+    Reads CSVs produced by ``cross_extract_grid_metrics`` and renders one PNG
     per IFF metric per session+gesture type into a metric-organized folder.
     Output: ``4_analysed/population_rf_grid_metrics_heatmaps/<metric>/`` (flat, backward compat)
     or ``4_analysed/population_rf_grid_metrics_heatmaps/<group_name>/<metric>/`` (when grid_group_defs).
@@ -723,8 +723,8 @@ def visualize_population_rf_grid_metrics_flow(
         )
 
 
-@flow(name="visualize_session_comparison")
-def visualize_session_comparison_flow(
+@flow(name="cross_render_sessions")
+def cross_render_sessions_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
     features: dict = None,
@@ -745,7 +745,7 @@ def visualize_session_comparison_flow(
 
     if features is None:
         raise ValueError(
-            "visualize_session_comparison_flow: 'features' config is required — "
+            "cross_render_sessions_flow: 'features' config is required — "
             "define exactly one feature in the DAG config."
         )
 
@@ -761,13 +761,13 @@ def visualize_session_comparison_flow(
         )
         if not series_csv_path.exists():
             raise ValueError(
-                f"visualize_session_comparison_flow: series-augmented CSV not found for "
+                f"cross_render_sessions_flow: series-augmented CSV not found for "
                 f"session '{session_id}': {series_csv_path}"
             )
         forearm_ply_path = resolve_forearm_ply(csv_path.parent, session_id)
         if forearm_ply_path is None:
             raise ValueError(
-                f"visualize_session_comparison_flow: forearm PLY not found for "
+                f"cross_render_sessions_flow: forearm PLY not found for "
                 f"session '{session_id}' in {csv_path.parent}"
             )
         npz_path = (
@@ -776,8 +776,8 @@ def visualize_session_comparison_flow(
         )
         if not npz_path.exists():
             raise ValueError(
-                f"visualize_session_comparison_flow: single_touch_rf_maps.npz not found for "
-                f"session '{session_id}': {npz_path}. Run map_single_touch_rf first."
+                f"cross_render_sessions_flow: single_touch_rf_maps.npz not found for "
+                f"session '{session_id}': {npz_path}. Run spatial_map_single_touch first."
             )
         resolved_items.append({
             "series_csv_path": series_csv_path,
@@ -799,8 +799,8 @@ def visualize_session_comparison_flow(
     )
 
 
-@flow(name="touch_preparation")
-def touch_preparation_flow(
+@flow(name="touch_prepare_sessions")
+def touch_prepare_sessions_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
     preparation: dict = None,
@@ -821,8 +821,8 @@ def touch_preparation_flow(
     )
 
 
-@flow(name="touch_series_transforms")
-def touch_series_transforms_flow(
+@flow(name="touch_compute_series")
+def touch_compute_series_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
     transforms: dict = None,
@@ -845,8 +845,8 @@ def touch_series_transforms_flow(
     )
 
 
-@flow(name="touch_feature_extraction")
-def touch_feature_extraction_flow(
+@flow(name="stimulus_extract_features")
+def stimulus_extract_features_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
     features: dict = None,
@@ -874,8 +874,8 @@ def touch_feature_extraction_flow(
     return [path for paths in per_feature.values() for path in paths]
 
 
-@flow(name="render_touch_feature_radar")
-def render_touch_feature_radar_flow(
+@flow(name="stimulus_render_radar")
+def stimulus_render_radar_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
     radar_groups: dict = None,
@@ -895,8 +895,8 @@ def render_touch_feature_radar_flow(
     )
 
 
-@flow(name="touch_clustering")
-def touch_clustering_flow(
+@flow(name="stimulus_cluster_touches")
+def stimulus_cluster_touches_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
     cluster_groups: Optional[dict] = None,
@@ -907,7 +907,7 @@ def touch_clustering_flow(
 ) -> List[Path]:
     """
     Stage 2: Global clustering on pooled feature CSVs.
-    Discovers CSVs written by touch_feature_extraction, merges per group,
+    Discovers CSVs written by stimulus_extract_features, merges per group,
     and writes
     ``4_analysed/touch_clusters/<group>/<clusterer>/pooled_touch_summary_clustered.csv``.
     """
@@ -929,8 +929,8 @@ def touch_clustering_flow(
     return [path for paths in per_key.values() for path in paths]
 
 
-@flow(name="touch_comparing")
-def touch_comparing_flow(
+@flow(name="stimulus_compare_clusters")
+def stimulus_compare_clusters_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
     cluster_groups: list = None,
@@ -943,7 +943,7 @@ def touch_comparing_flow(
 ) -> List[Path]:
     """
     Stage 3: Statistical comparison of sensor measurements across strata.
-    Discovers clustered CSVs written by touch_clustering and writes
+    Discovers clustered CSVs written by stimulus_cluster_touches and writes
     per-strategy result JSONs and a dispersion-weighted synthesis report.
     """
     print(f"[Batch Analysis] Running touch comparing for {len(input_items)} item(s)...")
@@ -965,8 +965,8 @@ def touch_comparing_flow(
     )
 
 
-@flow(name="analyse_ap_efficacy")
-def analyse_ap_efficacy_flow(
+@flow(name="stimulus_analyse_efficacy")
+def stimulus_analyse_efficacy_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False
 ) -> List[Path]:
@@ -1004,49 +1004,8 @@ def analyse_ap_efficacy_flow(
         logging.warning("No unified summary files found. Run 'unified_touch_analysis' first.")
         return []
 
-@flow(name="map_receptive_fields_clustered")
-def map_receptive_fields_clustered_flow(
-    input_items: List[Tuple[Path, Path]],
-    force_processing: bool = False,
-    cluster_groups: list = None,
-    cluster_group_defs: dict = None,
-    feature_combinations: dict = None,
-    clustering_profiles: dict = None,
-    projection_method: str = None,
-    disjoint_mask_distance_mm: float = 8.0,
-) -> List[Path]:
-    """
-    Cluster-based RF mapping: spike-count heatmaps per cluster from touch_clustering output.
-    Reads pooled_touch_summary_clustered.csv, forward-fills contact_points (30Hz->1kHz),
-    counts spikes per (x,y,z) point, and renders 3D forearm heatmap PNGs.
-    Output: ``4_analysed/receptive_field_maps_clustered/<group>/<clusterer>/``
-    """
-    print(f"[Batch Analysis] Running cluster-based RF mapping for {len(input_items)} item(s)...")
-    if not input_items:
-        return []
-
-    database_path = input_items[0][1]
-    clustering_dir = database_path / '4_analysed' / 'touch_clusters'
-    output_dir = database_path / '4_analysed' / 'receptive_field_maps_clustered'
-
-    result = run_cluster_rf_mapping(
-        clustering_dir=clustering_dir,
-        input_items=input_items,
-        output_dir=output_dir,
-        cluster_groups=cluster_groups,
-        cluster_group_defs=cluster_group_defs,
-        feature_combinations=feature_combinations,
-        clustering_profiles=clustering_profiles,
-        force=force_processing,
-        projection_method=projection_method,
-        disjoint_mask_distance_mm=disjoint_mask_distance_mm,
-    )
-
-    return result
-
-
-@flow(name="extract_receptive_fields_clustered")
-def extract_receptive_fields_clustered_flow(
+@flow(name="cross_extract_cluster_rf")
+def cross_extract_cluster_rf_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
     cluster_groups: list = None,
@@ -1079,8 +1038,8 @@ def extract_receptive_fields_clustered_flow(
     )
 
 
-@flow(name="compute_receptive_field_metrics")
-def compute_receptive_field_metrics_flow(
+@flow(name="cross_compute_cluster_metrics")
+def cross_compute_cluster_metrics_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
     cluster_groups: list = None,
@@ -1119,8 +1078,8 @@ def compute_receptive_field_metrics_flow(
     )
 
 
-@flow(name="visualize_receptive_fields_clustered")
-def visualize_receptive_fields_clustered_flow(
+@flow(name="cross_render_cluster_rf")
+def cross_render_cluster_rf_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
     cluster_groups: list = None,
@@ -1164,14 +1123,14 @@ def visualize_receptive_fields_clustered_flow(
     return result
 
 
-@flow(name="set_rf_camera_settings")
-def set_rf_camera_settings_flow(
+@flow(name="spatial_set_camera")
+def spatial_set_camera_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
 ) -> None:
     """
     Launch the RF Camera Settings GUI for the given sessions.
-    Reads series-augmented CSVs produced by ``touch_series_transforms``.
+    Reads series-augmented CSVs produced by ``touch_compute_series``.
     Allows the researcher to interactively set the camera orientation per
     session and save it. Settings are consumed by all downstream RF rendering
     and projection tasks.
@@ -1274,254 +1233,241 @@ def _build_pipeline_stages(dag_handler: DagConfigHandler, items_to_process) -> l
     database_path = items_to_process[0][1] if items_to_process else None
 
     def _preparation_dir() -> Optional[Path]:
-        if database_path is not None and _task_enabled("touch_preparation"):
+        if database_path is not None and _task_enabled("touch_prepare_sessions"):
             return database_path / '4_analysed' / 'preparation'
         return None
 
     def _series_dir() -> Optional[Path]:
-        if database_path is not None and _task_enabled("touch_series_transforms"):
+        if database_path is not None and _task_enabled("touch_compute_series"):
             return database_path / '4_analysed' / 'series_transforms'
         return None
 
     return [
         {
-            "name": "summarize_session_blocks",
-            "func": summarize_session_blocks_flow,
+            "name": "touch_summarize_blocks",
+            "func": touch_summarize_blocks_flow,
             "params": lambda: {},
         },
         {
-            "name": "touch_preparation",
-            "func": touch_preparation_flow,
+            "name": "touch_prepare_sessions",
+            "func": touch_prepare_sessions_flow,
             "params": lambda: {
-                "preparation": dag_handler.get_task_options("touch_preparation").get("preparation"),
+                "preparation": dag_handler.get_task_options("touch_prepare_sessions").get("preparation"),
             },
         },
         {
-            "name": "map_single_touch_rf",
-            "func": map_single_touch_rf_flow,
+            "name": "spatial_map_single_touch",
+            "func": spatial_map_single_touch_flow,
             "params": lambda: {
-                "neuron_mode": dag_handler.get_task_options("map_single_touch_rf").get("neuron_mode", "iff"),
+                "neuron_mode": dag_handler.get_task_options("spatial_map_single_touch").get("neuron_mode", "iff"),
                 "preparation_dir": _preparation_dir(),
             },
         },
         {
-            "name": "touch_series_transforms",
-            "func": touch_series_transforms_flow,
+            "name": "touch_compute_series",
+            "func": touch_compute_series_flow,
             "params": lambda: {
-                "transforms": dag_handler.get_task_options("touch_series_transforms").get("transforms"),
+                "transforms": dag_handler.get_task_options("touch_compute_series").get("transforms"),
                 "preparation_dir": _preparation_dir(),
             },
         },
         {
-            "name": "set_rf_camera_settings",
-            "func": set_rf_camera_settings_flow,
+            "name": "spatial_set_camera",
+            "func": spatial_set_camera_flow,
             "params": lambda: {},
         },
         {
-            "name": "map_receptive_fields_simple",
-            "func": map_receptive_fields_simple_flow,
+            "name": "spatial_map_baseline",
+            "func": spatial_map_baseline_flow,
             "params": lambda: {
-                "show_interactive": dag_handler.get_task_options("map_receptive_fields_simple").get("show_interactive", False),
-                "projection_method": dag_handler.get_task_options("map_receptive_fields_simple").get("projection_method"),
-                "save_diagnostics": bool(dag_handler.get_task_options("map_receptive_fields_simple").get("save_diagnostics", False)),
+                "show_interactive": dag_handler.get_task_options("spatial_map_baseline").get("show_interactive", False),
+                "projection_method": dag_handler.get_task_options("spatial_map_baseline").get("projection_method"),
+                "save_diagnostics": bool(dag_handler.get_task_options("spatial_map_baseline").get("save_diagnostics", False)),
             },
         },
         {
-            "name": "configure_forearm_slim_uv",
-            "func": configure_forearm_slim_uv_flow,
+            "name": "spatial_configure_slim_uv",
+            "func": spatial_configure_slim_uv_flow,
             "params": lambda: {
-                "interactive": bool(dag_handler.get_task_options("configure_forearm_slim_uv").get("interactive", True)),
-                "mesh_method": str(dag_handler.get_task_options("configure_forearm_slim_uv").get("mesh_method", "bpa")),
-                "max_edge_mm": float(dag_handler.get_task_options("configure_forearm_slim_uv").get("max_edge_mm", 0.0)),
-                "n_iter": int(dag_handler.get_task_options("configure_forearm_slim_uv").get("n_iter", 40)),
-                "save_diagnostics": bool(dag_handler.get_task_options("configure_forearm_slim_uv").get("save_diagnostics", True)),
-                "clean_steps": dag_handler.get_task_options("configure_forearm_slim_uv").get("clean_steps"),
+                "interactive": bool(dag_handler.get_task_options("spatial_configure_slim_uv").get("interactive", True)),
+                "mesh_method": str(dag_handler.get_task_options("spatial_configure_slim_uv").get("mesh_method", "bpa")),
+                "max_edge_mm": float(dag_handler.get_task_options("spatial_configure_slim_uv").get("max_edge_mm", 0.0)),
+                "n_iter": int(dag_handler.get_task_options("spatial_configure_slim_uv").get("n_iter", 40)),
+                "save_diagnostics": bool(dag_handler.get_task_options("spatial_configure_slim_uv").get("save_diagnostics", True)),
+                "clean_steps": dag_handler.get_task_options("spatial_configure_slim_uv").get("clean_steps"),
             },
         },
         {
-            "name": "precompute_forearm_slim_uv",
-            "func": precompute_forearm_slim_uv_flow,
+            "name": "spatial_precompute_slim_uv",
+            "func": spatial_precompute_slim_uv_flow,
             "params": lambda: {
-                "n_iter": int(dag_handler.get_task_options("precompute_forearm_slim_uv").get("n_iter", 40)),
-                "save_diagnostics": bool(dag_handler.get_task_options("precompute_forearm_slim_uv").get("save_diagnostics", False)),
-                "interactive": bool(dag_handler.get_task_options("precompute_forearm_slim_uv").get("interactive", False)),
-                "clean_steps": dag_handler.get_task_options("precompute_forearm_slim_uv").get("clean_steps"),
-                "mesh_method": str(dag_handler.get_task_options("precompute_forearm_slim_uv").get("mesh_method", "bpa")),
+                "n_iter": int(dag_handler.get_task_options("spatial_precompute_slim_uv").get("n_iter", 40)),
+                "save_diagnostics": bool(dag_handler.get_task_options("spatial_precompute_slim_uv").get("save_diagnostics", False)),
+                "interactive": bool(dag_handler.get_task_options("spatial_precompute_slim_uv").get("interactive", False)),
+                "clean_steps": dag_handler.get_task_options("spatial_precompute_slim_uv").get("clean_steps"),
+                "mesh_method": str(dag_handler.get_task_options("spatial_precompute_slim_uv").get("mesh_method", "bpa")),
                 **(
-                    {"max_edge_mm": float(dag_handler.get_task_options("precompute_forearm_slim_uv")["max_edge_mm"])}
-                    if dag_handler.get_task_options("precompute_forearm_slim_uv").get("max_edge_mm") is not None
+                    {"max_edge_mm": float(dag_handler.get_task_options("spatial_precompute_slim_uv")["max_edge_mm"])}
+                    if dag_handler.get_task_options("spatial_precompute_slim_uv").get("max_edge_mm") is not None
                     else {}
                 ),
             },
         },
         {
-            "name": "extract_population_rf_response_field_boundaries",
-            "func": extract_population_rf_response_field_boundaries_flow,
+            "name": "spatial_extract_boundaries",
+            "func": spatial_extract_boundaries_flow,
             "params": lambda: {
-                "neuron_mode": dag_handler.get_task_options("extract_population_rf_response_field_boundaries").get("neuron_mode", "iff"),
-                "min_overlap_pct": float(dag_handler.get_task_options("extract_population_rf_response_field_boundaries").get("min_overlap_pct", 25.0)),
-                "heatmap_space": dag_handler.get_task_options("extract_population_rf_response_field_boundaries").get("heatmap_space", "linear"),
-                "cmap": dag_handler.get_task_options("extract_population_rf_response_field_boundaries").get("cmap", "jet"),
+                "neuron_mode": dag_handler.get_task_options("spatial_extract_boundaries").get("neuron_mode", "iff"),
+                "min_overlap_pct": float(dag_handler.get_task_options("spatial_extract_boundaries").get("min_overlap_pct", 25.0)),
+                "heatmap_space": dag_handler.get_task_options("spatial_extract_boundaries").get("heatmap_space", "linear"),
+                "cmap": dag_handler.get_task_options("spatial_extract_boundaries").get("cmap", "jet"),
                 **(
-                    {"median_filter_size": int(dag_handler.get_task_options("extract_population_rf_response_field_boundaries")["median_filter_size"])}
-                    if dag_handler.get_task_options("extract_population_rf_response_field_boundaries").get("median_filter_size") is not None
+                    {"median_filter_size": int(dag_handler.get_task_options("spatial_extract_boundaries")["median_filter_size"])}
+                    if dag_handler.get_task_options("spatial_extract_boundaries").get("median_filter_size") is not None
                     else {}
                 ),
                 **(
-                    {"inflection_sigma": float(dag_handler.get_task_options("extract_population_rf_response_field_boundaries")["inflection_sigma"])}
-                    if dag_handler.get_task_options("extract_population_rf_response_field_boundaries").get("inflection_sigma") is not None
+                    {"inflection_sigma": float(dag_handler.get_task_options("spatial_extract_boundaries")["inflection_sigma"])}
+                    if dag_handler.get_task_options("spatial_extract_boundaries").get("inflection_sigma") is not None
                     else {}
                 ),
             },
         },
         {
-            "name": "compare_session_rf_boundaries",
-            "func": compare_session_rf_boundaries_flow,
+            "name": "spatial_compare_boundaries",
+            "func": spatial_compare_boundaries_flow,
             "params": lambda: {},
         },
         {
-            "name": "compare_rf_center_proximal_distal",
-            "func": compare_rf_center_proximal_distal_flow,
+            "name": "spatial_compare_rf_centers",
+            "func": spatial_compare_rf_centers_flow,
             "params": lambda: {
-                "heatmap_space": dag_handler.get_task_options("compare_rf_center_proximal_distal").get("heatmap_space", "linear"),
-                "cmap": dag_handler.get_task_options("compare_rf_center_proximal_distal").get("cmap", "jet"),
+                "heatmap_space": dag_handler.get_task_options("spatial_compare_rf_centers").get("heatmap_space", "linear"),
+                "cmap": dag_handler.get_task_options("spatial_compare_rf_centers").get("cmap", "jet"),
             },
         },
         {
-            "name": "touch_feature_extraction",
-            "func": touch_feature_extraction_flow,
+            "name": "stimulus_extract_features",
+            "func": stimulus_extract_features_flow,
             "params": lambda: {
-                "features": dag_handler.get_task_options("touch_feature_extraction").get("features"),
+                "features": dag_handler.get_task_options("stimulus_extract_features").get("features"),
                 "series_dir": _series_dir(),
                 "preparation_dir": _preparation_dir(),
             },
         },
         {
-            "name": "render_touch_feature_radar",
-            "func": render_touch_feature_radar_flow,
+            "name": "stimulus_render_radar",
+            "func": stimulus_render_radar_flow,
             "params": lambda: {
-                "radar_groups": dag_handler.get_task_options("render_touch_feature_radar").get("radar_groups"),
+                "radar_groups": dag_handler.get_task_options("stimulus_render_radar").get("radar_groups"),
             },
         },
         {
-            "name": "map_population_rf_grid",
-            "func": map_population_rf_grid_flow,
+            "name": "cross_map_feature_grid",
+            "func": cross_map_feature_grid_flow,
             "params": lambda: {
-                "grid_groups": dag_handler.get_task_options("map_population_rf_grid").get("grid_groups"),
-                "neuron_mode": dag_handler.get_task_options("map_population_rf_grid").get("neuron_mode", "iff"),
-                "per_gesture_type": bool(dag_handler.get_task_options("map_population_rf_grid").get("per_gesture_type", True)),
-                "vertex_threshold_ratio": float(dag_handler.get_task_options("map_population_rf_grid").get("vertex_threshold_ratio", 0.25)),
-                "compute_baseline": bool(dag_handler.get_task_options("map_population_rf_grid").get("compute_baseline", True)),
+                "grid_groups": dag_handler.get_task_options("cross_map_feature_grid").get("grid_groups"),
+                "neuron_mode": dag_handler.get_task_options("cross_map_feature_grid").get("neuron_mode", "iff"),
+                "per_gesture_type": bool(dag_handler.get_task_options("cross_map_feature_grid").get("per_gesture_type", True)),
+                "vertex_threshold_ratio": float(dag_handler.get_task_options("cross_map_feature_grid").get("vertex_threshold_ratio", 0.25)),
+                "compute_baseline": bool(dag_handler.get_task_options("cross_map_feature_grid").get("compute_baseline", True)),
                 **(
-                    {"features": dag_handler.get_task_options("map_population_rf_grid")["features"]}
-                    if "features" in dag_handler.get_task_options("map_population_rf_grid")
+                    {"features": dag_handler.get_task_options("cross_map_feature_grid")["features"]}
+                    if "features" in dag_handler.get_task_options("cross_map_feature_grid")
                     else {}
                 ),
             },
         },
         {
-            "name": "reduce_population_rf_grid",
-            "func": reduce_population_rf_grid_flow,
+            "name": "cross_extract_grid_metrics",
+            "func": cross_extract_grid_metrics_flow,
             "params": lambda: {
-                "projection_method": dag_handler.get_task_options("reduce_population_rf_grid").get("projection_method", "tangent_plane"),
-                "grid_group_defs": dag_handler.get_task_options("map_population_rf_grid").get("grid_groups") or None,
+                "projection_method": dag_handler.get_task_options("cross_extract_grid_metrics").get("projection_method", "tangent_plane"),
+                "grid_group_defs": dag_handler.get_task_options("cross_map_feature_grid").get("grid_groups") or None,
             },
         },
         {
-            "name": "visualize_population_rf_grid_metrics",
-            "func": visualize_population_rf_grid_metrics_flow,
+            "name": "cross_render_grid_metrics",
+            "func": cross_render_grid_metrics_flow,
             "params": lambda: {
-                "extracted_features": list(dag_handler.get_task_options("visualize_population_rf_grid_metrics")["extracted_features"])
-                    if "extracted_features" in dag_handler.get_task_options("visualize_population_rf_grid_metrics")
+                "extracted_features": list(dag_handler.get_task_options("cross_render_grid_metrics")["extracted_features"])
+                    if "extracted_features" in dag_handler.get_task_options("cross_render_grid_metrics")
                     else None,
-                "grid_group_defs": dag_handler.get_task_options("map_population_rf_grid").get("grid_groups") or None,
+                "grid_group_defs": dag_handler.get_task_options("cross_map_feature_grid").get("grid_groups") or None,
             },
         },
         {
-            "name": "visualize_session_comparison",
-            "func": visualize_session_comparison_flow,
+            "name": "cross_render_sessions",
+            "func": cross_render_sessions_flow,
             "params": lambda: {
-                "features": dag_handler.get_task_options("visualize_session_comparison").get("features"),
-                "neuron_mode": dag_handler.get_task_options("visualize_session_comparison").get("neuron_mode", "iff"),
-                "vertex_threshold_ratio": float(dag_handler.get_task_options("visualize_session_comparison").get("vertex_threshold_ratio", 0.25)),
-                "metric_name": dag_handler.get_task_options("visualize_session_comparison").get("metric_name", "mean_iff"),
-                "projection_method": dag_handler.get_task_options("visualize_session_comparison").get("projection_method", "tangent_plane"),
+                "features": dag_handler.get_task_options("cross_render_sessions").get("features"),
+                "neuron_mode": dag_handler.get_task_options("cross_render_sessions").get("neuron_mode", "iff"),
+                "vertex_threshold_ratio": float(dag_handler.get_task_options("cross_render_sessions").get("vertex_threshold_ratio", 0.25)),
+                "metric_name": dag_handler.get_task_options("cross_render_sessions").get("metric_name", "mean_iff"),
+                "projection_method": dag_handler.get_task_options("cross_render_sessions").get("projection_method", "tangent_plane"),
             },
         },
         {
-            "name": "touch_clustering",
-            "func": touch_clustering_flow,
+            "name": "stimulus_cluster_touches",
+            "func": stimulus_cluster_touches_flow,
             "params": lambda: {
-                "cluster_groups": dag_handler.get_task_options("touch_clustering").get("cluster_groups"),
-                "feature_combinations": dag_handler.get_task_options("touch_clustering").get("feature_combinations"),
-                "clustering_profiles": dag_handler.get_task_options("touch_clustering").get("clustering_profiles"),
-                "reduction": dag_handler.get_task_options("touch_clustering").get("reduction"),
-                "evaluation": dag_handler.get_task_options("touch_clustering").get("evaluation"),
+                "cluster_groups": dag_handler.get_task_options("stimulus_cluster_touches").get("cluster_groups"),
+                "feature_combinations": dag_handler.get_task_options("stimulus_cluster_touches").get("feature_combinations"),
+                "clustering_profiles": dag_handler.get_task_options("stimulus_cluster_touches").get("clustering_profiles"),
+                "reduction": dag_handler.get_task_options("stimulus_cluster_touches").get("reduction"),
+                "evaluation": dag_handler.get_task_options("stimulus_cluster_touches").get("evaluation"),
             },
         },
         {
-            "name": "touch_comparing",
-            "func": touch_comparing_flow,
+            "name": "stimulus_compare_clusters",
+            "func": stimulus_compare_clusters_flow,
             "params": lambda: {
-                "cluster_groups": dag_handler.get_task_options("touch_comparing").get("cluster_groups"),
-                "cluster_group_defs": dag_handler.get_task_options("touch_clustering").get("cluster_groups") or None,
-                "feature_combinations": dag_handler.get_task_options("touch_comparing").get("feature_combinations"),
-                "clustering_profiles": dag_handler.get_task_options("touch_comparing").get("clustering_profiles"),
-                "comparing_profiles": dag_handler.get_task_options("touch_comparing").get("comparing_profiles"),
-                "min_instances_per_sensor": dag_handler.get_task_options("touch_comparing").get("min_instances_per_sensor", 5),
-                "min_sensor_types": dag_handler.get_task_options("touch_comparing").get("min_sensor_types", 2),
+                "cluster_groups": dag_handler.get_task_options("stimulus_compare_clusters").get("cluster_groups"),
+                "cluster_group_defs": dag_handler.get_task_options("stimulus_cluster_touches").get("cluster_groups") or None,
+                "feature_combinations": dag_handler.get_task_options("stimulus_compare_clusters").get("feature_combinations"),
+                "clustering_profiles": dag_handler.get_task_options("stimulus_compare_clusters").get("clustering_profiles"),
+                "comparing_profiles": dag_handler.get_task_options("stimulus_compare_clusters").get("comparing_profiles"),
+                "min_instances_per_sensor": dag_handler.get_task_options("stimulus_compare_clusters").get("min_instances_per_sensor", 5),
+                "min_sensor_types": dag_handler.get_task_options("stimulus_compare_clusters").get("min_sensor_types", 2),
             },
         },
         {
-            "name": "analyse_ap_efficacy",
-            "func": analyse_ap_efficacy_flow,
+            "name": "stimulus_analyse_efficacy",
+            "func": stimulus_analyse_efficacy_flow,
             "params": lambda: {},
         },
         {
-            "name": "extract_receptive_fields_clustered",
-            "func": extract_receptive_fields_clustered_flow,
+            "name": "cross_extract_cluster_rf",
+            "func": cross_extract_cluster_rf_flow,
             "params": lambda: {
-                "cluster_groups": dag_handler.get_task_options("extract_receptive_fields_clustered").get("cluster_groups"),
-                "cluster_group_defs": dag_handler.get_task_options("touch_clustering").get("cluster_groups") or None,
-                "feature_combinations": dag_handler.get_task_options("extract_receptive_fields_clustered").get("feature_combinations"),
-                "clustering_profiles": dag_handler.get_task_options("extract_receptive_fields_clustered").get("clustering_profiles"),
+                "cluster_groups": dag_handler.get_task_options("cross_extract_cluster_rf").get("cluster_groups"),
+                "cluster_group_defs": dag_handler.get_task_options("stimulus_cluster_touches").get("cluster_groups") or None,
+                "feature_combinations": dag_handler.get_task_options("cross_extract_cluster_rf").get("feature_combinations"),
+                "clustering_profiles": dag_handler.get_task_options("cross_extract_cluster_rf").get("clustering_profiles"),
             },
         },
         {
-            "name": "compute_receptive_field_metrics",
-            "func": compute_receptive_field_metrics_flow,
+            "name": "cross_compute_cluster_metrics",
+            "func": cross_compute_cluster_metrics_flow,
             "params": lambda: {
-                "cluster_groups": dag_handler.get_task_options("compute_receptive_field_metrics").get("cluster_groups"),
-                "cluster_group_defs": dag_handler.get_task_options("touch_clustering").get("cluster_groups") or None,
-                "feature_combinations": dag_handler.get_task_options("compute_receptive_field_metrics").get("feature_combinations"),
-                "clustering_profiles": dag_handler.get_task_options("compute_receptive_field_metrics").get("clustering_profiles"),
-                "projection_method": dag_handler.get_task_options("compute_receptive_field_metrics").get("projection_method"),
+                "cluster_groups": dag_handler.get_task_options("cross_compute_cluster_metrics").get("cluster_groups"),
+                "cluster_group_defs": dag_handler.get_task_options("stimulus_cluster_touches").get("cluster_groups") or None,
+                "feature_combinations": dag_handler.get_task_options("cross_compute_cluster_metrics").get("feature_combinations"),
+                "clustering_profiles": dag_handler.get_task_options("cross_compute_cluster_metrics").get("clustering_profiles"),
+                "projection_method": dag_handler.get_task_options("cross_compute_cluster_metrics").get("projection_method"),
             },
         },
         {
-            "name": "visualize_receptive_fields_clustered",
-            "func": visualize_receptive_fields_clustered_flow,
+            "name": "cross_render_cluster_rf",
+            "func": cross_render_cluster_rf_flow,
             "params": lambda: {
-                "cluster_groups": dag_handler.get_task_options("visualize_receptive_fields_clustered").get("cluster_groups"),
-                "cluster_group_defs": dag_handler.get_task_options("touch_clustering").get("cluster_groups") or None,
-                "feature_combinations": dag_handler.get_task_options("visualize_receptive_fields_clustered").get("feature_combinations"),
-                "clustering_profiles": dag_handler.get_task_options("visualize_receptive_fields_clustered").get("clustering_profiles"),
-                "projection_method": dag_handler.get_task_options("visualize_receptive_fields_clustered").get("projection_method"),
-                "disjoint_mask_distance_mm": float(dag_handler.get_task_options("visualize_receptive_fields_clustered").get("disjoint_mask_distance_mm", 8.0)),
-                "gallery_viewer": bool(dag_handler.get_task_options("visualize_receptive_fields_clustered").get("gallery_viewer", False)),
-            },
-        },
-        # Legacy — kept for back-compat with DAG configs that still reference this key.
-        {
-            "name": "map_receptive_fields_clustered",
-            "func": map_receptive_fields_clustered_flow,
-            "params": lambda: {
-                "cluster_groups": dag_handler.get_task_options("map_receptive_fields_clustered").get("cluster_groups"),
-                "cluster_group_defs": dag_handler.get_task_options("touch_clustering").get("cluster_groups") or None,
-                "feature_combinations": dag_handler.get_task_options("map_receptive_fields_clustered").get("feature_combinations"),
-                "clustering_profiles": dag_handler.get_task_options("map_receptive_fields_clustered").get("clustering_profiles"),
-                "projection_method": dag_handler.get_task_options("map_receptive_fields_clustered").get("projection_method"),
-                "disjoint_mask_distance_mm": float(dag_handler.get_task_options("map_receptive_fields_clustered").get("disjoint_mask_distance_mm", 8.0)),
+                "cluster_groups": dag_handler.get_task_options("cross_render_cluster_rf").get("cluster_groups"),
+                "cluster_group_defs": dag_handler.get_task_options("stimulus_cluster_touches").get("cluster_groups") or None,
+                "feature_combinations": dag_handler.get_task_options("cross_render_cluster_rf").get("feature_combinations"),
+                "clustering_profiles": dag_handler.get_task_options("cross_render_cluster_rf").get("clustering_profiles"),
+                "projection_method": dag_handler.get_task_options("cross_render_cluster_rf").get("projection_method"),
+                "disjoint_mask_distance_mm": float(dag_handler.get_task_options("cross_render_cluster_rf").get("disjoint_mask_distance_mm", 8.0)),
+                "gallery_viewer": bool(dag_handler.get_task_options("cross_render_cluster_rf").get("gallery_viewer", False)),
             },
         },
     ]
