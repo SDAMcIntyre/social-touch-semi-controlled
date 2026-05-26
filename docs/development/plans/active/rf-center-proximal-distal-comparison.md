@@ -59,6 +59,15 @@ rendering and aggregation.
 - Modifications to the upstream
   `extract_population_rf_response_field_boundaries` pipeline.
 
+  **Note (2026-05-26):** The `feature/rf-hotspot-center` branch (plan:
+  `docs/development/plans/active/rf-hotspot-center.md`) introduced upstream
+  modifications that are additive to this plan's scope: `InflectionBoundary`
+  now carries a `peak_uv` field (hotspot center), and the per-session NPZ
+  stores `boundary_peak_uv_{gtype}` / `boundary_peak_xyz_{gtype}` alongside
+  the centroid keys.  The comparison pipeline (`rf_proximal_distal_center_pipeline.py`)
+  was extended to load hotspot UV, render separate hotspot PNGs, and add
+  hotspot columns to the summary CSV.
+
 ## Success Criteria
 
 - [ ] Running `compare_rf_center_proximal_distal` produces per-session

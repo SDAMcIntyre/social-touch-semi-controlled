@@ -515,6 +515,7 @@ def _save_response_fields_npz(
         if boundary is not None:
             data_dict[f'boundary_contour_uv_{gtype}'] = boundary.contour_uv.astype(np.float64)
             data_dict[f'boundary_centroid_uv_{gtype}'] = np.array(boundary.centroid_uv, dtype=np.float64)
+            data_dict[f'boundary_peak_uv_{gtype}'] = np.array(boundary.peak_uv, dtype=np.float64)
             data_dict[f'boundary_perimeter_uv_{gtype}'] = np.float64(boundary.perimeter_uv)
             data_dict[f'boundary_area_uv_{gtype}'] = np.float64(boundary.area_uv)
             data_dict[f'boundary_circularity_{gtype}'] = np.float64(boundary.circularity)
@@ -547,8 +548,14 @@ def _save_response_fields_npz(
             ])
             area_xyz_mm2 = 0.5 * float(np.sum(np.linalg.norm(cross_vecs, axis=1)))
 
+            peak_uv_arr = np.array(boundary.peak_uv, dtype=np.float64).reshape(1, 2)
+            peak_xyz = uv_points_to_xyz(
+                peak_uv_arr, forearm_uv, forearm_faces, forearm_V,
+            )[0]
+
             data_dict[f'boundary_contour_xyz_{gtype}'] = contour_xyz.astype(np.float64)
             data_dict[f'boundary_centroid_xyz_{gtype}'] = centroid_xyz.astype(np.float64)
+            data_dict[f'boundary_peak_xyz_{gtype}'] = peak_xyz.astype(np.float64)
             data_dict[f'boundary_perimeter_xyz_mm_{gtype}'] = np.float64(perimeter_xyz_mm)
             data_dict[f'boundary_area_xyz_mm2_{gtype}'] = np.float64(area_xyz_mm2)
 

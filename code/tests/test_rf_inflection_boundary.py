@@ -145,6 +145,18 @@ class TestCircularGaussian:
             f"expected {expected:.2f}"
         )
 
+    def test_peak_uv_near_grid_center(self, boundary: InflectionBoundary) -> None:
+        pu, pv = boundary.peak_uv
+        tolerance = 0.05
+        assert abs(pu - 0.5) < tolerance, f"U peak {pu:.4f} far from 0.5"
+        assert abs(pv - 0.5) < tolerance, f"V peak {pv:.4f} far from 0.5"
+
+    def test_peak_uv_type(self, boundary: InflectionBoundary) -> None:
+        assert isinstance(boundary.peak_uv, tuple)
+        assert len(boundary.peak_uv) == 2
+        assert isinstance(boundary.peak_uv[0], (float, int))
+        assert isinstance(boundary.peak_uv[1], (float, int))
+
 
 # ---------------------------------------------------------------------------
 # Test: elliptical Gaussian — PCA axes match sigma ratio
@@ -179,6 +191,14 @@ class TestEllipticalGaussian:
         assert actual_ratio > 1.5, (
             f"PCA ratio {actual_ratio:.2f} not > 1.5 for a 2:1 sigma ellipse"
         )
+
+    def test_peak_uv_near_centroid(self, boundary: InflectionBoundary) -> None:
+        # The Gaussian is centered at (0.5, 0.5); both peak and centroid should
+        # be close for a symmetric (even if elongated) centered distribution.
+        pu, pv = boundary.peak_uv
+        cu, cv = boundary.centroid_uv
+        assert abs(pu - cu) < 0.05, f"peak U {pu:.4f} far from centroid U {cu:.4f}"
+        assert abs(pv - cv) < 0.05, f"peak V {pv:.4f} far from centroid V {cv:.4f}"
 
 
 # ---------------------------------------------------------------------------
@@ -283,6 +303,7 @@ class TestSerialization:
             "perimeter_uv",
             "circularity",
             "centroid_uv",
+            "peak_uv",
             "pca_major_uv",
             "pca_minor_uv",
             "pca_orientation_deg",
