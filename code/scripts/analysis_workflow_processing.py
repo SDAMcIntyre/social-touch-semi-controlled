@@ -40,6 +40,7 @@ from analysis.receptive_field_mapping import (
     run_session_rf_boundary_comparison,
     run_proximal_distal_center_comparison,
     run_touch_feature_radar,
+    run_stimulus_session_comparison,
     launch_rf_camera_settings_viewer,
     launch_slim_uv_config_viewer,
 )
@@ -52,6 +53,29 @@ from analysis.receptive_field_mapping.surface.slim_uv_config_io import (
     config_hash as compute_config_hash,
 )
 from analysis.touch_analytics.pipeline_shared import session_id_from_path
+from analysis.pipeline.output_dirs import (
+    CROSS_CLUSTER_RF,
+    CROSS_EXTRACT_GRID_METRICS,
+    CROSS_MAP_FEATURE_GRID,
+    CROSS_RENDER_GRID_METRICS,
+    CROSS_RENDER_SESSIONS,
+    SPATIAL_COMPARE_BOUNDARIES,
+    SPATIAL_COMPARE_RF_CENTERS,
+    SPATIAL_EXTRACT_BOUNDARIES,
+    SPATIAL_MAP_BASELINE,
+    SPATIAL_MAP_SINGLE_TOUCH,
+    SPATIAL_SET_CAMERA,
+    SPATIAL_SLIM_UV,
+    STIMULUS_ANALYSE_EFFICACY,
+    STIMULUS_CLUSTER_TOUCHES,
+    STIMULUS_COMPARE_CLUSTERS,
+    STIMULUS_EXTRACT_FEATURES,
+    STIMULUS_RENDER_RADAR,
+    STIMULUS_COMPARE_SESSIONS,
+    TOUCH_COMPUTE_SERIES,
+    TOUCH_PREPARE_SESSIONS,
+    TOUCH_SUMMARIZE_BLOCKS,
+)
 
 from analysis.pipeline import collect_unique_session_dirs, discover_input_items, run_pipeline_stages
 
@@ -66,7 +90,7 @@ def _collect_unified_files(input_items: List[Tuple[Path, Path]]) -> List[Path]:
     seen: set = set()
     unified_files = []
     for input_file, database_path in input_items:
-        unified_root = database_path / "4_analysed" / "touch_features"
+        unified_root = database_path / "4_analysed" / STIMULUS_EXTRACT_FEATURES
         filename = input_file.name
 
         if "_semicontrolled_" in filename:
@@ -108,7 +132,7 @@ def touch_summarize_blocks_flow(
     input_paths = [item[0] for item in input_items]
     anchor_db_path = input_items[0][1]
 
-    output_dir = anchor_db_path / "4_analysed" / "session_summary"
+    output_dir = anchor_db_path / "4_analysed" / TOUCH_SUMMARIZE_BLOCKS
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / "session_block_summary.csv"
 
@@ -135,12 +159,12 @@ def spatial_map_baseline_flow(
     """
     Simple RF mapping: raw spike-position CSV + forearm heatmap per session.
     Runs before feature extraction — no dependency on clustering or extraction.
-    Output: ``4_analysed/receptive_field_maps_simple/<session_id>/``
+    Output: ``4_analysed/spatial_map_baseline/<session_id>/``
     """
     print(f"[Batch Analysis] Running simple RF mapping for {len(input_items)} item(s)...")
     if not input_items:
         return []
-    output_dir = input_items[0][1] / '4_analysed' / 'receptive_field_maps_simple'
+    output_dir = input_items[0][1] / '4_analysed' / SPATIAL_MAP_BASELINE
     return run_simple_rf_mapping(
         input_items=input_items,
         output_dir=output_dir,
@@ -164,7 +188,7 @@ def spatial_configure_slim_uv_flow(
 ) -> None:
     """Launch the per-session SLIM UV config GUI for sessions missing a config.
 
-    For each session, checks whether ``4_analysed/forearm_slim_uv/<session_id>/
+    For each session, checks whether ``4_analysed/spatial_slim_uv/<session_id>/
     slim_uv_config.yaml`` already exists. Sessions that already have a config
     are skipped (unless ``force_processing`` is True, which forces the GUI for
     every session). The GUI saves per-session YAML configs consumed by
@@ -184,7 +208,7 @@ def spatial_configure_slim_uv_flow(
         return
 
     database_path = input_items[0][1]
-    output_dir = database_path / '4_analysed' / 'forearm_slim_uv'
+    output_dir = database_path / '4_analysed' / SPATIAL_SLIM_UV
 
     if force_processing:
         missing_items = list(input_items)
@@ -197,7 +221,7 @@ def spatial_configure_slim_uv_flow(
         for csv_path, db_path in input_items:
             session_id = session_id_from_path(csv_path)
             cfg_path = config_path_for_session(
-                db_path / '4_analysed' / 'forearm_slim_uv',
+                db_path / '4_analysed' / SPATIAL_SLIM_UV,
                 session_id,
             )
             if not cfg_path.exists():
@@ -243,7 +267,7 @@ def spatial_precompute_slim_uv_flow(
     For each session, loads the forearm PLY (via load_or_build_forearm_mesh)
     and the single-touch RF maps NPZ (from spatial_map_single_touch output), runs
     SLIM, and caches the UV map as
-    ``4_analysed/forearm_slim_uv/<session_id>/<session_id>_slim_uv.npz``.
+    ``4_analysed/spatial_slim_uv/<session_id>/<session_id>_slim_uv.npz``.
 
     The UV origin (center_vid) is placed at the IFF-weighted centroid of all
     single-touch RF maps, giving a neuroscientifically meaningful anchor point.
@@ -277,16 +301,16 @@ def spatial_precompute_slim_uv_flow(
             )
 
         rf_maps_npz = (
-            db_path / '4_analysed' / 'single_touch_rf_maps'
+            db_path / '4_analysed' / SPATIAL_MAP_SINGLE_TOUCH
             / session_id / 'single_touch_rf_maps.npz'
         )
 
-        output_dir = db_path / '4_analysed' / 'forearm_slim_uv' / session_id
+        output_dir = db_path / '4_analysed' / SPATIAL_SLIM_UV / session_id
         output_dir.mkdir(parents=True, exist_ok=True)
         cache_path = output_dir / f"{session_id}_slim_uv.npz"
 
         cfg_path = config_path_for_session(
-            db_path / '4_analysed' / 'forearm_slim_uv', session_id,
+            db_path / '4_analysed' / SPATIAL_SLIM_UV, session_id,
         )
         if cfg_path.exists():
             cfg = load_slim_uv_config(cfg_path)
@@ -355,7 +379,7 @@ def spatial_precompute_slim_uv_flow(
                 results.append(cache_path)
                 continue
 
-        camera_settings_dir = db_path / '4_analysed' / 'rf_camera_settings'
+        camera_settings_dir = db_path / '4_analysed' / SPATIAL_SET_CAMERA
         print(
             f"[SLIM UV] {session_id}: computing SLIM UV map "
             f"(n_iter={session_n_iter}, mesh_method={session_mesh_method!r})..."
@@ -390,12 +414,12 @@ def spatial_map_single_touch_flow(
     Reads the prepared CSV produced by ``touch_prepare_sessions`` via
     ``load_playback_data()``, accumulates IFF or spike values per forearm vertex
     for each touch event, and saves results as a sparse ``.npz`` file.
-    Output: ``4_analysed/single_touch_rf_maps/<session_id>/``
+    Output: ``4_analysed/spatial_map_single_touch/<session_id>/``
     """
     print(f"[Batch Analysis] Running single-touch RF mapping for {len(input_items)} item(s)...")
     if not input_items:
         return []
-    output_dir = input_items[0][1] / '4_analysed' / 'single_touch_rf_maps'
+    output_dir = input_items[0][1] / '4_analysed' / SPATIAL_MAP_SINGLE_TOUCH
     return run_single_touch_rf_mapping(
         input_items=input_items,
         output_dir=output_dir,
@@ -420,16 +444,18 @@ def spatial_extract_boundaries_flow(
 
     For each session, produces one PNG per gesture subset (all, tap,
     stroke_proximal, stroke_distal) under
-    ``4_analysed/population_response_fields/<session_id>/``.
+    ``4_analysed/spatial_extract_boundaries/<session_id>/``.
     Idempotent via sentinel JSON.
     """
     print(f"[Batch Analysis] Extracting population response field boundaries for {len(input_items)} item(s)...")
     if not input_items:
         return
 
+    output_dir = input_items[0][1] / '4_analysed' / SPATIAL_EXTRACT_BOUNDARIES
     run_population_response_field_extraction(
         session_configs=input_items,
         neuron_mode=neuron_mode,
+        output_dir=output_dir,
         min_overlap_pct=min_overlap_pct,
         force_processing=force_processing,
         median_filter_size=median_filter_size,
@@ -449,14 +475,16 @@ def spatial_compare_boundaries_flow(
     Reads per-session NPZ files produced by spatial_extract_boundaries,
     builds a summary CSV, and renders UV contour overlays, per-gesture metric panels,
     and session-x-gesture heatmaps.
-    Output: 4_analysed/session_rf_boundary_comparison/
+    Output: 4_analysed/spatial_compare_boundaries/
     """
     print(f"[Batch Analysis] Comparing session RF boundaries for {len(input_items)} item(s)...")
     if not input_items:
         return
 
+    output_dir = input_items[0][1] / '4_analysed' / SPATIAL_COMPARE_BOUNDARIES
     run_session_rf_boundary_comparison(
         session_configs=input_items,
+        output_dir=output_dir,
         force_processing=force_processing,
     )
 
@@ -473,14 +501,16 @@ def spatial_compare_rf_centers_flow(
     Reads per-session NPZ files produced by spatial_extract_boundaries,
     renders per-session center-marked heatmap PNGs, and produces a cross-session
     aggregate scatter plot and summary CSV.
-    Output: 4_analysed/rf_center_proximal_distal/
+    Output: 4_analysed/spatial_compare_rf_centers/
     """
     print(f"[Batch Analysis] Comparing RF centers for {len(input_items)} item(s)...")
     if not input_items:
         return
 
+    output_dir = input_items[0][1] / '4_analysed' / SPATIAL_COMPARE_RF_CENTERS
     run_proximal_distal_center_comparison(
         session_configs=input_items,
+        output_dir=output_dir,
         force_processing=force_processing,
         heatmap_space=heatmap_space,
         cmap=cmap,
@@ -536,14 +566,14 @@ def cross_map_feature_grid_flow(
         }}
 
     database_path = input_items[0][1]
-    output_dir = database_path / '4_analysed'
-    touch_features_dir = database_path / '4_analysed' / 'touch_features'
+    output_dir = database_path / '4_analysed' / CROSS_MAP_FEATURE_GRID
+    touch_features_dir = database_path / '4_analysed' / STIMULUS_EXTRACT_FEATURES
 
     resolved_items = []
     for csv_path, db_path in input_items:
         session_id = session_id_from_path(csv_path)
         series_csv_path = (
-            db_path / '4_analysed' / 'series_transforms'
+            db_path / '4_analysed' / TOUCH_COMPUTE_SERIES
             / f'{session_id}_series_augmented.csv'
         )
         if not series_csv_path.exists():
@@ -558,7 +588,7 @@ def cross_map_feature_grid_flow(
                 f"session '{session_id}' in {csv_path.parent}"
             )
         npz_path = (
-            db_path / '4_analysed' / 'single_touch_rf_maps'
+            db_path / '4_analysed' / SPATIAL_MAP_SINGLE_TOUCH
             / session_id / 'single_touch_rf_maps.npz'
         )
         if not npz_path.exists():
@@ -622,9 +652,9 @@ def cross_extract_grid_metrics_flow(
         enabled_group_names = [None]
 
     database_path = input_items[0][1]
-    output_dir = database_path / '4_analysed'
+    output_dir = database_path / '4_analysed' / CROSS_EXTRACT_GRID_METRICS
     slim_uv_cache_dir = (
-        database_path / '4_analysed' / 'forearm_slim_uv'
+        database_path / '4_analysed' / SPATIAL_SLIM_UV
         if projection_method == 'slim' else None
     )
 
@@ -642,9 +672,9 @@ def cross_extract_grid_metrics_flow(
                     f"session '{session_id}' in {csv_path.parent}"
                 )
             if group_name is not None:
-                grid_dir = db_path / '4_analysed' / 'population_rf_grid' / group_name / session_id
+                grid_dir = db_path / '4_analysed' / CROSS_MAP_FEATURE_GRID / group_name / session_id
             else:
-                grid_dir = db_path / '4_analysed' / 'population_rf_grid' / session_id
+                grid_dir = db_path / '4_analysed' / CROSS_MAP_FEATURE_GRID / session_id
             if not grid_dir.exists():
                 raise ValueError(
                     f"cross_extract_grid_metrics_flow: population_rf_grid directory not found "
@@ -684,8 +714,8 @@ def cross_render_grid_metrics_flow(
 
     Reads CSVs produced by ``cross_extract_grid_metrics`` and renders one PNG
     per IFF metric per session+gesture type into a metric-organized folder.
-    Output: ``4_analysed/population_rf_grid_metrics_heatmaps/<metric>/`` (flat, backward compat)
-    or ``4_analysed/population_rf_grid_metrics_heatmaps/<group_name>/<metric>/`` (when grid_group_defs).
+    Output: ``4_analysed/cross_render_grid_metrics/<metric>/`` (flat, backward compat)
+    or ``4_analysed/cross_render_grid_metrics/<group_name>/<metric>/`` (when grid_group_defs).
     """
     print(f"[Batch Analysis] Visualizing population RF grid metrics for {len(input_items)} item(s)...")
     if not input_items:
@@ -709,10 +739,10 @@ def cross_render_grid_metrics_flow(
 
     for group_name in enabled_group_names:
         if group_name is not None:
-            output_dir = database_path / '4_analysed' / 'population_rf_grid_metrics_heatmaps' / group_name
-            metrics_base_dir = database_path / '4_analysed' / 'population_rf_grid_metrics' / group_name
+            output_dir = database_path / '4_analysed' / CROSS_RENDER_GRID_METRICS / group_name
+            metrics_base_dir = database_path / '4_analysed' / CROSS_EXTRACT_GRID_METRICS / group_name
         else:
-            output_dir = database_path / '4_analysed' / 'population_rf_grid_metrics_heatmaps'
+            output_dir = database_path / '4_analysed' / CROSS_RENDER_GRID_METRICS
             metrics_base_dir = None
         run_population_rf_grid_metrics_visualization(
             input_items=resolved_items,
@@ -750,13 +780,13 @@ def cross_render_sessions_flow(
         )
 
     database_path = input_items[0][1]
-    touch_features_dir = database_path / '4_analysed' / 'touch_features'
+    touch_features_dir = database_path / '4_analysed' / STIMULUS_EXTRACT_FEATURES
 
     resolved_items = []
     for csv_path, db_path in input_items:
         session_id = session_id_from_path(csv_path)
         series_csv_path = (
-            db_path / '4_analysed' / 'series_transforms'
+            db_path / '4_analysed' / TOUCH_COMPUTE_SERIES
             / f'{session_id}_series_augmented.csv'
         )
         if not series_csv_path.exists():
@@ -771,7 +801,7 @@ def cross_render_sessions_flow(
                 f"session '{session_id}' in {csv_path.parent}"
             )
         npz_path = (
-            db_path / '4_analysed' / 'single_touch_rf_maps'
+            db_path / '4_analysed' / SPATIAL_MAP_SINGLE_TOUCH
             / session_id / 'single_touch_rf_maps.npz'
         )
         if not npz_path.exists():
@@ -787,9 +817,11 @@ def cross_render_sessions_flow(
             "touch_features_dir": touch_features_dir if touch_features_dir.exists() else None,
         })
 
+    output_dir = database_path / '4_analysed' / CROSS_RENDER_SESSIONS
     run_session_comparison_visualization(
         input_items=resolved_items,
         database_path=database_path,
+        output_dir=output_dir,
         features=features,
         metric_name=metric_name,
         neuron_mode=neuron_mode,
@@ -807,12 +839,12 @@ def touch_prepare_sessions_flow(
 ) -> List[Path]:
     """
     Stage 1: Per-session data preparation (block-ID synthesis + NaN-gap interpolation).
-    Writes ``4_analysed/preparation/<session_id>_prepared.csv``.
+    Writes ``4_analysed/touch_prepare_sessions/<session_id>_prepared.csv``.
     """
     print(f"[Batch Analysis] Running touch preparation for {len(input_items)} item(s)...")
     if not input_items:
         return []
-    output_dir = input_items[0][1] / '4_analysed' / 'preparation'
+    output_dir = input_items[0][1] / '4_analysed' / TOUCH_PREPARE_SESSIONS
     return run_preparation(
         input_items=input_items,
         preparation_cfg=preparation or {},
@@ -830,12 +862,12 @@ def touch_compute_series_flow(
 ) -> List[Path]:
     """
     Stage 2a: Per-session series-level transforms (kinematics, pressure, MoS).
-    Writes ``4_analysed/series_transforms/<session>_series_augmented.csv``.
+    Writes ``4_analysed/touch_compute_series/<session>_series_augmented.csv``.
     """
     print(f"[Batch Analysis] Running touch series transforms for {len(input_items)} item(s)...")
     if not input_items:
         return []
-    output_dir = input_items[0][1] / '4_analysed' / 'series_transforms'
+    output_dir = input_items[0][1] / '4_analysed' / TOUCH_COMPUTE_SERIES
     return run_series_transforms(
         input_items=input_items,
         transforms=transforms or {},
@@ -856,13 +888,13 @@ def stimulus_extract_features_flow(
     """
     Stage 2b: Per-session feature extraction.
     Writes one CSV per (session, feature) to
-    ``4_analysed/touch_features/<feature>/<session>_touch_summary.csv``.
+    ``4_analysed/stimulus_extract_features/<feature>/<session>_touch_summary.csv``.
     """
     print(f"[Batch Analysis] Running touch feature extraction for {len(input_items)} item(s)...")
     if not input_items:
         return []
     feature_dict = features or {'max': {'enabled': True}}
-    output_dir = input_items[0][1] / '4_analysed' / 'touch_features'
+    output_dir = input_items[0][1] / '4_analysed' / STIMULUS_EXTRACT_FEATURES
     per_feature = run_feature_extraction(
         input_items=input_items,
         features=feature_dict,
@@ -888,9 +920,37 @@ def stimulus_render_radar_flow(
     print(f"[Batch Analysis] Rendering touch feature radar plots for {len(input_items)} item(s)...")
     if not input_items:
         return
+    output_dir = input_items[0][1] / '4_analysed' / STIMULUS_RENDER_RADAR
     run_touch_feature_radar(
         session_configs=input_items,
         radar_groups=radar_groups,
+        output_dir=output_dir,
+        force_processing=force_processing,
+    )
+
+
+@flow(name="stimulus_compare_sessions")
+def stimulus_compare_sessions_flow(
+    input_items: List[Tuple[Path, Path]],
+    force_processing: bool = False,
+    comparison_groups: Optional[dict] = None,
+    plot_type: str = 'box_strip',
+) -> None:
+    """Cross-session touch feature comparison plots.
+
+    Pools per-session feature CSVs and renders box/violin/bar plots with all
+    sessions on one figure, one PNG per feature per gesture type.
+    Output: 4_analysed/stimulus_compare_sessions/{group_name}/
+    """
+    print(f"[Batch Analysis] Running stimulus session comparison for {len(input_items)} item(s)...")
+    if not input_items:
+        return
+    output_dir = input_items[0][1] / '4_analysed' / STIMULUS_COMPARE_SESSIONS
+    run_stimulus_session_comparison(
+        session_configs=input_items,
+        comparison_groups=comparison_groups,
+        output_dir=output_dir,
+        plot_type=plot_type,
         force_processing=force_processing,
     )
 
@@ -909,13 +969,13 @@ def stimulus_cluster_touches_flow(
     Stage 2: Global clustering on pooled feature CSVs.
     Discovers CSVs written by stimulus_extract_features, merges per group,
     and writes
-    ``4_analysed/touch_clusters/<group>/<clusterer>/pooled_touch_summary_clustered.csv``.
+    ``4_analysed/stimulus_cluster_touches/<group>/<clusterer>/pooled_touch_summary_clustered.csv``.
     """
     print(f"[Batch Analysis] Running touch clustering for {len(input_items)} item(s)...")
     if not input_items:
         return []
-    extraction_dir = input_items[0][1] / '4_analysed' / 'touch_features'
-    output_dir = input_items[0][1] / '4_analysed' / 'touch_clusters'
+    extraction_dir = input_items[0][1] / '4_analysed' / STIMULUS_EXTRACT_FEATURES
+    output_dir = input_items[0][1] / '4_analysed' / STIMULUS_CLUSTER_TOUCHES
     per_key = run_clustering(
         output_dir=output_dir,
         cluster_groups=cluster_groups,
@@ -949,8 +1009,8 @@ def stimulus_compare_clusters_flow(
     print(f"[Batch Analysis] Running touch comparing for {len(input_items)} item(s)...")
     if not input_items:
         return []
-    clustering_dir = input_items[0][1] / '4_analysed' / 'touch_clusters'
-    output_dir = input_items[0][1] / '4_analysed' / 'touch_comparisons'
+    clustering_dir = input_items[0][1] / '4_analysed' / STIMULUS_CLUSTER_TOUCHES
+    output_dir = input_items[0][1] / '4_analysed' / STIMULUS_COMPARE_CLUSTERS
     return run_comparing(
         output_dir=output_dir,
         cluster_groups=cluster_groups,
@@ -972,7 +1032,7 @@ def stimulus_analyse_efficacy_flow(
 ) -> List[Path]:
     """
     STEP 3: Matrix Generation (Efficacy).
-    Generates a matrix of AP efficacy into '4_analysed/ap_efficacy'.
+    Generates a matrix of AP efficacy into '4_analysed/stimulus_analyse_efficacy'.
     """
     print(f"[Batch Analysis - AP Efficacy] Generating Efficacy Matrix...")
 
@@ -982,8 +1042,7 @@ def stimulus_analyse_efficacy_flow(
         try:
             anchor_db_path = input_items[0][1]
 
-            # Define specific subfolder for this analysis flow
-            output_dir = anchor_db_path / "4_analysed" / "ap_efficacy"
+            output_dir = anchor_db_path / "4_analysed" / STIMULUS_ANALYSE_EFFICACY
             output_dir.mkdir(parents=True, exist_ok=True)
 
             matrix_output_path = output_dir / "batch_ap_efficacy_matrix.csv"
@@ -1016,15 +1075,15 @@ def cross_extract_cluster_rf_flow(
     """
     Extraction-only step: load aggregated CSVs, count spikes per contact point,
     and write intermediate artifacts to disk.
-    Output: ``4_analysed/receptive_field_maps_clustered/<group>/<clusterer>/``
+    Output: ``4_analysed/cross_cluster_rf/<group>/<clusterer>/``
     """
     print(f"[Batch Analysis] Running RF extraction for {len(input_items)} item(s)...")
     if not input_items:
         return []
 
     database_path = input_items[0][1]
-    clustering_dir = database_path / '4_analysed' / 'touch_clusters'
-    output_dir = database_path / '4_analysed' / 'receptive_field_maps_clustered'
+    clustering_dir = database_path / '4_analysed' / STIMULUS_CLUSTER_TOUCHES
+    output_dir = database_path / '4_analysed' / CROSS_CLUSTER_RF
 
     return run_cluster_rf_extraction(
         clustering_dir=clustering_dir,
@@ -1053,16 +1112,16 @@ def cross_compute_cluster_metrics_flow(
     Metrics-only step: load extraction artifacts and compute RF metrics
     (centroid, hull area, Gaussian fit) per cluster, writing rf_metrics.json
     and rf_metrics_summary.csv.
-    Output: ``4_analysed/receptive_field_maps_clustered/<group>/<clusterer>/``
+    Output: ``4_analysed/cross_cluster_rf/<group>/<clusterer>/``
     """
     print(f"[Batch Analysis] Running RF metrics computation for {len(input_items)} item(s)...")
     if not input_items:
         return
 
     database_path = input_items[0][1]
-    output_dir = database_path / '4_analysed' / 'receptive_field_maps_clustered'
+    output_dir = database_path / '4_analysed' / CROSS_CLUSTER_RF
     slim_uv_cache_dir = (
-        database_path / '4_analysed' / 'forearm_slim_uv'
+        database_path / '4_analysed' / SPATIAL_SLIM_UV
         if projection_method == 'slim' else None
     )
 
@@ -1093,16 +1152,16 @@ def cross_render_cluster_rf_flow(
     """
     Visualization-only step: load extraction artifacts, compute RF metrics,
     and render per-session heatmap PNGs.
-    Output: ``4_analysed/receptive_field_maps_clustered/<group>/<clusterer>/``
+    Output: ``4_analysed/cross_cluster_rf/<group>/<clusterer>/``
     """
     print(f"[Batch Analysis] Running RF visualization for {len(input_items)} item(s)...")
     if not input_items:
         return []
 
     database_path = input_items[0][1]
-    output_dir = database_path / '4_analysed' / 'receptive_field_maps_clustered'
+    output_dir = database_path / '4_analysed' / CROSS_CLUSTER_RF
     slim_uv_cache_dir = (
-        database_path / '4_analysed' / 'forearm_slim_uv'
+        database_path / '4_analysed' / SPATIAL_SLIM_UV
         if projection_method == 'slim' else None
     )
 
@@ -1142,7 +1201,7 @@ def spatial_set_camera_flow(
         return
 
     database_path = input_items[0][1]
-    camera_settings_dir = database_path / '4_analysed' / 'rf_camera_settings'
+    camera_settings_dir = database_path / '4_analysed' / SPATIAL_SET_CAMERA
     session_ids = [session_id_from_path(csv_path) for csv_path, _ in input_items]
 
     if not force_processing:
@@ -1234,12 +1293,12 @@ def _build_pipeline_stages(dag_handler: DagConfigHandler, items_to_process) -> l
 
     def _preparation_dir() -> Optional[Path]:
         if database_path is not None and _task_enabled("touch_prepare_sessions"):
-            return database_path / '4_analysed' / 'preparation'
+            return database_path / '4_analysed' / TOUCH_PREPARE_SESSIONS
         return None
 
     def _series_dir() -> Optional[Path]:
         if database_path is not None and _task_enabled("touch_compute_series"):
-            return database_path / '4_analysed' / 'series_transforms'
+            return database_path / '4_analysed' / TOUCH_COMPUTE_SERIES
         return None
 
     return [
@@ -1360,6 +1419,14 @@ def _build_pipeline_stages(dag_handler: DagConfigHandler, items_to_process) -> l
             "func": stimulus_render_radar_flow,
             "params": lambda: {
                 "radar_groups": dag_handler.get_task_options("stimulus_render_radar").get("radar_groups"),
+            },
+        },
+        {
+            "name": "stimulus_compare_sessions",
+            "func": stimulus_compare_sessions_flow,
+            "params": lambda: {
+                "comparison_groups": dag_handler.get_task_options("stimulus_compare_sessions").get("comparison_groups"),
+                "plot_type": str(dag_handler.get_task_options("stimulus_compare_sessions").get("plot_type", "box_strip")),
             },
         },
         {

@@ -5,10 +5,10 @@
 parameters:
   # List of directories containing Kinect session config files to scan.
   # Paths are relative to configs/kinect_configs/.
-  kinect_configs: [valid_configs_ST13-01, valid_configs_ST13-02,
-      valid_configs_ST13-03, valid_configs_ST14-01, valid_configs_ST14-02,
-      valid_configs_ST14-04, valid_configs_ST15-01, valid_configs_ST16-02,
-      valid_configs_ST16-03, valid_configs_ST16-05, valid_configs_ST18-01,
+  kinect_configs: [valid_configs_ST13-01, valid_configs_ST13-02, 
+      valid_configs_ST13-03, valid_configs_ST14-01, valid_configs_ST14-02, 
+      valid_configs_ST14-04, valid_configs_ST15-01, valid_configs_ST16-02, 
+      valid_configs_ST16-03, valid_configs_ST16-05, valid_configs_ST18-01, 
       valid_configs_ST18-04]
 
 tasks:
@@ -180,7 +180,7 @@ tasks:
     category: spatial_sensitivity
     enabled: true
     options:
-      force_processing: true
+      force_processing: false
       neuron_mode: iff
       min_overlap_pct: 25
       median_filter_size: 5
@@ -208,7 +208,7 @@ tasks:
     category: spatial_sensitivity
     enabled: true
     options:
-      force_processing: true
+      force_processing: false
       heatmap_space: linear
       cmap: jet
     depends_on: [spatial_extract_boundaries]
@@ -248,7 +248,7 @@ tasks:
 
   stimulus_render_radar:
     category: stimulus_sensitivity
-    enabled: false
+    enabled: true
     options:
       force_processing: false
       radar_groups:
@@ -260,6 +260,26 @@ tasks:
             contact_depth:
             - mean_during_iff
             hand_velocity_amplitude:
+            - mean_during_iff
+    depends_on: [stimulus_extract_features]
+
+  stimulus_compare_sessions:
+    category: stimulus_sensitivity
+    enabled: true
+    options:
+      force_processing: false
+      plot_type: box_strip
+      comparison_groups:
+        canonical_iff:
+          enabled: true
+          features:
+            contact_area:
+            - mean_during_iff
+            contact_depth:
+            - mean_during_iff
+            hand_velocity_amplitude:
+            - mean_during_iff
+            pressure:
             - mean_during_iff
     depends_on: [stimulus_extract_features]
 
@@ -297,7 +317,7 @@ tasks:
           compute_baseline: true
           features:
             contact_depth_mean: {min: 0.0, max: 10.0, step: 0.1, span: 0.2}
-            hand_velocity_amplitude_mean: {min: 0.0, max: 500.0, step: 5.0, span:
+            hand_velocity_amplitude_mean: {min: 0.0, max: 500.0, step: 5.0, span: 
                 10.0}
     depends_on: [spatial_map_single_touch, stimulus_extract_features]
 
@@ -335,7 +355,7 @@ tasks:
     category: cross_domain
     enabled: true
     options:
-      force_processing: true
+      force_processing: false
       neuron_mode: iff
       vertex_threshold_ratio: 0.25
       metric_name: mean_iff
@@ -346,7 +366,7 @@ tasks:
           max: 500
           step: 25
           span: 50
-    depends_on: [spatial_map_single_touch, stimulus_extract_features,
+    depends_on: [spatial_map_single_touch, stimulus_extract_features, 
         spatial_set_camera]
 
   # Stages 3–5 (Reduction + Clustering + Evaluation): Global clustering on pooled feature CSVs.
