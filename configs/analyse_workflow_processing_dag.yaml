@@ -180,7 +180,7 @@ tasks:
     category: spatial_sensitivity
     enabled: true
     options:
-      force_processing: false
+      force_processing: true
       neuron_mode: iff
       min_overlap_pct: 25
       median_filter_size: 5
@@ -281,6 +281,22 @@ tasks:
             - mean_during_iff
             pressure:
             - mean_during_iff
+    depends_on: [stimulus_extract_features]
+
+  stimulus_iff_tuning_curves:
+    category: stimulus_sensitivity
+    enabled: true
+    options:
+      force_processing: false
+      tuning_features:
+      - contact_area_mean
+      - pressure_mean
+      - hand_velocity_amplitude
+      - contact_duration
+      - stroke_velocity_amplitude
+      - normal_force_mean
+      n_bins: 20
+      clip_percentile: 1.0
     depends_on: [stimulus_extract_features]
 
   # Population RF grid: sweep N-D feature space, average single-touch RFs per cell.

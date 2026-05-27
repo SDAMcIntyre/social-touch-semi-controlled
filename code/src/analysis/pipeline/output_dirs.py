@@ -20,6 +20,7 @@ STIMULUS_CLUSTER_TOUCHES = "stimulus_cluster_touches"
 STIMULUS_COMPARE_CLUSTERS = "stimulus_compare_clusters"
 STIMULUS_RENDER_RADAR = "stimulus_render_radar"
 STIMULUS_COMPARE_SESSIONS = "stimulus_compare_sessions"
+STIMULUS_IFF_TUNING_CURVES = "stimulus_iff_tuning_curves"
 STIMULUS_ANALYSE_EFFICACY = "stimulus_analyse_efficacy"
 
 # -- Cross-domain -------------------------------------------------------------

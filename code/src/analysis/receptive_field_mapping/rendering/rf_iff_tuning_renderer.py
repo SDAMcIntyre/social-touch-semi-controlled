@@ -1,0 +1,171 @@
+"""Pure rendering functions for IFF tuning curve plots."""
+
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+from pathlib import Path
+
+
+_BG = '#1e1e1e'
+_AX_BG = '#2d2d2d'
+_SPINE_COLOR = '#555555'
+_IFF_COLOR = '#4ec9b0'
+_COUNT_COLOR = '#569cd6'
+
+_DISPLAY_NAMES: dict[str, str] = {
+    "contact_area":            "Contact Area (mm²)",
+    "contact_depth":           "Depth (mm)",
+    "hand_velocity":           "Hand Velocity (mm/s)",
+    "hand_velocity_amplitude": "Hand Velocity (mm/s)",
+    "hand_acceleration":       "Hand Accel. (mm/s²)",
+    "pressure":                "Pressure (N/mm²)",
+    "hand_position":           "Hand Position (mm)",
+    "mos_strain":              "Strain",
+    "mos_stress_kpa":          "Stress (kPa)",
+    "mos_strain_rate":         "Strain Rate (1/s)",
+    "mos_elastic_energy_mj":   "Elastic E. (mJ)",
+    "mos_impulse_mns":         "Impulse (mN·s)",
+    "mechanics_of_solids":     "MoS",
+    "location":                "Location (mm)",
+}
+
+
+def _display_id(feature_name: str) -> str:
+    return _DISPLAY_NAMES.get(feature_name, feature_name)
+
+
+def _style_dark_ax(ax, bg_color: str = '#2d2d2d') -> None:
+    ax.set_facecolor(bg_color)
+    ax.tick_params(colors='white')
+    ax.xaxis.label.set_color('white')
+    ax.yaxis.label.set_color('white')
+    ax.title.set_color('white')
+    for spine in ax.spines.values():
+        spine.set_edgecolor(_SPINE_COLOR)
+
+
+def _bin_data(
+    df: pd.DataFrame,
+    feature_col: str,
+    iff_col: str,
+    bin_edges: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    if feature_col not in df.columns:
+        raise ValueError(
+            f"_bin_data: '{feature_col}' not in df.columns. "
+            f"Available: {sorted(df.columns)}"
+        )
+    if iff_col not in df.columns:
+        raise ValueError(
+            f"_bin_data: '{iff_col}' not in df.columns. "
+            f"Available: {sorted(df.columns)}"
+        )
+
+    valid = df[[feature_col, iff_col]].dropna()
+    feature_vals = valid[feature_col].to_numpy(dtype=float)
+    iff_vals = valid[iff_col].to_numpy(dtype=float)
+
+    n_bins = len(bin_edges) - 1
+    bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+    mean_iff_per_bin = np.full(n_bins, np.nan)
+    count_per_bin = np.zeros(n_bins, dtype=int)
+
+    bin_indices = np.digitize(feature_vals, bin_edges) - 1
+
+    for i in range(n_bins):
+        mask = bin_indices == i
+        count_per_bin[i] = int(mask.sum())
+        if count_per_bin[i] > 0:
+            mean_iff_per_bin[i] = float(np.mean(iff_vals[mask]))
+
+    return bin_centers, mean_iff_per_bin, count_per_bin
+
+
+def render_session_tuning_curve(
+    bin_centers: np.ndarray,
+    mean_iff: np.ndarray,
+    counts: np.ndarray,
+    feature_name: str,
+    session_id: str,
+    gesture_subset: str,
+    out_path: Path,
+    iff_ylim: tuple[float, float],
+    count_ymax: float,
+) -> None:
+    fig, ax_iff = plt.subplots(figsize=(8, 5), dpi=150)
+    fig.patch.set_facecolor(_BG)
+
+    _style_dark_ax(ax_iff)
+    ax_iff.grid(alpha=0.15, color='white', linestyle='--')
+
+    ax_count = ax_iff.twinx()
+    _style_dark_ax(ax_count)
+
+    ax_count.bar(
+        bin_centers,
+        counts,
+        width=(bin_centers[1] - bin_centers[0]) * 0.8 if len(bin_centers) > 1 else 1.0,
+        color=_COUNT_COLOR,
+        alpha=0.5,
+        zorder=2,
+    )
+    ax_count.set_ylim(0, count_ymax)
+    ax_count.set_ylabel('Touch count', color='white', fontsize=10)
+
+    valid_mask = ~np.isnan(mean_iff)
+    if valid_mask.any():
+        ax_iff.plot(
+            bin_centers[valid_mask],
+            mean_iff[valid_mask],
+            color=_IFF_COLOR,
+            linewidth=2,
+            zorder=3,
+        )
+    ax_iff.set_ylim(iff_ylim)
+    ax_iff.set_ylabel('Mean IFF (Hz)', color='white', fontsize=10)
+    ax_iff.set_xlabel(_display_id(feature_name), color='white', fontsize=10)
+    ax_iff.set_title(f"{session_id} | {gesture_subset}", color='white', fontsize=11)
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=150, bbox_inches='tight', facecolor=fig.get_facecolor())
+    plt.close(fig)
+
+
+def render_overlay_tuning_curve(
+    session_data: dict[str, tuple[np.ndarray, np.ndarray]],
+    feature_name: str,
+    gesture_subset: str,
+    out_path: Path,
+    iff_ylim: tuple[float, float],
+    session_colors: dict[str, str],
+) -> None:
+    fig, ax = plt.subplots(figsize=(8, 5), dpi=150)
+    fig.patch.set_facecolor(_BG)
+
+    _style_dark_ax(ax)
+    ax.grid(alpha=0.15, color='white', linestyle='--')
+
+    for session_id, (bin_centers, mean_iff) in session_data.items():
+        color = session_colors[session_id]
+        valid_mask = ~np.isnan(mean_iff)
+        if valid_mask.any():
+            ax.plot(
+                bin_centers[valid_mask],
+                mean_iff[valid_mask],
+                color=color,
+                linewidth=2,
+                label=session_id,
+            )
+
+    ax.set_ylim(iff_ylim)
+    ax.set_ylabel('Mean IFF (Hz)', color='white', fontsize=10)
+    ax.set_xlabel(_display_id(feature_name), color='white', fontsize=10)
+    ax.set_title(f"All sessions | {gesture_subset}", color='white', fontsize=11)
+
+    legend = ax.legend(fontsize=8, framealpha=0.3, facecolor=_AX_BG, labelcolor='white')
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=150, bbox_inches='tight', facecolor=fig.get_facecolor())
+    plt.close(fig)

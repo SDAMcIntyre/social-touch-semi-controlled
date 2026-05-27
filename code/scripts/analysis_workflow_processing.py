@@ -41,6 +41,7 @@ from analysis.receptive_field_mapping import (
     run_proximal_distal_center_comparison,
     run_touch_feature_radar,
     run_stimulus_session_comparison,
+    run_iff_tuning_curves,
     launch_rf_camera_settings_viewer,
     launch_slim_uv_config_viewer,
 )
@@ -72,6 +73,7 @@ from analysis.pipeline.output_dirs import (
     STIMULUS_EXTRACT_FEATURES,
     STIMULUS_RENDER_RADAR,
     STIMULUS_COMPARE_SESSIONS,
+    STIMULUS_IFF_TUNING_CURVES,
     TOUCH_COMPUTE_SERIES,
     TOUCH_PREPARE_SESSIONS,
     TOUCH_SUMMARIZE_BLOCKS,
@@ -955,6 +957,37 @@ def stimulus_compare_sessions_flow(
     )
 
 
+@flow(name="stimulus_iff_tuning_curves")
+def stimulus_iff_tuning_curves_flow(
+    input_items: List[Tuple[Path, Path]],
+    force_processing: bool = False,
+    tuning_features: Optional[list] = None,
+    n_bins: int = 20,
+    clip_percentile: float = 1.0,
+) -> None:
+    """Per-feature IFF tuning curve plots across all sessions.
+
+    Bins each selected touch feature into equal-width ranges, computes mean IFF
+    and touch count per bin, and renders dual Y-axis per-session PNGs plus
+    cross-session overlay PNGs, faceted by gesture subset.
+    Output: 4_analysed/stimulus_iff_tuning_curves/
+    """
+    print(f"[Batch Analysis] Rendering IFF tuning curves for {len(input_items)} item(s)...")
+    if not input_items:
+        return
+    output_dir = input_items[0][1] / '4_analysed' / STIMULUS_IFF_TUNING_CURVES
+    run_iff_tuning_curves(
+        session_config_paths=input_items,
+        options={
+            "tuning_features": tuning_features or [],
+            "n_bins": n_bins,
+            "clip_percentile": clip_percentile,
+            "force_processing": force_processing,
+        },
+        output_base_dir=output_dir,
+    )
+
+
 @flow(name="stimulus_cluster_touches")
 def stimulus_cluster_touches_flow(
     input_items: List[Tuple[Path, Path]],
@@ -1427,6 +1460,15 @@ def _build_pipeline_stages(dag_handler: DagConfigHandler, items_to_process) -> l
             "params": lambda: {
                 "comparison_groups": dag_handler.get_task_options("stimulus_compare_sessions").get("comparison_groups"),
                 "plot_type": str(dag_handler.get_task_options("stimulus_compare_sessions").get("plot_type", "box_strip")),
+            },
+        },
+        {
+            "name": "stimulus_iff_tuning_curves",
+            "func": stimulus_iff_tuning_curves_flow,
+            "params": lambda: {
+                "tuning_features": list(dag_handler.get_task_options("stimulus_iff_tuning_curves").get("tuning_features") or []),
+                "n_bins": int(dag_handler.get_task_options("stimulus_iff_tuning_curves").get("n_bins", 20)),
+                "clip_percentile": float(dag_handler.get_task_options("stimulus_iff_tuning_curves").get("clip_percentile", 1.0)),
             },
         },
         {
