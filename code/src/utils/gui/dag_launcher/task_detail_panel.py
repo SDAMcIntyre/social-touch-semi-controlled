@@ -94,6 +94,10 @@ _OPTION_ENUMS: dict[str, list[tuple[str, object]]] = {
         ("IFF (default)", "iff"),
         ("Spike", "spike"),
     ],
+    "iff_metric": [
+        ("Mean (default)", "mean"),
+        ("Max", "max"),
+    ],
 }
 
 

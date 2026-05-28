@@ -80,6 +80,7 @@ from analysis.pipeline.output_dirs import (
 )
 
 from analysis.pipeline import collect_unique_session_dirs, discover_input_items, run_pipeline_stages
+from analysis.pipeline.shared_constants import single_touch_npz_filename
 
 # --- Module-level helpers ---
 
@@ -302,9 +303,10 @@ def spatial_precompute_slim_uv_flow(
                 "run forearm extraction first."
             )
 
+        # SLIM UV always anchors on the mean-IFF centroid — use the mean NPZ.
         rf_maps_npz = (
             db_path / '4_analysed' / SPATIAL_MAP_SINGLE_TOUCH
-            / session_id / 'single_touch_rf_maps.npz'
+            / session_id / single_touch_npz_filename("mean")
         )
 
         output_dir = db_path / '4_analysed' / SPATIAL_SLIM_UV / session_id
@@ -436,6 +438,7 @@ def spatial_extract_boundaries_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
     neuron_mode: str = "iff",
+    iff_metric: str = "mean",
     min_overlap_pct: float = 25.0,
     median_filter_size: int | None = None,
     inflection_sigma: float | None = None,
@@ -464,6 +467,7 @@ def spatial_extract_boundaries_flow(
         inflection_sigma=inflection_sigma,
         heatmap_space=heatmap_space,
         cmap=cmap,
+        iff_metric=iff_metric,
     )
 
 
@@ -529,6 +533,7 @@ def cross_map_feature_grid_flow(
     features: Optional[dict] = None,
     compute_baseline: bool = True,
     grid_groups: Optional[dict] = None,
+    iff_metric: str = "mean",
 ) -> List[Path]:
     """Systematic RF population mapping via feature-space grid sweep.
 
@@ -591,11 +596,11 @@ def cross_map_feature_grid_flow(
             )
         npz_path = (
             db_path / '4_analysed' / SPATIAL_MAP_SINGLE_TOUCH
-            / session_id / 'single_touch_rf_maps.npz'
+            / session_id / single_touch_npz_filename(iff_metric)
         )
         if not npz_path.exists():
             raise ValueError(
-                f"cross_map_feature_grid_flow: single_touch_rf_maps.npz not found for "
+                f"cross_map_feature_grid_flow: {npz_path.name} not found for "
                 f"session '{session_id}': {npz_path}. Run spatial_map_single_touch first."
             )
         resolved_items.append({
@@ -764,6 +769,7 @@ def cross_render_sessions_flow(
     vertex_threshold_ratio: float = 0.25,
     metric_name: str = "mean_iff",
     projection_method: str = "tangent_plane",
+    iff_metric: str = "mean",
 ) -> None:
     """Render cross-session comparison heatmaps from 1D population RF grids.
 
@@ -804,11 +810,11 @@ def cross_render_sessions_flow(
             )
         npz_path = (
             db_path / '4_analysed' / SPATIAL_MAP_SINGLE_TOUCH
-            / session_id / 'single_touch_rf_maps.npz'
+            / session_id / single_touch_npz_filename(iff_metric)
         )
         if not npz_path.exists():
             raise ValueError(
-                f"cross_render_sessions_flow: single_touch_rf_maps.npz not found for "
+                f"cross_render_sessions_flow: {npz_path.name} not found for "
                 f"session '{session_id}': {npz_path}. Run spatial_map_single_touch first."
             )
         resolved_items.append({
@@ -964,6 +970,7 @@ def stimulus_iff_tuning_curves_flow(
     tuning_features: Optional[list] = None,
     n_bins: int = 20,
     clip_percentile: float = 1.0,
+    iff_metric: str = "mean",
 ) -> None:
     """Per-feature IFF tuning curve plots across all sessions.
 
@@ -983,6 +990,7 @@ def stimulus_iff_tuning_curves_flow(
             "n_bins": n_bins,
             "clip_percentile": clip_percentile,
             "force_processing": force_processing,
+            "iff_metric": iff_metric,
         },
         output_base_dir=output_dir,
     )
@@ -1410,6 +1418,7 @@ def _build_pipeline_stages(dag_handler: DagConfigHandler, items_to_process) -> l
             "func": spatial_extract_boundaries_flow,
             "params": lambda: {
                 "neuron_mode": dag_handler.get_task_options("spatial_extract_boundaries").get("neuron_mode", "iff"),
+                "iff_metric": dag_handler.get_task_options("spatial_extract_boundaries").get("iff_metric", "mean"),
                 "min_overlap_pct": float(dag_handler.get_task_options("spatial_extract_boundaries").get("min_overlap_pct", 25.0)),
                 "heatmap_space": dag_handler.get_task_options("spatial_extract_boundaries").get("heatmap_space", "linear"),
                 "cmap": dag_handler.get_task_options("spatial_extract_boundaries").get("cmap", "jet"),
@@ -1469,6 +1478,7 @@ def _build_pipeline_stages(dag_handler: DagConfigHandler, items_to_process) -> l
                 "tuning_features": list(dag_handler.get_task_options("stimulus_iff_tuning_curves").get("tuning_features") or []),
                 "n_bins": int(dag_handler.get_task_options("stimulus_iff_tuning_curves").get("n_bins", 20)),
                 "clip_percentile": float(dag_handler.get_task_options("stimulus_iff_tuning_curves").get("clip_percentile", 1.0)),
+                "iff_metric": dag_handler.get_task_options("stimulus_iff_tuning_curves").get("iff_metric", "mean"),
             },
         },
         {
@@ -1477,6 +1487,7 @@ def _build_pipeline_stages(dag_handler: DagConfigHandler, items_to_process) -> l
             "params": lambda: {
                 "grid_groups": dag_handler.get_task_options("cross_map_feature_grid").get("grid_groups"),
                 "neuron_mode": dag_handler.get_task_options("cross_map_feature_grid").get("neuron_mode", "iff"),
+                "iff_metric": dag_handler.get_task_options("cross_map_feature_grid").get("iff_metric", "mean"),
                 "per_gesture_type": bool(dag_handler.get_task_options("cross_map_feature_grid").get("per_gesture_type", True)),
                 "vertex_threshold_ratio": float(dag_handler.get_task_options("cross_map_feature_grid").get("vertex_threshold_ratio", 0.25)),
                 "compute_baseline": bool(dag_handler.get_task_options("cross_map_feature_grid").get("compute_baseline", True)),
@@ -1511,6 +1522,7 @@ def _build_pipeline_stages(dag_handler: DagConfigHandler, items_to_process) -> l
             "params": lambda: {
                 "features": dag_handler.get_task_options("cross_render_sessions").get("features"),
                 "neuron_mode": dag_handler.get_task_options("cross_render_sessions").get("neuron_mode", "iff"),
+                "iff_metric": dag_handler.get_task_options("cross_render_sessions").get("iff_metric", "mean"),
                 "vertex_threshold_ratio": float(dag_handler.get_task_options("cross_render_sessions").get("vertex_threshold_ratio", 0.25)),
                 "metric_name": dag_handler.get_task_options("cross_render_sessions").get("metric_name", "mean_iff"),
                 "projection_method": dag_handler.get_task_options("cross_render_sessions").get("projection_method", "tangent_plane"),

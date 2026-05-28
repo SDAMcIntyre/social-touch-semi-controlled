@@ -95,6 +95,7 @@ def render_session_tuning_curve(
     out_path: Path,
     iff_ylim: tuple[float, float],
     count_ymax: float,
+    iff_ylabel: str = "Mean IFF (Hz)",
 ) -> None:
     fig, ax_iff = plt.subplots(figsize=(8, 5), dpi=150)
     fig.patch.set_facecolor(_BG)
@@ -126,7 +127,7 @@ def render_session_tuning_curve(
             zorder=3,
         )
     ax_iff.set_ylim(iff_ylim)
-    ax_iff.set_ylabel('Mean IFF (Hz)', color='white', fontsize=10)
+    ax_iff.set_ylabel(iff_ylabel, color='white', fontsize=10)
     ax_iff.set_xlabel(_display_id(feature_name), color='white', fontsize=10)
     ax_iff.set_title(f"{session_id} | {gesture_subset}", color='white', fontsize=11)
 
@@ -142,6 +143,7 @@ def render_overlay_tuning_curve(
     out_path: Path,
     iff_ylim: tuple[float, float],
     session_colors: dict[str, str],
+    iff_ylabel: str = "Mean IFF (Hz)",
 ) -> None:
     fig, ax = plt.subplots(figsize=(8, 5), dpi=150)
     fig.patch.set_facecolor(_BG)
@@ -162,7 +164,7 @@ def render_overlay_tuning_curve(
             )
 
     ax.set_ylim(iff_ylim)
-    ax.set_ylabel('Mean IFF (Hz)', color='white', fontsize=10)
+    ax.set_ylabel(iff_ylabel, color='white', fontsize=10)
     ax.set_xlabel(_display_id(feature_name), color='white', fontsize=10)
     ax.set_title(f"All sessions | {gesture_subset}", color='white', fontsize=11)
 
