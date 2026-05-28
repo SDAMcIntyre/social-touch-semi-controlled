@@ -456,7 +456,7 @@ def spatial_extract_boundaries_flow(
     if not input_items:
         return
 
-    output_dir = input_items[0][1] / '4_analysed' / SPATIAL_EXTRACT_BOUNDARIES
+    output_dir = input_items[0][1] / '4_analysed' / SPATIAL_EXTRACT_BOUNDARIES / f"iff_{iff_metric}"
     run_population_response_field_extraction(
         session_configs=input_items,
         neuron_mode=neuron_mode,
@@ -475,23 +475,25 @@ def spatial_extract_boundaries_flow(
 def spatial_compare_boundaries_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
+    iff_metric: str = "mean",
 ) -> None:
     """Aggregate RF boundary metrics across sessions and render comparison visuals.
 
     Reads per-session NPZ files produced by spatial_extract_boundaries,
     builds a summary CSV, and renders UV contour overlays, per-gesture metric panels,
     and session-x-gesture heatmaps.
-    Output: 4_analysed/spatial_compare_boundaries/
+    Output: 4_analysed/spatial_compare_boundaries/iff_<iff_metric>/
     """
     print(f"[Batch Analysis] Comparing session RF boundaries for {len(input_items)} item(s)...")
     if not input_items:
         return
 
-    output_dir = input_items[0][1] / '4_analysed' / SPATIAL_COMPARE_BOUNDARIES
+    output_dir = input_items[0][1] / '4_analysed' / SPATIAL_COMPARE_BOUNDARIES / f"iff_{iff_metric}"
     run_session_rf_boundary_comparison(
         session_configs=input_items,
         output_dir=output_dir,
         force_processing=force_processing,
+        iff_metric=iff_metric,
     )
 
 
@@ -501,25 +503,27 @@ def spatial_compare_rf_centers_flow(
     force_processing: bool = False,
     heatmap_space: str = "linear",
     cmap: str = "jet",
+    iff_metric: str = "mean",
 ) -> None:
     """Compare RF center positions between proximal and distal strokes across sessions.
 
     Reads per-session NPZ files produced by spatial_extract_boundaries,
     renders per-session center-marked heatmap PNGs, and produces a cross-session
     aggregate scatter plot and summary CSV.
-    Output: 4_analysed/spatial_compare_rf_centers/
+    Output: 4_analysed/spatial_compare_rf_centers/iff_<iff_metric>/
     """
     print(f"[Batch Analysis] Comparing RF centers for {len(input_items)} item(s)...")
     if not input_items:
         return
 
-    output_dir = input_items[0][1] / '4_analysed' / SPATIAL_COMPARE_RF_CENTERS
+    output_dir = input_items[0][1] / '4_analysed' / SPATIAL_COMPARE_RF_CENTERS / f"iff_{iff_metric}"
     run_proximal_distal_center_comparison(
         session_configs=input_items,
         output_dir=output_dir,
         force_processing=force_processing,
         heatmap_space=heatmap_space,
         cmap=cmap,
+        iff_metric=iff_metric,
     )
 
 
@@ -1437,7 +1441,9 @@ def _build_pipeline_stages(dag_handler: DagConfigHandler, items_to_process) -> l
         {
             "name": "spatial_compare_boundaries",
             "func": spatial_compare_boundaries_flow,
-            "params": lambda: {},
+            "params": lambda: {
+                "iff_metric": dag_handler.get_task_options("spatial_compare_boundaries").get("iff_metric", "mean"),
+            },
         },
         {
             "name": "spatial_compare_rf_centers",
@@ -1445,6 +1451,7 @@ def _build_pipeline_stages(dag_handler: DagConfigHandler, items_to_process) -> l
             "params": lambda: {
                 "heatmap_space": dag_handler.get_task_options("spatial_compare_rf_centers").get("heatmap_space", "linear"),
                 "cmap": dag_handler.get_task_options("spatial_compare_rf_centers").get("cmap", "jet"),
+                "iff_metric": dag_handler.get_task_options("spatial_compare_rf_centers").get("iff_metric", "mean"),
             },
         },
         {

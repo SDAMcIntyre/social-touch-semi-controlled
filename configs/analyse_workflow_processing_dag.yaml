@@ -180,9 +180,9 @@ tasks:
     category: spatial_sensitivity
     enabled: true
     options:
-      force_processing: false
+      force_processing: true
       neuron_mode: iff
-      iff_metric: mean
+      iff_metric: max
       min_overlap_pct: 25
       median_filter_size: 5
       inflection_sigma: 5.0
@@ -199,6 +199,7 @@ tasks:
     enabled: true
     options:
       force_processing: false
+      iff_metric: mean
     depends_on: [spatial_extract_boundaries]
 
   # Compare RF center positions between proximal and distal strokes per session.
@@ -210,6 +211,7 @@ tasks:
     enabled: true
     options:
       force_processing: false
+      iff_metric: mean
       heatmap_space: linear
       cmap: jet
     depends_on: [spatial_extract_boundaries]
@@ -288,7 +290,7 @@ tasks:
     category: stimulus_sensitivity
     enabled: true
     options:
-      force_processing: true
+      force_processing: false
       iff_metric: mean
       tuning_features:
       - contact_area_mean
