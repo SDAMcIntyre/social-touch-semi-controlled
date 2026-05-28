@@ -15,20 +15,22 @@ _IFF_COLOR = '#4ec9b0'
 _COUNT_COLOR = '#569cd6'
 
 _DISPLAY_NAMES: dict[str, str] = {
-    "contact_area":            "Contact Area (mm²)",
-    "contact_depth":           "Depth (mm)",
-    "hand_velocity":           "Hand Velocity (mm/s)",
-    "hand_velocity_amplitude": "Hand Velocity (mm/s)",
-    "hand_acceleration":       "Hand Accel. (mm/s²)",
-    "pressure":                "Pressure (N/mm²)",
-    "hand_position":           "Hand Position (mm)",
-    "mos_strain":              "Strain",
-    "mos_stress_kpa":          "Stress (kPa)",
-    "mos_strain_rate":         "Strain Rate (1/s)",
-    "mos_elastic_energy_mj":   "Elastic E. (mJ)",
-    "mos_impulse_mns":         "Impulse (mN·s)",
-    "mechanics_of_solids":     "MoS",
-    "location":                "Location (mm)",
+    "contact_area_mean":            "Contact Area (mm²)",
+    "contact_depth_mean":           "Depth (mm)",
+    "pressure_mean":                "Pressure (N/mm²)",
+    "hand_velocity_amplitude_mean": "Hand Velocity (mm/s)",
+    "hand_velocity_signed_mean":    "Signed Velocity (mm/s)",
+    "hand_velocity_x_mean":         "Velocity X (mm/s)",
+    "hand_velocity_y_mean":         "Velocity Y (mm/s)",
+    "hand_velocity_z_mean":         "Velocity Z (mm/s)",
+    "hand_acceleration_x_mean":     "Accel. X (mm/s²)",
+    "hand_acceleration_y_mean":     "Accel. Y (mm/s²)",
+    "hand_acceleration_z_mean":     "Accel. Z (mm/s²)",
+    "mos_strain_mean":              "Strain",
+    "mos_stress_kpa_mean":          "Stress (kPa)",
+    "mos_strain_rate_mean":         "Strain Rate (1/s)",
+    "mos_elastic_energy_mj_mean":   "Elastic E. (mJ)",
+    "mos_impulse_mns_mean":         "Impulse (mN·s)",
 }
 
 

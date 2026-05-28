@@ -62,10 +62,9 @@ _CHECKLIST_UNIVERSES: dict[str, list[str]] = {
     "tuning_features": [
         "contact_area_mean",
         "pressure_mean",
-        "hand_velocity_amplitude",
-        "contact_duration",
-        "stroke_velocity_amplitude",
-        "normal_force_mean",
+        "hand_velocity_amplitude_mean",
+        "contact_depth_mean",
+        "hand_velocity_signed_mean",
     ],
 }
 
