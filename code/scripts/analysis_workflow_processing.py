@@ -986,7 +986,7 @@ def stimulus_iff_tuning_curves_flow(
     print(f"[Batch Analysis] Rendering IFF tuning curves for {len(input_items)} item(s)...")
     if not input_items:
         return
-    output_dir = input_items[0][1] / '4_analysed' / STIMULUS_IFF_TUNING_CURVES
+    output_dir = input_items[0][1] / '4_analysed' / STIMULUS_IFF_TUNING_CURVES / f"iff_{iff_metric}"
     run_iff_tuning_curves(
         session_config_paths=input_items,
         options={
