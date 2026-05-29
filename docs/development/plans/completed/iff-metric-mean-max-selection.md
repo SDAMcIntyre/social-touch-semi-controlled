@@ -2,7 +2,8 @@
 
 **Date:** 2026-05-28
 **Author:** Basil Duvernoy
-**Status:** In Progress
+**Status:** Completed
+**Completed:** 2026-05-29 08:51
 **Base Branch:** `feature/stimulus-iff-tuning-curves`
 **Branch:** `feature/iff-metric-mean-max-selection`
 
