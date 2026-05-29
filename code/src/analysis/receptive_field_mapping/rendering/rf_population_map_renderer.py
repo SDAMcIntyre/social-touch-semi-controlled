@@ -9,6 +9,7 @@ import matplotlib
 import matplotlib.pyplot as plt
 import matplotlib.tri as mtri
 import numpy as np
+from matplotlib.collections import PolyCollection
 from matplotlib.colors import LogNorm, Normalize
 from scipy.ndimage import generic_filter
 from scipy.sparse import csr_matrix
@@ -571,9 +572,10 @@ def render_population_rf_circular_crop(
     """Render a transparent circular crop of a population RF heatmap and save as PNG.
 
     The circular boundary is defined in UV space using the mm-to-UV scale
-    derived from ``compute_uv_to_mm_scale``. The background shows per-vertex
-    skin colors (or grey if ``vertex_colors`` is None) for forearm vertices
-    within the circle. The heatmap is drawn with jet colormap at alpha=0.8.
+    derived from ``compute_uv_to_mm_scale``. The background shows a solid
+    triangulated mesh surface with per-face skin colours (or grey if
+    ``vertex_colors`` is None) for forearm faces that overlap the circle.
+    The heatmap is drawn with jet colormap fully opaque (alpha=1.0).
     No axes, titles, spines, or decorations are included.
 
     Parameters
@@ -616,7 +618,10 @@ def render_population_rf_circular_crop(
     radius_uv = radius_mm / scale
 
     dist = np.linalg.norm(forearm_uv - center_uv, axis=1)
-    mask = dist <= radius_uv
+    vertex_mask = dist <= radius_uv
+
+    face_mask = np.any(vertex_mask[forearm_faces], axis=1)
+    selected_faces = forearm_faces[face_mask]
 
     fig, ax = plt.subplots(1, 1)
     fig.patch.set_alpha(0.0)
@@ -624,27 +629,22 @@ def render_population_rf_circular_crop(
     ax.set_aspect('equal')
     ax.axis('off')
 
+    tri_verts = forearm_uv[selected_faces]  # shape (M, 3, 2)
     if vertex_colors is not None:
-        ax.scatter(
-            forearm_uv[mask, 0], forearm_uv[mask, 1],
-            c=vertex_colors[mask],
-            s=1, zorder=0, linewidths=0,
-        )
+        face_colors = vertex_colors[selected_faces].mean(axis=1)  # shape (M, 4) RGBA
     else:
-        ax.scatter(
-            forearm_uv[mask, 0], forearm_uv[mask, 1],
-            c='#606060',
-            s=1, zorder=0, linewidths=0,
-        )
+        face_colors = np.tile([0.5, 0.5, 0.5, 1.0], (len(selected_faces), 1))
+    mesh_coll = PolyCollection(tri_verts, facecolors=face_colors, edgecolors="none")
+    ax.add_collection(mesh_coll)
 
     if heatmap_space == "log":
         norm = LogNorm(vmin=max(vmin, 1e-9), vmax=vmax)
     else:
         norm = Normalize(vmin=vmin, vmax=vmax)
 
-    ax.pcolormesh(u_grid, v_grid, interp_grid, cmap='jet', norm=norm, alpha=0.8, zorder=1, shading='auto')
+    ax.pcolormesh(u_grid, v_grid, interp_grid, cmap='jet', norm=norm, alpha=1.0, zorder=1, shading='auto')
 
-    clip_circle = Circle(center_uv, radius_uv, transform=ax.transData)
+    clip_circle = Circle(center_uv, radius_uv, transform=ax.transData, fill=False, edgecolor='none')
     ax.add_patch(clip_circle)
     for artist in ax.collections:
         artist.set_clip_path(clip_circle)

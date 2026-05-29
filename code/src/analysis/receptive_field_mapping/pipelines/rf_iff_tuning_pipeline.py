@@ -27,6 +27,8 @@ import pandas as pd
 from analysis.pipeline.output_dirs import STIMULUS_IFF_TUNING_CURVES
 from analysis.pipeline.shared_constants import (
     GESTURE_TYPES,
+    IFF_METRICS,
+    TOUCH_ID_COLS,
     session_id_from_path,
 )
 from analysis.receptive_field_mapping.pipelines.rf_touch_feature_radar_pipeline import (
@@ -43,9 +45,7 @@ from analysis.receptive_field_mapping.rendering.rf_stimulus_session_comparison_r
 
 logger = logging.getLogger(__name__)
 
-_IFF_COL = "Nerve_freq_mean"
 _GESTURE_COL = "gesture_type"
-_AGGREGATION = "mean"
 
 _GESTURE_SUBSETS = ["all", "tap", "stroke", "stroke_proximal", "stroke_distal"]
 _MIN_ROWS = 5
@@ -157,16 +157,20 @@ def _compute_bin_edges(
 def _compute_global_iff_ylim(
     session_dfs: list[pd.DataFrame],
     clip_percentile: float,
+    iff_col: str,
 ) -> tuple[float, float]:
     """Return ``(0.0, upper_bound)`` where upper bound is the pooled IFF max.
 
     Parameters
     ----------
     session_dfs:
-        All per-session DataFrames (must contain ``_IFF_COL``).
+        All per-session DataFrames (must contain *iff_col*).
     clip_percentile:
         Upper percentile for clipping — the upper bound is set to
         ``np.nanpercentile(all_iff, 100 - clip_percentile)``.
+    iff_col:
+        Name of the IFF column (e.g. ``"Nerve_freq_mean"`` or
+        ``"Nerve_freq_max"``).
 
     Returns
     -------
@@ -174,13 +178,13 @@ def _compute_global_iff_ylim(
         ``(0.0, upper_percentile_value)``
     """
     all_iff = np.concatenate([
-        df[_IFF_COL].dropna().to_numpy(dtype=float)
+        df[iff_col].dropna().to_numpy(dtype=float)
         for df in session_dfs
-        if _IFF_COL in df.columns
+        if iff_col in df.columns
     ])
     if len(all_iff) == 0:
         raise ValueError(
-            f"_compute_global_iff_ylim: '{_IFF_COL}' contains no finite values "
+            f"_compute_global_iff_ylim: '{iff_col}' contains no finite values "
             f"across all sessions."
         )
     upper = float(np.nanpercentile(all_iff, 100.0 - clip_percentile))
@@ -191,6 +195,7 @@ def _compute_global_count_max(
     session_dfs: list[pd.DataFrame],
     feature_col: str,
     bin_edges: np.ndarray,
+    iff_col: str,
 ) -> float:
     """Return the maximum per-bin touch count across all sessions and gesture subsets.
 
@@ -204,6 +209,9 @@ def _compute_global_count_max(
         Feature column to bin.
     bin_edges:
         Pre-computed global bin edges for this feature.
+    iff_col:
+        Name of the IFF column (e.g. ``"Nerve_freq_mean"`` or
+        ``"Nerve_freq_max"``).
 
     Returns
     -------
@@ -217,7 +225,7 @@ def _compute_global_count_max(
             filtered = _filter_gesture(df, gesture_subset)
             if len(filtered) == 0:
                 continue
-            _, _, counts = _bin_data(filtered, feature_col, _IFF_COL, bin_edges)
+            _, _, counts = _bin_data(filtered, feature_col, iff_col, bin_edges)
             bin_max = int(counts.max())
             if bin_max > global_max:
                 global_max = bin_max
@@ -298,6 +306,16 @@ def run_iff_tuning_curves(
     n_bins: int = int(options.get("n_bins", 20))
     clip_percentile: float = float(options.get("clip_percentile", 1.0))
     force_processing: bool = bool(options.get("force_processing", False))
+    smoothing_sigma: float = float(options.get("smoothing_sigma", 0.0))
+
+    iff_metric: str = str(options.get("iff_metric", "mean"))
+    if iff_metric not in IFF_METRICS:
+        raise ValueError(
+            f"run_iff_tuning_curves: invalid 'iff_metric' value '{iff_metric}'. "
+            f"Expected one of {IFF_METRICS}."
+        )
+    iff_col: str = f"Nerve_freq_{iff_metric}"
+    iff_ylabel: str = "Mean IFF (Hz)" if iff_metric == "mean" else "Max IFF (Hz)"
 
     sentinel = output_base_dir / "iff_tuning_sentinel.json"
 
@@ -317,20 +335,62 @@ def run_iff_tuning_curves(
         database_path = Path(database_path)
         session_id = session_id_from_path(csv_path)
 
-        csv = _find_feature_csv(database_path, _AGGREGATION, session_id)
-        df = pd.read_csv(csv)
+        mean_csv = _find_feature_csv(database_path, "mean", session_id)
+        df = pd.read_csv(mean_csv)
 
-        if _IFF_COL not in df.columns:
-            raise ValueError(
-                f"[IFF Tuning Curves] {session_id}: column '{_IFF_COL}' not found in "
-                f"{csv}. Available columns: {sorted(df.columns)}. "
-                f"Ensure 'stimulus_extract_features' with aggregation 'mean' has run."
+        if iff_metric == "max":
+            # Load the max aggregation CSV to obtain Nerve_freq_max, then merge
+            # on TOUCH_ID_COLS. X-axis features always come from the mean CSV.
+            max_csv = _find_feature_csv(database_path, "max", session_id)
+            df_max = pd.read_csv(max_csv)
+
+            touch_id_cols = list(TOUCH_ID_COLS)
+            missing_in_mean = [c for c in touch_id_cols if c not in df.columns]
+            if missing_in_mean:
+                raise ValueError(
+                    f"[IFF Tuning Curves] {session_id}: TOUCH_ID_COLS columns "
+                    f"{missing_in_mean} not found in mean CSV {mean_csv}."
+                )
+            missing_in_max = [c for c in touch_id_cols if c not in df_max.columns]
+            if missing_in_max:
+                raise ValueError(
+                    f"[IFF Tuning Curves] {session_id}: TOUCH_ID_COLS columns "
+                    f"{missing_in_max} not found in max CSV {max_csv}."
+                )
+            if iff_col not in df_max.columns:
+                raise ValueError(
+                    f"[IFF Tuning Curves] {session_id}: column '{iff_col}' not found in "
+                    f"{max_csv}. Available columns: {sorted(df_max.columns)}. "
+                    f"Ensure 'stimulus_extract_features' with aggregation 'max' has run."
+                )
+
+            n_mean_rows = len(df)
+            df = df.merge(
+                df_max[touch_id_cols + [iff_col]],
+                on=touch_id_cols,
+                how="inner",
             )
+            n_merged_rows = len(df)
+            if n_merged_rows != n_mean_rows:
+                raise ValueError(
+                    f"[IFF Tuning Curves] {session_id}: inner merge on TOUCH_ID_COLS "
+                    f"yielded {n_merged_rows} rows but the mean CSV had {n_mean_rows} rows. "
+                    f"Touch IDs must be identical across aggregation CSVs — check that "
+                    f"'stimulus_extract_features' (mean and max) was run on the same data."
+                )
+        else:
+            # mean metric: IFF column comes from the mean CSV directly
+            if iff_col not in df.columns:
+                raise ValueError(
+                    f"[IFF Tuning Curves] {session_id}: column '{iff_col}' not found in "
+                    f"{mean_csv}. Available columns: {sorted(df.columns)}. "
+                    f"Ensure 'stimulus_extract_features' with aggregation 'mean' has run."
+                )
 
         if _GESTURE_COL not in df.columns:
             raise ValueError(
                 f"[IFF Tuning Curves] {session_id}: column '{_GESTURE_COL}' not found in "
-                f"{csv}. Available columns: {sorted(df.columns)}."
+                f"the loaded DataFrame. Available columns: {sorted(df.columns)}."
             )
 
         session_data.append({
@@ -378,12 +438,12 @@ def run_iff_tuning_curves(
     # =========================================================================
     # Compute global IFF ylim and per-feature count maxima
     # =========================================================================
-    iff_ylim = _compute_global_iff_ylim(session_dfs, clip_percentile)
+    iff_ylim = _compute_global_iff_ylim(session_dfs, clip_percentile, iff_col)
 
     count_maxima: dict[str, float] = {}
     for feature in valid_features:
         count_maxima[feature] = _compute_global_count_max(
-            session_dfs, feature, bin_edges[feature]
+            session_dfs, feature, bin_edges[feature], iff_col
         )
 
     colors = assign_session_colors(session_ids)
@@ -413,7 +473,7 @@ def run_iff_tuning_curves(
                     continue
 
                 bin_centers, mean_iff, counts = _bin_data(
-                    filtered, feature, _IFF_COL, edges
+                    filtered, feature, iff_col, edges
                 )
 
                 out_path = (
@@ -432,6 +492,8 @@ def run_iff_tuning_curves(
                     out_path=out_path,
                     iff_ylim=iff_ylim,
                     count_ymax=count_ymax,
+                    iff_ylabel=iff_ylabel,
+                    smoothing_sigma=smoothing_sigma,
                 )
                 print(
                     f"[IFF Tuning Curves] {feature} / {gesture_subset} / {session_id}: "
@@ -459,6 +521,8 @@ def run_iff_tuning_curves(
                 out_path=overlay_path,
                 iff_ylim=iff_ylim,
                 session_colors=colors,
+                iff_ylabel=iff_ylabel,
+                smoothing_sigma=smoothing_sigma,
             )
             print(
                 f"[IFF Tuning Curves] {feature} / {gesture_subset}: "

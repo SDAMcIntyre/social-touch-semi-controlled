@@ -73,6 +73,7 @@ tasks:
     options:
       force_processing: false
       neuron_mode: iff
+      iff_metric: mean
     depends_on: []
 
   # Touch Population Explorer: per-touch scatter (configurable feature axes) + 3D forearm heatmap.
@@ -81,10 +82,11 @@ tasks:
   # Output: interactive GUI (no files written)
   explore_touch_population:
     category: viewer
-    enabled: true
+    enabled: false
     options:
       force_processing: false
       neuron_mode: iff
+      iff_metric: mean
     depends_on: []
 
   # RF Cluster Gallery Viewer: interactive gallery of RF heatmaps with thumbnail sidebar and
@@ -106,7 +108,7 @@ tasks:
   # Output: interactive GUI (no files written)
   explore_rf_surface:
     category: viewer
-    enabled: false
+    enabled: true
     options:
       force_processing: false
       neuron_mode: iff
