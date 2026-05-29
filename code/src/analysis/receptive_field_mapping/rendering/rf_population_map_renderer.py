@@ -9,6 +9,7 @@ import matplotlib
 import matplotlib.pyplot as plt
 import matplotlib.tri as mtri
 import numpy as np
+from matplotlib.collections import PolyCollection
 from matplotlib.colors import LogNorm, Normalize
 from scipy.ndimage import generic_filter
 from scipy.sparse import csr_matrix
@@ -502,6 +503,159 @@ def render_population_rf_colorbar(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(str(output_path), dpi=150, bbox_inches='tight', facecolor='black')
     logger.info("Saved population RF colorbar: %s", output_path)
+    plt.close(fig)
+
+
+def compute_uv_to_mm_scale(
+    forearm_uv: np.ndarray,
+    forearm_V: np.ndarray,
+    forearm_faces: np.ndarray,
+) -> float:
+    """Return the mm-per-UV-unit scale factor estimated from mesh edge lengths.
+
+    Computes the median ratio of 3D edge length (mm) to UV edge length across
+    all unique edges in ``forearm_faces``. Edges with UV length < 1e-12 are
+    filtered to avoid division by zero on degenerate UV seams.
+
+    Parameters
+    ----------
+    forearm_uv:
+        (N, 2) UV coordinates.
+    forearm_V:
+        (N, 3) 3D vertex positions in mm.
+    forearm_faces:
+        (F, 3) triangle index array.
+    """
+    i0 = forearm_faces[:, 0]
+    i1 = forearm_faces[:, 1]
+    i2 = forearm_faces[:, 2]
+
+    edge_pairs = np.concatenate([
+        np.stack([i0, i1], axis=1),
+        np.stack([i1, i2], axis=1),
+        np.stack([i2, i0], axis=1),
+    ], axis=0)
+    edge_pairs = np.sort(edge_pairs, axis=1)
+    edge_pairs = np.unique(edge_pairs, axis=0)
+
+    a, b = edge_pairs[:, 0], edge_pairs[:, 1]
+
+    len_3d = np.linalg.norm(forearm_V[a] - forearm_V[b], axis=1)
+    len_uv = np.linalg.norm(forearm_uv[a] - forearm_uv[b], axis=1)
+
+    valid = len_uv >= 1e-12
+    if not np.any(valid):
+        raise ValueError(
+            "compute_uv_to_mm_scale: all edges have degenerate UV length (< 1e-12). "
+            "The UV parameterisation may be collapsed."
+        )
+
+    return float(np.median(len_3d[valid] / len_uv[valid]))
+
+
+def render_population_rf_circular_crop(
+    u_grid: np.ndarray,
+    v_grid: np.ndarray,
+    interp_grid: np.ndarray,
+    forearm_uv: np.ndarray,
+    forearm_V: np.ndarray,
+    forearm_faces: np.ndarray,
+    center_uv: np.ndarray,
+    radius_mm: float,
+    vmax: float,
+    vmin: float,
+    output_path: Path,
+    vertex_colors: np.ndarray | None = None,
+    heatmap_space: str = "linear",
+    dpi: int = 300,
+) -> None:
+    """Render a transparent circular crop of a population RF heatmap and save as PNG.
+
+    The circular boundary is defined in UV space using the mm-to-UV scale
+    derived from ``compute_uv_to_mm_scale``. The background shows a solid
+    triangulated mesh surface with per-face skin colours (or grey if
+    ``vertex_colors`` is None) for forearm faces that overlap the circle.
+    The heatmap is drawn with jet colormap fully opaque (alpha=1.0).
+    No axes, titles, spines, or decorations are included.
+
+    Parameters
+    ----------
+    u_grid:
+        (R, C) U-coordinate meshgrid.
+    v_grid:
+        (R, C) V-coordinate meshgrid.
+    interp_grid:
+        (R, C) interpolated heatmap values; NaN outside the mesh.
+    forearm_uv:
+        (N, 2) UV coordinates of all forearm vertices.
+    forearm_V:
+        (N, 3) 3D vertex positions in mm.
+    forearm_faces:
+        (F, 3) triangle index array.
+    center_uv:
+        (2,) UV coordinate of the circle centre.
+    radius_mm:
+        Circle radius in mm (world-space).
+    vmax:
+        Colour scale upper bound.
+    vmin:
+        Colour scale lower bound.
+    output_path:
+        Destination PNG file path.
+    vertex_colors:
+        (N, 4) RGBA float64 skin colors for forearm vertices. If None, grey
+        (#606060) is used.
+    heatmap_space:
+        ``"log"`` for LogNorm; any other value uses linear Normalize.
+    dpi:
+        Output resolution (default 300).
+    """
+    from matplotlib.patches import Circle
+
+    matplotlib.use('Agg')
+
+    scale = compute_uv_to_mm_scale(forearm_uv, forearm_V, forearm_faces)
+    radius_uv = radius_mm / scale
+
+    dist = np.linalg.norm(forearm_uv - center_uv, axis=1)
+    vertex_mask = dist <= radius_uv
+
+    face_mask = np.any(vertex_mask[forearm_faces], axis=1)
+    selected_faces = forearm_faces[face_mask]
+
+    fig, ax = plt.subplots(1, 1)
+    fig.patch.set_alpha(0.0)
+    ax.patch.set_alpha(0.0)
+    ax.set_aspect('equal')
+    ax.axis('off')
+
+    tri_verts = forearm_uv[selected_faces]  # shape (M, 3, 2)
+    if vertex_colors is not None:
+        face_colors = vertex_colors[selected_faces].mean(axis=1)  # shape (M, 4) RGBA
+    else:
+        face_colors = np.tile([0.5, 0.5, 0.5, 1.0], (len(selected_faces), 1))
+    mesh_coll = PolyCollection(tri_verts, facecolors=face_colors, edgecolors="none")
+    ax.add_collection(mesh_coll)
+
+    if heatmap_space == "log":
+        norm = LogNorm(vmin=max(vmin, 1e-9), vmax=vmax)
+    else:
+        norm = Normalize(vmin=vmin, vmax=vmax)
+
+    ax.pcolormesh(u_grid, v_grid, interp_grid, cmap='jet', norm=norm, alpha=1.0, zorder=1, shading='auto')
+
+    clip_circle = Circle(center_uv, radius_uv, transform=ax.transData, fill=False, edgecolor='none')
+    ax.add_patch(clip_circle)
+    for artist in ax.collections:
+        artist.set_clip_path(clip_circle)
+
+    margin = radius_uv * 0.05
+    ax.set_xlim(center_uv[0] - radius_uv - margin, center_uv[0] + radius_uv + margin)
+    ax.set_ylim(center_uv[1] - radius_uv - margin, center_uv[1] + radius_uv + margin)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=dpi, bbox_inches='tight', transparent=True)
+    logger.info("Saved circular RF crop: %s", output_path)
     plt.close(fig)
 
 

@@ -28,6 +28,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from analysis.pipeline.output_dirs import STIMULUS_EXTRACT_FEATURES
 from analysis.pipeline.shared_constants import (
     GESTURE_TYPES,
     TOUCH_ID_COLS_WITH_SESSION,
@@ -92,7 +93,7 @@ def _find_feature_csv(db_path: Path, aggregation: str, session_id: str) -> Path:
     ValueError
         If no CSV is found, or if more than one CSV matches the pattern.
     """
-    feature_dir = db_path / "4_analysed" / "touch_features" / aggregation
+    feature_dir = db_path / "4_analysed" / STIMULUS_EXTRACT_FEATURES / aggregation
     candidates = sorted(feature_dir.glob(f"{session_id}_*_touch_summary.csv"))
     if not candidates:
         raise ValueError(
@@ -438,6 +439,7 @@ def _render_radar_pngs(
 def run_touch_feature_radar(
     session_configs: list,
     radar_groups: dict,
+    output_dir: Path,
     force_processing: bool = False,
 ) -> None:
     """Render per-session touch feature radar plots for each enabled radar group.
@@ -449,7 +451,7 @@ def run_touch_feature_radar(
     - **global** — min/max computed across all sessions (always recomputed).
 
     Outputs are written to
-    ``{db}/4_analysed/touch_feature_radar/{group_name}/{scope}/{session_id}/``.
+    ``{output_dir}/{group_name}/{scope}/{session_id}/``.
 
     Parameters
     ----------
@@ -460,6 +462,9 @@ def run_touch_feature_radar(
         Dict mapping group name -> group spec.  Each spec must have an
         ``enabled`` bool and a ``features`` dict (data type -> list of
         aggregation methods).  Groups with ``enabled: false`` are skipped.
+    output_dir:
+        Root output directory for this task
+        (e.g. ``database_path / '4_analysed' / STIMULUS_RENDER_RADAR``).
     force_processing:
         If ``True``, reprocess sessions even when the sentinel file is fresh.
 
@@ -560,9 +565,7 @@ def run_touch_feature_radar(
             database_path = entry["database_path"]
             raw = entry["raw"]
             gesture_types = entry["gesture_types"]
-            base_dir = (
-                database_path / "4_analysed" / "touch_feature_radar" / group_name
-            )
+            base_dir = output_dir / group_name
 
             # --- Session-normalized scope (idempotency via sentinel) ---
             session_dir = base_dir / "session" / session_id
