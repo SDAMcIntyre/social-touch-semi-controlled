@@ -306,6 +306,7 @@ def run_iff_tuning_curves(
     n_bins: int = int(options.get("n_bins", 20))
     clip_percentile: float = float(options.get("clip_percentile", 1.0))
     force_processing: bool = bool(options.get("force_processing", False))
+    smoothing_sigma: float = float(options.get("smoothing_sigma", 0.0))
 
     iff_metric: str = str(options.get("iff_metric", "mean"))
     if iff_metric not in IFF_METRICS:
@@ -492,6 +493,7 @@ def run_iff_tuning_curves(
                     iff_ylim=iff_ylim,
                     count_ymax=count_ymax,
                     iff_ylabel=iff_ylabel,
+                    smoothing_sigma=smoothing_sigma,
                 )
                 print(
                     f"[IFF Tuning Curves] {feature} / {gesture_subset} / {session_id}: "
@@ -520,6 +522,7 @@ def run_iff_tuning_curves(
                 iff_ylim=iff_ylim,
                 session_colors=colors,
                 iff_ylabel=iff_ylabel,
+                smoothing_sigma=smoothing_sigma,
             )
             print(
                 f"[IFF Tuning Curves] {feature} / {gesture_subset}: "

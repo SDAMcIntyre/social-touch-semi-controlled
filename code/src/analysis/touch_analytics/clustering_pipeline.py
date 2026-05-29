@@ -208,7 +208,7 @@ def _merge_feature_csvs(feature_names: list[str], extraction_dir: Path) -> pd.Da
         Ordered list of feature names (e.g. ``['max', 'mean']``).
     extraction_dir
         Root of the extraction output tree
-        (e.g. ``database / '4_analysed' / 'touch_features'``).
+        (e.g. ``database / '4_analysed' / 'stimulus_extract_features'``).
 
     Returns
     -------
@@ -304,7 +304,7 @@ def run_clustering(
     ----------
     output_dir
         Root directory for clustering outputs
-        (e.g. ``database / '4_analysed' / 'touch_clusters'``).
+        (e.g. ``database / '4_analysed' / 'stimulus_cluster_touches'``).
     cluster_groups
         Dict mapping group_name -> group_spec.  Each spec must contain:
         ``features: {data_type: [agg, ...]}`` and

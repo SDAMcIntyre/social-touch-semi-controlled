@@ -33,6 +33,7 @@ from analysis.receptive_field_mapping.data.rf_extraction_io import (
 )
 from analysis.touch_analytics.clustering_pipeline import DATA_TYPE_TO_COLUMNS
 from analysis.pipeline.shared_constants import GESTURE_TYPES, NERVE_SPIKE_COL, CONTACT_POINTS_COL
+from analysis.pipeline.output_dirs import TOUCH_COMPUTE_SERIES
 from analysis.touch_analytics.pipeline_shared import (
     SHARED_COLUMNS,
     filter_enabled_profiles,
@@ -441,7 +442,7 @@ def _resolve_explorer_session_paths(
     for csv_path, database_path in input_items:
         session_id = session_id_from_path(csv_path)
         series_csv_path = (
-            database_path / '4_analysed' / 'series_transforms'
+            database_path / '4_analysed' / TOUCH_COMPUTE_SERIES
             / f'{session_id}_series_augmented.csv'
         )
         if not series_csv_path.exists():

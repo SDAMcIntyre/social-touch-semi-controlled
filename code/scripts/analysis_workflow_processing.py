@@ -456,19 +456,21 @@ def spatial_extract_boundaries_flow(
     if not input_items:
         return
 
-    output_dir = input_items[0][1] / '4_analysed' / SPATIAL_EXTRACT_BOUNDARIES / f"iff_{iff_metric}"
-    run_population_response_field_extraction(
-        session_configs=input_items,
-        neuron_mode=neuron_mode,
-        output_dir=output_dir,
-        min_overlap_pct=min_overlap_pct,
-        force_processing=force_processing,
-        median_filter_size=median_filter_size,
-        inflection_sigma=inflection_sigma,
-        heatmap_space=heatmap_space,
-        cmap=cmap,
-        iff_metric=iff_metric,
-    )
+    metrics = ["mean", "max"] if iff_metric == "both" else [iff_metric]
+    for metric in metrics:
+        output_dir = input_items[0][1] / '4_analysed' / SPATIAL_EXTRACT_BOUNDARIES / f"iff_{metric}"
+        run_population_response_field_extraction(
+            session_configs=input_items,
+            neuron_mode=neuron_mode,
+            output_dir=output_dir,
+            min_overlap_pct=min_overlap_pct,
+            force_processing=force_processing,
+            median_filter_size=median_filter_size,
+            inflection_sigma=inflection_sigma,
+            heatmap_space=heatmap_space,
+            cmap=cmap,
+            iff_metric=metric,
+        )
 
 
 @flow(name="spatial_compare_boundaries")
@@ -488,13 +490,15 @@ def spatial_compare_boundaries_flow(
     if not input_items:
         return
 
-    output_dir = input_items[0][1] / '4_analysed' / SPATIAL_COMPARE_BOUNDARIES / f"iff_{iff_metric}"
-    run_session_rf_boundary_comparison(
-        session_configs=input_items,
-        output_dir=output_dir,
-        force_processing=force_processing,
-        iff_metric=iff_metric,
-    )
+    metrics = ["mean", "max"] if iff_metric == "both" else [iff_metric]
+    for metric in metrics:
+        output_dir = input_items[0][1] / '4_analysed' / SPATIAL_COMPARE_BOUNDARIES / f"iff_{metric}"
+        run_session_rf_boundary_comparison(
+            session_configs=input_items,
+            output_dir=output_dir,
+            force_processing=force_processing,
+            iff_metric=metric,
+        )
 
 
 @flow(name="spatial_compare_rf_centers")
@@ -516,15 +520,17 @@ def spatial_compare_rf_centers_flow(
     if not input_items:
         return
 
-    output_dir = input_items[0][1] / '4_analysed' / SPATIAL_COMPARE_RF_CENTERS / f"iff_{iff_metric}"
-    run_proximal_distal_center_comparison(
-        session_configs=input_items,
-        output_dir=output_dir,
-        force_processing=force_processing,
-        heatmap_space=heatmap_space,
-        cmap=cmap,
-        iff_metric=iff_metric,
-    )
+    metrics = ["mean", "max"] if iff_metric == "both" else [iff_metric]
+    for metric in metrics:
+        output_dir = input_items[0][1] / '4_analysed' / SPATIAL_COMPARE_RF_CENTERS / f"iff_{metric}"
+        run_proximal_distal_center_comparison(
+            session_configs=input_items,
+            output_dir=output_dir,
+            force_processing=force_processing,
+            heatmap_space=heatmap_space,
+            cmap=cmap,
+            iff_metric=metric,
+        )
 
 
 @flow(name="cross_map_feature_grid")
@@ -975,6 +981,7 @@ def stimulus_iff_tuning_curves_flow(
     n_bins: int = 20,
     clip_percentile: float = 1.0,
     iff_metric: str = "mean",
+    smoothing_sigma: float = 0.0,
 ) -> None:
     """Per-feature IFF tuning curve plots across all sessions.
 
@@ -986,18 +993,21 @@ def stimulus_iff_tuning_curves_flow(
     print(f"[Batch Analysis] Rendering IFF tuning curves for {len(input_items)} item(s)...")
     if not input_items:
         return
-    output_dir = input_items[0][1] / '4_analysed' / STIMULUS_IFF_TUNING_CURVES / f"iff_{iff_metric}"
-    run_iff_tuning_curves(
-        session_config_paths=input_items,
-        options={
-            "tuning_features": tuning_features or [],
-            "n_bins": n_bins,
-            "clip_percentile": clip_percentile,
-            "force_processing": force_processing,
-            "iff_metric": iff_metric,
-        },
-        output_base_dir=output_dir,
-    )
+    metrics = ["mean", "max"] if iff_metric == "both" else [iff_metric]
+    for metric in metrics:
+        output_dir = input_items[0][1] / '4_analysed' / STIMULUS_IFF_TUNING_CURVES / f"iff_{metric}"
+        run_iff_tuning_curves(
+            session_config_paths=input_items,
+            options={
+                "tuning_features": tuning_features or [],
+                "n_bins": n_bins,
+                "clip_percentile": clip_percentile,
+                "force_processing": force_processing,
+                "iff_metric": metric,
+                "smoothing_sigma": smoothing_sigma,
+            },
+            output_base_dir=output_dir,
+        )
 
 
 @flow(name="stimulus_cluster_touches")
@@ -1486,6 +1496,7 @@ def _build_pipeline_stages(dag_handler: DagConfigHandler, items_to_process) -> l
                 "n_bins": int(dag_handler.get_task_options("stimulus_iff_tuning_curves").get("n_bins", 20)),
                 "clip_percentile": float(dag_handler.get_task_options("stimulus_iff_tuning_curves").get("clip_percentile", 1.0)),
                 "iff_metric": dag_handler.get_task_options("stimulus_iff_tuning_curves").get("iff_metric", "mean"),
+                "smoothing_sigma": float(dag_handler.get_task_options("stimulus_iff_tuning_curves").get("smoothing_sigma", 0.0)),
             },
         },
         {

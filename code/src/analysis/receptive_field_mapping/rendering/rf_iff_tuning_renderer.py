@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from pathlib import Path
+from scipy.ndimage import gaussian_filter1d
 
 
 _BG = '#1e1e1e'
@@ -85,6 +86,21 @@ def _bin_data(
     return bin_centers, mean_iff_per_bin, count_per_bin
 
 
+def _smooth_nan_aware(values: np.ndarray, sigma: float) -> np.ndarray:
+    """Nadaraya-Watson Gaussian smoothing that ignores NaN bins."""
+    valid = ~np.isnan(values)
+    if valid.sum() < 2:
+        return values.copy()
+    filled = np.where(valid, values, 0.0)
+    weights = valid.astype(float)
+    smoothed_vals = gaussian_filter1d(filled, sigma=sigma)
+    smoothed_weights = gaussian_filter1d(weights, sigma=sigma)
+    result = np.full_like(values, np.nan)
+    nonzero = smoothed_weights > 0
+    result[nonzero] = smoothed_vals[nonzero] / smoothed_weights[nonzero]
+    return result
+
+
 def render_session_tuning_curve(
     bin_centers: np.ndarray,
     mean_iff: np.ndarray,
@@ -96,6 +112,7 @@ def render_session_tuning_curve(
     iff_ylim: tuple[float, float],
     count_ymax: float,
     iff_ylabel: str = "Mean IFF (Hz)",
+    smoothing_sigma: float = 0.0,
 ) -> None:
     fig, ax_iff = plt.subplots(figsize=(8, 5), dpi=150)
     fig.patch.set_facecolor(_BG)
@@ -119,13 +136,23 @@ def render_session_tuning_curve(
 
     valid_mask = ~np.isnan(mean_iff)
     if valid_mask.any():
-        ax_iff.plot(
-            bin_centers[valid_mask],
-            mean_iff[valid_mask],
-            color=_IFF_COLOR,
-            linewidth=2,
-            zorder=3,
-        )
+        if smoothing_sigma > 0:
+            ax_iff.scatter(
+                bin_centers[valid_mask], mean_iff[valid_mask],
+                color=_IFF_COLOR, alpha=0.4, s=18, zorder=3,
+            )
+            smoothed = _smooth_nan_aware(mean_iff, smoothing_sigma)
+            smooth_valid = ~np.isnan(smoothed)
+            if smooth_valid.any():
+                ax_iff.plot(
+                    bin_centers[smooth_valid], smoothed[smooth_valid],
+                    color=_IFF_COLOR, linewidth=2, zorder=4,
+                )
+        else:
+            ax_iff.plot(
+                bin_centers[valid_mask], mean_iff[valid_mask],
+                color=_IFF_COLOR, linewidth=2, zorder=3,
+            )
     ax_iff.set_ylim(iff_ylim)
     ax_iff.set_ylabel(iff_ylabel, color='white', fontsize=10)
     ax_iff.set_xlabel(_display_id(feature_name), color='white', fontsize=10)
@@ -144,6 +171,7 @@ def render_overlay_tuning_curve(
     iff_ylim: tuple[float, float],
     session_colors: dict[str, str],
     iff_ylabel: str = "Mean IFF (Hz)",
+    smoothing_sigma: float = 0.0,
 ) -> None:
     fig, ax = plt.subplots(figsize=(8, 5), dpi=150)
     fig.patch.set_facecolor(_BG)
@@ -155,13 +183,23 @@ def render_overlay_tuning_curve(
         color = session_colors[session_id]
         valid_mask = ~np.isnan(mean_iff)
         if valid_mask.any():
-            ax.plot(
-                bin_centers[valid_mask],
-                mean_iff[valid_mask],
-                color=color,
-                linewidth=2,
-                label=session_id,
-            )
+            if smoothing_sigma > 0:
+                ax.scatter(
+                    bin_centers[valid_mask], mean_iff[valid_mask],
+                    color=color, alpha=0.3, s=12, zorder=2,
+                )
+                smoothed = _smooth_nan_aware(mean_iff, smoothing_sigma)
+                smooth_valid = ~np.isnan(smoothed)
+                if smooth_valid.any():
+                    ax.plot(
+                        bin_centers[smooth_valid], smoothed[smooth_valid],
+                        color=color, linewidth=2, label=session_id, zorder=3,
+                    )
+            else:
+                ax.plot(
+                    bin_centers[valid_mask], mean_iff[valid_mask],
+                    color=color, linewidth=2, label=session_id,
+                )
 
     ax.set_ylim(iff_ylim)
     ax.set_ylabel(iff_ylabel, color='white', fontsize=10)
