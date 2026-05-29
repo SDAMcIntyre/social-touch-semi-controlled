@@ -1,4 +1,4 @@
-"""Dialog for creating or editing a radar group spec in render_touch_feature_radar."""
+"""Dialog for creating or editing a radar group spec in stimulus_render_radar."""
 
 from __future__ import annotations
 

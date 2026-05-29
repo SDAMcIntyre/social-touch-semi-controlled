@@ -4,7 +4,7 @@ For each session, loads per-touch population data via ``load_population_data()``
 extracts spike-associated contact vertex indices, saves them as
 ``spike_positions.csv`` (x, y, z), and renders a forearm heatmap PNG.
 
-Reads the series-augmented CSV produced by ``touch_series_transforms``
+Reads the series-augmented CSV produced by ``touch_compute_series``
 (``4_analysed/series_transforms/<session_id>_series_augmented.csv``).
 
 Runs early in the analysis workflow — no dependency on feature extraction
@@ -104,7 +104,7 @@ def run_simple_rf_mapping(
         if not series_csv_path.exists():
             raise FileNotFoundError(
                 f"[RF Simple] {session_id}: series-augmented CSV not found — "
-                f"run 'touch_series_transforms' first: {series_csv_path}"
+                f"run 'touch_compute_series' first: {series_csv_path}"
             )
 
         # --- Resolve forearm PLY (mandatory — no fallback) ---
@@ -204,7 +204,7 @@ def run_simple_rf_mapping(
             if session_id not in cameras:
                 raise ValueError(
                     f"[RF Simple] {session_id}: no camera settings found. "
-                    "Run 'set_rf_camera_settings' first."
+                    "Run 'spatial_set_camera' first."
                 )
             session_cam = cameras[session_id]
             rotation_matrix = camera_settings_to_rotation(session_cam)

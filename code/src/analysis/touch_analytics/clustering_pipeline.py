@@ -224,7 +224,7 @@ def _merge_feature_csvs(feature_names: list[str], extraction_dir: Path) -> pd.Da
         if not feature_dir.exists():
             logging.warning(
                 f"_merge_feature_csvs: feature folder not found: {feature_dir} — "
-                f"run touch_feature_extraction with feature '{feature_name}' enabled."
+                f"run stimulus_extract_features with feature '{feature_name}' enabled."
             )
             feature_sessions[feature_name] = {}
             continue

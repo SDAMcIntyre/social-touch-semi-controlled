@@ -1,4 +1,4 @@
-"""Dialogs for editing touch_clustering ``reduction`` and ``evaluation`` config blocks.
+"""Dialogs for editing stimulus_cluster_touches ``reduction`` and ``evaluation`` config blocks.
 
 :class:`ReductionConfigDialog` — Stage 3 (dimensionality reduction): scaler,
 variance filter, and decomposition options.
@@ -41,7 +41,7 @@ _INTERNAL_METRICS: list[str] = ["silhouette", "davies_bouldin", "calinski_haraba
 
 
 class ReductionConfigDialog(QDialog):
-    """Dialog for editing the touch_clustering ``reduction`` YAML block (Stage 3).
+    """Dialog for editing the stimulus_cluster_touches ``reduction`` YAML block (Stage 3).
 
     Pass the current YAML values for the reduction block via ``reduction_cfg``.
     After ``exec_()`` returns ``Accepted``, read the new dict back via
@@ -191,7 +191,7 @@ class ReductionConfigDialog(QDialog):
 
 
 class EvaluationConfigDialog(QDialog):
-    """Dialog for editing the touch_clustering ``evaluation`` YAML block (Stage 5).
+    """Dialog for editing the stimulus_cluster_touches ``evaluation`` YAML block (Stage 5).
 
     Pass the current YAML values for the evaluation block via ``evaluation_cfg``.
     After ``exec_()`` returns ``Accepted``, read the new dict back via

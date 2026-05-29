@@ -176,7 +176,7 @@ class TestPrecomputeForearmSlimUv:
         mesh.export(str(path))
 
     def _write_rf_npz(self, vertex_iff_pairs: list[tuple[int, float]], path):
-        """Write a synthetic single-touch RF maps NPZ in ``map_single_touch_rf`` format.
+        """Write a synthetic single-touch RF maps NPZ in ``spatial_map_single_touch`` format.
 
         Parameters
         ----------

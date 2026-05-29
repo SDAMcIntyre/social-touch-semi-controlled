@@ -63,7 +63,7 @@ def run_proximal_distal_center_comparison(
         if not npz_path.exists():
             raise FileNotFoundError(
                 f"[RF Center Comparison] {session_id}: NPZ not found at "
-                f"{npz_path} — run extract_population_rf_response_field_boundaries first."
+                f"{npz_path} — run spatial_extract_boundaries first."
             )
 
         npz = np.load(npz_path, allow_pickle=True)

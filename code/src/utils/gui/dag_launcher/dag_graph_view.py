@@ -21,6 +21,7 @@ from utils.gui.dag_launcher.dag_graph_items import DagEdge, DagTaskNode
 from utils.pipeline.dag_config_model import DagConfigModel
 
 _SPACING_FACTOR = 1.4
+_SCENE_MARGIN_FRACTION = 0.5
 
 
 class _VertexView:
@@ -144,13 +145,29 @@ class DagGraphView(QGraphicsView):
 
         if not self._load_layout():
             self.fit_all()
+        else:
+            self._update_scene_rect()
 
     # ------------------------------------------------------------------
     # Public interface
     # ------------------------------------------------------------------
 
     def fit_all(self) -> None:
-        self.fitInView(self._scene.itemsBoundingRect(), Qt.KeepAspectRatio)
+        self._update_scene_rect()
+        rect = self._scene.itemsBoundingRect()
+        if rect.isNull():
+            return
+        margin_x = rect.width() * 0.05
+        margin_y = rect.height() * 0.05
+        self.fitInView(rect.adjusted(-margin_x, -margin_y, margin_x, margin_y), Qt.KeepAspectRatio)
+
+    def _update_scene_rect(self) -> None:
+        rect = self._scene.itemsBoundingRect()
+        if rect.isNull():
+            return
+        margin_x = rect.width() * _SCENE_MARGIN_FRACTION
+        margin_y = rect.height() * _SCENE_MARGIN_FRACTION
+        self._scene.setSceneRect(rect.adjusted(-margin_x, -margin_y, margin_x, margin_y))
 
     def select_task(self, task_name: str) -> None:
         for node in self._nodes.values():
@@ -201,6 +218,7 @@ class DagGraphView(QGraphicsView):
     def _on_node_moved(self, _task_name: str, _x: float, _y: float) -> None:
         for edge in self._edges:
             edge.update_path()
+        self._update_scene_rect()
         self._save_timer.start()
 
     # ------------------------------------------------------------------

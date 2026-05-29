@@ -233,7 +233,7 @@ class DagConfigModel:
         return self._get_task(task_name).get("description")
 
     # ------------------------------------------------------------------
-    # Cluster groups — CRUD for touch_clustering groups and downstream refs
+    # Cluster groups — CRUD for stimulus_cluster_touches groups and downstream refs
     # ------------------------------------------------------------------
     #
     # get_cluster_group_names / set_profile_enabled reuse existing profile helpers
@@ -342,7 +342,7 @@ class DagConfigModel:
         self._dirty = True
 
     # ------------------------------------------------------------------
-    # Radar groups — CRUD for render_touch_feature_radar radar_groups entries
+    # Radar groups — CRUD for stimulus_render_radar radar_groups entries
     # ------------------------------------------------------------------
 
     def get_radar_group_spec(self, task_name: str, group_name: str) -> dict:
@@ -382,7 +382,7 @@ class DagConfigModel:
         self._dirty = True
 
     # ------------------------------------------------------------------
-    # Grid groups — CRUD for map_population_rf_grid grid_groups entries
+    # Grid groups — CRUD for cross_map_feature_grid grid_groups entries
     # ------------------------------------------------------------------
 
     def get_grid_group_spec(self, task_name: str, opt_key: str, name: str) -> dict:

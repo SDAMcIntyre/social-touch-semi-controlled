@@ -30,8 +30,8 @@ from analysis.pipeline import (
 )
 
 
-@flow(name="precompute_explorer_caches")
-def precompute_explorer_caches_flow(
+@flow(name="explore_precompute_caches")
+def explore_precompute_caches_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
     max_workers: int = 4,
@@ -39,7 +39,7 @@ def precompute_explorer_caches_flow(
     """Pre-compute .npz sidecar caches for the RF Feature-Space Explorer.
 
     Runs ``load_explorer_data()`` for each session in a thread pool so that
-    the subsequent ``explore_rf_feature_space`` GUI task opens instantly on a
+    the subsequent ``explore_feature_space`` GUI task opens instantly on a
     cache hit.  Cache invalidation is handled internally by
     ``load_explorer_data``; ``force_processing`` is accepted for interface
     consistency but is a no-op here.
@@ -51,14 +51,14 @@ def precompute_explorer_caches_flow(
     precompute_explorer_caches(input_items, max_workers=max_workers)
 
 
-@flow(name="explore_rf_feature_space")
-def explore_rf_feature_space_flow(
+@flow(name="explore_feature_space")
+def explore_feature_space_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
 ) -> None:
     """
     Launch the RF Feature-Space Explorer GUI for the given sessions.
-    Reads series-augmented CSVs produced by ``touch_series_transforms`` — no
+    Reads series-augmented CSVs produced by ``touch_compute_series`` — no
     dependency on RF clustering or visualization.
     ``force_processing`` is accepted for interface consistency but is a no-op:
     the GUI is stateless and always launches fresh.
@@ -77,7 +77,7 @@ def explore_touch_playback_flow(
 ) -> None:
     """
     Launch the Touch Playback Explorer GUI for the given sessions.
-    Reads series-augmented CSVs produced by ``touch_series_transforms`` — no
+    Reads series-augmented CSVs produced by ``touch_compute_series`` — no
     dependency on RF clustering or visualization.
     ``force_processing`` is accepted for interface consistency but is a no-op:
     the GUI is stateless and always launches fresh.
@@ -97,7 +97,7 @@ def explore_touch_population_flow(
 ) -> None:
     """
     Launch the Touch Population Explorer GUI for the given sessions.
-    Reads series-augmented CSVs produced by ``touch_series_transforms`` — no
+    Reads series-augmented CSVs produced by ``touch_compute_series`` — no
     dependency on RF clustering or visualization.
     ``force_processing`` is accepted for interface consistency but is a no-op:
     the GUI is stateless and always launches fresh.
@@ -120,7 +120,7 @@ def explore_single_touch_rf_flow(
 ) -> None:
     """
     Launch the Single-Touch RF Explorer GUI for the given sessions.
-    Reads per-touch RF maps produced by ``map_single_touch_rf`` — no dependency
+    Reads per-touch RF maps produced by ``spatial_map_single_touch`` — no dependency
     on clustering or visualization.
     ``force_processing`` is accepted for interface consistency but is a no-op:
     the GUI is stateless and always launches fresh.
@@ -226,7 +226,7 @@ def explore_preparation_flow(
 ) -> None:
     """
     Launch the Touch Preparation Viewer GUI for the given sessions.
-    Reads prepared CSVs produced by ``touch_preparation`` — no dependency on
+    Reads prepared CSVs produced by ``touch_prepare_sessions`` — no dependency on
     series transforms or feature extraction.
     ``force_processing`` is accepted for interface consistency but is a no-op:
     the GUI is stateless and always launches fresh.
@@ -247,8 +247,8 @@ def explore_rf_surface_flow(
     """Interactive 3D RF surface viewer: Z = mean IFF, coloured by jet colormap.
 
     Loads the per-session ``_population_response_fields.npz`` produced by
-    ``extract_population_rf_response_field_boundaries`` and presents a rotatable 3D surface showing
-    RF topography. Requires ``extract_population_rf_response_field_boundaries`` to have run first.
+    ``spatial_extract_boundaries`` and presents a rotatable 3D surface showing
+    RF topography. Requires ``spatial_extract_boundaries`` to have run first.
     """
     print(f"[Batch Analysis] Launching RF surface viewer for {len(input_items)} item(s)...")
     if not input_items:
@@ -301,9 +301,9 @@ def main():
         return
 
     task_names = [
-        "precompute_explorer_caches",
+        "explore_precompute_caches",
         "explore_preparation",
-        "explore_rf_feature_space",
+        "explore_feature_space",
         "explore_touch_playback",
         "explore_single_touch_rf",
         "explore_touch_population",
@@ -314,11 +314,11 @@ def main():
 
     pipeline_stages = [
         {
-            "name": "precompute_explorer_caches",
-            "func": precompute_explorer_caches_flow,
+            "name": "explore_precompute_caches",
+            "func": explore_precompute_caches_flow,
             "params": lambda: (
-                {"max_workers": int(dag_handler.get_task_options("precompute_explorer_caches").get("max_workers", 4))}
-                if "max_workers" in (dag_handler.get_task_options("precompute_explorer_caches") or {})
+                {"max_workers": int(dag_handler.get_task_options("explore_precompute_caches").get("max_workers", 4))}
+                if "max_workers" in (dag_handler.get_task_options("explore_precompute_caches") or {})
                 else {}
             ),
         },
@@ -328,8 +328,8 @@ def main():
             "params": lambda: {},
         },
         {
-            "name": "explore_rf_feature_space",
-            "func": explore_rf_feature_space_flow,
+            "name": "explore_feature_space",
+            "func": explore_feature_space_flow,
             "params": lambda: {},
         },
         {

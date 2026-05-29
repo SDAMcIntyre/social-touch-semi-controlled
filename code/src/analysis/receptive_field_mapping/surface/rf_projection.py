@@ -28,7 +28,7 @@ def project_tangent_plane(
     if rotation_matrix is None:
         raise ValueError(
             "project_tangent_plane: rotation_matrix is required. "
-            "Run 'set_rf_camera_settings' before any downstream RF task."
+            "Run 'spatial_set_camera' before any downstream RF task."
         )
     rotated = align_points(points_3d, rotation_matrix)
     return rotated[:, :2]

@@ -191,7 +191,7 @@ def _transform_session(
         if not source_file.exists():
             raise FileNotFoundError(
                 f"series_pipeline: prepared CSV not found for {session_id}: {source_file}. "
-                "Run touch_preparation first, or set preparation_dir=None to use inline Stage 1."
+                "Run touch_prepare_sessions first, or set preparation_dir=None to use inline Stage 1."
             )
     else:
         source_file = input_file
