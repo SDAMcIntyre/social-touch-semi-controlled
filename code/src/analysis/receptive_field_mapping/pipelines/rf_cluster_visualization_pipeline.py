@@ -97,7 +97,8 @@ def run_cluster_rf_visualization(
             "use the standalone 'explore_rf_gallery' DAG task instead."
         )
 
-    camera_settings_dir = output_dir.parent / 'rf_camera_settings'
+    from analysis.pipeline.output_dirs import SPATIAL_SET_CAMERA
+    camera_settings_dir = output_dir.parent / SPATIAL_SET_CAMERA
 
     pairs = _build_pairs(
         cluster_groups, cluster_group_defs, feature_combinations, clustering_profiles,

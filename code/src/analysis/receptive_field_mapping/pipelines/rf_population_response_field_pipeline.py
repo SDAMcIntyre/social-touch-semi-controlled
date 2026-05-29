@@ -9,7 +9,10 @@ from typing import List
 import numpy as np
 from scipy.spatial import KDTree
 
-from analysis.receptive_field_mapping.data.rf_data_loader import resolve_forearm_ply
+from analysis.receptive_field_mapping.data.rf_data_loader import (
+    load_forearm_vertex_colors,
+    resolve_forearm_ply,
+)
 from analysis.receptive_field_mapping.surface.forearm_slim_uv import (
     load_slim_uv_cache,
     uv_points_to_xyz,
@@ -18,7 +21,7 @@ from analysis.receptive_field_mapping.data.touch_population_data import (
     load_population_data,
     load_population_rf_data,
 )
-from analysis.pipeline.shared_constants import GESTURE_TYPES
+from analysis.pipeline.shared_constants import GESTURE_TYPES, IFF_METRICS, single_touch_npz_filename
 from analysis.receptive_field_mapping.data.rf_population_heatmap import (
     apply_vertex_threshold,
     build_gesture_touch_indices,
@@ -37,10 +40,17 @@ from analysis.receptive_field_mapping.metrics.rf_pca_alignment import (
 from analysis.receptive_field_mapping.rendering.rf_population_map_renderer import (
     compute_interpolated_grid,
     compute_standalone_figwidth,
+    render_population_rf_circular_crop,
     render_population_rf_map,
     render_population_rf_composite,
     render_population_rf_standalone_interpolated,
     render_population_rf_colorbar,
+)
+from analysis.pipeline.output_dirs import (
+    SPATIAL_EXTRACT_BOUNDARIES,
+    SPATIAL_MAP_SINGLE_TOUCH,
+    SPATIAL_SLIM_UV,
+    TOUCH_COMPUTE_SERIES,
 )
 from analysis.pipeline.shared_constants import session_id_from_path
 
@@ -65,23 +75,27 @@ class _SessionCompositeData:
     alignment_center: np.ndarray = field(default_factory=lambda: np.zeros(2))
     alignment_rotation_matrix: np.ndarray = field(default_factory=lambda: np.eye(2))
     alignment_angle_deg: float = 0.0
+    forearm_ply_path: Path | None = field(default=None)
+    slim_vertex_colors: np.ndarray | None = field(default=None)
 
 
 def run_population_response_field_extraction(
     session_configs: list,
     neuron_mode: str,
+    output_dir: Path,
     min_overlap_pct: float = 25.0,
     force_processing: bool = False,
     median_filter_size: int | None = None,
     inflection_sigma: float | None = None,
     heatmap_space: str = "linear",
     cmap: str = "jet",
+    iff_metric: str = "mean",
 ) -> None:
     """Render per-session 2D population RF heatmap PNGs projected via SLIM UV.
 
     For each session config, produces one PNG per gesture subset (all, stroke,
     tap, stroke_proximal, stroke_distal) plus two composite PNGs (scatter and
-    interpolated) under ``4_analysed/population_response_fields/{session_id}/``.
+    interpolated) under ``4_analysed/spatial_extract_boundaries/{session_id}/``.
     ``stroke`` is a virtual subset combining stroke_proximal + stroke_distal.
 
     Composites use a global colour scale and UV axis range across all sessions
@@ -94,6 +108,9 @@ def run_population_response_field_extraction(
     neuron_mode:
         ``"iff"`` or ``"spike"`` — must match the mode used by
         ``run_single_touch_rf_mapping``.
+    output_dir:
+        Root output directory for this task
+        (e.g. ``database_path / '4_analysed' / SPATIAL_EXTRACT_BOUNDARIES``).
     min_overlap_pct:
         Minimum percentage of touches that must contact a vertex for it to be
         included in the heatmap (default 25 %).
@@ -102,7 +119,16 @@ def run_population_response_field_extraction(
     inflection_sigma:
         Gaussian smoothing sigma for Laplacian inflection boundary detection.
         Pass ``None`` to disable boundary computation entirely.
+    iff_metric:
+        Which IFF aggregation NPZ to consume — ``"mean"`` (default) or
+        ``"max"``.  Must be one of ``IFF_METRICS``.
     """
+    if iff_metric not in IFF_METRICS:
+        raise ValueError(
+            f"run_population_response_field_extraction: invalid iff_metric "
+            f"{iff_metric!r}. Expected one of {IFF_METRICS}."
+        )
+    npz_filename = single_touch_npz_filename(iff_metric)
     # ---- Pass 1: compute heatmaps + render per-gesture PNGs ----
     composite_queue: List[_SessionCompositeData] = []
 
@@ -111,8 +137,8 @@ def run_population_response_field_extraction(
         database_path = Path(database_path)
 
         session_id = session_id_from_path(csv_path)
-        output_dir = database_path / '4_analysed' / 'population_response_fields' / session_id
-        sentinel = output_dir / f'{session_id}_population_response_fields_done.json'
+        session_output_dir = output_dir / session_id
+        sentinel = session_output_dir / f'{session_id}_population_response_fields_done.json'
 
         if sentinel.exists() and not force_processing:
             print(f"[Population Response Fields] {session_id}: up-to-date, skipping.")
@@ -122,7 +148,7 @@ def run_population_response_field_extraction(
 
         # --- Resolve paths ---
         series_csv_path = (
-            database_path / '4_analysed' / 'series_transforms'
+            database_path / '4_analysed' / TOUCH_COMPUTE_SERIES
             / f'{session_id}_series_augmented.csv'
         )
         if not series_csv_path.exists():
@@ -139,17 +165,17 @@ def run_population_response_field_extraction(
             )
 
         npz_path = (
-            database_path / '4_analysed' / 'single_touch_rf_maps'
-            / session_id / 'single_touch_rf_maps.npz'
+            database_path / '4_analysed' / SPATIAL_MAP_SINGLE_TOUCH
+            / session_id / npz_filename
         )
         if not npz_path.exists():
             raise FileNotFoundError(
-                f"[Population Response Fields] {session_id}: single_touch_rf_maps.npz not found: "
+                f"[Population Response Fields] {session_id}: {npz_filename} not found: "
                 f"{npz_path}. Enable 'spatial_map_single_touch' in the DAG config and re-run."
             )
 
         slim_cache_path = (
-            database_path / '4_analysed' / 'forearm_slim_uv'
+            database_path / '4_analysed' / SPATIAL_SLIM_UV
             / session_id / f'{session_id}_slim_uv.npz'
         )
         if not slim_cache_path.exists():
@@ -199,6 +225,15 @@ def run_population_response_field_extraction(
                 session_id, n_over, len(slim_V),
                 _WARN_THRESHOLD_MM, max_dist_mm,
             )
+
+        # --- Load PLY vertex colors and map to SLIM vertices via KDTree ---
+        raw_colors = load_forearm_vertex_colors(forearm_ply_path)
+        if raw_colors is not None:
+            slim_colors_rgb = raw_colors[nearest_orig_for_slim].astype(np.float64) / 255.0
+            alpha_col = np.ones((len(slim_colors_rgb), 1), dtype=np.float64)
+            slim_vertex_colors = np.hstack([slim_colors_rgb, alpha_col])
+        else:
+            slim_vertex_colors = None
 
         # --- Compute heatmaps for all gesture subsets ---
         subsets = ['all'] + list(GESTURE_TYPES)
@@ -278,7 +313,7 @@ def run_population_response_field_extraction(
                 "[Population Response Fields] %s: no gesture subsets had touches — no PNGs produced.",
                 session_id,
             )
-            output_dir.mkdir(parents=True, exist_ok=True)
+            session_output_dir.mkdir(parents=True, exist_ok=True)
             _write_sentinel(sentinel, session_id, produced=[])
             continue
 
@@ -318,10 +353,10 @@ def run_population_response_field_extraction(
         ]
         session_vmin = min(finite_minima) if finite_minima else session_vmax * 1e-3
 
-        output_dir.mkdir(parents=True, exist_ok=True)
-        aggregated_dir = output_dir / "aggregated"
+        session_output_dir.mkdir(parents=True, exist_ok=True)
+        aggregated_dir = session_output_dir / "aggregated"
         aggregated_dir.mkdir(parents=True, exist_ok=True)
-        inspection_dir = output_dir / "inspection"
+        inspection_dir = session_output_dir / "inspection"
         inspection_dir.mkdir(parents=True, exist_ok=True)
         produced: List[Path] = []
         gesture_boundaries: dict = {}
@@ -368,7 +403,7 @@ def run_population_response_field_extraction(
             print(f"[Population Response Fields] {session_id}: saved {png_path.name}")
 
         vertex_data_npz = _save_response_fields_npz(
-            output_dir=output_dir,
+            output_dir=session_output_dir,
             session_id=session_id,
             forearm_uv=forearm_uv,
             forearm_faces=slim_faces,
@@ -394,7 +429,7 @@ def run_population_response_field_extraction(
 
         composite_queue.append(_SessionCompositeData(
             session_id=session_id,
-            output_dir=output_dir,
+            output_dir=session_output_dir,
             forearm_uv=forearm_uv,
             forearm_faces=slim_faces,
             forearm_V=slim_V,
@@ -409,6 +444,8 @@ def run_population_response_field_extraction(
             alignment_center=alignment_center,
             alignment_rotation_matrix=alignment_rotation_matrix,
             alignment_angle_deg=alignment_angle_deg,
+            forearm_ply_path=forearm_ply_path,
+            slim_vertex_colors=slim_vertex_colors,
         ))
 
     # ---- Pass 2: render composite PNGs with global colour scale + UV limits ----
@@ -535,6 +572,40 @@ def run_population_response_field_extraction(
         render_population_rf_colorbar(output_path=colorbar_path, vmax=global_vmax, vmin=global_vmin, heatmap_space=heatmap_space)
         sd.produced.append(colorbar_path)
         print(f"[Population Response Fields] {sd.session_id}: saved {colorbar_path.name}")
+
+        all_boundary = sd.gesture_boundaries.get('all')
+        if all_boundary is None:
+            raise ValueError(
+                "render_population_rf_circular_crop requires an inflection boundary for gesture 'all' "
+                "but none is available — ensure inflection_sigma is configured"
+            )
+        all_grid_u, all_grid_v, all_grid_z = sd.per_gesture_grids['all']
+        for center_label, center_uv in (
+            ('centroid', np.array(all_boundary.centroid_uv)),
+            ('peak', np.array(all_boundary.peak_uv)),
+        ):
+            circular_path = sd.output_dir / f'{sd.session_id}_rf_population_all_circular_{center_label}.png'
+            print(
+                f"[Population Response Fields] {sd.session_id}: "
+                f"rendering 'all' circular {center_label}..."
+            )
+            render_population_rf_circular_crop(
+                u_grid=all_grid_u,
+                v_grid=all_grid_v,
+                interp_grid=all_grid_z,
+                forearm_uv=sd.forearm_uv,
+                forearm_V=sd.forearm_V,
+                forearm_faces=sd.forearm_faces,
+                center_uv=center_uv,
+                radius_mm=50.0,
+                vmax=global_vmax,
+                vmin=global_vmin,
+                output_path=circular_path,
+                vertex_colors=sd.slim_vertex_colors,
+                heatmap_space=heatmap_space,
+            )
+            sd.produced.append(circular_path)
+            print(f"[Population Response Fields] {sd.session_id}: saved {circular_path.name}")
 
         _write_sentinel(sd.sentinel, sd.session_id, produced=sd.produced,
                         inflection_boundaries=sd.gesture_boundaries,

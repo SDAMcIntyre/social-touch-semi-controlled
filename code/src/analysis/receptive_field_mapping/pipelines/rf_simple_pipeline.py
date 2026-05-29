@@ -5,7 +5,7 @@ extracts spike-associated contact vertex indices, saves them as
 ``spike_positions.csv`` (x, y, z), and renders a forearm heatmap PNG.
 
 Reads the series-augmented CSV produced by ``touch_compute_series``
-(``4_analysed/series_transforms/<session_id>_series_augmented.csv``).
+(``4_analysed/touch_compute_series/<session_id>_series_augmented.csv``).
 
 Runs early in the analysis workflow — no dependency on feature extraction
 or clustering.
@@ -44,6 +44,7 @@ from analysis.receptive_field_mapping.surface.tangent_plane_alignment import (
 from analysis.receptive_field_mapping.data.touch_population_data import (
     load_population_data,
 )
+from analysis.pipeline.output_dirs import SPATIAL_SET_CAMERA, SPATIAL_SLIM_UV, TOUCH_COMPUTE_SERIES
 from analysis.pipeline.shared_constants import session_id_from_path
 from utils.should_process_task import should_process_task
 
@@ -62,7 +63,7 @@ def run_simple_rf_mapping(
 
     For each session in ``input_items``:
     1. Loads per-touch population data via ``load_population_data()`` from the
-       series-augmented CSV (``4_analysed/series_transforms/<session_id>_series_augmented.csv``).
+       series-augmented CSV (``4_analysed/touch_compute_series/<session_id>_series_augmented.csv``).
     2. Extracts spike-associated contact vertex indices (``cp_vertex_idx[cp_spike]``).
     3. Saves ``spike_positions.csv`` (columns: x, y, z) — one row per spike contact vertex.
     4. Aggregates positions by vertex index using ``np.bincount()`` and renders
@@ -89,7 +90,7 @@ def run_simple_rf_mapping(
     List of paths to produced spike_positions.csv files.
     """
     produced: List[Path] = []
-    camera_settings_dir = output_dir.parent / 'rf_camera_settings'
+    camera_settings_dir = output_dir.parent / SPATIAL_SET_CAMERA
 
     for csv_path, database_path in input_items:
         session_id = session_id_from_path(csv_path)
@@ -98,7 +99,7 @@ def run_simple_rf_mapping(
 
         # --- Resolve series-augmented CSV ---
         series_csv_path = (
-            database_path / '4_analysed' / 'series_transforms'
+            database_path / '4_analysed' / TOUCH_COMPUTE_SERIES
             / f'{session_id}_series_augmented.csv'
         )
         if not series_csv_path.exists():
@@ -251,7 +252,7 @@ def run_simple_rf_mapping(
                     _slim_cache_path = None
                     if proj_method == "slim":
                         _slim_cache_path = (
-                            database_path / '4_analysed' / 'forearm_slim_uv'
+                            database_path / '4_analysed' / SPATIAL_SLIM_UV
                             / session_id / f"{session_id}_slim_uv.npz"
                         )
                     uv_spikes = project_to_2d(

@@ -5,7 +5,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from analysis.pipeline.shared_constants import session_id_from_path
+from analysis.pipeline.output_dirs import SPATIAL_EXTRACT_BOUNDARIES
+from analysis.pipeline.shared_constants import IFF_METRICS, session_id_from_path
 from analysis.receptive_field_mapping.rendering.rf_boundary_comparison_renderer import (
     render_boundary_contour_overlay,
     render_boundary_metric_panels,
@@ -28,14 +29,17 @@ PANEL_METRICS = [
 
 def run_session_rf_boundary_comparison(
     session_configs: list[tuple[Path, Path]],
+    output_dir: Path,
     force_processing: bool = False,
+    iff_metric: str = "mean",
 ) -> None:
+    if iff_metric not in IFF_METRICS:
+        raise ValueError(
+            f"[Session RF Boundary Comparison] Invalid iff_metric {iff_metric!r}. "
+            f"Expected one of {IFF_METRICS}."
+        )
     if not session_configs:
         raise ValueError("[Session RF Boundary Comparison] session_configs is empty.")
-
-    _, db_path = session_configs[0]
-    db_path = Path(db_path)
-    output_dir = db_path / '4_analysed' / 'session_rf_boundary_comparison'
     sentinel_path = output_dir / 'session_rf_boundary_comparison_done.json'
 
     if sentinel_path.exists() and not force_processing:
@@ -50,7 +54,7 @@ def run_session_rf_boundary_comparison(
         d.mkdir(parents=True, exist_ok=True)
 
     logger.info("[Session RF Boundary Comparison] building summary DataFrame from %d sessions...", len(session_configs))
-    df, contour_data, centroid_data = _build_summary_dataframe(session_configs)
+    df, contour_data, centroid_data = _build_summary_dataframe(session_configs, iff_metric=iff_metric)
 
     csv_path = output_dir / 'session_rf_boundary_summary.csv'
     df.to_csv(csv_path, index=False)
@@ -229,6 +233,7 @@ def _load_boundary_metrics_from_npz(
 
 def _build_summary_dataframe(
     session_configs: list[tuple[Path, Path]],
+    iff_metric: str = "mean",
 ) -> tuple[pd.DataFrame, dict[str, dict[str, np.ndarray]], dict[str, dict[str, np.ndarray]]]:
     all_rows: list[dict] = []
     contour_data: dict[str, dict[str, np.ndarray]] = {}
@@ -240,8 +245,8 @@ def _build_summary_dataframe(
 
         session_id = session_id_from_path(csv_path)
         npz_path = (
-            db_path / '4_analysed' / 'population_response_fields'
-            / session_id / f'{session_id}_population_response_fields.npz'
+            db_path / '4_analysed' / SPATIAL_EXTRACT_BOUNDARIES
+            / f"iff_{iff_metric}" / session_id / f'{session_id}_population_response_fields.npz'
         )
 
         if not npz_path.exists():
