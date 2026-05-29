@@ -21,7 +21,7 @@ from analysis.receptive_field_mapping.data.touch_population_data import (
     load_population_data,
     load_population_rf_data,
 )
-from analysis.pipeline.shared_constants import GESTURE_TYPES
+from analysis.pipeline.shared_constants import GESTURE_TYPES, IFF_METRICS, single_touch_npz_filename
 from analysis.receptive_field_mapping.data.rf_population_heatmap import (
     apply_vertex_threshold,
     build_gesture_touch_indices,
@@ -89,6 +89,7 @@ def run_population_response_field_extraction(
     inflection_sigma: float | None = None,
     heatmap_space: str = "linear",
     cmap: str = "jet",
+    iff_metric: str = "mean",
 ) -> None:
     """Render per-session 2D population RF heatmap PNGs projected via SLIM UV.
 
@@ -118,7 +119,16 @@ def run_population_response_field_extraction(
     inflection_sigma:
         Gaussian smoothing sigma for Laplacian inflection boundary detection.
         Pass ``None`` to disable boundary computation entirely.
+    iff_metric:
+        Which IFF aggregation NPZ to consume — ``"mean"`` (default) or
+        ``"max"``.  Must be one of ``IFF_METRICS``.
     """
+    if iff_metric not in IFF_METRICS:
+        raise ValueError(
+            f"run_population_response_field_extraction: invalid iff_metric "
+            f"{iff_metric!r}. Expected one of {IFF_METRICS}."
+        )
+    npz_filename = single_touch_npz_filename(iff_metric)
     # ---- Pass 1: compute heatmaps + render per-gesture PNGs ----
     composite_queue: List[_SessionCompositeData] = []
 
@@ -156,11 +166,11 @@ def run_population_response_field_extraction(
 
         npz_path = (
             database_path / '4_analysed' / SPATIAL_MAP_SINGLE_TOUCH
-            / session_id / 'single_touch_rf_maps.npz'
+            / session_id / npz_filename
         )
         if not npz_path.exists():
             raise FileNotFoundError(
-                f"[Population Response Fields] {session_id}: single_touch_rf_maps.npz not found: "
+                f"[Population Response Fields] {session_id}: {npz_filename} not found: "
                 f"{npz_path}. Enable 'spatial_map_single_touch' in the DAG config and re-run."
             )
 

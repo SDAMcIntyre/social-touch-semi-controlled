@@ -11,6 +11,16 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from analysis.pipeline.output_dirs import (
+    SPATIAL_EXTRACT_BOUNDARIES,
+    SPATIAL_MAP_SINGLE_TOUCH,
+    SPATIAL_SET_CAMERA,
+    SPATIAL_SLIM_UV,
+)
+from analysis.pipeline.shared_constants import (
+    resolve_single_touch_npz,
+    single_touch_npz_filename,
+)
 from analysis.receptive_field_mapping.data.rf_data_loader import resolve_forearm_ply
 from analysis.touch_analytics.pipeline_shared import session_id_from_path
 
@@ -162,6 +172,7 @@ def launch_touch_playback_explorer(
 def launch_single_touch_rf_explorer(
     input_items: List[Tuple[Path, Path]],
     neuron_mode: str = "iff",
+    iff_metric: str = "mean",
 ) -> None:
     """Launch the Single-Touch RF Explorer GUI for all sessions in input_items.
 
@@ -179,6 +190,10 @@ def launch_single_touch_rf_explorer(
         ``"iff"`` or ``"spike"`` — must match the mode used when
         ``run_single_touch_rf_mapping`` was run.  Only used to validate the
         loaded data; the actual mode is stored in the ``.npz`` file.
+    iff_metric:
+        Which IFF aggregation NPZ to load — ``"mean"`` (default) or ``"max"``.
+        Falls back to the legacy ``"single_touch_rf_maps.npz"`` for
+        ``"mean"`` when the new split file does not yet exist.
     """
     from analysis.receptive_field_mapping.gui.single_touch_rf_explorer import (
         SingleTouchRFExplorer,
@@ -193,15 +208,8 @@ def launch_single_touch_rf_explorer(
     def _resolve_and_load(item: Tuple[Path, Path]) -> Tuple[str, object]:
         csv_path, database_path = item
         session_id = session_id_from_path(csv_path)
-        npz_path = (
-            database_path / "4_analysed" / "single_touch_rf_maps"
-            / session_id / "single_touch_rf_maps.npz"
-        )
-        if not npz_path.exists():
-            raise ValueError(
-                f"launch_single_touch_rf_explorer: npz not found for session "
-                f"'{session_id}': {npz_path}"
-            )
+        session_dir = database_path / "4_analysed" / SPATIAL_MAP_SINGLE_TOUCH / session_id
+        npz_path = resolve_single_touch_npz(session_dir, iff_metric)
         forearm_ply_path = resolve_forearm_ply(csv_path.parent, session_id)
         if forearm_ply_path is None:
             raise ValueError(
@@ -231,6 +239,7 @@ def launch_single_touch_rf_explorer(
 def launch_touch_population_explorer(
     input_items: List[Tuple[Path, Path]],
     neuron_mode: str = "iff",
+    iff_metric: str = "mean",
 ) -> None:
     """Launch the Touch Population Explorer GUI for all sessions in input_items.
 
@@ -241,7 +250,7 @@ def launch_touch_population_explorer(
     sessions.  Blocks until the user closes the window.
 
     For each session, also attempts to load a ``PopulationRFData`` from the
-    pre-computed ``single_touch_rf_maps.npz`` (produced by
+    pre-computed single-touch RF maps NPZ (produced by
     ``run_single_touch_rf_mapping``).  If the ``.npz`` is absent for a session,
     ``None`` is stored in ``rf_sessions`` for that position — the viewer
     gracefully disables RF heatmap mode for that session.  If the file exists
@@ -257,6 +266,10 @@ def launch_touch_population_explorer(
         ``"iff"`` or ``"spike"`` — must match the mode used when
         ``run_single_touch_rf_mapping`` was run.  Passed to the viewer so it
         can label the RF heatmap axis correctly.
+    iff_metric:
+        Which IFF aggregation NPZ to load — ``"mean"`` (default) or ``"max"``.
+        Falls back to the legacy ``"single_touch_rf_maps.npz"`` for
+        ``"mean"`` when the new split file does not yet exist.
     """
     from analysis.receptive_field_mapping.data.touch_population_data import (
         load_population_data,
@@ -284,11 +297,10 @@ def launch_touch_population_explorer(
     # Resolve RF data per session — None if .npz absent, ValueError propagates if corrupt.
     rf_sessions: List[Optional[PopulationRFData]] = []
     for (csv_path, database_path), (session_id, pop_data) in zip(input_items, sessions):
-        npz_path = (
-            database_path / "4_analysed" / "single_touch_rf_maps"
-            / session_id / "single_touch_rf_maps.npz"
-        )
-        if not npz_path.exists():
+        session_dir = database_path / "4_analysed" / SPATIAL_MAP_SINGLE_TOUCH / session_id
+        try:
+            npz_path = resolve_single_touch_npz(session_dir, iff_metric)
+        except FileNotFoundError:
             print(
                 f"[Touch Population] {session_id}: RF .npz not found — "
                 f"RF heatmap mode disabled for this session."
@@ -376,7 +388,7 @@ def launch_rf_surface_viewer(
     for csv_path, database_path in input_items:
         session_id = session_id_from_path(csv_path)
         npz_path = (
-            database_path / "4_analysed" / "population_response_fields"
+            database_path / "4_analysed" / SPATIAL_EXTRACT_BOUNDARIES
             / session_id / f"{session_id}_population_response_fields.npz"
         )
         if not npz_path.exists():
@@ -401,7 +413,7 @@ def launch_rf_camera_settings_viewer(
 
     Passes session paths to the viewer which loads data on-demand per session.
     Blocks until the user closes the window.
-    Camera settings are saved to 4_analysed/rf_camera_settings/rf_camera_settings.json.
+    Camera settings are saved to 4_analysed/spatial_set_camera/rf_camera_settings.json.
     """
     from analysis.receptive_field_mapping.gui.rf_camera_settings_viewer import RFCameraSettingsViewer
     from PyQt5.QtWidgets import QApplication
@@ -414,7 +426,7 @@ def launch_rf_camera_settings_viewer(
     print(f"[RF Camera Settings] Launching viewer for {n} session(s)...")
 
     database_path = input_items[0][1]
-    output_dir = database_path / '4_analysed' / 'rf_camera_settings'
+    output_dir = database_path / '4_analysed' / SPATIAL_SET_CAMERA
 
     app = QApplication.instance() or QApplication(sys.argv)
     viewer = RFCameraSettingsViewer(
@@ -432,10 +444,10 @@ def launch_slim_uv_config_viewer(
     """Launch the SLIM UV per-session config GUI for all sessions in input_items.
 
     For each session, resolves the forearm PLY path, the single-touch RF maps
-    NPZ path, and the per-session ``forearm_slim_uv`` output directory; then
+    NPZ path, and the per-session ``spatial_slim_uv`` output directory; then
     opens the ``SlimUvConfigViewer`` window.  Blocks until the user closes
     the window.  Per-session ``slim_uv_config.yaml`` files are written to
-    ``4_analysed/forearm_slim_uv/<session_id>/`` on "Accept".
+    ``4_analysed/spatial_slim_uv/<session_id>/`` on "Accept".
 
     Parameters
     ----------
@@ -472,11 +484,13 @@ def launch_slim_uv_config_viewer(
                 f"for session '{session_id}' in {csv_path.parent} — "
                 "run forearm extraction first."
             )
+        # The SLIM UV config viewer always uses the mean-IFF NPZ — it is a
+        # diagnostic display tool and mean is the canonical reference.
         rf_maps_npz = (
-            database_path / '4_analysed' / 'single_touch_rf_maps'
-            / session_id / 'single_touch_rf_maps.npz'
+            database_path / '4_analysed' / SPATIAL_MAP_SINGLE_TOUCH
+            / session_id / single_touch_npz_filename("mean")
         )
-        output_dir = database_path / '4_analysed' / 'forearm_slim_uv'
+        output_dir = database_path / '4_analysed' / SPATIAL_SLIM_UV
         sessions.append({
             "session_id": session_id,
             "forearm_ply_path": forearm_ply_path,

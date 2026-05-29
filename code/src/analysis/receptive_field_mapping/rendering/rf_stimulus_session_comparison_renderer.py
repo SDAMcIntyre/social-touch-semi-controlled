@@ -1,6 +1,7 @@
 """Pure rendering functions for cross-session touch feature comparison plots."""
 
 import math
+import re
 
 import matplotlib
 matplotlib.use('Agg')
@@ -15,6 +16,13 @@ from typing import Literal
 _BG = '#1a1a1a'
 _SPINE_COLOR = '#555555'
 _GRID_COLOR = '#444444'
+
+
+_DATE_PREFIX_RE = re.compile(r'^\d{4}-\d{2}-\d{2}_')
+
+
+def _display_id(session_id: str) -> str:
+    return _DATE_PREFIX_RE.sub('', session_id)
 
 
 def assign_session_colors(session_ids: list[str]) -> dict[str, tuple]:
@@ -105,10 +113,30 @@ def _draw_feature_on_ax(
             raise ValueError(f"Unknown plot_type: {plot_type!r}")
 
 
+def _annotate_session_counts(
+    ax,
+    df_gesture: pd.DataFrame,
+    feature_col: str,
+    session_ids: list[str],
+) -> None:
+    ylo, yhi = ax.get_ylim()
+    offset = 0.03 * (yhi - ylo)
+    for i, sid in enumerate(session_ids):
+        values = df_gesture[df_gesture['session_id'] == sid][feature_col].dropna()
+        if values.empty:
+            continue
+        ax.text(
+            i, float(values.max()) + offset, str(len(values)),
+            ha='center', va='bottom',
+            fontsize=11, color='#cccccc',
+            clip_on=False,
+        )
+
+
 def _style_ax(ax, session_ids: list[str], display_label: str, ylim: tuple[float, float] | None) -> None:
     ax.set_xticks(range(len(session_ids)))
-    ax.set_xticklabels(session_ids, rotation=45, ha='right', fontsize=8, color='white')
-    ax.set_xlim(-0.7, len(session_ids) - 0.3)
+    ax.set_xticklabels([_display_id(s) for s in session_ids], rotation=45, ha='right', fontsize=8, color='white')
+    ax.set_xlim(-0.5, len(session_ids) - 0.5)
     ax.set_ylabel(display_label, color='white', fontsize=10)
     ax.tick_params(axis='y', colors='white')
     ax.tick_params(axis='x', colors='white')
@@ -142,12 +170,13 @@ def render_feature_session_comparison(
     else:
         df_gesture = df[df['gesture_type'] == gesture_type]
 
-    fig_w = max(8, 1.2 * len(session_ids))
+    fig_w = max(6, 0.8 * len(session_ids))
     fig, ax = plt.subplots(figsize=(fig_w, 6), dpi=150)
     fig.patch.set_facecolor(_BG)
 
     _draw_feature_on_ax(ax, df_gesture, feature_col, session_ids, colors, plot_type)
     _style_ax(ax, session_ids, display_label, ylim)
+    _annotate_session_counts(ax, df_gesture, feature_col, session_ids)
     ax.set_title(f"{gesture_type} | {display_label}", color='white', fontsize=11)
 
     fig.tight_layout()
@@ -165,6 +194,7 @@ def render_feature_summary_grid(
     plot_type: Literal['box_strip', 'violin', 'bar_error'],
     output_path: Path,
     gesture_type: str = 'all',
+    ylims: dict[str, tuple[float, float]] | None = None,
 ) -> None:
     """Render a multi-panel grid: one axes per feature, 3 columns."""
     if not feature_cols:
@@ -197,7 +227,8 @@ def render_feature_summary_grid(
     for idx, (col, label) in enumerate(zip(feature_cols, display_labels)):
         ax = axes_flat[idx]
         _draw_feature_on_ax(ax, df_gesture, col, session_ids, colors, plot_type)
-        _style_ax(ax, session_ids, label, ylim=None)
+        _style_ax(ax, session_ids, label, ylim=ylims.get(col) if ylims is not None else None)
+        _annotate_session_counts(ax, df_gesture, col, session_ids)
         ax.set_title(label, color='white', fontsize=9)
 
     for idx in range(len(feature_cols), len(axes_flat)):
