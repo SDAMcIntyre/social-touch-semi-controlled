@@ -182,6 +182,7 @@ tasks:
     options:
       force_processing: false
       neuron_mode: iff
+      iff_metric: both
       min_overlap_pct: 25
       median_filter_size: 5
       inflection_sigma: 5.0
@@ -198,6 +199,7 @@ tasks:
     enabled: true
     options:
       force_processing: false
+      iff_metric: both
     depends_on: [spatial_extract_boundaries]
 
   # Compare RF center positions between proximal and distal strokes per session.
@@ -209,6 +211,7 @@ tasks:
     enabled: true
     options:
       force_processing: false
+      iff_metric: both
       heatmap_space: linear
       cmap: jet
     depends_on: [spatial_extract_boundaries]
@@ -283,6 +286,22 @@ tasks:
             - mean_during_iff
     depends_on: [stimulus_extract_features]
 
+  stimulus_iff_tuning_curves:
+    category: stimulus_sensitivity
+    enabled: true
+    options:
+      force_processing: true
+      iff_metric: both
+      tuning_features:
+      - contact_area_mean
+      - pressure_mean
+      - hand_velocity_amplitude_mean
+      - contact_depth_mean
+      n_bins: 50
+      clip_percentile: 1.0
+      smoothing_sigma: 1.5
+    depends_on: [stimulus_extract_features]
+
   # Population RF grid: sweep N-D feature space, average single-touch RFs per cell.
   # Depends on: spatial_map_single_touch (RF maps), stimulus_extract_features (feature CSVs).
   # Output: 4_analysed/population_rf_grid/<session_id>/
@@ -291,6 +310,7 @@ tasks:
     enabled: false
     options:
       force_processing: false
+      iff_metric: mean
       grid_groups:
         velocity_pressure_2d:
           enabled: false
@@ -357,6 +377,7 @@ tasks:
     options:
       force_processing: false
       neuron_mode: iff
+      iff_metric: mean
       vertex_threshold_ratio: 0.25
       metric_name: mean_iff
       projection_method: tangent_plane

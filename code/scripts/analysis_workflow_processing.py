@@ -41,6 +41,7 @@ from analysis.receptive_field_mapping import (
     run_proximal_distal_center_comparison,
     run_touch_feature_radar,
     run_stimulus_session_comparison,
+    run_iff_tuning_curves,
     launch_rf_camera_settings_viewer,
     launch_slim_uv_config_viewer,
 )
@@ -72,12 +73,14 @@ from analysis.pipeline.output_dirs import (
     STIMULUS_EXTRACT_FEATURES,
     STIMULUS_RENDER_RADAR,
     STIMULUS_COMPARE_SESSIONS,
+    STIMULUS_IFF_TUNING_CURVES,
     TOUCH_COMPUTE_SERIES,
     TOUCH_PREPARE_SESSIONS,
     TOUCH_SUMMARIZE_BLOCKS,
 )
 
 from analysis.pipeline import collect_unique_session_dirs, discover_input_items, run_pipeline_stages
+from analysis.pipeline.shared_constants import single_touch_npz_filename
 
 # --- Module-level helpers ---
 
@@ -300,9 +303,10 @@ def spatial_precompute_slim_uv_flow(
                 "run forearm extraction first."
             )
 
+        # SLIM UV always anchors on the mean-IFF centroid — use the mean NPZ.
         rf_maps_npz = (
             db_path / '4_analysed' / SPATIAL_MAP_SINGLE_TOUCH
-            / session_id / 'single_touch_rf_maps.npz'
+            / session_id / single_touch_npz_filename("mean")
         )
 
         output_dir = db_path / '4_analysed' / SPATIAL_SLIM_UV / session_id
@@ -434,6 +438,7 @@ def spatial_extract_boundaries_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
     neuron_mode: str = "iff",
+    iff_metric: str = "mean",
     min_overlap_pct: float = 25.0,
     median_filter_size: int | None = None,
     inflection_sigma: float | None = None,
@@ -451,42 +456,49 @@ def spatial_extract_boundaries_flow(
     if not input_items:
         return
 
-    output_dir = input_items[0][1] / '4_analysed' / SPATIAL_EXTRACT_BOUNDARIES
-    run_population_response_field_extraction(
-        session_configs=input_items,
-        neuron_mode=neuron_mode,
-        output_dir=output_dir,
-        min_overlap_pct=min_overlap_pct,
-        force_processing=force_processing,
-        median_filter_size=median_filter_size,
-        inflection_sigma=inflection_sigma,
-        heatmap_space=heatmap_space,
-        cmap=cmap,
-    )
+    metrics = ["mean", "max"] if iff_metric == "both" else [iff_metric]
+    for metric in metrics:
+        output_dir = input_items[0][1] / '4_analysed' / SPATIAL_EXTRACT_BOUNDARIES / f"iff_{metric}"
+        run_population_response_field_extraction(
+            session_configs=input_items,
+            neuron_mode=neuron_mode,
+            output_dir=output_dir,
+            min_overlap_pct=min_overlap_pct,
+            force_processing=force_processing,
+            median_filter_size=median_filter_size,
+            inflection_sigma=inflection_sigma,
+            heatmap_space=heatmap_space,
+            cmap=cmap,
+            iff_metric=metric,
+        )
 
 
 @flow(name="spatial_compare_boundaries")
 def spatial_compare_boundaries_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
+    iff_metric: str = "mean",
 ) -> None:
     """Aggregate RF boundary metrics across sessions and render comparison visuals.
 
     Reads per-session NPZ files produced by spatial_extract_boundaries,
     builds a summary CSV, and renders UV contour overlays, per-gesture metric panels,
     and session-x-gesture heatmaps.
-    Output: 4_analysed/spatial_compare_boundaries/
+    Output: 4_analysed/spatial_compare_boundaries/iff_<iff_metric>/
     """
     print(f"[Batch Analysis] Comparing session RF boundaries for {len(input_items)} item(s)...")
     if not input_items:
         return
 
-    output_dir = input_items[0][1] / '4_analysed' / SPATIAL_COMPARE_BOUNDARIES
-    run_session_rf_boundary_comparison(
-        session_configs=input_items,
-        output_dir=output_dir,
-        force_processing=force_processing,
-    )
+    metrics = ["mean", "max"] if iff_metric == "both" else [iff_metric]
+    for metric in metrics:
+        output_dir = input_items[0][1] / '4_analysed' / SPATIAL_COMPARE_BOUNDARIES / f"iff_{metric}"
+        run_session_rf_boundary_comparison(
+            session_configs=input_items,
+            output_dir=output_dir,
+            force_processing=force_processing,
+            iff_metric=metric,
+        )
 
 
 @flow(name="spatial_compare_rf_centers")
@@ -495,26 +507,30 @@ def spatial_compare_rf_centers_flow(
     force_processing: bool = False,
     heatmap_space: str = "linear",
     cmap: str = "jet",
+    iff_metric: str = "mean",
 ) -> None:
     """Compare RF center positions between proximal and distal strokes across sessions.
 
     Reads per-session NPZ files produced by spatial_extract_boundaries,
     renders per-session center-marked heatmap PNGs, and produces a cross-session
     aggregate scatter plot and summary CSV.
-    Output: 4_analysed/spatial_compare_rf_centers/
+    Output: 4_analysed/spatial_compare_rf_centers/iff_<iff_metric>/
     """
     print(f"[Batch Analysis] Comparing RF centers for {len(input_items)} item(s)...")
     if not input_items:
         return
 
-    output_dir = input_items[0][1] / '4_analysed' / SPATIAL_COMPARE_RF_CENTERS
-    run_proximal_distal_center_comparison(
-        session_configs=input_items,
-        output_dir=output_dir,
-        force_processing=force_processing,
-        heatmap_space=heatmap_space,
-        cmap=cmap,
-    )
+    metrics = ["mean", "max"] if iff_metric == "both" else [iff_metric]
+    for metric in metrics:
+        output_dir = input_items[0][1] / '4_analysed' / SPATIAL_COMPARE_RF_CENTERS / f"iff_{metric}"
+        run_proximal_distal_center_comparison(
+            session_configs=input_items,
+            output_dir=output_dir,
+            force_processing=force_processing,
+            heatmap_space=heatmap_space,
+            cmap=cmap,
+            iff_metric=metric,
+        )
 
 
 @flow(name="cross_map_feature_grid")
@@ -527,6 +543,7 @@ def cross_map_feature_grid_flow(
     features: Optional[dict] = None,
     compute_baseline: bool = True,
     grid_groups: Optional[dict] = None,
+    iff_metric: str = "mean",
 ) -> List[Path]:
     """Systematic RF population mapping via feature-space grid sweep.
 
@@ -589,11 +606,11 @@ def cross_map_feature_grid_flow(
             )
         npz_path = (
             db_path / '4_analysed' / SPATIAL_MAP_SINGLE_TOUCH
-            / session_id / 'single_touch_rf_maps.npz'
+            / session_id / single_touch_npz_filename(iff_metric)
         )
         if not npz_path.exists():
             raise ValueError(
-                f"cross_map_feature_grid_flow: single_touch_rf_maps.npz not found for "
+                f"cross_map_feature_grid_flow: {npz_path.name} not found for "
                 f"session '{session_id}': {npz_path}. Run spatial_map_single_touch first."
             )
         resolved_items.append({
@@ -762,6 +779,7 @@ def cross_render_sessions_flow(
     vertex_threshold_ratio: float = 0.25,
     metric_name: str = "mean_iff",
     projection_method: str = "tangent_plane",
+    iff_metric: str = "mean",
 ) -> None:
     """Render cross-session comparison heatmaps from 1D population RF grids.
 
@@ -802,11 +820,11 @@ def cross_render_sessions_flow(
             )
         npz_path = (
             db_path / '4_analysed' / SPATIAL_MAP_SINGLE_TOUCH
-            / session_id / 'single_touch_rf_maps.npz'
+            / session_id / single_touch_npz_filename(iff_metric)
         )
         if not npz_path.exists():
             raise ValueError(
-                f"cross_render_sessions_flow: single_touch_rf_maps.npz not found for "
+                f"cross_render_sessions_flow: {npz_path.name} not found for "
                 f"session '{session_id}': {npz_path}. Run spatial_map_single_touch first."
             )
         resolved_items.append({
@@ -953,6 +971,43 @@ def stimulus_compare_sessions_flow(
         plot_type=plot_type,
         force_processing=force_processing,
     )
+
+
+@flow(name="stimulus_iff_tuning_curves")
+def stimulus_iff_tuning_curves_flow(
+    input_items: List[Tuple[Path, Path]],
+    force_processing: bool = False,
+    tuning_features: Optional[list] = None,
+    n_bins: int = 20,
+    clip_percentile: float = 1.0,
+    iff_metric: str = "mean",
+    smoothing_sigma: float = 0.0,
+) -> None:
+    """Per-feature IFF tuning curve plots across all sessions.
+
+    Bins each selected touch feature into equal-width ranges, computes mean IFF
+    and touch count per bin, and renders dual Y-axis per-session PNGs plus
+    cross-session overlay PNGs, faceted by gesture subset.
+    Output: 4_analysed/stimulus_iff_tuning_curves/
+    """
+    print(f"[Batch Analysis] Rendering IFF tuning curves for {len(input_items)} item(s)...")
+    if not input_items:
+        return
+    metrics = ["mean", "max"] if iff_metric == "both" else [iff_metric]
+    for metric in metrics:
+        output_dir = input_items[0][1] / '4_analysed' / STIMULUS_IFF_TUNING_CURVES / f"iff_{metric}"
+        run_iff_tuning_curves(
+            session_config_paths=input_items,
+            options={
+                "tuning_features": tuning_features or [],
+                "n_bins": n_bins,
+                "clip_percentile": clip_percentile,
+                "force_processing": force_processing,
+                "iff_metric": metric,
+                "smoothing_sigma": smoothing_sigma,
+            },
+            output_base_dir=output_dir,
+        )
 
 
 @flow(name="stimulus_cluster_touches")
@@ -1377,6 +1432,7 @@ def _build_pipeline_stages(dag_handler: DagConfigHandler, items_to_process) -> l
             "func": spatial_extract_boundaries_flow,
             "params": lambda: {
                 "neuron_mode": dag_handler.get_task_options("spatial_extract_boundaries").get("neuron_mode", "iff"),
+                "iff_metric": dag_handler.get_task_options("spatial_extract_boundaries").get("iff_metric", "mean"),
                 "min_overlap_pct": float(dag_handler.get_task_options("spatial_extract_boundaries").get("min_overlap_pct", 25.0)),
                 "heatmap_space": dag_handler.get_task_options("spatial_extract_boundaries").get("heatmap_space", "linear"),
                 "cmap": dag_handler.get_task_options("spatial_extract_boundaries").get("cmap", "jet"),
@@ -1395,7 +1451,9 @@ def _build_pipeline_stages(dag_handler: DagConfigHandler, items_to_process) -> l
         {
             "name": "spatial_compare_boundaries",
             "func": spatial_compare_boundaries_flow,
-            "params": lambda: {},
+            "params": lambda: {
+                "iff_metric": dag_handler.get_task_options("spatial_compare_boundaries").get("iff_metric", "mean"),
+            },
         },
         {
             "name": "spatial_compare_rf_centers",
@@ -1403,6 +1461,7 @@ def _build_pipeline_stages(dag_handler: DagConfigHandler, items_to_process) -> l
             "params": lambda: {
                 "heatmap_space": dag_handler.get_task_options("spatial_compare_rf_centers").get("heatmap_space", "linear"),
                 "cmap": dag_handler.get_task_options("spatial_compare_rf_centers").get("cmap", "jet"),
+                "iff_metric": dag_handler.get_task_options("spatial_compare_rf_centers").get("iff_metric", "mean"),
             },
         },
         {
@@ -1430,11 +1489,23 @@ def _build_pipeline_stages(dag_handler: DagConfigHandler, items_to_process) -> l
             },
         },
         {
+            "name": "stimulus_iff_tuning_curves",
+            "func": stimulus_iff_tuning_curves_flow,
+            "params": lambda: {
+                "tuning_features": list(dag_handler.get_task_options("stimulus_iff_tuning_curves").get("tuning_features") or []),
+                "n_bins": int(dag_handler.get_task_options("stimulus_iff_tuning_curves").get("n_bins", 20)),
+                "clip_percentile": float(dag_handler.get_task_options("stimulus_iff_tuning_curves").get("clip_percentile", 1.0)),
+                "iff_metric": dag_handler.get_task_options("stimulus_iff_tuning_curves").get("iff_metric", "mean"),
+                "smoothing_sigma": float(dag_handler.get_task_options("stimulus_iff_tuning_curves").get("smoothing_sigma", 0.0)),
+            },
+        },
+        {
             "name": "cross_map_feature_grid",
             "func": cross_map_feature_grid_flow,
             "params": lambda: {
                 "grid_groups": dag_handler.get_task_options("cross_map_feature_grid").get("grid_groups"),
                 "neuron_mode": dag_handler.get_task_options("cross_map_feature_grid").get("neuron_mode", "iff"),
+                "iff_metric": dag_handler.get_task_options("cross_map_feature_grid").get("iff_metric", "mean"),
                 "per_gesture_type": bool(dag_handler.get_task_options("cross_map_feature_grid").get("per_gesture_type", True)),
                 "vertex_threshold_ratio": float(dag_handler.get_task_options("cross_map_feature_grid").get("vertex_threshold_ratio", 0.25)),
                 "compute_baseline": bool(dag_handler.get_task_options("cross_map_feature_grid").get("compute_baseline", True)),
@@ -1469,6 +1540,7 @@ def _build_pipeline_stages(dag_handler: DagConfigHandler, items_to_process) -> l
             "params": lambda: {
                 "features": dag_handler.get_task_options("cross_render_sessions").get("features"),
                 "neuron_mode": dag_handler.get_task_options("cross_render_sessions").get("neuron_mode", "iff"),
+                "iff_metric": dag_handler.get_task_options("cross_render_sessions").get("iff_metric", "mean"),
                 "vertex_threshold_ratio": float(dag_handler.get_task_options("cross_render_sessions").get("vertex_threshold_ratio", 0.25)),
                 "metric_name": dag_handler.get_task_options("cross_render_sessions").get("metric_name", "mean_iff"),
                 "projection_method": dag_handler.get_task_options("cross_render_sessions").get("projection_method", "tangent_plane"),

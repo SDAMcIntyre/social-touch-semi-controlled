@@ -7,7 +7,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from analysis.pipeline.shared_constants import session_id_from_path
+from analysis.pipeline.output_dirs import SPATIAL_EXTRACT_BOUNDARIES
+from analysis.pipeline.shared_constants import IFF_METRICS, session_id_from_path
 from analysis.receptive_field_mapping.rendering.rf_center_comparison_renderer import (
     render_center_marked_heatmap,
     render_proximal_distal_aggregate,
@@ -25,16 +26,19 @@ _HOTSPOT_GTYPES = ('stroke', 'stroke_proximal', 'stroke_distal')
 
 def run_proximal_distal_center_comparison(
     session_configs: list[tuple[Path, Path]],
+    output_dir: Path,
     force_processing: bool = False,
     heatmap_space: str = "linear",
     cmap: str = "jet",
+    iff_metric: str = "mean",
 ) -> None:
+    if iff_metric not in IFF_METRICS:
+        raise ValueError(
+            f"[RF Center Comparison] Invalid iff_metric {iff_metric!r}. "
+            f"Expected one of {IFF_METRICS}."
+        )
     if not session_configs:
         raise ValueError("[RF Center Comparison] session_configs is empty.")
-
-    _, db_path = session_configs[0]
-    db_path = Path(db_path)
-    output_dir = db_path / '4_analysed' / 'rf_center_proximal_distal'
     sentinel_path = output_dir / 'rf_center_proximal_distal_done.json'
 
     if sentinel_path.exists() and not force_processing:
@@ -56,8 +60,8 @@ def run_proximal_distal_center_comparison(
         session_id = session_id_from_path(csv_path)
 
         npz_path = (
-            db_path_item / '4_analysed' / 'population_response_fields'
-            / session_id / f'{session_id}_population_response_fields.npz'
+            db_path_item / '4_analysed' / SPATIAL_EXTRACT_BOUNDARIES
+            / f"iff_{iff_metric}" / session_id / f'{session_id}_population_response_fields.npz'
         )
 
         if not npz_path.exists():

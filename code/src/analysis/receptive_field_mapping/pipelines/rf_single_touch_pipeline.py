@@ -2,8 +2,10 @@
 
 For each session, reads all single touches from the prepared CSV via
 ``load_playback_data()``, accumulates per-vertex neuron values (IFF or spike)
-using the same pattern as the Touch Playback Explorer, and saves results as
-a single sparse ``.npz`` file per session.
+using the same pattern as the Touch Playback Explorer, and saves two sparse
+``.npz`` files per session: ``single_touch_rf_maps_mean.npz`` (per-vertex
+mean IFF) and ``single_touch_rf_maps_max.npz`` (per-vertex max IFF). Both
+accumulators run in a single pass for efficiency.
 
 Depends on: ``touch_prepare_sessions`` (reads ``<session>_prepared.csv``).
 """
@@ -21,7 +23,11 @@ from analysis.receptive_field_mapping.data.touch_playback_data import (
     TouchEvent,
     load_playback_data,
 )
-from analysis.pipeline.shared_constants import session_id_from_path, NEURON_MODES
+from analysis.pipeline.shared_constants import (
+    session_id_from_path,
+    NEURON_MODES,
+    single_touch_npz_filename,
+)
 from utils.should_process_task import should_process_task
 
 logger = logging.getLogger(__name__)
@@ -33,12 +39,12 @@ def _compute_touch_rf(
     touch: TouchEvent,
     n_vertices: int,
     neuron_mode: str,
-) -> List[Tuple[int, float]]:
-    """Compute the RF map for a single touch event.
+) -> Tuple[List[Tuple[int, float]], List[Tuple[int, float]]]:
+    """Compute mean and max RF maps for a single touch event.
 
-    Accumulates per-vertex neuron values using ``np.add.at`` and returns only
-    vertices that were contacted at least once, as ``(vertex_idx, mean_value)``
-    pairs.
+    Accumulates per-vertex neuron values using ``np.add.at`` (mean) and
+    ``np.maximum.at`` (max), and returns only vertices that were contacted at
+    least once as ``(vertex_idx, value)`` pairs.
 
     Parameters
     ----------
@@ -51,9 +57,12 @@ def _compute_touch_rf(
 
     Returns
     -------
-    List of ``(vertex_idx, mean_value)`` pairs for all contacted vertices.
+    Tuple of ``(mean_pairs, max_pairs)``, each a list of
+    ``(vertex_idx, value)`` pairs for all contacted vertices with valid data.
+    Vertices where all frames are NaN are excluded from both lists.
     """
     val_sum = np.zeros(n_vertices, dtype=np.float64)
+    val_max = np.full(n_vertices, -np.inf, dtype=np.float64)
     contact_count = np.zeros(n_vertices, dtype=np.float64)
 
     n_frames = len(touch.frame_vertex_indices)
@@ -72,25 +81,32 @@ def _compute_touch_rf(
         if len(verts) == 0:
             continue
         np.add.at(val_sum, verts, neuron_values[fi])
+        np.maximum.at(val_max, verts, neuron_values[fi])
         np.add.at(contact_count, verts, 1.0)
 
     contacted_mask = contact_count > 0
     if not contacted_mask.any():
-        return []
+        return [], []
 
     contacted_indices = np.where(contacted_mask)[0]
     mean_values = val_sum[contacted_indices] / contact_count[contacted_indices]
+    max_values = val_max[contacted_indices]
 
     # Drop vertices whose mean is NaN. NaN propagates through ``np.add.at`` once
     # any frame's ``neuron_values`` is NaN (e.g. unit not held during the touch
     # window — see ST13-03 blocks 5–8). Keeping NaN pairs would yield invisible
     # heatmaps but a non-zero vertex count, masking the "no neural data" state.
+    # The same NaN mask is applied to max values: if mean is NaN then all frames
+    # at that vertex were NaN, so max is also meaningless.
     valid = ~np.isnan(mean_values)
     if not valid.any():
-        return []
+        return [], []
     contacted_indices = contacted_indices[valid]
     mean_values = mean_values[valid]
-    return [(int(idx), float(val)) for idx, val in zip(contacted_indices, mean_values)]
+    max_values = max_values[valid]
+    mean_pairs = [(int(idx), float(val)) for idx, val in zip(contacted_indices, mean_values)]
+    max_pairs = [(int(idx), float(val)) for idx, val in zip(contacted_indices, max_values)]
+    return mean_pairs, max_pairs
 
 
 def run_single_touch_rf_mapping(
@@ -105,9 +121,11 @@ def run_single_touch_rf_mapping(
     For each session in ``input_items``:
     1. Resolves the prepared CSV from ``preparation_dir``.
     2. Loads per-touch playback data via ``load_playback_data()``.
-    3. Accumulates per-vertex neuron values for every ``TouchEvent``.
-    4. Saves ``single_touch_rf_maps.npz`` and ``single_touch_rf_summary.json``
-       (sentinel for idempotency) under ``output_dir / <session_id> /``.
+    3. Accumulates per-vertex neuron values for every ``TouchEvent``
+       (both mean and max in a single pass).
+    4. Saves ``single_touch_rf_maps_mean.npz``, ``single_touch_rf_maps_max.npz``
+       and ``single_touch_rf_summary.json`` (sentinel for idempotency)
+       under ``output_dir / <session_id> /``.
 
     Parameters
     ----------
@@ -155,13 +173,14 @@ def run_single_touch_rf_mapping(
         session_out = output_dir / session_id
         sentinel = session_out / 'single_touch_rf_summary.json'
 
+        mean_npz_path = session_out / single_touch_npz_filename('mean')
         if not should_process_task(
             input_paths=[csv_path],
             output_paths=[sentinel],
             force=force,
         ):
             print(f"[Single-Touch RF] {session_id}: up-to-date, skipping.")
-            produced.append(session_out / 'single_touch_rf_maps.npz')
+            produced.append(mean_npz_path)
             continue
 
         print(f"[Single-Touch RF] {session_id}: processing (neuron_mode={neuron_mode!r})...")
@@ -192,7 +211,8 @@ def run_single_touch_rf_mapping(
 
         # --- Iterate all touches and compute RF maps ---
         touch_id_map: dict = {}
-        rf_data: dict = {}
+        rf_data_mean: dict = {}
+        rf_data_max: dict = {}
         incremental_id = 0
         total_touches = 0
 
@@ -201,7 +221,9 @@ def run_single_touch_rf_mapping(
                 for touch in playback.touches_by_block_trial[(block_id, trial_id)]:
                     key = (touch.block_order_id, touch.trial_id, touch.single_touch_id)
                     touch_id_map[key] = incremental_id
-                    rf_data[incremental_id] = _compute_touch_rf(touch, n_vertices, neuron_mode)
+                    mean_pairs, max_pairs = _compute_touch_rf(touch, n_vertices, neuron_mode)
+                    rf_data_mean[incremental_id] = mean_pairs
+                    rf_data_max[incremental_id] = max_pairs
                     incremental_id += 1
                     total_touches += 1
 
@@ -210,17 +232,18 @@ def run_single_touch_rf_mapping(
             f"{n_vertices} vertices in mesh."
         )
 
-        # --- Save .npz output ---
+        # --- Save .npz outputs (one per IFF metric) ---
         session_out.mkdir(parents=True, exist_ok=True)
-        npz_path = session_out / 'single_touch_rf_maps.npz'
-        np.savez(
-            npz_path,
-            touch_id_map=touch_id_map,
-            rf_data=rf_data,
-            neuron_mode=neuron_mode,
-        )
-        produced.append(npz_path)
-        print(f"[Single-Touch RF] {session_id}: saved -> {npz_path.name}")
+        for iff_metric, rf_data in (('mean', rf_data_mean), ('max', rf_data_max)):
+            npz_path = session_out / single_touch_npz_filename(iff_metric)
+            np.savez(
+                npz_path,
+                touch_id_map=touch_id_map,
+                rf_data=rf_data,
+                neuron_mode=neuron_mode,
+            )
+            print(f"[Single-Touch RF] {session_id}: saved -> {npz_path.name}")
+        produced.append(mean_npz_path)
 
         # --- Save sentinel ---
         with open(sentinel, 'w') as f:

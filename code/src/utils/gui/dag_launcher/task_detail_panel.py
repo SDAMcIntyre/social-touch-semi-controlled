@@ -59,6 +59,13 @@ _CHECKLIST_UNIVERSES: dict[str, list[str]] = {
         "threshold_area_mm2",
         "convex_hull_area_mm2",
     ],
+    "tuning_features": [
+        "contact_area_mean",
+        "pressure_mean",
+        "hand_velocity_amplitude_mean",
+        "contact_depth_mean",
+        "hand_velocity_signed_mean",
+    ],
 }
 
 # Option keys that should render as a dropdown. Values are (display_label, saved_value) pairs.
@@ -86,6 +93,11 @@ _OPTION_ENUMS: dict[str, list[tuple[str, object]]] = {
     "neuron_mode": [
         ("IFF (default)", "iff"),
         ("Spike", "spike"),
+    ],
+    "iff_metric": [
+        ("Mean (default)", "mean"),
+        ("Max", "max"),
+        ("Both", "both"),
     ],
 }
 
@@ -294,7 +306,7 @@ class TaskDetailPanel(QWidget):
                 widget = self._make_camera_angle_mode_section(key, val)
             elif key == "cluster_groups" and isinstance(val, (list, CommentedSeq)):
                 widget = self._make_downstream_cluster_groups_section(key, val)
-            elif key == "extracted_features" and isinstance(val, (list, CommentedSeq)):
+            elif key in _CHECKLIST_UNIVERSES and isinstance(val, (list, CommentedSeq)):
                 widget = self._make_checklist_section(key, val)
             elif key == "cluster_groups" and _is_cluster_groups_dict(val):
                 widget = self._make_cluster_groups_section(key, val)

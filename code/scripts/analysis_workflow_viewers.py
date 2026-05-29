@@ -22,6 +22,7 @@ from analysis.receptive_field_mapping import (
     launch_gallery_viewer,
     launch_rf_surface_viewer,
 )
+from analysis.pipeline.output_dirs import CROSS_CLUSTER_RF
 from analysis.touch_analytics.gui import launch_preparation_viewer
 from analysis.pipeline import (
     collect_unique_session_dirs,
@@ -94,6 +95,7 @@ def explore_touch_population_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
     neuron_mode: str = "iff",
+    iff_metric: str = "mean",
 ) -> None:
     """
     Launch the Touch Population Explorer GUI for the given sessions.
@@ -104,12 +106,13 @@ def explore_touch_population_flow(
 
     ``neuron_mode`` is forwarded to ``launch_touch_population_explorer`` to
     determine which pre-computed RF maps to load (``"iff"`` or ``"spike"``).
+    ``iff_metric`` selects which aggregation NPZ to load (``"mean"`` or ``"max"``).
     """
     print(f"[Batch Analysis] Launching Touch Population Explorer for {len(input_items)} item(s)...")
     if not input_items:
         return
 
-    launch_touch_population_explorer(input_items, neuron_mode=neuron_mode)
+    launch_touch_population_explorer(input_items, neuron_mode=neuron_mode, iff_metric=iff_metric)
 
 
 @flow(name="explore_single_touch_rf")
@@ -117,6 +120,7 @@ def explore_single_touch_rf_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
     neuron_mode: str = "iff",
+    iff_metric: str = "mean",
 ) -> None:
     """
     Launch the Single-Touch RF Explorer GUI for the given sessions.
@@ -124,12 +128,14 @@ def explore_single_touch_rf_flow(
     on clustering or visualization.
     ``force_processing`` is accepted for interface consistency but is a no-op:
     the GUI is stateless and always launches fresh.
+
+    ``iff_metric`` selects which aggregation NPZ to load (``"mean"`` or ``"max"``).
     """
     print(f"[Batch Analysis] Launching Single-Touch RF Explorer for {len(input_items)} item(s)...")
     if not input_items:
         return
 
-    launch_single_touch_rf_explorer(input_items, neuron_mode=neuron_mode)
+    launch_single_touch_rf_explorer(input_items, neuron_mode=neuron_mode, iff_metric=iff_metric)
 
 
 def _discover_processed_groups(output_dir: Path) -> dict:
@@ -196,7 +202,7 @@ def explore_rf_gallery_flow(
         )
 
     database_path = input_items[0][1]
-    output_dir = database_path / '4_analysed' / 'receptive_field_maps_clustered'
+    output_dir = database_path / '4_analysed' / CROSS_CLUSTER_RF
     available = _discover_processed_groups(output_dir)
 
     for combo_name in cluster_groups:
@@ -340,17 +346,17 @@ def main():
         {
             "name": "explore_single_touch_rf",
             "func": explore_single_touch_rf_flow,
-            "params": lambda: (
-                {"neuron_mode": dag_handler.get_task_options("explore_single_touch_rf").get("neuron_mode", "iff")}
-                if "neuron_mode" in (dag_handler.get_task_options("explore_single_touch_rf") or {})
-                else {}
-            ),
+            "params": lambda: {
+                "neuron_mode": dag_handler.get_task_options("explore_single_touch_rf").get("neuron_mode", "iff"),
+                "iff_metric": dag_handler.get_task_options("explore_single_touch_rf").get("iff_metric", "mean"),
+            },
         },
         {
             "name": "explore_touch_population",
             "func": explore_touch_population_flow,
             "params": lambda: {
                 "neuron_mode": dag_handler.get_task_options("explore_touch_population").get("neuron_mode", "iff"),
+                "iff_metric": dag_handler.get_task_options("explore_touch_population").get("iff_metric", "mean"),
             },
         },
         {

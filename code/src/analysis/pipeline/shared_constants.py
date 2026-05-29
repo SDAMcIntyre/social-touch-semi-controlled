@@ -10,6 +10,7 @@ fundamental domain concepts (column names, gesture vocabulary).
 
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 
 
@@ -71,6 +72,91 @@ LOCATION_BASE_COLS: tuple[str, ...] = (
 
 #: Valid neuron response modes for RF mapping (IFF or spike count).
 NEURON_MODES: tuple[str, ...] = ('iff', 'spike')
+
+
+# ---------------------------------------------------------------------------
+# IFF metric selection
+# ---------------------------------------------------------------------------
+
+#: Valid IFF aggregation metrics for single-touch RF maps.
+IFF_METRICS: tuple[str, ...] = ('mean', 'max')
+
+
+def single_touch_npz_filename(iff_metric: str) -> str:
+    """Return the NPZ filename for the given IFF metric.
+
+    Parameters
+    ----------
+    iff_metric:
+        One of ``IFF_METRICS`` (``'mean'`` or ``'max'``).
+
+    Returns
+    -------
+    str
+        Filename of the form ``"single_touch_rf_maps_{iff_metric}.npz"``.
+
+    Raises
+    ------
+    ValueError
+        If *iff_metric* is not in ``IFF_METRICS``.
+    """
+    if iff_metric not in IFF_METRICS:
+        raise ValueError(
+            f"Invalid iff_metric {iff_metric!r}. Expected one of {IFF_METRICS}."
+        )
+    return f"single_touch_rf_maps_{iff_metric}.npz"
+
+
+def resolve_single_touch_npz(session_dir: Path, iff_metric: str) -> Path:
+    """Resolve the single-touch RF maps NPZ path for the given IFF metric.
+
+    For ``iff_metric='mean'``, falls back to the legacy
+    ``"single_touch_rf_maps.npz"`` filename with a deprecation warning if the
+    new ``"single_touch_rf_maps_mean.npz"`` does not exist.
+
+    For ``iff_metric='max'``, only ``"single_touch_rf_maps_max.npz"`` is
+    considered — no legacy fallback exists.
+
+    Parameters
+    ----------
+    session_dir:
+        Directory that should contain the NPZ file (typically the per-session
+        output folder for ``spatial_map_single_touch``).
+    iff_metric:
+        One of ``IFF_METRICS`` (``'mean'`` or ``'max'``).
+
+    Returns
+    -------
+    Path
+        Absolute path to the NPZ file.
+
+    Raises
+    ------
+    ValueError
+        If *iff_metric* is not in ``IFF_METRICS``.
+    FileNotFoundError
+        If no suitable NPZ file is found in *session_dir*.
+    """
+    canonical = session_dir / single_touch_npz_filename(iff_metric)
+    if canonical.exists():
+        return canonical
+
+    if iff_metric == 'mean':
+        legacy = session_dir / 'single_touch_rf_maps.npz'
+        if legacy.exists():
+            warnings.warn(
+                f"Legacy NPZ file found at {legacy}. "
+                "Re-run 'spatial_map_single_touch' to produce the new "
+                "'single_touch_rf_maps_mean.npz' file and retire this path.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            return legacy
+
+    raise FileNotFoundError(
+        f"Single-touch RF maps NPZ not found for iff_metric={iff_metric!r} "
+        f"in {session_dir}. Expected: {canonical}"
+    )
 
 
 # ---------------------------------------------------------------------------
