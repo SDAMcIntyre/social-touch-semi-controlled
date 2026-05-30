@@ -300,6 +300,14 @@ tasks:
       n_bins: 50
       clip_percentile: 1.0
       smoothing_sigma: 1.5
+      overlap_ratio: 0.0                   # 0.0 to 0.5; sliding-window bin overlap
+      metadata_dir: touch_prepare_sessions # under <database>/4_analysed/
+      metadata_filename: '{session_id}_prepared.csv'
+      count_category_by:  # tuning_feature -> designed-metadata column
+        contact_area_mean: contact_area_metadata
+        hand_velocity_amplitude_mean: speed_metadata
+        pressure_mean: force_metadata
+        contact_depth_mean: force_metadata
     depends_on: [stimulus_extract_features]
 
   # Population RF grid: sweep N-D feature space, average single-touch RFs per cell.

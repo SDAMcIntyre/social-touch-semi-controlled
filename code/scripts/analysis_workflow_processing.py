@@ -982,6 +982,10 @@ def stimulus_iff_tuning_curves_flow(
     clip_percentile: float = 1.0,
     iff_metric: str = "mean",
     smoothing_sigma: float = 0.0,
+    overlap_ratio: float = 0.0,
+    metadata_dir: str = "touch_prepare_sessions",
+    metadata_filename: str = "{session_id}_prepared.csv",
+    count_category_by: Optional[dict] = None,
 ) -> None:
     """Per-feature IFF tuning curve plots across all sessions.
 
@@ -1005,6 +1009,10 @@ def stimulus_iff_tuning_curves_flow(
                 "force_processing": force_processing,
                 "iff_metric": metric,
                 "smoothing_sigma": smoothing_sigma,
+                "overlap_ratio": overlap_ratio,
+                "metadata_dir": metadata_dir,
+                "metadata_filename": metadata_filename,
+                "count_category_by": count_category_by or {},
             },
             output_base_dir=output_dir,
         )
@@ -1497,6 +1505,10 @@ def _build_pipeline_stages(dag_handler: DagConfigHandler, items_to_process) -> l
                 "clip_percentile": float(dag_handler.get_task_options("stimulus_iff_tuning_curves").get("clip_percentile", 1.0)),
                 "iff_metric": dag_handler.get_task_options("stimulus_iff_tuning_curves").get("iff_metric", "mean"),
                 "smoothing_sigma": float(dag_handler.get_task_options("stimulus_iff_tuning_curves").get("smoothing_sigma", 0.0)),
+                "overlap_ratio": float(dag_handler.get_task_options("stimulus_iff_tuning_curves").get("overlap_ratio", 0.0)),
+                "metadata_dir": str(dag_handler.get_task_options("stimulus_iff_tuning_curves").get("metadata_dir", "touch_prepare_sessions")),
+                "metadata_filename": str(dag_handler.get_task_options("stimulus_iff_tuning_curves").get("metadata_filename", "{session_id}_prepared.csv")),
+                "count_category_by": dag_handler.get_task_options("stimulus_iff_tuning_curves").get("count_category_by") or {},
             },
         },
         {

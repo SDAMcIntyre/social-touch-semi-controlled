@@ -20,6 +20,7 @@ import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -36,6 +37,7 @@ from analysis.receptive_field_mapping.pipelines.rf_touch_feature_radar_pipeline 
 )
 from analysis.receptive_field_mapping.rendering.rf_iff_tuning_renderer import (
     _bin_data,
+    _cat_display,
     render_session_tuning_curve,
     render_overlay_tuning_curve,
 )
@@ -92,8 +94,55 @@ def _filter_gesture(df: pd.DataFrame, gesture_subset: str) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
-# Bin edge computation
+# Bin edge / window computation
 # ---------------------------------------------------------------------------
+
+
+def _compute_bin_windows(
+    pooled_series: pd.Series,
+    n_bins: int,
+    clip_percentile: float,
+    overlap_ratio: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Compute parallel low/high edge arrays for sliding-window bins.
+
+    Returns (bin_low, bin_high), each shape (n_bins,).
+    overlap_ratio=0 reproduces disjoint half-open windows (last window inclusive).
+    """
+    if not (0.0 <= overlap_ratio <= 0.5):
+        raise ValueError(
+            f"_compute_bin_windows: overlap_ratio must be in [0.0, 0.5], "
+            f"got {overlap_ratio}."
+        )
+
+    values = pooled_series.dropna().to_numpy(dtype=float)
+    if len(values) == 0:
+        raise ValueError(
+            "_compute_bin_windows: pooled series is entirely NaN — "
+            "cannot compute bin windows."
+        )
+
+    if clip_percentile > 0.0:
+        lo = float(np.percentile(values, clip_percentile))
+        hi = float(np.percentile(values, 100.0 - clip_percentile))
+    else:
+        lo = float(values.min())
+        hi = float(values.max())
+
+    if lo >= hi:
+        raise ValueError(
+            f"_compute_bin_windows: after clipping at {clip_percentile}th / "
+            f"{100.0 - clip_percentile}th percentile, feature range collapsed to "
+            f"[{lo}, {hi}] — all values are effectively identical. "
+            f"Increase clip_percentile or remove this feature from tuning_features."
+        )
+
+    w = (hi - lo) / n_bins
+    stride = w * (1.0 - overlap_ratio)
+    bin_low = np.array([lo + i * stride for i in range(n_bins)], dtype=float)
+    bin_high = bin_low + w
+    bin_high[-1] = hi
+    return bin_low, bin_high
 
 
 def _compute_bin_edges(
@@ -194,8 +243,11 @@ def _compute_global_iff_ylim(
 def _compute_global_count_max(
     session_dfs: list[pd.DataFrame],
     feature_col: str,
-    bin_edges: np.ndarray,
+    bin_low: np.ndarray,
+    bin_high: np.ndarray,
     iff_col: str,
+    category_col: str | None = None,
+    category_levels: list | None = None,
 ) -> float:
     """Return the maximum per-bin touch count across all sessions and gesture subsets.
 
@@ -207,11 +259,18 @@ def _compute_global_count_max(
         All per-session DataFrames.
     feature_col:
         Feature column to bin.
-    bin_edges:
-        Pre-computed global bin edges for this feature.
+    bin_low:
+        Pre-computed global bin low edges for this feature.
+    bin_high:
+        Pre-computed global bin high edges for this feature.
     iff_col:
         Name of the IFF column (e.g. ``"Nerve_freq_mean"`` or
         ``"Nerve_freq_max"``).
+    category_col:
+        Optional metadata column used for per-level composition.
+    category_levels:
+        Global ordered level list for *category_col*; passed through to
+        ``_bin_data``.
 
     Returns
     -------
@@ -225,8 +284,11 @@ def _compute_global_count_max(
             filtered = _filter_gesture(df, gesture_subset)
             if len(filtered) == 0:
                 continue
-            _, _, counts = _bin_data(filtered, feature_col, iff_col, bin_edges)
-            bin_max = int(counts.max())
+            bin_result = _bin_data(
+                filtered, feature_col, iff_col, bin_low, bin_high,
+                category_col=category_col, category_levels=category_levels,
+            )
+            bin_max = int(bin_result.counts.max())
             if bin_max > global_max:
                 global_max = bin_max
     return float(max(global_max, 1))
@@ -246,6 +308,93 @@ def _write_sentinel(sentinel: Path, n_sessions: int, n_features: int) -> None:
     sentinel.parent.mkdir(parents=True, exist_ok=True)
     with open(sentinel, "w") as f:
         json.dump(data, f, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# Metadata CSV loader
+# ---------------------------------------------------------------------------
+
+
+def _load_session_metadata_df(
+    database_path: Path,
+    metadata_dir: str,
+    metadata_filename: str,
+    session_id: str,
+    needed_cols: list[str],
+) -> pd.DataFrame:
+    """Load a per-session metadata CSV and validate that required columns exist.
+
+    Builds the path as::
+
+        database_path / '4_analysed' / metadata_dir /
+            metadata_filename.format(session_id=session_id)
+
+    Raises
+    ------
+    ValueError
+        If the file does not exist or any column in *needed_cols* is missing.
+    """
+    csv_path = (
+        database_path
+        / "4_analysed"
+        / metadata_dir
+        / metadata_filename.format(session_id=session_id)
+    )
+    if not csv_path.exists():
+        raise ValueError(
+            f"_load_session_metadata_df: metadata CSV not found for session "
+            f"'{session_id}': {csv_path}"
+        )
+    df = pd.read_csv(csv_path)
+    missing = [c for c in needed_cols if c not in df.columns]
+    if missing:
+        raise ValueError(
+            f"_load_session_metadata_df: metadata CSV for session '{session_id}' "
+            f"is missing required columns {missing}. "
+            f"Available columns: {sorted(df.columns.tolist())}"
+        )
+    return df
+
+
+# ---------------------------------------------------------------------------
+# CSV export helper
+# ---------------------------------------------------------------------------
+
+
+def _write_bin_csv(
+    bin_result: Any,
+    session_id: str,
+    feature: str,
+    gesture_subset: str,
+    overlap_ratio: float,
+    out_path: Path,
+) -> None:
+    """Write per-bin data from *bin_result* to a CSV at *out_path*.
+
+    Columns written:
+        bin_center, bin_low, bin_high, count, iff_mean, iff_std,
+        overlap_ratio, session_id, feature, gesture_subset,
+        and for each level lv in bin_result.level_counts:
+            count_{lv}, prop_{lv}.
+    """
+    rows: dict[str, Any] = {
+        "bin_center": bin_result.bin_centers,
+        "bin_low": bin_result.bin_low,
+        "bin_high": bin_result.bin_high,
+        "count": bin_result.counts,
+        "iff_mean": bin_result.mean_iff,
+        "iff_std": bin_result.std_iff,
+        "overlap_ratio": overlap_ratio,
+        "session_id": session_id,
+        "feature": feature,
+        "gesture_subset": gesture_subset,
+    }
+    for lv in bin_result.level_counts:
+        rows[f"count_{lv}"] = bin_result.level_counts[lv]
+        rows[f"prop_{lv}"] = bin_result.level_props[lv]
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(rows).to_csv(out_path, index=False)
 
 
 # ---------------------------------------------------------------------------
@@ -307,6 +456,10 @@ def run_iff_tuning_curves(
     clip_percentile: float = float(options.get("clip_percentile", 1.0))
     force_processing: bool = bool(options.get("force_processing", False))
     smoothing_sigma: float = float(options.get("smoothing_sigma", 0.0))
+    overlap_ratio: float = float(options.get("overlap_ratio", 0.0))
+    metadata_dir: str = str(options.get("metadata_dir", "touch_prepare_sessions"))
+    metadata_filename: str = str(options.get("metadata_filename", "{session_id}_prepared.csv"))
+    count_category_by: dict = dict(options.get("count_category_by") or {})
 
     iff_metric: str = str(options.get("iff_metric", "mean"))
     if iff_metric not in IFF_METRICS:
@@ -393,6 +546,29 @@ def run_iff_tuning_curves(
                 f"the loaded DataFrame. Available columns: {sorted(df.columns)}."
             )
 
+        if count_category_by:
+            needed_cols = list(dict.fromkeys(count_category_by.values()))
+            meta_df = _load_session_metadata_df(
+                database_path, metadata_dir, metadata_filename, session_id, needed_cols
+            )
+            touch_id_cols = list(TOUCH_ID_COLS)
+            meta_deduped = (
+                meta_df[touch_id_cols + needed_cols]
+                .groupby(touch_id_cols)[needed_cols]
+                .first()
+                .reset_index()
+            )
+            n_before = len(df)
+            df = df.merge(meta_deduped, on=touch_id_cols, how="inner")
+            n_after = len(df)
+            if n_after != n_before:
+                raise ValueError(
+                    f"[IFF Tuning Curves] {session_id}: inner merge with metadata "
+                    f"dropped rows ({n_before} → {n_after}). "
+                    f"Touch IDs in the metadata CSV must cover every touch in the "
+                    f"feature CSV."
+                )
+
         session_data.append({
             "session_id": session_id,
             "df": df,
@@ -421,18 +597,45 @@ def run_iff_tuning_curves(
     # Restrict to features actually present
     valid_features = [f for f in tuning_features if f in all_cols]
 
+    if count_category_by:
+        unmapped = [f for f in valid_features if f not in count_category_by]
+        if unmapped:
+            raise ValueError(
+                f"[IFF Tuning Curves] The following tuning features are not mapped in "
+                f"'count_category_by': {unmapped}. "
+                f"Add each feature → designed-metadata column entry to 'count_category_by' "
+                f"in the DAG config, or leave 'count_category_by' empty to disable "
+                f"composition colouring."
+            )
+
     session_dfs = [entry["df"] for entry in session_data]
     session_ids = [entry["session_id"] for entry in session_data]
 
     # =========================================================================
-    # Compute global bin edges per feature
+    # Compute global bin windows per feature
     # =========================================================================
     pooled = pd.concat(session_dfs, ignore_index=True)
 
-    bin_edges: dict[str, np.ndarray] = {}
+    global_levels: dict[str, list] = {}
+    for cat_col in dict.fromkeys(count_category_by.values()):
+        if cat_col not in pooled.columns:
+            raise ValueError(
+                f"[IFF Tuning Curves] Category column '{cat_col}' from "
+                f"'count_category_by' is not present in the pooled DataFrame. "
+                f"Available columns: {sorted(pooled.columns.tolist())[:20]}"
+            )
+        raw_values = pooled[cat_col].dropna().unique()
+        try:
+            numeric_vals = [float(v) for v in raw_values]
+            ordered = [v for _, v in sorted(zip(numeric_vals, raw_values))]
+        except (ValueError, TypeError):
+            ordered = sorted(str(v) for v in raw_values)
+        global_levels[cat_col] = ordered
+
+    bin_windows: dict[str, tuple[np.ndarray, np.ndarray]] = {}
     for feature in valid_features:
-        bin_edges[feature] = _compute_bin_edges(
-            pooled[feature], n_bins, clip_percentile
+        bin_windows[feature] = _compute_bin_windows(
+            pooled[feature], n_bins, clip_percentile, overlap_ratio=overlap_ratio
         )
 
     # =========================================================================
@@ -442,8 +645,12 @@ def run_iff_tuning_curves(
 
     count_maxima: dict[str, float] = {}
     for feature in valid_features:
+        bin_low, bin_high = bin_windows[feature]
+        cat_col = count_category_by.get(feature) if count_category_by else None
+        cat_levels = global_levels.get(cat_col, []) if cat_col else None
         count_maxima[feature] = _compute_global_count_max(
-            session_dfs, feature, bin_edges[feature], iff_col
+            session_dfs, feature, bin_low, bin_high, iff_col,
+            category_col=cat_col, category_levels=cat_levels,
         )
 
     colors = assign_session_colors(session_ids)
@@ -452,11 +659,14 @@ def run_iff_tuning_curves(
     # Pass 2 — Render
     # =========================================================================
     for feature in valid_features:
-        edges = bin_edges[feature]
+        bin_low, bin_high = bin_windows[feature]
         count_ymax = count_maxima[feature]
+        cat_col = count_category_by.get(feature) if count_category_by else None
+        cat_levels = global_levels.get(cat_col, []) if cat_col else None
 
         for gesture_subset in _GESTURE_SUBSETS:
-            overlay_session_data: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+            overlay_session_data: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
+            overlay_csv_dfs: list[pd.DataFrame] = []
 
             for entry in session_data:
                 session_id = entry["session_id"]
@@ -472,9 +682,13 @@ def run_iff_tuning_curves(
                     )
                     continue
 
-                bin_centers, mean_iff, counts = _bin_data(
-                    filtered, feature, iff_col, edges
+                bin_result = _bin_data(
+                    filtered, feature, iff_col, bin_low, bin_high,
+                    category_col=cat_col, category_levels=cat_levels,
                 )
+                bin_centers = bin_result.bin_centers
+                mean_iff = bin_result.mean_iff
+                counts = bin_result.counts
 
                 out_path = (
                     output_base_dir
@@ -494,6 +708,16 @@ def run_iff_tuning_curves(
                     count_ymax=count_ymax,
                     iff_ylabel=iff_ylabel,
                     smoothing_sigma=smoothing_sigma,
+                    std_iff=bin_result.std_iff,
+                    level_counts=bin_result.level_counts,
+                    level_props=bin_result.level_props,
+                    category_levels=cat_levels or [],
+                    category_display_name=_cat_display(cat_col) if cat_col else "",
+                )
+                csv_out_path = out_path.with_suffix(".csv")
+                _write_bin_csv(
+                    bin_result, session_id, feature, gesture_subset,
+                    overlap_ratio=overlap_ratio, out_path=csv_out_path,
                 )
                 print(
                     f"[IFF Tuning Curves] {feature} / {gesture_subset} / {session_id}: "
@@ -501,7 +725,8 @@ def run_iff_tuning_curves(
                     flush=True,
                 )
 
-                overlay_session_data[session_id] = (bin_centers, mean_iff)
+                overlay_session_data[session_id] = (bin_centers, mean_iff, bin_result.std_iff)
+                overlay_csv_dfs.append(pd.read_csv(csv_out_path))
 
             if len(overlay_session_data) < 2:
                 logger.warning(
@@ -523,6 +748,10 @@ def run_iff_tuning_curves(
                 session_colors=colors,
                 iff_ylabel=iff_ylabel,
                 smoothing_sigma=smoothing_sigma,
+            )
+            overlay_csv_path = overlay_path.with_suffix(".csv")
+            pd.concat(overlay_csv_dfs, ignore_index=True).to_csv(
+                overlay_csv_path, index=False
             )
             print(
                 f"[IFF Tuning Curves] {feature} / {gesture_subset}: "
