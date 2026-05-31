@@ -247,6 +247,8 @@ tasks:
         mean_before_iff:
           enabled: true
           pre_iff_window_ms: 250
+        spike_count:
+          enabled: true
     depends_on: [touch_compute_series]
 
   stimulus_render_radar:
@@ -292,15 +294,16 @@ tasks:
     options:
       force_processing: true
       iff_metric: both
+      response_metric: all
       tuning_features:
       - contact_area_mean
       - pressure_mean
       - hand_velocity_amplitude_mean
       - contact_depth_mean
-      n_bins: 50
+      n_bins: 25
       clip_percentile: 1.0
       smoothing_sigma: 1.5
-      overlap_ratio: 0.0                   # 0.0 to 0.5; sliding-window bin overlap
+      overlap_ratio: 0.25                  # 0.0 to 0.5; sliding-window bin overlap
       metadata_dir: touch_prepare_sessions # under <database>/4_analysed/
       metadata_filename: '{session_id}_prepared.csv'
       count_category_by:  # tuning_feature -> designed-metadata column

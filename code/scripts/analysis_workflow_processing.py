@@ -45,6 +45,9 @@ from analysis.receptive_field_mapping import (
     launch_rf_camera_settings_viewer,
     launch_slim_uv_config_viewer,
 )
+from analysis.receptive_field_mapping.pipelines.rf_iff_tuning_pipeline import (
+    _resolve_response_metric,
+)
 from analysis.receptive_field_mapping.data.rf_data_loader import resolve_forearm_ply
 from analysis.receptive_field_mapping.data.rf_extraction_io import load_rf_camera_settings
 from analysis.receptive_field_mapping.surface.slim_uv_config_io import (
@@ -980,42 +983,40 @@ def stimulus_iff_tuning_curves_flow(
     tuning_features: Optional[list] = None,
     n_bins: int = 20,
     clip_percentile: float = 1.0,
-    iff_metric: str = "mean",
+    response_metric: str = "iff_mean",
     smoothing_sigma: float = 0.0,
     overlap_ratio: float = 0.0,
     metadata_dir: str = "touch_prepare_sessions",
     metadata_filename: str = "{session_id}_prepared.csv",
     count_category_by: Optional[dict] = None,
 ) -> None:
-    """Per-feature IFF tuning curve plots across all sessions.
+    """Per-feature IFF / spike-count tuning curve plots across all sessions.
 
-    Bins each selected touch feature into equal-width ranges, computes mean IFF
-    and touch count per bin, and renders dual Y-axis per-session PNGs plus
-    cross-session overlay PNGs, faceted by gesture subset.
-    Output: 4_analysed/stimulus_iff_tuning_curves/
+    Bins each selected touch feature into equal-width ranges, computes the
+    requested response metric per bin, and renders dual Y-axis per-session PNGs
+    plus cross-session overlay PNGs, faceted by gesture subset.
+    Output: 4_analysed/stimulus_iff_tuning_curves/<subdir>/
     """
     print(f"[Batch Analysis] Rendering IFF tuning curves for {len(input_items)} item(s)...")
     if not input_items:
         return
-    metrics = ["mean", "max"] if iff_metric == "both" else [iff_metric]
-    for metric in metrics:
-        output_dir = input_items[0][1] / '4_analysed' / STIMULUS_IFF_TUNING_CURVES / f"iff_{metric}"
-        run_iff_tuning_curves(
-            session_config_paths=input_items,
-            options={
-                "tuning_features": tuning_features or [],
-                "n_bins": n_bins,
-                "clip_percentile": clip_percentile,
-                "force_processing": force_processing,
-                "iff_metric": metric,
-                "smoothing_sigma": smoothing_sigma,
-                "overlap_ratio": overlap_ratio,
-                "metadata_dir": metadata_dir,
-                "metadata_filename": metadata_filename,
-                "count_category_by": count_category_by or {},
-            },
-            output_base_dir=output_dir,
-        )
+    output_dir = input_items[0][1] / '4_analysed' / STIMULUS_IFF_TUNING_CURVES
+    run_iff_tuning_curves(
+        session_config_paths=input_items,
+        options={
+            "tuning_features": tuning_features or [],
+            "n_bins": n_bins,
+            "clip_percentile": clip_percentile,
+            "force_processing": force_processing,
+            "response_metric": response_metric,
+            "smoothing_sigma": smoothing_sigma,
+            "overlap_ratio": overlap_ratio,
+            "metadata_dir": metadata_dir,
+            "metadata_filename": metadata_filename,
+            "count_category_by": count_category_by or {},
+        },
+        output_base_dir=output_dir,
+    )
 
 
 @flow(name="stimulus_cluster_touches")
@@ -1503,7 +1504,7 @@ def _build_pipeline_stages(dag_handler: DagConfigHandler, items_to_process) -> l
                 "tuning_features": list(dag_handler.get_task_options("stimulus_iff_tuning_curves").get("tuning_features") or []),
                 "n_bins": int(dag_handler.get_task_options("stimulus_iff_tuning_curves").get("n_bins", 20)),
                 "clip_percentile": float(dag_handler.get_task_options("stimulus_iff_tuning_curves").get("clip_percentile", 1.0)),
-                "iff_metric": dag_handler.get_task_options("stimulus_iff_tuning_curves").get("iff_metric", "mean"),
+                "response_metric": dag_handler.get_task_options("stimulus_iff_tuning_curves").get("response_metric", "iff_mean"),
                 "smoothing_sigma": float(dag_handler.get_task_options("stimulus_iff_tuning_curves").get("smoothing_sigma", 0.0)),
                 "overlap_ratio": float(dag_handler.get_task_options("stimulus_iff_tuning_curves").get("overlap_ratio", 0.0)),
                 "metadata_dir": str(dag_handler.get_task_options("stimulus_iff_tuning_curves").get("metadata_dir", "touch_prepare_sessions")),

@@ -14,8 +14,8 @@ class BinResult(NamedTuple):
     bin_centers: np.ndarray      # shape (n_bins,)
     bin_low: np.ndarray          # shape (n_bins,)
     bin_high: np.ndarray         # shape (n_bins,)
-    mean_iff: np.ndarray         # shape (n_bins,) — NaN for empty bins
-    std_iff: np.ndarray          # shape (n_bins,) — NaN if count < 2
+    mean_iff: np.ndarray         # shape (n_bins,) — NaN for empty bins; sum when bin_agg="sum"
+    std_iff: np.ndarray          # shape (n_bins,) — NaN if count < 2; always NaN when bin_agg="sum"
     counts: np.ndarray           # shape (n_bins,) int
     level_counts: dict[str, np.ndarray]   # level -> shape (n_bins,) int
     level_props: dict[str, np.ndarray]    # level -> shape (n_bins,) float in [0,1]
@@ -73,6 +73,9 @@ def _style_dark_ax(ax, bg_color: str = '#2d2d2d') -> None:
         spine.set_edgecolor(_SPINE_COLOR)
 
 
+_BIN_AGG_VALUES = ("mean", "sum")
+
+
 def _bin_data(
     df: pd.DataFrame,
     feature_col: str,
@@ -81,7 +84,27 @@ def _bin_data(
     bin_high: np.ndarray,
     category_col: str | None = None,
     category_levels: list | None = None,
+    bin_agg: str = "mean",
 ) -> BinResult:
+    """Bin *df* rows by *feature_col* and aggregate *iff_col* per bin.
+
+    Parameters
+    ----------
+    bin_agg:
+        Aggregation to apply to *iff_col* within each bin.
+        ``"mean"`` → per-bin mean ± STD (existing behaviour).
+        ``"sum"``  → per-bin sum; STD is left as NaN (no error bars).
+
+    Raises
+    ------
+    ValueError
+        If *feature_col* or *iff_col* is missing, or *bin_agg* is unknown.
+    """
+    if bin_agg not in _BIN_AGG_VALUES:
+        raise ValueError(
+            f"_bin_data: unknown bin_agg={bin_agg!r}. "
+            f"Expected one of {_BIN_AGG_VALUES}."
+        )
     if feature_col not in df.columns:
         raise ValueError(
             f"_bin_data: '{feature_col}' not in df.columns. "
@@ -99,8 +122,8 @@ def _bin_data(
 
     n_bins = len(bin_low)
     bin_centers = 0.5 * (bin_low + bin_high)
-    mean_iff_per_bin = np.full(n_bins, np.nan)
-    std_iff_per_bin = np.full(n_bins, np.nan)
+    response_per_bin = np.full(n_bins, np.nan)
+    std_per_bin = np.full(n_bins, np.nan)
     count_per_bin = np.zeros(n_bins, dtype=int)
 
     use_categories = (
@@ -132,9 +155,12 @@ def _bin_data(
 
         count_per_bin[i] = int(mask.sum())
         if count_per_bin[i] > 0:
-            mean_iff_per_bin[i] = float(np.mean(iff_vals[mask]))
-            if count_per_bin[i] >= 2:
-                std_iff_per_bin[i] = float(np.std(iff_vals[mask], ddof=1))
+            if bin_agg == "sum":
+                response_per_bin[i] = float(np.sum(iff_vals[mask]))
+            else:
+                response_per_bin[i] = float(np.mean(iff_vals[mask]))
+                if count_per_bin[i] >= 2:
+                    std_per_bin[i] = float(np.std(iff_vals[mask], ddof=1))
 
         if use_categories and count_per_bin[i] > 0:
             bin_cat_vals = cat_vals[mask]
@@ -159,8 +185,8 @@ def _bin_data(
         bin_centers=bin_centers,
         bin_low=bin_low,
         bin_high=bin_high,
-        mean_iff=mean_iff_per_bin,
-        std_iff=std_iff_per_bin,
+        mean_iff=response_per_bin,
+        std_iff=std_per_bin,
         counts=count_per_bin,
         level_counts=level_counts_out,
         level_props=level_props,
