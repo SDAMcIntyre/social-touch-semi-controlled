@@ -312,6 +312,21 @@ tasks:
         pressure_mean: force_metadata
         contact_depth_mean: force_metadata
     depends_on: [stimulus_extract_features]
+  stimulus_iff_instruction_tuning:
+    category: stimulus_sensitivity
+    enabled: true
+    options:
+      force_processing: false
+      iff_metric: both
+      clip_percentile: 1.0
+      tuning_categories:
+      - contact_area_metadata
+      - speed_metadata
+      - force_metadata
+      metadata_dir: touch_prepare_sessions
+      metadata_filename: '{session_id}_prepared.csv'
+    depends_on:
+    - stimulus_extract_features
 
   # Population RF grid: sweep N-D feature space, average single-touch RFs per cell.
   # Depends on: spatial_map_single_touch (RF maps), stimulus_extract_features (feature CSVs).

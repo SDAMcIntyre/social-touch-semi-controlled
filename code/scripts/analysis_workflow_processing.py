@@ -42,6 +42,7 @@ from analysis.receptive_field_mapping import (
     run_touch_feature_radar,
     run_stimulus_session_comparison,
     run_iff_tuning_curves,
+    run_iff_instruction_tuning,
     launch_rf_camera_settings_viewer,
     launch_slim_uv_config_viewer,
 )
@@ -77,6 +78,7 @@ from analysis.pipeline.output_dirs import (
     STIMULUS_RENDER_RADAR,
     STIMULUS_COMPARE_SESSIONS,
     STIMULUS_IFF_TUNING_CURVES,
+    STIMULUS_IFF_INSTRUCTION_TUNING,
     TOUCH_COMPUTE_SERIES,
     TOUCH_PREPARE_SESSIONS,
     TOUCH_SUMMARIZE_BLOCKS,
@@ -1019,6 +1021,41 @@ def stimulus_iff_tuning_curves_flow(
     )
 
 
+@flow(name="stimulus_iff_instruction_tuning")
+def stimulus_iff_instruction_tuning_flow(
+    input_items: List[Tuple[Path, Path]],
+    force_processing: bool = False,
+    tuning_categories: Optional[list] = None,
+    iff_metric: str = "mean",
+    clip_percentile: float = 1.0,
+    metadata_dir: str = "touch_prepare_sessions",
+    metadata_filename: str = "{session_id}_prepared.csv",
+) -> None:
+    """Per-instruction-level IFF bar charts across all sessions.
+
+    Groups touches by designed metadata instruction levels, computes mean IFF
+    per category, and renders per-session bar charts plus cross-session overlay
+    dot-plots, faceted by gesture subset.
+    Output: 4_analysed/stimulus_iff_instruction_tuning/iff_{metric}/
+    """
+    print(f"[Batch Analysis] Rendering IFF instruction tuning for {len(input_items)} item(s)...")
+    if not input_items:
+        return
+    output_dir = input_items[0][1] / '4_analysed' / STIMULUS_IFF_INSTRUCTION_TUNING
+    run_iff_instruction_tuning(
+        session_config_paths=input_items,
+        options={
+            "tuning_categories": tuning_categories or [],
+            "iff_metric": iff_metric,
+            "clip_percentile": clip_percentile,
+            "force_processing": force_processing,
+            "metadata_dir": metadata_dir,
+            "metadata_filename": metadata_filename,
+        },
+        output_base_dir=output_dir,
+    )
+
+
 @flow(name="stimulus_cluster_touches")
 def stimulus_cluster_touches_flow(
     input_items: List[Tuple[Path, Path]],
@@ -1510,6 +1547,17 @@ def _build_pipeline_stages(dag_handler: DagConfigHandler, items_to_process) -> l
                 "metadata_dir": str(dag_handler.get_task_options("stimulus_iff_tuning_curves").get("metadata_dir", "touch_prepare_sessions")),
                 "metadata_filename": str(dag_handler.get_task_options("stimulus_iff_tuning_curves").get("metadata_filename", "{session_id}_prepared.csv")),
                 "count_category_by": dag_handler.get_task_options("stimulus_iff_tuning_curves").get("count_category_by") or {},
+            },
+        },
+        {
+            "name": "stimulus_iff_instruction_tuning",
+            "func": stimulus_iff_instruction_tuning_flow,
+            "params": lambda: {
+                "tuning_categories": list(dag_handler.get_task_options("stimulus_iff_instruction_tuning").get("tuning_categories") or []),
+                "iff_metric": str(dag_handler.get_task_options("stimulus_iff_instruction_tuning").get("iff_metric", "mean")),
+                "clip_percentile": float(dag_handler.get_task_options("stimulus_iff_instruction_tuning").get("clip_percentile", 1.0)),
+                "metadata_dir": str(dag_handler.get_task_options("stimulus_iff_instruction_tuning").get("metadata_dir", "touch_prepare_sessions")),
+                "metadata_filename": str(dag_handler.get_task_options("stimulus_iff_instruction_tuning").get("metadata_filename", "{session_id}_prepared.csv")),
             },
         },
         {
