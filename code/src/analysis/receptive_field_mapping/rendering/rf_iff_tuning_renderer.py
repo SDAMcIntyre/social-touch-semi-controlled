@@ -1,5 +1,7 @@
 """Pure rendering functions for IFF tuning curve plots."""
 
+import warnings
+
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -232,6 +234,7 @@ def render_session_tuning_curve(
     level_props: dict | None = None,
     category_levels: list | None = None,
     category_display_name: str = "",
+    line_color: str = _IFF_COLOR,
 ) -> None:
     if std_iff is None:
         std_iff = np.full_like(mean_iff, np.nan)
@@ -291,7 +294,7 @@ def render_session_tuning_curve(
         ax_iff.errorbar(
             bin_centers[valid_mask], mean_iff[valid_mask],
             yerr=yerr,
-            fmt='o', capsize=2, color=_IFF_COLOR, alpha=0.85,
+            fmt='o', capsize=2, color=line_color, alpha=0.85,
             markersize=4, linewidth=1, zorder=4,
         )
         if smoothing_sigma > 0:
@@ -300,12 +303,216 @@ def render_session_tuning_curve(
             if smooth_valid.any():
                 ax_iff.plot(
                     bin_centers[smooth_valid], smoothed[smooth_valid],
-                    color=_IFF_COLOR, linewidth=2, zorder=3, alpha=0.6,
+                    color=line_color, linewidth=2, zorder=3, alpha=0.6,
                 )
 
     ax_iff.set_ylim(iff_ylim)
     ax_iff.set_ylabel(iff_ylabel, color='white', fontsize=10)
     ax_iff.set_xlabel(_display_id(feature_name), color='white', fontsize=10)
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=150, bbox_inches='tight', facecolor=fig.get_facecolor())
+    plt.close(fig)
+
+
+def _fit_polynomial(
+    feature_vals: np.ndarray,
+    response_vals: np.ndarray,
+    fit_degree: int,
+) -> tuple[np.ndarray | None, float | None]:
+    """Fit a degree-``fit_degree`` polynomial and compute its R².
+
+    Returns ``(coeffs, r2)`` where *coeffs* are the ``np.polyfit`` coefficients
+    (highest power first) and *r2* the coefficient of determination.
+
+    Graceful degradation (explicitly requested in plan):
+      - Returns ``(None, None)`` when fewer than ``fit_degree + 1`` valid rows
+        exist — caller renders dots only with ``R²=n/a``.
+      - Returns ``r2 = 0.0`` when ``ss_tot == 0`` (e.g. all-constant response).
+    """
+    n = len(feature_vals)
+    if n < fit_degree + 1:
+        # Too few points to determine the polynomial — skip the fit (dots only).
+        return None, None
+
+    coeffs = np.polyfit(feature_vals, response_vals, fit_degree)
+    predicted = np.polyval(coeffs, feature_vals)
+    ss_res = float(np.sum((response_vals - predicted) ** 2))
+    ss_tot = float(np.sum((response_vals - np.mean(response_vals)) ** 2))
+    if ss_tot == 0.0:
+        # Constant response: R² is undefined; report 0.0 by convention.
+        r2 = 0.0
+    else:
+        r2 = 1.0 - ss_res / ss_tot
+    return coeffs, r2
+
+
+def render_session_raw_dots(
+    feature_vals: np.ndarray,
+    response_vals: np.ndarray,
+    feature_name: str,
+    session_id: str,
+    gesture_subset: str,
+    out_path: Path,
+    iff_ylim: tuple[float, float],
+    iff_ylabel: str = "IFF (Hz)",
+    fit_degree: int = 1,
+    dot_alpha: float = 0.35,
+    show_fit_ci: bool = False,
+    line_color: str = _IFF_COLOR,
+) -> None:
+    """Per-session raw-touch scatter + polynomial fit line.
+
+    Every touch is plotted as a semi-transparent dot at its exact
+    ``(feature_value, response_value)`` coordinate. A degree-``fit_degree``
+    polynomial regression line is drawn through the points. The total touch
+    count N and the fit R² are reported in the title (there are no bins, so no
+    right-axis count bars are drawn).
+    """
+    feature_vals = np.asarray(feature_vals, dtype=float)
+    response_vals = np.asarray(response_vals, dtype=float)
+
+    # Drop NaN pairs so the fit only sees complete observations.
+    valid_mask = ~(np.isnan(feature_vals) | np.isnan(response_vals))
+    feat = feature_vals[valid_mask]
+    resp = response_vals[valid_mask]
+    n = int(feat.size)
+
+    fig, ax = plt.subplots(figsize=(8, 5), dpi=150)
+    fig.patch.set_facecolor(_BG)
+    _style_dark_ax(ax)
+    ax.grid(alpha=0.15, color='white', linestyle='--')
+
+    ax.scatter(
+        feat, resp,
+        s=20, color=line_color, alpha=dot_alpha,
+        edgecolors='none', zorder=3,
+    )
+
+    coeffs, r2 = _fit_polynomial(feat, resp, fit_degree)
+    if coeffs is not None:
+        r2_text = f"{r2:.2f}"
+        x_line = np.linspace(float(np.min(feat)), float(np.max(feat)), 200)
+        y_line = np.polyval(coeffs, x_line)
+        ax.plot(x_line, y_line, color=line_color, linewidth=2.5, zorder=5)
+
+        # CI band: closed-form, degree-1 only. For higher degrees the simple
+        # standard-error formula does not apply, so we warn and disable it
+        # gracefully (explicitly requested in plan).
+        if show_fit_ci and fit_degree > 1:
+            warnings.warn(
+                "render_session_raw_dots: show_fit_ci is only supported for "
+                f"fit_degree=1; got fit_degree={fit_degree}. Disabling the CI "
+                "band.",
+                stacklevel=2,
+            )
+        elif show_fit_ci and fit_degree == 1 and n >= 3:
+            predicted = np.polyval(coeffs, feat)
+            residuals = resp - predicted
+            dof = n - 2
+            s_err = np.sqrt(np.sum(residuals ** 2) / dof)
+            x_mean = float(np.mean(feat))
+            ss_xx = float(np.sum((feat - x_mean) ** 2))
+            if ss_xx > 0:
+                # 95% CI for the mean response (t≈1.96 large-sample approx).
+                se_line = s_err * np.sqrt(
+                    1.0 / n + (x_line - x_mean) ** 2 / ss_xx
+                )
+                ci = 1.96 * se_line
+                ax.fill_between(
+                    x_line, y_line - ci, y_line + ci,
+                    color=line_color, alpha=0.2, zorder=4, linewidth=0,
+                )
+    else:
+        r2_text = "n/a"
+
+    ax.set_ylim(iff_ylim)
+    ax.set_ylabel(iff_ylabel, color='white', fontsize=10)
+    ax.set_xlabel(_display_id(feature_name), color='white', fontsize=10)
+    ax.set_title(
+        f"{session_id} | {gesture_subset} | N={n}, R²={r2_text}",
+        color='white', fontsize=11,
+    )
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=150, bbox_inches='tight', facecolor=fig.get_facecolor())
+    plt.close(fig)
+
+
+def render_overlay_raw_dots(
+    session_data: dict[str, tuple[np.ndarray, np.ndarray]],
+    feature_name: str,
+    gesture_subset: str,
+    out_path: Path,
+    iff_ylim: tuple[float, float],
+    session_colors: dict[str, str],
+    iff_ylabel: str = "IFF (Hz)",
+    fit_degree: int = 1,
+    dot_alpha: float = 0.15,
+    show_fit_ci: bool = False,
+    legend_mode: str = "by_session",
+    session_neuron_types: dict[str, str] | None = None,
+    type_colors: dict[str, str] | None = None,
+) -> None:
+    """Multi-session raw-touch scatter + per-session fit lines.
+
+    Each session contributes a faint scatter cloud (``alpha=dot_alpha``,
+    ``s=20``) and a bold polynomial fit line (``linewidth=2.5``) in its
+    neuron-type / session colour. The legend block mirrors
+    ``render_overlay_tuning_curve`` (``by_type`` / ``by_session`` modes).
+    """
+    from matplotlib.lines import Line2D
+
+    fig, ax = plt.subplots(figsize=(8, 5), dpi=150)
+    fig.patch.set_facecolor(_BG)
+    _style_dark_ax(ax)
+    ax.grid(alpha=0.15, color='white', linestyle='--')
+
+    for session_id, (feature_vals, response_vals) in session_data.items():
+        color = session_colors[session_id]
+        if legend_mode == "by_type" and session_neuron_types is not None:
+            line_label = session_neuron_types[session_id]
+        else:
+            line_label = session_id
+
+        feat = np.asarray(feature_vals, dtype=float)
+        resp = np.asarray(response_vals, dtype=float)
+        valid_mask = ~(np.isnan(feat) | np.isnan(resp))
+        feat = feat[valid_mask]
+        resp = resp[valid_mask]
+        if feat.size == 0:
+            continue
+
+        ax.scatter(
+            feat, resp,
+            s=20, color=color, alpha=dot_alpha,
+            edgecolors='none', zorder=2,
+        )
+
+        coeffs, _ = _fit_polynomial(feat, resp, fit_degree)
+        if coeffs is not None:
+            x_line = np.linspace(float(np.min(feat)), float(np.max(feat)), 200)
+            y_line = np.polyval(coeffs, x_line)
+            ax.plot(
+                x_line, y_line,
+                color=color, linewidth=2.5, label=line_label, zorder=3,
+            )
+
+    ax.set_ylim(iff_ylim)
+    ax.set_ylabel(iff_ylabel, color='white', fontsize=10)
+    ax.set_xlabel(_display_id(feature_name), color='white', fontsize=10)
+    ax.set_title(f"All sessions | {gesture_subset}", color='white', fontsize=11)
+
+    if legend_mode == "by_type" and type_colors is not None:
+        handles = [
+            Line2D([0], [0], color=color, linewidth=2, label=ntype)
+            for ntype, color in type_colors.items()
+        ]
+        legend = ax.legend(handles=handles, title="Neuron Type", fontsize=8, framealpha=0.3, facecolor=_AX_BG, labelcolor='white')
+        legend.get_title().set_color('white')
+    else:
+        legend = ax.legend(title="Session", fontsize=8, framealpha=0.3, facecolor=_AX_BG, labelcolor='white')
+        legend.get_title().set_color('white')
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=150, bbox_inches='tight', facecolor=fig.get_facecolor())
@@ -321,7 +528,12 @@ def render_overlay_tuning_curve(
     session_colors: dict[str, str],
     iff_ylabel: str = "Mean IFF (Hz)",
     smoothing_sigma: float = 0.0,
+    legend_mode: str = "by_session",
+    session_neuron_types: dict[str, str] | None = None,
+    type_colors: dict[str, str] | None = None,
 ) -> None:
+    from matplotlib.lines import Line2D
+
     fig, ax = plt.subplots(figsize=(8, 5), dpi=150)
     fig.patch.set_facecolor(_BG)
 
@@ -330,6 +542,10 @@ def render_overlay_tuning_curve(
 
     for session_id, (bin_centers, mean_iff, std_iff) in session_data.items():
         color = session_colors[session_id]
+        if legend_mode == "by_type" and session_neuron_types is not None:
+            line_label = session_neuron_types[session_id]
+        else:
+            line_label = session_id
         valid_mask = ~np.isnan(mean_iff)
         if valid_mask.any():
             yerr = np.where(np.isnan(std_iff[valid_mask]), 0.0, std_iff[valid_mask])
@@ -348,12 +564,12 @@ def render_overlay_tuning_curve(
                 if smooth_valid.any():
                     ax.plot(
                         bin_centers[smooth_valid], smoothed[smooth_valid],
-                        color=color, linewidth=2, label=session_id, zorder=3,
+                        color=color, linewidth=2, label=line_label, zorder=3,
                     )
             else:
                 ax.plot(
                     bin_centers[valid_mask], mean_iff[valid_mask],
-                    color=color, linewidth=2, label=session_id,
+                    color=color, linewidth=2, label=line_label,
                 )
 
     ax.set_ylim(iff_ylim)
@@ -361,7 +577,16 @@ def render_overlay_tuning_curve(
     ax.set_xlabel(_display_id(feature_name), color='white', fontsize=10)
     ax.set_title(f"All sessions | {gesture_subset}", color='white', fontsize=11)
 
-    legend = ax.legend(fontsize=8, framealpha=0.3, facecolor=_AX_BG, labelcolor='white')
+    if legend_mode == "by_type" and type_colors is not None:
+        handles = [
+            Line2D([0], [0], color=color, linewidth=2, label=ntype)
+            for ntype, color in type_colors.items()
+        ]
+        legend = ax.legend(handles=handles, title="Neuron Type", fontsize=8, framealpha=0.3, facecolor=_AX_BG, labelcolor='white')
+        legend.get_title().set_color('white')
+    else:
+        legend = ax.legend(title="Session", fontsize=8, framealpha=0.3, facecolor=_AX_BG, labelcolor='white')
+        legend.get_title().set_color('white')
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=150, bbox_inches='tight', facecolor=fig.get_facecolor())

@@ -41,6 +41,7 @@ from .pipelines.rf_proximal_distal_center_pipeline import run_proximal_distal_ce
 from .pipelines.rf_touch_feature_radar_pipeline import run_touch_feature_radar
 from .pipelines.rf_stimulus_session_comparison_pipeline import run_stimulus_session_comparison
 from .pipelines.rf_iff_tuning_pipeline import run_iff_tuning_curves
+from .pipelines.rf_iff_instruction_tuning_pipeline import run_iff_instruction_tuning
 
 __all__ = [
     "project_to_2d",
@@ -75,4 +76,5 @@ __all__ = [
     "run_touch_feature_radar",
     "run_stimulus_session_comparison",
     "run_iff_tuning_curves",
+    "run_iff_instruction_tuning",
 ]
