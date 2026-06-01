@@ -103,8 +103,11 @@ _OPTION_ENUMS: dict[str, list[tuple[str, object]]] = {
         ("IFF Mean (default)", "iff_mean"),
         ("IFF Max", "iff_max"),
         ("Spike Count Mean", "spike_count_mean"),
-        ("Spike Count Total", "spike_count_total"),
         ("All", "all"),
+    ],
+    "binning_strategy": [
+        ("Sliding Window (default)", "sliding_window"),
+        ("Raw Dots", "raw_dots"),
     ],
 }
 
