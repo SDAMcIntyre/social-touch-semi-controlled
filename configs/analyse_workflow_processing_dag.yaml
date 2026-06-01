@@ -10,6 +10,11 @@ parameters:
       valid_configs_ST14-04, valid_configs_ST15-01, valid_configs_ST16-02, 
       valid_configs_ST16-03, valid_configs_ST16-05, valid_configs_ST18-01, 
       valid_configs_ST18-04]
+  # Path to MNG-DataSummary.xlsx (neuron type metadata). Absolute, or relative
+  # to the database root (e.g. "03_metadata/MNG-DataSummary.xlsx").
+  # Used by stimulus_iff_tuning_curves and stimulus_iff_instruction_tuning.
+  neuron_summary_xlsx: "F:/liu-onedrive-nospecial-carac/_Teams/Social touch Kinect
+    MNG/03_metadata/MNG-DataSummary.xlsx"
 
 tasks:
   # ============================================================
@@ -247,6 +252,8 @@ tasks:
         mean_before_iff:
           enabled: true
           pre_iff_window_ms: 250
+        spike_count:
+          enabled: true
     depends_on: [touch_compute_series]
 
   stimulus_render_radar:
@@ -291,16 +298,43 @@ tasks:
     enabled: true
     options:
       force_processing: true
-      iff_metric: both
+      response_metric: all
       tuning_features:
       - contact_area_mean
       - pressure_mean
       - hand_velocity_amplitude_mean
       - contact_depth_mean
-      n_bins: 50
+      n_bins: 25
       clip_percentile: 1.0
       smoothing_sigma: 1.5
+      overlap_ratio: 0.25                  # 0.0 to 0.5; sliding-window bin overlap
+      binning_strategy: "raw_dots"         # sliding_window | raw_dots
+      fit_degree: 3                        # raw_dots: polynomial fit degree
+      dot_alpha: 0.35                      # raw_dots: per-session scatter opacity
+      show_fit_ci: true                    # raw_dots: degree-1 CI band on fit line
+      metadata_dir: touch_prepare_sessions # under <database>/4_analysed/
+      metadata_filename: '{session_id}_prepared.csv'
+      count_category_by:  # tuning_feature -> designed-metadata column
+        contact_area_mean: contact_area_metadata
+        hand_velocity_amplitude_mean: speed_metadata
+        pressure_mean: force_metadata
+        contact_depth_mean: force_metadata
     depends_on: [stimulus_extract_features]
+  stimulus_iff_instruction_tuning:
+    category: stimulus_sensitivity
+    enabled: true
+    options:
+      force_processing: false
+      iff_metric: both
+      clip_percentile: 1.0
+      tuning_categories:
+      - contact_area_metadata
+      - speed_metadata
+      - force_metadata
+      metadata_dir: touch_prepare_sessions
+      metadata_filename: '{session_id}_prepared.csv'
+    depends_on:
+    - stimulus_extract_features
 
   # Population RF grid: sweep N-D feature space, average single-touch RFs per cell.
   # Depends on: spatial_map_single_touch (RF maps), stimulus_extract_features (feature CSVs).
