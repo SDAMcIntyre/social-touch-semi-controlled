@@ -235,7 +235,7 @@ def run_iff_instruction_tuning(
 
     for response_col, agg_folder, _bin_agg, response_ylabel, metric_subdir in metric_specs:
 
-        metric_dir = output_base_dir / f"iff_{metric_subdir}"
+        metric_dir = output_base_dir / metric_subdir
         sentinel = metric_dir / "iff_instruction_tuning_sentinel.json"
 
         if sentinel.exists() and not force_processing:
@@ -385,9 +385,11 @@ def run_iff_instruction_tuning(
             raise ValueError(
                 "run_iff_instruction_tuning: 'neuron_summary_xlsx' is not set in the task options. "
                 "Set configs/analyse_workflow_processing_dag.yaml parameters.neuron_summary_xlsx "
-                "to the absolute path of MNG-DataSummary.xlsx."
+                "to the path of MNG-DataSummary.xlsx (absolute, or relative to the database root)."
             )
         xlsx_path = Path(neuron_summary_xlsx_str)
+        if not xlsx_path.is_absolute():
+            xlsx_path = database_path / xlsx_path
         if not xlsx_path.is_file():
             raise FileNotFoundError(
                 f"run_iff_instruction_tuning: neuron_summary_xlsx not found: {xlsx_path}"

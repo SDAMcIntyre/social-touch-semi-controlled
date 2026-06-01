@@ -47,7 +47,10 @@ def parse_neuron_summary_xlsx(xlsx_path: Path) -> dict[str, str]:
     """Parse MNG-DataSummary.xlsx and return {unit_name: neuron_type}.
 
     Column lookup is case-insensitive and strips surrounding whitespace.
-    Raises ValueError if either required column is absent.
+    When no column is named 'neuron type', falls back to the first column
+    (index 0), which is the layout used in MNG-DataSummary.xlsx where the
+    neuron-type column has no header.
+    Raises ValueError if the unit-name column is absent.
     """
     df = pd.read_excel(xlsx_path)
 
@@ -59,14 +62,14 @@ def parse_neuron_summary_xlsx(xlsx_path: Path) -> dict[str, str]:
             f"Required column '{_UNIT_NAME_COL}' not found in {xlsx_path.name}. "
             f"Found columns: {list(df.columns)}"
         )
-    if _NEURON_TYPE_COL not in col_map:
-        raise ValueError(
-            f"Required column '{_NEURON_TYPE_COL}' not found in {xlsx_path.name}. "
-            f"Found columns: {list(df.columns)}"
-        )
 
     unit_col = col_map[_UNIT_NAME_COL]
-    type_col = col_map[_NEURON_TYPE_COL]
+    # Prefer a named "neuron type" column; fall back to the first column (index 0)
+    # when the type column has no header (as in MNG-DataSummary.xlsx).
+    if _NEURON_TYPE_COL in col_map:
+        type_col = col_map[_NEURON_TYPE_COL]
+    else:
+        type_col = df.columns[0]
 
     df = df.dropna(subset=[unit_col, type_col])
 
