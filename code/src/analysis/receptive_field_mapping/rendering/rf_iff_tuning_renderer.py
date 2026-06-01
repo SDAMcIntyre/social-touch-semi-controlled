@@ -232,6 +232,7 @@ def render_session_tuning_curve(
     level_props: dict | None = None,
     category_levels: list | None = None,
     category_display_name: str = "",
+    line_color: str = _IFF_COLOR,
 ) -> None:
     if std_iff is None:
         std_iff = np.full_like(mean_iff, np.nan)
@@ -291,7 +292,7 @@ def render_session_tuning_curve(
         ax_iff.errorbar(
             bin_centers[valid_mask], mean_iff[valid_mask],
             yerr=yerr,
-            fmt='o', capsize=2, color=_IFF_COLOR, alpha=0.85,
+            fmt='o', capsize=2, color=line_color, alpha=0.85,
             markersize=4, linewidth=1, zorder=4,
         )
         if smoothing_sigma > 0:
@@ -300,7 +301,7 @@ def render_session_tuning_curve(
             if smooth_valid.any():
                 ax_iff.plot(
                     bin_centers[smooth_valid], smoothed[smooth_valid],
-                    color=_IFF_COLOR, linewidth=2, zorder=3, alpha=0.6,
+                    color=line_color, linewidth=2, zorder=3, alpha=0.6,
                 )
 
     ax_iff.set_ylim(iff_ylim)
@@ -321,7 +322,12 @@ def render_overlay_tuning_curve(
     session_colors: dict[str, str],
     iff_ylabel: str = "Mean IFF (Hz)",
     smoothing_sigma: float = 0.0,
+    legend_mode: str = "by_session",
+    session_neuron_types: dict[str, str] | None = None,
+    type_colors: dict[str, str] | None = None,
 ) -> None:
+    from matplotlib.lines import Line2D
+
     fig, ax = plt.subplots(figsize=(8, 5), dpi=150)
     fig.patch.set_facecolor(_BG)
 
@@ -330,6 +336,10 @@ def render_overlay_tuning_curve(
 
     for session_id, (bin_centers, mean_iff, std_iff) in session_data.items():
         color = session_colors[session_id]
+        if legend_mode == "by_type" and session_neuron_types is not None:
+            line_label = session_neuron_types[session_id]
+        else:
+            line_label = session_id
         valid_mask = ~np.isnan(mean_iff)
         if valid_mask.any():
             yerr = np.where(np.isnan(std_iff[valid_mask]), 0.0, std_iff[valid_mask])
@@ -348,12 +358,12 @@ def render_overlay_tuning_curve(
                 if smooth_valid.any():
                     ax.plot(
                         bin_centers[smooth_valid], smoothed[smooth_valid],
-                        color=color, linewidth=2, label=session_id, zorder=3,
+                        color=color, linewidth=2, label=line_label, zorder=3,
                     )
             else:
                 ax.plot(
                     bin_centers[valid_mask], mean_iff[valid_mask],
-                    color=color, linewidth=2, label=session_id,
+                    color=color, linewidth=2, label=line_label,
                 )
 
     ax.set_ylim(iff_ylim)
@@ -361,7 +371,16 @@ def render_overlay_tuning_curve(
     ax.set_xlabel(_display_id(feature_name), color='white', fontsize=10)
     ax.set_title(f"All sessions | {gesture_subset}", color='white', fontsize=11)
 
-    legend = ax.legend(fontsize=8, framealpha=0.3, facecolor=_AX_BG, labelcolor='white')
+    if legend_mode == "by_type" and type_colors is not None:
+        handles = [
+            Line2D([0], [0], color=color, linewidth=2, label=ntype)
+            for ntype, color in type_colors.items()
+        ]
+        legend = ax.legend(handles=handles, title="Neuron Type", fontsize=8, framealpha=0.3, facecolor=_AX_BG, labelcolor='white')
+        legend.get_title().set_color('white')
+    else:
+        legend = ax.legend(title="Session", fontsize=8, framealpha=0.3, facecolor=_AX_BG, labelcolor='white')
+        legend.get_title().set_color('white')
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=150, bbox_inches='tight', facecolor=fig.get_facecolor())

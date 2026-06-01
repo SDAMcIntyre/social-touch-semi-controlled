@@ -991,6 +991,7 @@ def stimulus_iff_tuning_curves_flow(
     metadata_dir: str = "touch_prepare_sessions",
     metadata_filename: str = "{session_id}_prepared.csv",
     count_category_by: Optional[dict] = None,
+    neuron_summary_xlsx: Optional[str] = None,
 ) -> None:
     """Per-feature IFF / spike-count tuning curve plots across all sessions.
 
@@ -1016,6 +1017,7 @@ def stimulus_iff_tuning_curves_flow(
             "metadata_dir": metadata_dir,
             "metadata_filename": metadata_filename,
             "count_category_by": count_category_by or {},
+            "neuron_summary_xlsx": neuron_summary_xlsx,
         },
         output_base_dir=output_dir,
     )
@@ -1030,6 +1032,7 @@ def stimulus_iff_instruction_tuning_flow(
     clip_percentile: float = 1.0,
     metadata_dir: str = "touch_prepare_sessions",
     metadata_filename: str = "{session_id}_prepared.csv",
+    neuron_summary_xlsx: Optional[str] = None,
 ) -> None:
     """Per-instruction-level IFF bar charts across all sessions.
 
@@ -1051,6 +1054,7 @@ def stimulus_iff_instruction_tuning_flow(
             "force_processing": force_processing,
             "metadata_dir": metadata_dir,
             "metadata_filename": metadata_filename,
+            "neuron_summary_xlsx": neuron_summary_xlsx,
         },
         output_base_dir=output_dir,
     )
@@ -1547,6 +1551,7 @@ def _build_pipeline_stages(dag_handler: DagConfigHandler, items_to_process) -> l
                 "metadata_dir": str(dag_handler.get_task_options("stimulus_iff_tuning_curves").get("metadata_dir", "touch_prepare_sessions")),
                 "metadata_filename": str(dag_handler.get_task_options("stimulus_iff_tuning_curves").get("metadata_filename", "{session_id}_prepared.csv")),
                 "count_category_by": dag_handler.get_task_options("stimulus_iff_tuning_curves").get("count_category_by") or {},
+                "neuron_summary_xlsx": dag_handler.get_parameter("neuron_summary_xlsx") or None,
             },
         },
         {
@@ -1558,6 +1563,7 @@ def _build_pipeline_stages(dag_handler: DagConfigHandler, items_to_process) -> l
                 "clip_percentile": float(dag_handler.get_task_options("stimulus_iff_instruction_tuning").get("clip_percentile", 1.0)),
                 "metadata_dir": str(dag_handler.get_task_options("stimulus_iff_instruction_tuning").get("metadata_dir", "touch_prepare_sessions")),
                 "metadata_filename": str(dag_handler.get_task_options("stimulus_iff_instruction_tuning").get("metadata_filename", "{session_id}_prepared.csv")),
+                "neuron_summary_xlsx": dag_handler.get_parameter("neuron_summary_xlsx") or None,
             },
         },
         {

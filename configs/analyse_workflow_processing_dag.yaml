@@ -5,11 +5,14 @@
 parameters:
   # List of directories containing Kinect session config files to scan.
   # Paths are relative to configs/kinect_configs/.
-  kinect_configs: [valid_configs_ST13-01, valid_configs_ST13-02, 
-      valid_configs_ST13-03, valid_configs_ST14-01, valid_configs_ST14-02, 
-      valid_configs_ST14-04, valid_configs_ST15-01, valid_configs_ST16-02, 
-      valid_configs_ST16-03, valid_configs_ST16-05, valid_configs_ST18-01, 
+  kinect_configs: [valid_configs_ST13-01, valid_configs_ST13-02,
+      valid_configs_ST13-03, valid_configs_ST14-01, valid_configs_ST14-02,
+      valid_configs_ST14-04, valid_configs_ST15-01, valid_configs_ST16-02,
+      valid_configs_ST16-03, valid_configs_ST16-05, valid_configs_ST18-01,
       valid_configs_ST18-04]
+  # Absolute path to MNG-DataSummary.xlsx (neuron type metadata).
+  # Used by stimulus_iff_tuning_curves and stimulus_iff_instruction_tuning.
+  neuron_summary_xlsx: ""
 
 tasks:
   # ============================================================
@@ -293,7 +296,6 @@ tasks:
     enabled: true
     options:
       force_processing: true
-      iff_metric: both
       response_metric: all
       tuning_features:
       - contact_area_mean

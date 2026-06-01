@@ -41,8 +41,9 @@ from analysis.receptive_field_mapping.rendering.rf_iff_tuning_renderer import (
     render_session_tuning_curve,
     render_overlay_tuning_curve,
 )
-from analysis.receptive_field_mapping.rendering.rf_stimulus_session_comparison_renderer import (
-    assign_session_colors,
+from analysis.receptive_field_mapping.rendering.neuron_type_colors import (
+    build_session_color_scheme,
+    SessionColorScheme,
 )
 
 logger = logging.getLogger(__name__)
@@ -85,22 +86,15 @@ RESPONSE_METRICS: dict[str, _ResponseMetricSpec] = {
         "Mean spikes / touch",
         "spike_count_mean",
     ),
-    "spike_count_total": (
-        "Nerve_spike_count",
-        "spike_count",
-        "sum",
-        "Total spikes",
-        "spike_count_total",
-    ),
 }
 
-_ALL_RESPONSE_METRICS = ("iff_mean", "iff_max", "spike_count_mean", "spike_count_total")
+_ALL_RESPONSE_METRICS = ("iff_mean", "iff_max", "spike_count_mean")
 
 
 def _resolve_response_metric(token: str) -> list[_ResponseMetricSpec]:
     """Return the list of metric specs for *token*.
 
-    ``"all"`` expands to all four entries in ``RESPONSE_METRICS``.
+    ``"all"`` expands to all entries in ``RESPONSE_METRICS``.
 
     Raises
     ------
@@ -778,7 +772,19 @@ def run_iff_tuning_curves(
                 category_col=cat_col, category_levels=cat_levels,
             )
 
-        colors = assign_session_colors(session_ids)
+        neuron_summary_xlsx_str: str | None = options.get("neuron_summary_xlsx") or None
+        if not neuron_summary_xlsx_str:
+            raise ValueError(
+                "run_iff_tuning_curves: 'neuron_summary_xlsx' is not set in the task options. "
+                "Set configs/analyse_workflow_processing_dag.yaml parameters.neuron_summary_xlsx "
+                "to the absolute path of MNG-DataSummary.xlsx."
+            )
+        xlsx_path = Path(neuron_summary_xlsx_str)
+        if not xlsx_path.is_file():
+            raise FileNotFoundError(
+                f"run_iff_tuning_curves: neuron_summary_xlsx not found: {xlsx_path}"
+            )
+        scheme: SessionColorScheme = build_session_color_scheme(session_ids, xlsx_path)
 
         # =====================================================================
         # Pass 2 — Render
@@ -841,6 +847,7 @@ def run_iff_tuning_curves(
                         level_props=bin_result.level_props,
                         category_levels=cat_levels or [],
                         category_display_name=_cat_display(cat_col) if cat_col else "",
+                        line_color=scheme.session_color[session_id],
                     )
                     csv_out_path = out_path.with_suffix(".csv")
                     _write_bin_csv(
@@ -868,31 +875,56 @@ def run_iff_tuning_curves(
                     )
                     continue
 
-                overlay_path = (
+                overlay_path_by_type = (
                     output_base_dir
                     / feature
                     / gesture_subset
                     / overlap_dir
                     / metric_subdir
-                    / "overlay_tuning.png"
+                    / "overlay_tuning_by_type.png"
                 )
                 render_overlay_tuning_curve(
                     session_data=overlay_session_data,
                     feature_name=feature,
                     gesture_subset=gesture_subset,
-                    out_path=overlay_path,
+                    out_path=overlay_path_by_type,
                     iff_ylim=response_ylim,
-                    session_colors=colors,
+                    session_colors={sid: scheme.session_color[sid] for sid in overlay_session_data},
                     iff_ylabel=response_ylabel,
                     smoothing_sigma=smoothing_sigma,
+                    legend_mode="by_type",
+                    session_neuron_types=scheme.session_neuron_type,
+                    type_colors=scheme.type_color,
                 )
-                overlay_csv_path = overlay_path.with_suffix(".csv")
+                overlay_path_by_session = (
+                    output_base_dir
+                    / feature
+                    / gesture_subset
+                    / overlap_dir
+                    / metric_subdir
+                    / "overlay_tuning_by_session.png"
+                )
+                render_overlay_tuning_curve(
+                    session_data=overlay_session_data,
+                    feature_name=feature,
+                    gesture_subset=gesture_subset,
+                    out_path=overlay_path_by_session,
+                    iff_ylim=response_ylim,
+                    session_colors={sid: scheme.session_color[sid] for sid in overlay_session_data},
+                    iff_ylabel=response_ylabel,
+                    smoothing_sigma=smoothing_sigma,
+                    legend_mode="by_session",
+                    session_neuron_types=scheme.session_neuron_type,
+                    type_colors=scheme.type_color,
+                )
+                overlay_csv_path = overlay_path_by_type.parent / "overlay_tuning.csv"
                 pd.concat(overlay_csv_dfs, ignore_index=True).to_csv(
                     overlay_csv_path, index=False
                 )
                 print(
                     f"[IFF Tuning Curves] {metric_subdir} / {feature} / "
-                    f"{gesture_subset}: saved {overlay_path.name}",
+                    f"{gesture_subset}: saved {overlay_path_by_type.name} + "
+                    f"{overlay_path_by_session.name}",
                     flush=True,
                 )
 
