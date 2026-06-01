@@ -2,7 +2,8 @@
 
 **Date:** 2026-06-01
 **Author:** Basil Duvernoy
-**Status:** In Progress
+**Status:** Completed
+**Completed:** 2026-06-01 14:04
 **Base Branch:** `feature/iff-tuning-neuron-type-coloring`
 **Branch:** `feature/iff-tuning-raw-dots`
 
