@@ -40,6 +40,8 @@ from analysis.receptive_field_mapping.rendering.rf_iff_tuning_renderer import (
     _cat_display,
     render_session_tuning_curve,
     render_overlay_tuning_curve,
+    render_session_raw_dots,
+    render_overlay_raw_dots,
 )
 from analysis.receptive_field_mapping.rendering.neuron_type_colors import (
     build_session_color_scheme,
@@ -408,6 +410,52 @@ def _compute_global_count_max(
     return float(max(global_max, 1))
 
 
+def _compute_raw_response_ylim(
+    session_dfs: list[pd.DataFrame],
+    response_col: str,
+    clip_percentile: float,
+) -> tuple[float, float]:
+    """Return ``(0.0, upper_percentile)`` for the raw-dots response Y axis.
+
+    Pools every raw response value across all sessions and clips the upper
+    bound at the ``(100 - clip_percentile)``-th percentile.  This mirrors the
+    ``bin_agg="mean"`` branch of :func:`_compute_global_response_ylim` but does
+    not require pre-computed ``bin_windows`` (the raw-dots strategy has no bins).
+
+    Parameters
+    ----------
+    session_dfs:
+        All per-session DataFrames.
+    response_col:
+        Response column name (e.g. ``"Nerve_freq_mean"``).
+    clip_percentile:
+        Symmetric percentile clip; the upper bound is
+        ``np.nanpercentile(all_vals, 100 - clip_percentile)``.
+
+    Returns
+    -------
+    tuple[float, float]
+        ``(0.0, upper_percentile)``
+
+    Raises
+    ------
+    ValueError
+        If *response_col* contains no finite values across all sessions.
+    """
+    all_vals = np.concatenate([
+        df[response_col].dropna().to_numpy(dtype=float)
+        for df in session_dfs
+        if response_col in df.columns
+    ])
+    if len(all_vals) == 0:
+        raise ValueError(
+            f"_compute_raw_response_ylim: '{response_col}' contains no "
+            f"finite values across all sessions."
+        )
+    upper = float(np.nanpercentile(all_vals, 100.0 - clip_percentile))
+    return (0.0, upper)
+
+
 # ---------------------------------------------------------------------------
 # Sentinel helper
 # ---------------------------------------------------------------------------
@@ -514,6 +562,64 @@ def _write_bin_csv(
     pd.DataFrame(rows).to_csv(out_path, index=False)
 
 
+def _write_raw_dots_csv(
+    feature_vals: np.ndarray,
+    response_vals: np.ndarray,
+    session_id: str,
+    feature: str,
+    gesture_subset: str,
+    fit_degree: int,
+    metric: str,
+    out_path: Path,
+) -> None:
+    """Write per-touch raw-dots data to a CSV at *out_path*.
+
+    One row per touch.  Columns written (in order):
+        session_id, feature_value, response_value, gesture_subset,
+        fit_degree, metric.
+
+    Parameters
+    ----------
+    feature_vals:
+        Per-touch feature values (x axis).
+    response_vals:
+        Per-touch response values (y axis); must be parallel to *feature_vals*.
+    session_id:
+        Session identifier (constant across all rows).
+    feature:
+        Feature column name (used for messaging / validation only).
+    gesture_subset:
+        Gesture subset label (constant across all rows).
+    fit_degree:
+        Polynomial fit degree (constant across all rows).
+    metric:
+        Response-metric subdir token (constant across all rows).
+    out_path:
+        Destination CSV path.
+
+    Raises
+    ------
+    ValueError
+        If *feature_vals* and *response_vals* differ in length.
+    """
+    if len(feature_vals) != len(response_vals):
+        raise ValueError(
+            f"_write_raw_dots_csv: feature_vals ({len(feature_vals)}) and "
+            f"response_vals ({len(response_vals)}) have mismatched lengths for "
+            f"session '{session_id}', feature '{feature}'."
+        )
+    rows: dict[str, Any] = {
+        "session_id": session_id,
+        "feature_value": feature_vals,
+        "response_value": response_vals,
+        "gesture_subset": gesture_subset,
+        "fit_degree": fit_degree,
+        "metric": metric,
+    }
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(rows).to_csv(out_path, index=False)
+
+
 # ---------------------------------------------------------------------------
 # Main pipeline entry point
 # ---------------------------------------------------------------------------
@@ -585,6 +691,16 @@ def run_iff_tuning_curves(
     response_metric_token: str = str(options.get("response_metric", "iff_mean"))
     metric_specs = _resolve_response_metric(response_metric_token)
 
+    binning_strategy: str = str(options.get("binning_strategy", "sliding_window"))
+    if binning_strategy not in {"sliding_window", "raw_dots"}:
+        raise ValueError(
+            f"run_iff_tuning_curves: unknown binning_strategy '{binning_strategy}'. "
+            f"Valid values: 'sliding_window', 'raw_dots'."
+        )
+    fit_degree: int = int(options.get("fit_degree", 1))
+    dot_alpha: float = float(options.get("dot_alpha", 0.35))
+    show_fit_ci: bool = bool(options.get("show_fit_ci", False))
+
     sentinel = output_base_dir / "iff_tuning_sentinel.json"
 
     if sentinel.exists() and not force_processing:
@@ -593,7 +709,10 @@ def run_iff_tuning_curves(
         )
         return
 
-    overlap_dir = f"b{n_bins}_ov{overlap_ratio:.2f}"
+    if binning_strategy == "raw_dots":
+        overlap_dir = f"raw_dots_d{fit_degree}"
+    else:
+        overlap_dir = f"b{n_bins}_ov{overlap_ratio:.2f}"
 
     total_features_rendered = 0
 
@@ -747,29 +866,39 @@ def run_iff_tuning_curves(
                 ordered = sorted(str(v) for v in raw_values)
             global_levels[cat_col] = ordered
 
-        bin_windows: dict[str, tuple[np.ndarray, np.ndarray]] = {}
-        for feature in valid_features:
-            bin_windows[feature] = _compute_bin_windows(
-                pooled[feature], n_bins, clip_percentile, overlap_ratio=overlap_ratio
+        if binning_strategy == "sliding_window":
+            bin_windows: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+            for feature in valid_features:
+                bin_windows[feature] = _compute_bin_windows(
+                    pooled[feature], n_bins, clip_percentile, overlap_ratio=overlap_ratio
+                )
+
+            # =================================================================
+            # Compute global response ylim and per-feature count maxima
+            # =================================================================
+            response_ylim = _compute_global_response_ylim(
+                session_dfs, clip_percentile, response_col, bin_agg,
+                bin_windows, valid_features,
             )
 
-        # =====================================================================
-        # Compute global response ylim and per-feature count maxima
-        # =====================================================================
-        response_ylim = _compute_global_response_ylim(
-            session_dfs, clip_percentile, response_col, bin_agg,
-            bin_windows, valid_features,
-        )
-
-        count_maxima: dict[str, float] = {}
-        for feature in valid_features:
-            bin_low, bin_high = bin_windows[feature]
-            cat_col = count_category_by.get(feature) if count_category_by else None
-            cat_levels = global_levels.get(cat_col, []) if cat_col else None
-            count_maxima[feature] = _compute_global_count_max(
-                session_dfs, feature, bin_low, bin_high,
-                response_col, bin_agg,
-                category_col=cat_col, category_levels=cat_levels,
+            count_maxima: dict[str, float] = {}
+            for feature in valid_features:
+                bin_low, bin_high = bin_windows[feature]
+                cat_col = count_category_by.get(feature) if count_category_by else None
+                cat_levels = global_levels.get(cat_col, []) if cat_col else None
+                count_maxima[feature] = _compute_global_count_max(
+                    session_dfs, feature, bin_low, bin_high,
+                    response_col, bin_agg,
+                    category_col=cat_col, category_levels=cat_levels,
+                )
+        else:
+            # raw_dots strategy: no bins, no count bars. Pool raw response
+            # values for a consistent Y axis (same response_col / clip_percentile
+            # the sliding_window path uses for its mean-mode ylim).
+            bin_windows = {}
+            count_maxima = {}
+            response_ylim = _compute_raw_response_ylim(
+                session_dfs, response_col, clip_percentile,
             )
 
         neuron_summary_xlsx_str: str | None = options.get("neuron_summary_xlsx") or None
@@ -777,9 +906,11 @@ def run_iff_tuning_curves(
             raise ValueError(
                 "run_iff_tuning_curves: 'neuron_summary_xlsx' is not set in the task options. "
                 "Set configs/analyse_workflow_processing_dag.yaml parameters.neuron_summary_xlsx "
-                "to the absolute path of MNG-DataSummary.xlsx."
+                "to the path of MNG-DataSummary.xlsx (absolute, or relative to the database root)."
             )
         xlsx_path = Path(neuron_summary_xlsx_str)
+        if not xlsx_path.is_absolute():
+            xlsx_path = database_path / xlsx_path
         if not xlsx_path.is_file():
             raise FileNotFoundError(
                 f"run_iff_tuning_curves: neuron_summary_xlsx not found: {xlsx_path}"
@@ -790,13 +921,14 @@ def run_iff_tuning_curves(
         # Pass 2 — Render
         # =====================================================================
         for feature in valid_features:
-            bin_low, bin_high = bin_windows[feature]
-            count_ymax = count_maxima[feature]
+            if binning_strategy == "sliding_window":
+                bin_low, bin_high = bin_windows[feature]
+                count_ymax = count_maxima[feature]
             cat_col = count_category_by.get(feature) if count_category_by else None
             cat_levels = global_levels.get(cat_col, []) if cat_col else None
 
             for gesture_subset in _GESTURE_SUBSETS:
-                overlay_session_data: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
+                overlay_session_data: dict = {}
                 overlay_csv_dfs: list[pd.DataFrame] = []
 
                 for entry in session_data:
@@ -813,59 +945,109 @@ def run_iff_tuning_curves(
                         )
                         continue
 
-                    bin_result = _bin_data(
-                        filtered, feature, response_col, bin_low, bin_high,
-                        category_col=cat_col, category_levels=cat_levels,
-                        bin_agg=bin_agg,
-                    )
-                    bin_centers = bin_result.bin_centers
-                    response_values = bin_result.mean_iff
-                    counts = bin_result.counts
+                    if binning_strategy == "sliding_window":
+                        bin_result = _bin_data(
+                            filtered, feature, response_col, bin_low, bin_high,
+                            category_col=cat_col, category_levels=cat_levels,
+                            bin_agg=bin_agg,
+                        )
+                        bin_centers = bin_result.bin_centers
+                        response_values = bin_result.mean_iff
+                        counts = bin_result.counts
 
-                    out_path = (
-                        output_base_dir
-                        / feature
-                        / gesture_subset
-                        / overlap_dir
-                        / metric_subdir
-                        / f"{session_id}_tuning.png"
-                    )
-                    render_session_tuning_curve(
-                        bin_centers=bin_centers,
-                        mean_iff=response_values,
-                        counts=counts,
-                        feature_name=feature,
-                        session_id=session_id,
-                        gesture_subset=gesture_subset,
-                        out_path=out_path,
-                        iff_ylim=response_ylim,
-                        count_ymax=count_ymax,
-                        iff_ylabel=response_ylabel,
-                        smoothing_sigma=smoothing_sigma,
-                        std_iff=bin_result.std_iff,
-                        level_counts=bin_result.level_counts,
-                        level_props=bin_result.level_props,
-                        category_levels=cat_levels or [],
-                        category_display_name=_cat_display(cat_col) if cat_col else "",
-                        line_color=scheme.session_color[session_id],
-                    )
-                    csv_out_path = out_path.with_suffix(".csv")
-                    _write_bin_csv(
-                        bin_result, session_id, feature, gesture_subset,
-                        overlap_ratio=overlap_ratio,
-                        metric=metric_subdir,
-                        out_path=csv_out_path,
-                    )
-                    print(
-                        f"[IFF Tuning Curves] {metric_subdir} / {feature} / "
-                        f"{gesture_subset} / {session_id}: saved {out_path.name}",
-                        flush=True,
-                    )
+                        out_path = (
+                            output_base_dir
+                            / feature
+                            / gesture_subset
+                            / overlap_dir
+                            / metric_subdir
+                            / f"{session_id}_tuning.png"
+                        )
+                        render_session_tuning_curve(
+                            bin_centers=bin_centers,
+                            mean_iff=response_values,
+                            counts=counts,
+                            feature_name=feature,
+                            session_id=session_id,
+                            gesture_subset=gesture_subset,
+                            out_path=out_path,
+                            iff_ylim=response_ylim,
+                            count_ymax=count_ymax,
+                            iff_ylabel=response_ylabel,
+                            smoothing_sigma=smoothing_sigma,
+                            std_iff=bin_result.std_iff,
+                            level_counts=bin_result.level_counts,
+                            level_props=bin_result.level_props,
+                            category_levels=cat_levels or [],
+                            category_display_name=_cat_display(cat_col) if cat_col else "",
+                            line_color=scheme.session_color[session_id],
+                        )
+                        csv_out_path = out_path.with_suffix(".csv")
+                        _write_bin_csv(
+                            bin_result, session_id, feature, gesture_subset,
+                            overlap_ratio=overlap_ratio,
+                            metric=metric_subdir,
+                            out_path=csv_out_path,
+                        )
+                        print(
+                            f"[IFF Tuning Curves] {metric_subdir} / {feature} / "
+                            f"{gesture_subset} / {session_id}: saved {out_path.name}",
+                            flush=True,
+                        )
 
-                    overlay_session_data[session_id] = (
-                        bin_centers, response_values, bin_result.std_iff
-                    )
-                    overlay_csv_dfs.append(pd.read_csv(csv_out_path))
+                        overlay_session_data[session_id] = (
+                            bin_centers, response_values, bin_result.std_iff
+                        )
+                        overlay_csv_dfs.append(pd.read_csv(csv_out_path))
+                    else:
+                        # raw_dots strategy: extract the same raw feature/response
+                        # arrays the sliding_window path bins, drop NaN pairs, and
+                        # plot every touch as a dot with a polynomial fit line.
+                        valid_rows = filtered[[feature, response_col]].dropna()
+                        feat_arr = valid_rows[feature].to_numpy(dtype=float)
+                        resp_arr = valid_rows[response_col].to_numpy(dtype=float)
+
+                        out_path = (
+                            output_base_dir
+                            / feature
+                            / gesture_subset
+                            / overlap_dir
+                            / metric_subdir
+                            / f"{session_id}_tuning.png"
+                        )
+                        render_session_raw_dots(
+                            feature_vals=feat_arr,
+                            response_vals=resp_arr,
+                            feature_name=feature,
+                            session_id=session_id,
+                            gesture_subset=gesture_subset,
+                            out_path=out_path,
+                            iff_ylim=response_ylim,
+                            iff_ylabel=response_ylabel,
+                            fit_degree=fit_degree,
+                            dot_alpha=dot_alpha,
+                            show_fit_ci=show_fit_ci,
+                            line_color=scheme.session_color[session_id],
+                        )
+                        csv_out_path = out_path.with_suffix(".csv")
+                        _write_raw_dots_csv(
+                            feature_vals=feat_arr,
+                            response_vals=resp_arr,
+                            session_id=session_id,
+                            feature=feature,
+                            gesture_subset=gesture_subset,
+                            fit_degree=fit_degree,
+                            metric=metric_subdir,
+                            out_path=csv_out_path,
+                        )
+                        print(
+                            f"[IFF Tuning Curves] {metric_subdir} / {feature} / "
+                            f"{gesture_subset} / {session_id}: saved {out_path.name}",
+                            flush=True,
+                        )
+
+                        overlay_session_data[session_id] = (feat_arr, resp_arr)
+                        overlay_csv_dfs.append(pd.read_csv(csv_out_path))
 
                 if len(overlay_session_data) < 2:
                     logger.warning(
@@ -883,19 +1065,6 @@ def run_iff_tuning_curves(
                     / metric_subdir
                     / "overlay_tuning_by_type.png"
                 )
-                render_overlay_tuning_curve(
-                    session_data=overlay_session_data,
-                    feature_name=feature,
-                    gesture_subset=gesture_subset,
-                    out_path=overlay_path_by_type,
-                    iff_ylim=response_ylim,
-                    session_colors={sid: scheme.session_color[sid] for sid in overlay_session_data},
-                    iff_ylabel=response_ylabel,
-                    smoothing_sigma=smoothing_sigma,
-                    legend_mode="by_type",
-                    session_neuron_types=scheme.session_neuron_type,
-                    type_colors=scheme.type_color,
-                )
                 overlay_path_by_session = (
                     output_base_dir
                     / feature
@@ -904,19 +1073,64 @@ def run_iff_tuning_curves(
                     / metric_subdir
                     / "overlay_tuning_by_session.png"
                 )
-                render_overlay_tuning_curve(
-                    session_data=overlay_session_data,
-                    feature_name=feature,
-                    gesture_subset=gesture_subset,
-                    out_path=overlay_path_by_session,
-                    iff_ylim=response_ylim,
-                    session_colors={sid: scheme.session_color[sid] for sid in overlay_session_data},
-                    iff_ylabel=response_ylabel,
-                    smoothing_sigma=smoothing_sigma,
-                    legend_mode="by_session",
-                    session_neuron_types=scheme.session_neuron_type,
-                    type_colors=scheme.type_color,
-                )
+                if binning_strategy == "sliding_window":
+                    render_overlay_tuning_curve(
+                        session_data=overlay_session_data,
+                        feature_name=feature,
+                        gesture_subset=gesture_subset,
+                        out_path=overlay_path_by_type,
+                        iff_ylim=response_ylim,
+                        session_colors={sid: scheme.session_color[sid] for sid in overlay_session_data},
+                        iff_ylabel=response_ylabel,
+                        smoothing_sigma=smoothing_sigma,
+                        legend_mode="by_type",
+                        session_neuron_types=scheme.session_neuron_type,
+                        type_colors=scheme.type_color,
+                    )
+                    render_overlay_tuning_curve(
+                        session_data=overlay_session_data,
+                        feature_name=feature,
+                        gesture_subset=gesture_subset,
+                        out_path=overlay_path_by_session,
+                        iff_ylim=response_ylim,
+                        session_colors={sid: scheme.session_color[sid] for sid in overlay_session_data},
+                        iff_ylabel=response_ylabel,
+                        smoothing_sigma=smoothing_sigma,
+                        legend_mode="by_session",
+                        session_neuron_types=scheme.session_neuron_type,
+                        type_colors=scheme.type_color,
+                    )
+                else:
+                    render_overlay_raw_dots(
+                        session_data=overlay_session_data,
+                        feature_name=feature,
+                        gesture_subset=gesture_subset,
+                        out_path=overlay_path_by_type,
+                        iff_ylim=response_ylim,
+                        session_colors={sid: scheme.session_color[sid] for sid in overlay_session_data},
+                        iff_ylabel=response_ylabel,
+                        fit_degree=fit_degree,
+                        dot_alpha=0.15,
+                        show_fit_ci=show_fit_ci,
+                        legend_mode="by_type",
+                        session_neuron_types=scheme.session_neuron_type,
+                        type_colors=scheme.type_color,
+                    )
+                    render_overlay_raw_dots(
+                        session_data=overlay_session_data,
+                        feature_name=feature,
+                        gesture_subset=gesture_subset,
+                        out_path=overlay_path_by_session,
+                        iff_ylim=response_ylim,
+                        session_colors={sid: scheme.session_color[sid] for sid in overlay_session_data},
+                        iff_ylabel=response_ylabel,
+                        fit_degree=fit_degree,
+                        dot_alpha=0.15,
+                        show_fit_ci=show_fit_ci,
+                        legend_mode="by_session",
+                        session_neuron_types=scheme.session_neuron_type,
+                        type_colors=scheme.type_color,
+                    )
                 overlay_csv_path = overlay_path_by_type.parent / "overlay_tuning.csv"
                 pd.concat(overlay_csv_dfs, ignore_index=True).to_csv(
                     overlay_csv_path, index=False
