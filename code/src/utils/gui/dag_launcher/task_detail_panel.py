@@ -99,6 +99,16 @@ _OPTION_ENUMS: dict[str, list[tuple[str, object]]] = {
         ("Max", "max"),
         ("Both", "both"),
     ],
+    "response_metric": [
+        ("IFF Mean (default)", "iff_mean"),
+        ("IFF Max", "iff_max"),
+        ("Spike Count Mean", "spike_count_mean"),
+        ("All", "all"),
+    ],
+    "binning_strategy": [
+        ("Sliding Window (default)", "sliding_window"),
+        ("Raw Dots", "raw_dots"),
+    ],
 }
 
 

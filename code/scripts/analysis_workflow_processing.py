@@ -42,8 +42,12 @@ from analysis.receptive_field_mapping import (
     run_touch_feature_radar,
     run_stimulus_session_comparison,
     run_iff_tuning_curves,
+    run_iff_instruction_tuning,
     launch_rf_camera_settings_viewer,
     launch_slim_uv_config_viewer,
+)
+from analysis.receptive_field_mapping.pipelines.rf_iff_tuning_pipeline import (
+    _resolve_response_metric,
 )
 from analysis.receptive_field_mapping.data.rf_data_loader import resolve_forearm_ply
 from analysis.receptive_field_mapping.data.rf_extraction_io import load_rf_camera_settings
@@ -74,6 +78,7 @@ from analysis.pipeline.output_dirs import (
     STIMULUS_RENDER_RADAR,
     STIMULUS_COMPARE_SESSIONS,
     STIMULUS_IFF_TUNING_CURVES,
+    STIMULUS_IFF_INSTRUCTION_TUNING,
     TOUCH_COMPUTE_SERIES,
     TOUCH_PREPARE_SESSIONS,
     TOUCH_SUMMARIZE_BLOCKS,
@@ -980,42 +985,87 @@ def stimulus_iff_tuning_curves_flow(
     tuning_features: Optional[list] = None,
     n_bins: int = 20,
     clip_percentile: float = 1.0,
-    iff_metric: str = "mean",
+    response_metric: str = "iff_mean",
     smoothing_sigma: float = 0.0,
     overlap_ratio: float = 0.0,
+    binning_strategy: str = "sliding_window",
+    fit_degree: int = 1,
+    dot_alpha: float = 0.35,
+    show_fit_ci: bool = False,
     metadata_dir: str = "touch_prepare_sessions",
     metadata_filename: str = "{session_id}_prepared.csv",
     count_category_by: Optional[dict] = None,
+    neuron_summary_xlsx: Optional[str] = None,
 ) -> None:
-    """Per-feature IFF tuning curve plots across all sessions.
+    """Per-feature IFF / spike-count tuning curve plots across all sessions.
 
-    Bins each selected touch feature into equal-width ranges, computes mean IFF
-    and touch count per bin, and renders dual Y-axis per-session PNGs plus
-    cross-session overlay PNGs, faceted by gesture subset.
-    Output: 4_analysed/stimulus_iff_tuning_curves/
+    Bins each selected touch feature into equal-width ranges, computes the
+    requested response metric per bin, and renders dual Y-axis per-session PNGs
+    plus cross-session overlay PNGs, faceted by gesture subset.
+    Output: 4_analysed/stimulus_iff_tuning_curves/<subdir>/
     """
     print(f"[Batch Analysis] Rendering IFF tuning curves for {len(input_items)} item(s)...")
     if not input_items:
         return
-    metrics = ["mean", "max"] if iff_metric == "both" else [iff_metric]
-    for metric in metrics:
-        output_dir = input_items[0][1] / '4_analysed' / STIMULUS_IFF_TUNING_CURVES / f"iff_{metric}"
-        run_iff_tuning_curves(
-            session_config_paths=input_items,
-            options={
-                "tuning_features": tuning_features or [],
-                "n_bins": n_bins,
-                "clip_percentile": clip_percentile,
-                "force_processing": force_processing,
-                "iff_metric": metric,
-                "smoothing_sigma": smoothing_sigma,
-                "overlap_ratio": overlap_ratio,
-                "metadata_dir": metadata_dir,
-                "metadata_filename": metadata_filename,
-                "count_category_by": count_category_by or {},
-            },
-            output_base_dir=output_dir,
-        )
+    output_dir = input_items[0][1] / '4_analysed' / STIMULUS_IFF_TUNING_CURVES
+    run_iff_tuning_curves(
+        session_config_paths=input_items,
+        options={
+            "tuning_features": tuning_features or [],
+            "n_bins": n_bins,
+            "clip_percentile": clip_percentile,
+            "force_processing": force_processing,
+            "response_metric": response_metric,
+            "smoothing_sigma": smoothing_sigma,
+            "overlap_ratio": overlap_ratio,
+            "binning_strategy": binning_strategy,
+            "fit_degree": fit_degree,
+            "dot_alpha": dot_alpha,
+            "show_fit_ci": show_fit_ci,
+            "metadata_dir": metadata_dir,
+            "metadata_filename": metadata_filename,
+            "count_category_by": count_category_by or {},
+            "neuron_summary_xlsx": neuron_summary_xlsx,
+        },
+        output_base_dir=output_dir,
+    )
+
+
+@flow(name="stimulus_iff_instruction_tuning")
+def stimulus_iff_instruction_tuning_flow(
+    input_items: List[Tuple[Path, Path]],
+    force_processing: bool = False,
+    tuning_categories: Optional[list] = None,
+    iff_metric: str = "mean",
+    clip_percentile: float = 1.0,
+    metadata_dir: str = "touch_prepare_sessions",
+    metadata_filename: str = "{session_id}_prepared.csv",
+    neuron_summary_xlsx: Optional[str] = None,
+) -> None:
+    """Per-instruction-level IFF bar charts across all sessions.
+
+    Groups touches by designed metadata instruction levels, computes mean IFF
+    per category, and renders per-session bar charts plus cross-session overlay
+    dot-plots, faceted by gesture subset.
+    Output: 4_analysed/stimulus_iff_instruction_tuning/iff_{metric}/
+    """
+    print(f"[Batch Analysis] Rendering IFF instruction tuning for {len(input_items)} item(s)...")
+    if not input_items:
+        return
+    output_dir = input_items[0][1] / '4_analysed' / STIMULUS_IFF_INSTRUCTION_TUNING
+    run_iff_instruction_tuning(
+        session_config_paths=input_items,
+        options={
+            "tuning_categories": tuning_categories or [],
+            "iff_metric": iff_metric,
+            "clip_percentile": clip_percentile,
+            "force_processing": force_processing,
+            "metadata_dir": metadata_dir,
+            "metadata_filename": metadata_filename,
+            "neuron_summary_xlsx": neuron_summary_xlsx,
+        },
+        output_base_dir=output_dir,
+    )
 
 
 @flow(name="stimulus_cluster_touches")
@@ -1503,12 +1553,29 @@ def _build_pipeline_stages(dag_handler: DagConfigHandler, items_to_process) -> l
                 "tuning_features": list(dag_handler.get_task_options("stimulus_iff_tuning_curves").get("tuning_features") or []),
                 "n_bins": int(dag_handler.get_task_options("stimulus_iff_tuning_curves").get("n_bins", 20)),
                 "clip_percentile": float(dag_handler.get_task_options("stimulus_iff_tuning_curves").get("clip_percentile", 1.0)),
-                "iff_metric": dag_handler.get_task_options("stimulus_iff_tuning_curves").get("iff_metric", "mean"),
+                "response_metric": dag_handler.get_task_options("stimulus_iff_tuning_curves").get("response_metric", "iff_mean"),
                 "smoothing_sigma": float(dag_handler.get_task_options("stimulus_iff_tuning_curves").get("smoothing_sigma", 0.0)),
                 "overlap_ratio": float(dag_handler.get_task_options("stimulus_iff_tuning_curves").get("overlap_ratio", 0.0)),
+                "binning_strategy": str(dag_handler.get_task_options("stimulus_iff_tuning_curves").get("binning_strategy", "sliding_window")),
+                "fit_degree": int(dag_handler.get_task_options("stimulus_iff_tuning_curves").get("fit_degree", 1)),
+                "dot_alpha": float(dag_handler.get_task_options("stimulus_iff_tuning_curves").get("dot_alpha", 0.35)),
+                "show_fit_ci": bool(dag_handler.get_task_options("stimulus_iff_tuning_curves").get("show_fit_ci", False)),
                 "metadata_dir": str(dag_handler.get_task_options("stimulus_iff_tuning_curves").get("metadata_dir", "touch_prepare_sessions")),
                 "metadata_filename": str(dag_handler.get_task_options("stimulus_iff_tuning_curves").get("metadata_filename", "{session_id}_prepared.csv")),
                 "count_category_by": dag_handler.get_task_options("stimulus_iff_tuning_curves").get("count_category_by") or {},
+                "neuron_summary_xlsx": dag_handler.get_parameter("neuron_summary_xlsx") or None,
+            },
+        },
+        {
+            "name": "stimulus_iff_instruction_tuning",
+            "func": stimulus_iff_instruction_tuning_flow,
+            "params": lambda: {
+                "tuning_categories": list(dag_handler.get_task_options("stimulus_iff_instruction_tuning").get("tuning_categories") or []),
+                "iff_metric": str(dag_handler.get_task_options("stimulus_iff_instruction_tuning").get("iff_metric", "mean")),
+                "clip_percentile": float(dag_handler.get_task_options("stimulus_iff_instruction_tuning").get("clip_percentile", 1.0)),
+                "metadata_dir": str(dag_handler.get_task_options("stimulus_iff_instruction_tuning").get("metadata_dir", "touch_prepare_sessions")),
+                "metadata_filename": str(dag_handler.get_task_options("stimulus_iff_instruction_tuning").get("metadata_filename", "{session_id}_prepared.csv")),
+                "neuron_summary_xlsx": dag_handler.get_parameter("neuron_summary_xlsx") or None,
             },
         },
         {
