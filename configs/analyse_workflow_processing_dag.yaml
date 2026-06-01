@@ -10,6 +10,11 @@ parameters:
       valid_configs_ST14-04, valid_configs_ST15-01, valid_configs_ST16-02, 
       valid_configs_ST16-03, valid_configs_ST16-05, valid_configs_ST18-01, 
       valid_configs_ST18-04]
+  # Path to MNG-DataSummary.xlsx (neuron type metadata). Absolute, or relative
+  # to the database root (e.g. "03_metadata/MNG-DataSummary.xlsx").
+  # Used by stimulus_iff_tuning_curves and stimulus_iff_instruction_tuning.
+  neuron_summary_xlsx: "F:/liu-onedrive-nospecial-carac/_Teams/Social touch Kinect
+    MNG/03_metadata/MNG-DataSummary.xlsx"
 
 tasks:
   # ============================================================
@@ -293,7 +298,6 @@ tasks:
     enabled: true
     options:
       force_processing: true
-      iff_metric: both
       response_metric: all
       tuning_features:
       - contact_area_mean
@@ -304,6 +308,10 @@ tasks:
       clip_percentile: 1.0
       smoothing_sigma: 1.5
       overlap_ratio: 0.25                  # 0.0 to 0.5; sliding-window bin overlap
+      binning_strategy: "raw_dots"         # sliding_window | raw_dots
+      fit_degree: 3                        # raw_dots: polynomial fit degree
+      dot_alpha: 0.35                      # raw_dots: per-session scatter opacity
+      show_fit_ci: true                    # raw_dots: degree-1 CI band on fit line
       metadata_dir: touch_prepare_sessions # under <database>/4_analysed/
       metadata_filename: '{session_id}_prepared.csv'
       count_category_by:  # tuning_feature -> designed-metadata column

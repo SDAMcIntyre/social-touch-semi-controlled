@@ -100,6 +100,7 @@ def render_session_instruction_tuning(
     out_path: Path,
     iff_ylim: tuple[float, float],
     iff_ylabel: str = "Mean IFF (Hz)",
+    bar_color: str = _IFF_COLOR,
 ) -> None:
     """Render a single-axis bar chart of mean IFF per instruction level for one session.
 
@@ -137,7 +138,7 @@ def render_session_instruction_tuning(
 
     # Draw bars (height = mean IFF; zero height for empty categories).
     bar_heights = np.where(np.isnan(mean_iff), 0.0, mean_iff)
-    ax.bar(x_pos, bar_heights, color=_IFF_COLOR, alpha=0.75, zorder=2)
+    ax.bar(x_pos, bar_heights, color=bar_color, alpha=0.75, zorder=2)
 
     # Overlay error bars — use nan_to_num so positions with count < 2 get yerr=0.
     yerr = np.nan_to_num(std_iff, nan=0.0)
@@ -196,6 +197,9 @@ def render_overlay_instruction_tuning(
     iff_ylim: tuple[float, float],
     session_colors: dict[str, tuple],
     iff_ylabel: str = "Mean IFF (Hz)",
+    legend_mode: str = "by_session",
+    session_neuron_types: dict[str, str] | None = None,
+    type_colors: dict[str, str] | None = None,
 ) -> None:
     """Render a cross-session jittered dot plot for instruction-level IFF tuning.
 
@@ -242,6 +246,10 @@ def render_overlay_instruction_tuning(
 
     for session_id, cat_result in session_category_data.items():
         color = session_colors[session_id]
+        if legend_mode == "by_type" and session_neuron_types is not None:
+            scatter_label = session_neuron_types[session_id]
+        else:
+            scatter_label = session_id
         mean_iff = cat_result.mean_iff
         std_iff = cat_result.std_iff
 
@@ -267,7 +275,7 @@ def render_overlay_instruction_tuning(
             zorder=2,
         )
 
-        # Dots with session label (only label the first valid dot to avoid legend duplication).
+        # Dots with label.
         ax.scatter(
             x_jittered[valid_mask],
             mean_iff[valid_mask],
@@ -275,7 +283,7 @@ def render_overlay_instruction_tuning(
             alpha=0.85,
             s=30,
             zorder=3,
-            label=session_id,
+            label=scatter_label,
         )
 
     ax.set_xticks(x_pos)
@@ -288,7 +296,17 @@ def render_overlay_instruction_tuning(
     ax.set_xlabel(_cat_display(category_col), color='white', fontsize=10)
     ax.set_title(f"All sessions | {gesture_subset}", color='white', fontsize=11)
 
-    legend = ax.legend(fontsize=8, framealpha=0.3, facecolor=_AX_BG, labelcolor='white')
+    if legend_mode == "by_type" and type_colors is not None:
+        from matplotlib.lines import Line2D
+        handles = [
+            Line2D([0], [0], color=color, linewidth=2, label=ntype)
+            for ntype, color in type_colors.items()
+        ]
+        legend = ax.legend(handles=handles, title="Neuron Type", fontsize=8, framealpha=0.3, facecolor=_AX_BG, labelcolor='white')
+        legend.get_title().set_color('white')
+    else:
+        legend = ax.legend(title="Session", fontsize=8, framealpha=0.3, facecolor=_AX_BG, labelcolor='white')
+        legend.get_title().set_color('white')
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=150, bbox_inches='tight', facecolor=fig.get_facecolor())

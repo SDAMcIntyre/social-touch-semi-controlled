@@ -988,9 +988,14 @@ def stimulus_iff_tuning_curves_flow(
     response_metric: str = "iff_mean",
     smoothing_sigma: float = 0.0,
     overlap_ratio: float = 0.0,
+    binning_strategy: str = "sliding_window",
+    fit_degree: int = 1,
+    dot_alpha: float = 0.35,
+    show_fit_ci: bool = False,
     metadata_dir: str = "touch_prepare_sessions",
     metadata_filename: str = "{session_id}_prepared.csv",
     count_category_by: Optional[dict] = None,
+    neuron_summary_xlsx: Optional[str] = None,
 ) -> None:
     """Per-feature IFF / spike-count tuning curve plots across all sessions.
 
@@ -1013,9 +1018,14 @@ def stimulus_iff_tuning_curves_flow(
             "response_metric": response_metric,
             "smoothing_sigma": smoothing_sigma,
             "overlap_ratio": overlap_ratio,
+            "binning_strategy": binning_strategy,
+            "fit_degree": fit_degree,
+            "dot_alpha": dot_alpha,
+            "show_fit_ci": show_fit_ci,
             "metadata_dir": metadata_dir,
             "metadata_filename": metadata_filename,
             "count_category_by": count_category_by or {},
+            "neuron_summary_xlsx": neuron_summary_xlsx,
         },
         output_base_dir=output_dir,
     )
@@ -1030,6 +1040,7 @@ def stimulus_iff_instruction_tuning_flow(
     clip_percentile: float = 1.0,
     metadata_dir: str = "touch_prepare_sessions",
     metadata_filename: str = "{session_id}_prepared.csv",
+    neuron_summary_xlsx: Optional[str] = None,
 ) -> None:
     """Per-instruction-level IFF bar charts across all sessions.
 
@@ -1051,6 +1062,7 @@ def stimulus_iff_instruction_tuning_flow(
             "force_processing": force_processing,
             "metadata_dir": metadata_dir,
             "metadata_filename": metadata_filename,
+            "neuron_summary_xlsx": neuron_summary_xlsx,
         },
         output_base_dir=output_dir,
     )
@@ -1544,9 +1556,14 @@ def _build_pipeline_stages(dag_handler: DagConfigHandler, items_to_process) -> l
                 "response_metric": dag_handler.get_task_options("stimulus_iff_tuning_curves").get("response_metric", "iff_mean"),
                 "smoothing_sigma": float(dag_handler.get_task_options("stimulus_iff_tuning_curves").get("smoothing_sigma", 0.0)),
                 "overlap_ratio": float(dag_handler.get_task_options("stimulus_iff_tuning_curves").get("overlap_ratio", 0.0)),
+                "binning_strategy": str(dag_handler.get_task_options("stimulus_iff_tuning_curves").get("binning_strategy", "sliding_window")),
+                "fit_degree": int(dag_handler.get_task_options("stimulus_iff_tuning_curves").get("fit_degree", 1)),
+                "dot_alpha": float(dag_handler.get_task_options("stimulus_iff_tuning_curves").get("dot_alpha", 0.35)),
+                "show_fit_ci": bool(dag_handler.get_task_options("stimulus_iff_tuning_curves").get("show_fit_ci", False)),
                 "metadata_dir": str(dag_handler.get_task_options("stimulus_iff_tuning_curves").get("metadata_dir", "touch_prepare_sessions")),
                 "metadata_filename": str(dag_handler.get_task_options("stimulus_iff_tuning_curves").get("metadata_filename", "{session_id}_prepared.csv")),
                 "count_category_by": dag_handler.get_task_options("stimulus_iff_tuning_curves").get("count_category_by") or {},
+                "neuron_summary_xlsx": dag_handler.get_parameter("neuron_summary_xlsx") or None,
             },
         },
         {
@@ -1558,6 +1575,7 @@ def _build_pipeline_stages(dag_handler: DagConfigHandler, items_to_process) -> l
                 "clip_percentile": float(dag_handler.get_task_options("stimulus_iff_instruction_tuning").get("clip_percentile", 1.0)),
                 "metadata_dir": str(dag_handler.get_task_options("stimulus_iff_instruction_tuning").get("metadata_dir", "touch_prepare_sessions")),
                 "metadata_filename": str(dag_handler.get_task_options("stimulus_iff_instruction_tuning").get("metadata_filename", "{session_id}_prepared.csv")),
+                "neuron_summary_xlsx": dag_handler.get_parameter("neuron_summary_xlsx") or None,
             },
         },
         {

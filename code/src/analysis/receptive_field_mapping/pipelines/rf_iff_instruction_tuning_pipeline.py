@@ -43,8 +43,9 @@ from analysis.receptive_field_mapping.rendering.rf_iff_instruction_tuning_render
     render_session_instruction_tuning,
     render_overlay_instruction_tuning,
 )
-from analysis.receptive_field_mapping.rendering.rf_stimulus_session_comparison_renderer import (
-    assign_session_colors,
+from analysis.receptive_field_mapping.rendering.neuron_type_colors import (
+    build_session_color_scheme,
+    SessionColorScheme,
 )
 
 logger = logging.getLogger(__name__)
@@ -234,7 +235,7 @@ def run_iff_instruction_tuning(
 
     for response_col, agg_folder, _bin_agg, response_ylabel, metric_subdir in metric_specs:
 
-        metric_dir = output_base_dir / f"iff_{metric_subdir}"
+        metric_dir = output_base_dir / metric_subdir
         sentinel = metric_dir / "iff_instruction_tuning_sentinel.json"
 
         if sentinel.exists() and not force_processing:
@@ -379,7 +380,21 @@ def run_iff_instruction_tuning(
             iff_ylim = (0.0, 1.0)
 
         session_ids = [entry["session_id"] for entry in session_data]
-        colors = assign_session_colors(session_ids)
+        neuron_summary_xlsx_str: str | None = options.get("neuron_summary_xlsx") or None
+        if not neuron_summary_xlsx_str:
+            raise ValueError(
+                "run_iff_instruction_tuning: 'neuron_summary_xlsx' is not set in the task options. "
+                "Set configs/analyse_workflow_processing_dag.yaml parameters.neuron_summary_xlsx "
+                "to the path of MNG-DataSummary.xlsx (absolute, or relative to the database root)."
+            )
+        xlsx_path = Path(neuron_summary_xlsx_str)
+        if not xlsx_path.is_absolute():
+            xlsx_path = database_path / xlsx_path
+        if not xlsx_path.is_file():
+            raise FileNotFoundError(
+                f"run_iff_instruction_tuning: neuron_summary_xlsx not found: {xlsx_path}"
+            )
+        scheme: SessionColorScheme = build_session_color_scheme(session_ids, xlsx_path)
 
         # =====================================================================
         # Pass 2 — Render
@@ -428,6 +443,7 @@ def run_iff_instruction_tuning(
                         out_path=out_path,
                         iff_ylim=iff_ylim,
                         iff_ylabel=response_ylabel,
+                        bar_color=scheme.session_color[session_id],
                     )
                     print(
                         f"[IFF Instruction Tuning] {metric_subdir} / {category_col} / "
@@ -459,28 +475,50 @@ def run_iff_instruction_tuning(
                     )
                     continue
 
-                overlay_path = (
+                overlay_path_by_type = (
                     metric_dir
                     / category_col
                     / gesture_subset
-                    / "overlay_instruction_tuning.png"
+                    / "overlay_instruction_tuning_by_type.png"
                 )
                 render_overlay_instruction_tuning(
                     session_category_data=overlay_session_data,
                     category_col=category_col,
                     gesture_subset=gesture_subset,
-                    out_path=overlay_path,
+                    out_path=overlay_path_by_type,
                     iff_ylim=iff_ylim,
-                    session_colors=colors,
+                    session_colors={sid: scheme.session_color[sid] for sid in overlay_session_data},
                     iff_ylabel=response_ylabel,
+                    legend_mode="by_type",
+                    session_neuron_types=scheme.session_neuron_type,
+                    type_colors=scheme.type_color,
                 )
-                overlay_csv_path = overlay_path.with_suffix(".csv")
+                overlay_path_by_session = (
+                    metric_dir
+                    / category_col
+                    / gesture_subset
+                    / "overlay_instruction_tuning_by_session.png"
+                )
+                render_overlay_instruction_tuning(
+                    session_category_data=overlay_session_data,
+                    category_col=category_col,
+                    gesture_subset=gesture_subset,
+                    out_path=overlay_path_by_session,
+                    iff_ylim=iff_ylim,
+                    session_colors={sid: scheme.session_color[sid] for sid in overlay_session_data},
+                    iff_ylabel=response_ylabel,
+                    legend_mode="by_session",
+                    session_neuron_types=scheme.session_neuron_type,
+                    type_colors=scheme.type_color,
+                )
+                overlay_csv_path = overlay_path_by_type.parent / "overlay_instruction_tuning.csv"
                 pd.concat(overlay_csv_dfs, ignore_index=True).to_csv(
                     overlay_csv_path, index=False
                 )
                 print(
                     f"[IFF Instruction Tuning] {metric_subdir} / {category_col} / "
-                    f"{gesture_subset}: saved {overlay_path.name}",
+                    f"{gesture_subset}: saved {overlay_path_by_type.name} + "
+                    f"{overlay_path_by_session.name}",
                     flush=True,
                 )
 
