@@ -2,7 +2,8 @@
 
 **Date:** 2026-05-31
 **Author:** Basil
-**Status:** In Progress
+**Status:** Completed
+**Completed:** 2026-06-01 14:04
 **Started:** 2026-05-31
 **Base Branch:** `feature/stimulus-tuning-spike-count-metric`
 **Branch:** `feature/stimulus-iff-instruction-tuning`
