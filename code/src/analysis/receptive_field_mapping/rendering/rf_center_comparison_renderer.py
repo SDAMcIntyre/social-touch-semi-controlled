@@ -79,7 +79,7 @@ def render_center_marked_heatmap(
 def render_proximal_distal_aggregate(
     session_centroids: dict[str, dict[str, np.ndarray]],
     output_path: Path,
-    uv_limits: tuple[tuple[float, float], tuple[float, float]] | None = None,
+    mm_limits: tuple[tuple[float, float], tuple[float, float]] | None = None,
 ) -> None:
     if not session_centroids:
         raise ValueError("render_proximal_distal_aggregate: session_centroids is empty")
@@ -108,15 +108,15 @@ def render_proximal_distal_aggregate(
         ax.plot(prox[0], prox[1], 'o', ms=6, color=color, label=session_id, zorder=3)
         ax.plot(dist[0], dist[1], 'D', ms=6, color=color, zorder=3)
 
-    ax.set_xlabel('ΔU from all-gesture center')
-    ax.set_ylabel('ΔV from all-gesture center')
+    ax.set_xlabel('ΔU from all-gesture center (mm)')
+    ax.set_ylabel('ΔV from all-gesture center (mm)')
     ax.set_title('Proximal vs Distal RF Center Offsets')
     ax.set_aspect('equal')
     ax.legend(fontsize=7, loc='best')
 
-    if uv_limits is not None:
-        ax.set_xlim(*uv_limits[0])
-        ax.set_ylim(*uv_limits[1])
+    if mm_limits is not None:
+        ax.set_xlim(*mm_limits[0])
+        ax.set_ylim(*mm_limits[1])
 
     fig.tight_layout()
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -128,7 +128,7 @@ def render_proximal_distal_aggregate(
 def render_proximal_distal_hotspot_aggregate(
     session_hotspots: dict[str, dict[str, np.ndarray]],
     output_path: Path,
-    uv_limits: tuple[tuple[float, float], tuple[float, float]] | None = None,
+    mm_limits: tuple[tuple[float, float], tuple[float, float]] | None = None,
 ) -> None:
     if not session_hotspots:
         raise ValueError("render_proximal_distal_hotspot_aggregate: session_hotspots is empty")
@@ -157,15 +157,15 @@ def render_proximal_distal_hotspot_aggregate(
         ax.plot(prox[0], prox[1], 'o', ms=6, color=color, label=session_id, zorder=3)
         ax.plot(dist[0], dist[1], 'D', ms=6, color=color, zorder=3)
 
-    ax.set_xlabel('ΔU from stroke hotspot')
-    ax.set_ylabel('ΔV from stroke hotspot')
+    ax.set_xlabel('ΔU from stroke hotspot (mm)')
+    ax.set_ylabel('ΔV from stroke hotspot (mm)')
     ax.set_title('Proximal vs Distal RF Hotspot Offsets')
     ax.set_aspect('equal')
     ax.legend(fontsize=7, loc='best')
 
-    if uv_limits is not None:
-        ax.set_xlim(*uv_limits[0])
-        ax.set_ylim(*uv_limits[1])
+    if mm_limits is not None:
+        ax.set_xlim(*mm_limits[0])
+        ax.set_ylim(*mm_limits[1])
 
     fig.tight_layout()
     output_path.parent.mkdir(parents=True, exist_ok=True)

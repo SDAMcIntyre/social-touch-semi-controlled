@@ -12,6 +12,9 @@ from analysis.receptive_field_mapping.rendering.rf_boundary_comparison_renderer 
     render_boundary_metric_panels,
     render_session_gesture_heatmap,
 )
+from analysis.receptive_field_mapping.rendering.rf_population_map_renderer import (
+    compute_uv_to_mm_scale,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -19,8 +22,8 @@ PANEL_METRICS = [
     'area_mm2',
     'perimeter_mm',
     'circularity',
-    'pca_major_uv',
-    'pca_minor_uv',
+    'pca_major_mm',
+    'pca_minor_mm',
     'pca_aspect_ratio',
     'pca_orientation_deg',
     'mean_iff_on_contour',
@@ -153,6 +156,11 @@ def _load_boundary_metrics_from_npz(
     npz = np.load(npz_path, allow_pickle=True)
     gesture_types = list(npz['gesture_types'])
 
+    forearm_uv = npz['forearm_uv'].astype(np.float64)
+    forearm_V = npz['forearm_V'].astype(np.float64)
+    forearm_faces = npz['forearm_faces'].astype(np.int32)
+    uv_to_mm = compute_uv_to_mm_scale(forearm_uv, forearm_V, forearm_faces)
+
     rows: list[dict] = []
     contours_by_gtype: dict[str, np.ndarray] = {}
     centroids_by_gtype: dict[str, np.ndarray] = {}
@@ -174,50 +182,52 @@ def _load_boundary_metrics_from_npz(
             area_mm2 = float(npz[f'boundary_area_xyz_mm2_{gtype}'])
             perimeter_mm = float(npz[f'boundary_perimeter_xyz_mm_{gtype}'])
             circularity = float(npz[f'boundary_circularity_{gtype}'])
-            pca_major_uv = float(npz[f'boundary_pca_major_uv_{gtype}'])
-            pca_minor_uv = float(npz[f'boundary_pca_minor_uv_{gtype}'])
+            pca_major_mm = float(npz[f'boundary_pca_major_uv_{gtype}']) * uv_to_mm
+            pca_minor_mm = float(npz[f'boundary_pca_minor_uv_{gtype}']) * uv_to_mm
             pca_orientation_deg = float(npz[f'boundary_pca_orientation_deg_{gtype}'])
             mean_iff_on_contour = float(npz[f'boundary_mean_iff_on_contour_{gtype}'])
-            area_uv = float(npz[f'boundary_area_uv_{gtype}'])
-            perimeter_uv = float(npz[f'boundary_perimeter_uv_{gtype}'])
+            area_uv_mm2 = float(npz[f'boundary_area_uv_{gtype}']) * uv_to_mm ** 2
+            perimeter_uv_mm = float(npz[f'boundary_perimeter_uv_{gtype}']) * uv_to_mm
             centroid_xyz = npz[f'boundary_centroid_xyz_{gtype}'].astype(np.float64)
 
-            pca_aspect_ratio = pca_major_uv / pca_minor_uv if pca_minor_uv != 0.0 else float('nan')
+            pca_aspect_ratio = pca_major_mm / pca_minor_mm if pca_minor_mm != 0.0 else float('nan')
 
             row = {
                 'session_id': session_id,
                 'gesture_type': gtype,
+                'uv_to_mm_scale': uv_to_mm,
                 'area_mm2': area_mm2,
                 'perimeter_mm': perimeter_mm,
                 'circularity': circularity,
-                'pca_major_uv': pca_major_uv,
-                'pca_minor_uv': pca_minor_uv,
+                'pca_major_mm': pca_major_mm,
+                'pca_minor_mm': pca_minor_mm,
                 'pca_aspect_ratio': pca_aspect_ratio,
                 'pca_orientation_deg': pca_orientation_deg,
                 'mean_iff_on_contour': mean_iff_on_contour,
                 'centroid_x_mm': float(centroid_xyz[0]),
                 'centroid_y_mm': float(centroid_xyz[1]),
                 'centroid_z_mm': float(centroid_xyz[2]),
-                'area_uv': area_uv,
-                'perimeter_uv': perimeter_uv,
+                'area_uv_mm2': area_uv_mm2,
+                'perimeter_uv_mm': perimeter_uv_mm,
             }
         else:
             row = {
                 'session_id': session_id,
                 'gesture_type': gtype,
+                'uv_to_mm_scale': uv_to_mm,
                 'area_mm2': float('nan'),
                 'perimeter_mm': float('nan'),
                 'circularity': float('nan'),
-                'pca_major_uv': float('nan'),
-                'pca_minor_uv': float('nan'),
+                'pca_major_mm': float('nan'),
+                'pca_minor_mm': float('nan'),
                 'pca_aspect_ratio': float('nan'),
                 'pca_orientation_deg': float('nan'),
                 'mean_iff_on_contour': float('nan'),
                 'centroid_x_mm': float('nan'),
                 'centroid_y_mm': float('nan'),
                 'centroid_z_mm': float('nan'),
-                'area_uv': float('nan'),
-                'perimeter_uv': float('nan'),
+                'area_uv_mm2': float('nan'),
+                'perimeter_uv_mm': float('nan'),
             }
 
         rows.append(row)
@@ -270,19 +280,20 @@ def _build_summary_dataframe(
     df = df.astype({
         'session_id': str,
         'gesture_type': str,
+        'uv_to_mm_scale': np.float64,
         'area_mm2': np.float64,
         'perimeter_mm': np.float64,
         'circularity': np.float64,
-        'pca_major_uv': np.float64,
-        'pca_minor_uv': np.float64,
+        'pca_major_mm': np.float64,
+        'pca_minor_mm': np.float64,
         'pca_aspect_ratio': np.float64,
         'pca_orientation_deg': np.float64,
         'mean_iff_on_contour': np.float64,
         'centroid_x_mm': np.float64,
         'centroid_y_mm': np.float64,
         'centroid_z_mm': np.float64,
-        'area_uv': np.float64,
-        'perimeter_uv': np.float64,
+        'area_uv_mm2': np.float64,
+        'perimeter_uv_mm': np.float64,
     })
 
     return df, contour_data, centroid_data
