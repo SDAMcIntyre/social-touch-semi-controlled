@@ -30,7 +30,7 @@ def run_proximal_distal_center_comparison(
     output_dir: Path,
     force_processing: bool = False,
     heatmap_space: str = "linear",
-    cmap: str = "jet",
+    cmap: str = "inferno",
     iff_metric: str = "mean",
 ) -> None:
     if iff_metric not in IFF_METRICS:

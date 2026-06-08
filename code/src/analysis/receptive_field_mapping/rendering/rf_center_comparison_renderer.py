@@ -26,7 +26,7 @@ def render_center_marked_heatmap(
     xlim: tuple[float, float] | None = None,
     ylim: tuple[float, float] | None = None,
     heatmap_space: str = "linear",
-    cmap: str = "jet",
+    cmap: str = "inferno",
     peak_uv: np.ndarray | None = None,
 ) -> None:
     norm = LogNorm(vmin=vmin, vmax=vmax) if heatmap_space == "log" else Normalize(vmin=vmin, vmax=vmax)

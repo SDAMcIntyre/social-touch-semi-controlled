@@ -88,7 +88,7 @@ def run_population_response_field_extraction(
     median_filter_size: int | None = None,
     inflection_sigma: float | None = None,
     heatmap_space: str = "linear",
-    cmap: str = "jet",
+    cmap: str = "inferno",
     iff_metric: str = "mean",
 ) -> None:
     """Render per-session 2D population RF heatmap PNGs projected via SLIM UV.
@@ -540,6 +540,7 @@ def run_population_response_field_extraction(
                 precomputed_grids=precomputed_grids,
                 inflection_boundaries=inflection_boundaries,
                 heatmap_space=heatmap_space,
+                cmap=cmap,
             )
             sd.produced.append(composite_path)
             print(
@@ -564,12 +565,13 @@ def run_population_response_field_extraction(
                 xlim=global_uv_xlim,
                 ylim=global_uv_ylim,
                 heatmap_space=heatmap_space,
+                cmap=cmap,
             )
             sd.produced.append(standalone_path)
             print(f"[Population Response Fields] {sd.session_id}: saved {standalone_path.name}")
 
         colorbar_path = sd.output_dir / f'{sd.session_id}_rf_population_colorbar.png'
-        render_population_rf_colorbar(output_path=colorbar_path, vmax=global_vmax, vmin=global_vmin, heatmap_space=heatmap_space)
+        render_population_rf_colorbar(output_path=colorbar_path, vmax=global_vmax, vmin=global_vmin, heatmap_space=heatmap_space, cmap=cmap)
         sd.produced.append(colorbar_path)
         print(f"[Population Response Fields] {sd.session_id}: saved {colorbar_path.name}")
 
@@ -603,6 +605,7 @@ def run_population_response_field_extraction(
                 output_path=circular_path,
                 vertex_colors=sd.slim_vertex_colors,
                 heatmap_space=heatmap_space,
+                cmap=cmap,
             )
             sd.produced.append(circular_path)
             print(f"[Population Response Fields] {sd.session_id}: saved {circular_path.name}")

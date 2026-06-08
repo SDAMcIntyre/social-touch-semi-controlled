@@ -113,7 +113,7 @@ class RFSurfaceViewer(QMainWindow):
         self._plotter.add_mesh(
             surface,
             scalars="mean_iff",
-            cmap="jet",
+            cmap="inferno",
             show_scalar_bar=True,
             scalar_bar_args={"title": "Mean IFF (Hz)", "color": "white"},
         )

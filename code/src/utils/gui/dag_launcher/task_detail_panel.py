@@ -85,10 +85,15 @@ _OPTION_ENUMS: dict[str, list[tuple[str, object]]] = {
         ("Logarithmic", "log"),
     ],
     "cmap": [
-        ("Jet", "jet"),
+        ("Inferno", "inferno"),
+        ("Viridis", "viridis"),
+        ("Plasma", "plasma"),
+        ("Magma", "magma"),
+        ("Cividis", "cividis"),
         ("Nipy Spectral", "nipy_spectral"),
         ("Rainbow", "rainbow"),
         ("Turbo", "turbo"),
+        ("Jet", "jet"),
     ],
     "neuron_mode": [
         ("IFF (default)", "iff"),
