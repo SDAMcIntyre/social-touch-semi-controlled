@@ -2,9 +2,9 @@
 
 **Created:** 2026-06-08 18:00
 **Approved:** —
-**Completed:** —
+**Completed:** 2026-06-09 09:44
 **Author:** Basil Duvernoy
-**Status:** In Progress
+**Status:** Completed
 **Branch:** `feature/uv-to-mm-conversion`
 
 ---
