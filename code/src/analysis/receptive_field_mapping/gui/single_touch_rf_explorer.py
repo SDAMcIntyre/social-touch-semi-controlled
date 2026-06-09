@@ -544,7 +544,7 @@ class SingleTouchRFExplorer(QMainWindow):
         self._plotter.add_mesh(
             cloud,
             scalars="heatmap",
-            cmap="jet",
+            cmap="inferno",
             clim=(0.0, self._data.session_max_value),
             nan_color=[0.3, 0.3, 0.3],
             show_scalar_bar=True,

@@ -72,7 +72,8 @@ def run_cluster_rf_metrics_computation(
             "run_cluster_rf_metrics_computation: either 'cluster_groups' or 'feature_combinations' must be provided."
         )
 
-    camera_settings_dir = output_dir.parent / 'rf_camera_settings'
+    from analysis.pipeline.output_dirs import SPATIAL_SET_CAMERA
+    camera_settings_dir = output_dir.parent / SPATIAL_SET_CAMERA
 
     pairs = _build_pairs(
         cluster_groups, cluster_group_defs, feature_combinations, clustering_profiles,

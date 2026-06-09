@@ -208,7 +208,7 @@ def render_population_rf_map(
     precomputed_grid: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None,
     inflection_boundary: InflectionBoundary | None = None,
     heatmap_space: str = "linear",
-    cmap: str = "jet",
+    cmap: str = "inferno",
 ) -> None:
     """Render a two-panel population RF heatmap (scatter + interpolated) and save as PNG.
 
@@ -376,6 +376,7 @@ def render_population_rf_standalone_interpolated(
     xlim: tuple[float, float] | None = None,
     ylim: tuple[float, float] | None = None,
     heatmap_space: str = "linear",
+    cmap: str = "inferno",
 ) -> None:
     """Render a single-panel interpolated population RF heatmap and save as PNG.
 
@@ -415,6 +416,8 @@ def render_population_rf_standalone_interpolated(
         UV U-axis limits shared across sessions.
     ylim:
         UV V-axis limits shared across sessions.
+    cmap:
+        Matplotlib colormap name (default ``"inferno"``).
     """
     if (boundary_u is None) != (boundary_v is None):
         raise ValueError(
@@ -446,7 +449,7 @@ def render_population_rf_standalone_interpolated(
     display_grid = np.where(interp_grid > 0, interp_grid, np.nan)
     im = ax.pcolormesh(
         u_grid, v_grid, display_grid,
-        cmap='jet', norm=norm, shading='auto',
+        cmap=cmap, norm=norm, shading='auto',
     )
 
     if boundary_u is not None:
@@ -473,6 +476,7 @@ def render_population_rf_colorbar(
     vmax: float,
     vmin: float,
     heatmap_space: str = "linear",
+    cmap: str = "inferno",
 ) -> None:
     """Render a standalone vertical colorbar PNG for population RF heatmaps.
 
@@ -484,11 +488,13 @@ def render_population_rf_colorbar(
         Colour scale upper bound (session-wide max).
     vmin:
         Colour scale lower bound.
+    cmap:
+        Matplotlib colormap name (default ``"inferno"``).
     """
     matplotlib.use('Agg')
 
     norm = LogNorm(vmin=vmin, vmax=vmax) if heatmap_space == "log" else Normalize(vmin=vmin, vmax=vmax)
-    sm = plt.cm.ScalarMappable(cmap='jet', norm=norm)
+    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
     sm.set_array([])
 
     fig, ax = plt.subplots(figsize=(1.2, 4), facecolor='black')
@@ -568,6 +574,7 @@ def render_population_rf_circular_crop(
     vertex_colors: np.ndarray | None = None,
     heatmap_space: str = "linear",
     dpi: int = 300,
+    cmap: str = "inferno",
 ) -> None:
     """Render a transparent circular crop of a population RF heatmap and save as PNG.
 
@@ -575,7 +582,7 @@ def render_population_rf_circular_crop(
     derived from ``compute_uv_to_mm_scale``. The background shows a solid
     triangulated mesh surface with per-face skin colours (or grey if
     ``vertex_colors`` is None) for forearm faces that overlap the circle.
-    The heatmap is drawn with jet colormap fully opaque (alpha=1.0).
+    The heatmap is drawn fully opaque (alpha=1.0).
     No axes, titles, spines, or decorations are included.
 
     Parameters
@@ -609,6 +616,8 @@ def render_population_rf_circular_crop(
         ``"log"`` for LogNorm; any other value uses linear Normalize.
     dpi:
         Output resolution (default 300).
+    cmap:
+        Matplotlib colormap name (default ``"inferno"``).
     """
     from matplotlib.patches import Circle
 
@@ -642,7 +651,7 @@ def render_population_rf_circular_crop(
     else:
         norm = Normalize(vmin=vmin, vmax=vmax)
 
-    ax.pcolormesh(u_grid, v_grid, interp_grid, cmap='jet', norm=norm, alpha=1.0, zorder=1, shading='auto')
+    ax.pcolormesh(u_grid, v_grid, interp_grid, cmap=cmap, norm=norm, alpha=1.0, zorder=1, shading='auto')
 
     clip_circle = Circle(center_uv, radius_uv, transform=ax.transData, fill=False, edgecolor='none')
     ax.add_patch(clip_circle)
@@ -679,6 +688,7 @@ def render_population_rf_composite(
     precomputed_grids: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]] | None = None,
     inflection_boundaries: dict[str, InflectionBoundary | None] | None = None,
     heatmap_space: str = "linear",
+    cmap: str = "inferno",
 ) -> None:
     """Render a multi-panel composite (one panel per gesture type) and save as PNG.
 
@@ -713,6 +723,8 @@ def render_population_rf_composite(
     inflection_boundaries:
         If provided, maps gesture type to an ``InflectionBoundary`` (or ``None``).
         Boundaries are drawn on the interpolated panel only.
+    cmap:
+        Matplotlib colormap name (default ``"inferno"``).
     """
     matplotlib.use('Agg')
 
@@ -771,7 +783,7 @@ def render_population_rf_composite(
             if len(valid_uv) > 0:
                 ax.scatter(
                     valid_uv[:, 0], valid_uv[:, 1],
-                    c=valid_vals, cmap='jet', norm=norm,
+                    c=valid_vals, cmap=cmap, norm=norm,
                     s=20, alpha=0.9, linewidths=0, zorder=3, rasterized=True,
                 )
         else:
@@ -786,7 +798,7 @@ def render_population_rf_composite(
             display_z = np.where(grid_z > 0, grid_z, np.nan)
             ax.pcolormesh(
                 grid_u, grid_v, display_z,
-                cmap='jet', norm=norm, shading='auto',
+                cmap=cmap, norm=norm, shading='auto',
             )
             if (
                 inflection_boundaries is not None
@@ -811,7 +823,7 @@ def render_population_rf_composite(
             ax.set_xlabel('U')
             ax.set_ylabel('')
 
-    sm = plt.cm.ScalarMappable(cmap='jet', norm=norm)
+    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
     sm.set_array([])
     cbar = fig.colorbar(sm, ax=axes, label='Mean IFF / spike', shrink=0.8)
     cbar.ax.yaxis.set_tick_params(color='white')

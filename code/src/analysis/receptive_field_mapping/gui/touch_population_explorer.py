@@ -605,7 +605,7 @@ class TouchPopulationExplorer(QMainWindow):
         self._actor = self._plotter.add_mesh(
             self._cloud,
             scalars="heatmap",
-            cmap="jet",
+            cmap="inferno",
             clim=self._heatmap_clim(),
             nan_color=[0.3, 0.3, 0.3],
             below_color=[0.75, 0.75, 0.75],

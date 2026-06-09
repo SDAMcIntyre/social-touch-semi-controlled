@@ -66,6 +66,7 @@ class _SessionCompositeData:
     forearm_V: np.ndarray
     results: dict
     session_vmax: float
+    session_vmin: float
     min_overlap_pct: float
     sentinel: Path
     produced: List[Path] = field(default_factory=list)
@@ -88,7 +89,7 @@ def run_population_response_field_extraction(
     median_filter_size: int | None = None,
     inflection_sigma: float | None = None,
     heatmap_space: str = "linear",
-    cmap: str = "jet",
+    cmap: str = "inferno",
     iff_metric: str = "mean",
 ) -> None:
     """Render per-session 2D population RF heatmap PNGs projected via SLIM UV.
@@ -435,6 +436,7 @@ def run_population_response_field_extraction(
             forearm_V=slim_V,
             results=results,
             session_vmax=session_vmax,
+            session_vmin=session_vmin,
             min_overlap_pct=min_overlap_pct,
             sentinel=sentinel,
             produced=produced,
@@ -540,6 +542,7 @@ def run_population_response_field_extraction(
                 precomputed_grids=precomputed_grids,
                 inflection_boundaries=inflection_boundaries,
                 heatmap_space=heatmap_space,
+                cmap=cmap,
             )
             sd.produced.append(composite_path)
             print(
@@ -564,14 +567,26 @@ def run_population_response_field_extraction(
                 xlim=global_uv_xlim,
                 ylim=global_uv_ylim,
                 heatmap_space=heatmap_space,
+                cmap=cmap,
             )
             sd.produced.append(standalone_path)
             print(f"[Population Response Fields] {sd.session_id}: saved {standalone_path.name}")
 
         colorbar_path = sd.output_dir / f'{sd.session_id}_rf_population_colorbar.png'
-        render_population_rf_colorbar(output_path=colorbar_path, vmax=global_vmax, vmin=global_vmin, heatmap_space=heatmap_space)
+        render_population_rf_colorbar(output_path=colorbar_path, vmax=global_vmax, vmin=global_vmin, heatmap_space=heatmap_space, cmap=cmap)
         sd.produced.append(colorbar_path)
         print(f"[Population Response Fields] {sd.session_id}: saved {colorbar_path.name}")
+
+        colorbar_local_path = sd.output_dir / f'{sd.session_id}_rf_population_colorbar_local.png'
+        render_population_rf_colorbar(
+            output_path=colorbar_local_path,
+            vmax=sd.session_vmax,
+            vmin=sd.session_vmin,
+            heatmap_space=heatmap_space,
+            cmap=cmap,
+        )
+        sd.produced.append(colorbar_local_path)
+        print(f"[Population Response Fields] {sd.session_id}: saved {colorbar_local_path.name}")
 
         all_boundary = sd.gesture_boundaries.get('all')
         if all_boundary is None:
@@ -603,9 +618,36 @@ def run_population_response_field_extraction(
                 output_path=circular_path,
                 vertex_colors=sd.slim_vertex_colors,
                 heatmap_space=heatmap_space,
+                cmap=cmap,
             )
             sd.produced.append(circular_path)
             print(f"[Population Response Fields] {sd.session_id}: saved {circular_path.name}")
+
+            circular_local_path = (
+                sd.output_dir / f'{sd.session_id}_rf_population_all_circular_{center_label}_local.png'
+            )
+            print(
+                f"[Population Response Fields] {sd.session_id}: "
+                f"rendering 'all' circular {center_label} (local scale)..."
+            )
+            render_population_rf_circular_crop(
+                u_grid=all_grid_u,
+                v_grid=all_grid_v,
+                interp_grid=all_grid_z,
+                forearm_uv=sd.forearm_uv,
+                forearm_V=sd.forearm_V,
+                forearm_faces=sd.forearm_faces,
+                center_uv=center_uv,
+                radius_mm=50.0,
+                vmax=sd.session_vmax,
+                vmin=sd.session_vmin,
+                output_path=circular_local_path,
+                vertex_colors=sd.slim_vertex_colors,
+                heatmap_space=heatmap_space,
+                cmap=cmap,
+            )
+            sd.produced.append(circular_local_path)
+            print(f"[Population Response Fields] {sd.session_id}: saved {circular_local_path.name}")
 
         _write_sentinel(sd.sentinel, sd.session_id, produced=sd.produced,
                         inflection_boundaries=sd.gesture_boundaries,

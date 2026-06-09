@@ -12,6 +12,11 @@ matplotlib.use('Agg')
 import matplotlib.gridspec as gridspec
 import matplotlib.pyplot as plt
 
+from analysis.pipeline.output_dirs import (
+    CROSS_EXTRACT_GRID_METRICS,
+    CROSS_MAP_FEATURE_GRID,
+    SPATIAL_SET_CAMERA,
+)
 from analysis.receptive_field_mapping.pipelines.rf_population_grid_pipeline import (
     run_population_rf_grid,
     PopulationRFGridConfig,
@@ -148,6 +153,7 @@ def render_session_comparison_heatmap(
 def run_session_comparison_visualization(
     input_items: list,
     database_path: Path,
+    output_dir: Path,
     features: dict,
     metric_name: str = "mean_iff",
     neuron_mode: str = "iff",
@@ -161,7 +167,7 @@ def run_session_comparison_visualization(
             f"got {len(features)}: {list(features)}"
         )
 
-    comparison_root = database_path / "4_analysed" / "session_comparison"
+    comparison_root = output_dir
     output_heatmaps = comparison_root / "session_comparison_heatmaps" / metric_name
     sentinel = output_heatmaps / "summary.json"
 
@@ -173,14 +179,16 @@ def run_session_comparison_visualization(
         compute_baseline=False,
     )
 
-    run_population_rf_grid(input_items, comparison_root, grid_config, force)
+    grid_output_dir = comparison_root / CROSS_MAP_FEATURE_GRID
+    run_population_rf_grid(input_items, grid_output_dir, grid_config, force)
 
     # load_rf_camera_rotation raises ValueError when settings are absent.
-    # run_population_rf_grid_metrics reads from output_dir / 'rf_camera_settings'.
+    # run_population_rf_grid_metrics reads from output_dir.parent / SPATIAL_SET_CAMERA.
     # We create a symlink so the metrics pipeline finds the authoritative settings
     # that were set via the RF camera settings viewer.
-    camera_settings_src = database_path / "4_analysed" / "rf_camera_settings"
-    camera_settings_dst = comparison_root / "rf_camera_settings"
+    camera_settings_src = database_path / "4_analysed" / SPATIAL_SET_CAMERA
+    metrics_output_dir = comparison_root / CROSS_EXTRACT_GRID_METRICS
+    camera_settings_dst = metrics_output_dir.parent / SPATIAL_SET_CAMERA
     if not camera_settings_dst.exists() and camera_settings_src.exists():
         try:
             os.symlink(str(camera_settings_src), str(camera_settings_dst),
@@ -202,15 +210,15 @@ def run_session_comparison_visualization(
     metrics_input_items = [
         {
             **item,
-            "grid_dir": comparison_root / "population_rf_grid" / item["session_id"],
+            "grid_dir": grid_output_dir / item["session_id"],
         }
         for item in input_items
     ]
 
     metrics_config = PopulationRFGridMetricsConfig(projection_method=projection_method)
-    run_population_rf_grid_metrics(metrics_input_items, comparison_root, metrics_config, force)
+    run_population_rf_grid_metrics(metrics_input_items, metrics_output_dir, metrics_config, force)
 
-    metrics_base = comparison_root / "population_rf_grid_metrics"
+    metrics_base = metrics_output_dir
     all_csv_paths = [
         p
         for item in input_items

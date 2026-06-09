@@ -249,8 +249,9 @@ def explore_rf_surface_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
     neuron_mode: str = "iff",
+    iff_metric: str = "mean",
 ) -> None:
-    """Interactive 3D RF surface viewer: Z = mean IFF, coloured by jet colormap.
+    """Interactive 3D RF surface viewer: Z = mean IFF, coloured by inferno colormap.
 
     Loads the per-session ``_population_response_fields.npz`` produced by
     ``spatial_extract_boundaries`` and presents a rotatable 3D surface showing
@@ -259,7 +260,7 @@ def explore_rf_surface_flow(
     print(f"[Batch Analysis] Launching RF surface viewer for {len(input_items)} item(s)...")
     if not input_items:
         return
-    launch_rf_surface_viewer(input_items, neuron_mode=neuron_mode)
+    launch_rf_surface_viewer(input_items, neuron_mode=neuron_mode, iff_metric=iff_metric)
 
 
 def main():
@@ -371,6 +372,7 @@ def main():
             "func": explore_rf_surface_flow,
             "params": lambda: {
                 "neuron_mode": dag_handler.get_task_options("explore_rf_surface").get("neuron_mode", "iff"),
+                "iff_metric": dag_handler.get_task_options("explore_rf_surface").get("iff_metric", "mean"),
             },
         },
     ]

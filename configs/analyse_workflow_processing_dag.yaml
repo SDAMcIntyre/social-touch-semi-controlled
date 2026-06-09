@@ -185,14 +185,14 @@ tasks:
     category: spatial_sensitivity
     enabled: true
     options:
-      force_processing: false
+      force_processing: true
       neuron_mode: iff
       iff_metric: both
       min_overlap_pct: 25
       median_filter_size: 5
       inflection_sigma: 5.0
       heatmap_space: linear
-      cmap: jet
+      cmap: inferno
     depends_on: [spatial_map_single_touch, spatial_precompute_slim_uv]
 
   # Aggregate inflection boundary metrics across sessions and render comparison visuals.
@@ -203,7 +203,7 @@ tasks:
     category: spatial_sensitivity
     enabled: true
     options:
-      force_processing: false
+      force_processing: true
       iff_metric: both
     depends_on: [spatial_extract_boundaries]
 
@@ -215,10 +215,10 @@ tasks:
     category: spatial_sensitivity
     enabled: true
     options:
-      force_processing: false
+      force_processing: true
       iff_metric: both
       heatmap_space: linear
-      cmap: jet
+      cmap: inferno
     depends_on: [spatial_extract_boundaries]
 
   # Stage 2b (Feature Extraction): Per-session feature extraction. Each enabled feature extracts to its own folder.
@@ -297,19 +297,19 @@ tasks:
     category: stimulus_sensitivity
     enabled: true
     options:
-      force_processing: true
+      force_processing: false
       response_metric: all
       tuning_features:
       - contact_area_mean
       - pressure_mean
       - hand_velocity_amplitude_mean
       - contact_depth_mean
-      n_bins: 25
+      n_bins: 50
       clip_percentile: 1.0
       smoothing_sigma: 1.5
       overlap_ratio: 0.25                  # 0.0 to 0.5; sliding-window bin overlap
       binning_strategy: "raw_dots"         # sliding_window | raw_dots
-      fit_degree: 3                        # raw_dots: polynomial fit degree
+      fit_degree: 4                        # raw_dots: polynomial fit degree
       dot_alpha: 0.35                      # raw_dots: per-session scatter opacity
       show_fit_ci: true                    # raw_dots: degree-1 CI band on fit line
       metadata_dir: touch_prepare_sessions # under <database>/4_analysed/

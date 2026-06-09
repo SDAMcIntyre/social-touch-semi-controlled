@@ -38,6 +38,9 @@ from utils.pipeline.dag_config_model import DagConfigModel
 class LauncherWindow(QMainWindow):
     """Three-column GUI: workflow selector (left), tasks (center), kinect dirs (right)."""
 
+    _WORKFLOW_PANEL_WIDTH = 200
+    _SESSION_PANEL_WIDTH = 200
+
     def __init__(
         self,
         entries: list[WorkflowEntry],
@@ -265,7 +268,8 @@ class LauncherWindow(QMainWindow):
             w = self._splitter.width()
             h = self._vsplitter.height()
             if w > 0 and h > 0:
-                self._splitter.setSizes([w // 4, w // 2, w // 4])
+                center = max(w - self._WORKFLOW_PANEL_WIDTH - self._SESSION_PANEL_WIDTH, 0)
+                self._splitter.setSizes([self._WORKFLOW_PANEL_WIDTH, center, self._SESSION_PANEL_WIDTH])
                 self._vsplitter.setSizes([int(h * 0.7), int(h * 0.3)])
                 self._initial_sizes_applied = True
 

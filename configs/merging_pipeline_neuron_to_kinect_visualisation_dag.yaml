@@ -6,7 +6,7 @@
 # ==============================================================================
 
 parameters:
-  kinect_configs: valid_configs_ST13-02
+  kinect_configs: valid_configs_ST14-02
 tasks:
   view_neural_kinect_scene:
     enabled: false

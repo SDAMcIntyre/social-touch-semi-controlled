@@ -444,7 +444,7 @@ class TouchPlaybackExplorer(QMainWindow):
         self._plotter_right.add_mesh(
             cloud_right,
             scalars="heatmap",
-            cmap="jet",
+            cmap="inferno",
             clim=clim,
             nan_color=[0.3, 0.3, 0.3],
             show_scalar_bar=True,
@@ -513,7 +513,7 @@ class TouchPlaybackExplorer(QMainWindow):
             self._plotter_right.add_mesh(
                 self._forearm_cloud_right,
                 scalars="heatmap",
-                cmap="jet",
+                cmap="inferno",
                 clim=clim,
                 nan_color=[0.3, 0.3, 0.3],
                 show_scalar_bar=True,
@@ -904,7 +904,7 @@ class TouchPlaybackExplorer(QMainWindow):
         pl_right.add_mesh(
             cloud_right,
             scalars="heatmap",
-            cmap="jet",
+            cmap="inferno",
             clim=clim,
             nan_color=[0.3, 0.3, 0.3],
             show_scalar_bar=True,
