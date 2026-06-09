@@ -2,7 +2,8 @@
 
 **Date:** 2026-06-08
 **Author:** Basil Duvernoy
-**Status:** In Progress
+**Status:** Completed
+**Completed:** 2026-06-09 09:44
 **Base Branch:** `feature/uv-to-mm-conversion`
 **Branch:** `feature/replace-jet-colormap`
 
