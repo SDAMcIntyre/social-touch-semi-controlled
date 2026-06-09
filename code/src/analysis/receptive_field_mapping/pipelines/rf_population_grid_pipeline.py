@@ -283,9 +283,9 @@ def run_population_rf_grid(
         touch_features_dir = item.get("touch_features_dir")
 
         if group_name is not None:
-            session_out_dir = output_dir / "population_rf_grid" / group_name / session_id
+            session_out_dir = output_dir / group_name / session_id
         else:
-            session_out_dir = output_dir / "population_rf_grid" / session_id
+            session_out_dir = output_dir / session_id
 
         if config.per_gesture_type:
             sentinel_paths = sorted(session_out_dir.glob("population_rf_grid_*_summary.json"))

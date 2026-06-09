@@ -319,6 +319,7 @@ def run_stimulus_session_comparison(
                 plot_type=plot_type,
                 output_path=grid_png,
                 gesture_type=gesture,
+                ylims=ylims,
             )
             print(
                 f"[Stimulus Compare Sessions] {group_name} / {gesture}: "

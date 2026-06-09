@@ -448,7 +448,7 @@ def spatial_extract_boundaries_flow(
     median_filter_size: int | None = None,
     inflection_sigma: float | None = None,
     heatmap_space: str = "linear",
-    cmap: str = "jet",
+    cmap: str = "inferno",
 ) -> None:
     """Render per-session 2D population RF heatmap PNGs projected via SLIM UV.
 
@@ -511,7 +511,7 @@ def spatial_compare_rf_centers_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
     heatmap_space: str = "linear",
-    cmap: str = "jet",
+    cmap: str = "inferno",
     iff_metric: str = "mean",
 ) -> None:
     """Compare RF center positions between proximal and distal strokes across sessions.
@@ -1493,7 +1493,7 @@ def _build_pipeline_stages(dag_handler: DagConfigHandler, items_to_process) -> l
                 "iff_metric": dag_handler.get_task_options("spatial_extract_boundaries").get("iff_metric", "mean"),
                 "min_overlap_pct": float(dag_handler.get_task_options("spatial_extract_boundaries").get("min_overlap_pct", 25.0)),
                 "heatmap_space": dag_handler.get_task_options("spatial_extract_boundaries").get("heatmap_space", "linear"),
-                "cmap": dag_handler.get_task_options("spatial_extract_boundaries").get("cmap", "jet"),
+                "cmap": dag_handler.get_task_options("spatial_extract_boundaries").get("cmap", "inferno"),
                 **(
                     {"median_filter_size": int(dag_handler.get_task_options("spatial_extract_boundaries")["median_filter_size"])}
                     if dag_handler.get_task_options("spatial_extract_boundaries").get("median_filter_size") is not None
@@ -1518,7 +1518,7 @@ def _build_pipeline_stages(dag_handler: DagConfigHandler, items_to_process) -> l
             "func": spatial_compare_rf_centers_flow,
             "params": lambda: {
                 "heatmap_space": dag_handler.get_task_options("spatial_compare_rf_centers").get("heatmap_space", "linear"),
-                "cmap": dag_handler.get_task_options("spatial_compare_rf_centers").get("cmap", "jet"),
+                "cmap": dag_handler.get_task_options("spatial_compare_rf_centers").get("cmap", "inferno"),
                 "iff_metric": dag_handler.get_task_options("spatial_compare_rf_centers").get("iff_metric", "mean"),
             },
         },

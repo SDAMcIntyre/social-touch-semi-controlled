@@ -9,6 +9,7 @@ from matplotlib.colors import BoundaryNorm, ListedColormap
 import numpy as np
 import pandas as pd
 
+from analysis.pipeline.output_dirs import CROSS_EXTRACT_GRID_METRICS
 from utils.should_process_task import should_process_task
 
 matplotlib.use('Agg')
@@ -221,7 +222,7 @@ def run_population_rf_grid_metrics_visualization(
     sentinel = output_dir / "heatmaps_summary.json"
 
     if metrics_base_dir is None:
-        metrics_base_dir = output_dir.parent / "population_rf_grid_metrics"
+        metrics_base_dir = output_dir.parent / CROSS_EXTRACT_GRID_METRICS
 
     csv_paths = []
     for item in input_items:

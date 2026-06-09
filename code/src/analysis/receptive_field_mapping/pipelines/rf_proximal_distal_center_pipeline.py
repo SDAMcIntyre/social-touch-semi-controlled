@@ -16,6 +16,7 @@ from analysis.receptive_field_mapping.rendering.rf_center_comparison_renderer im
 )
 from analysis.receptive_field_mapping.rendering.rf_population_map_renderer import (
     compute_standalone_figwidth,
+    compute_uv_to_mm_scale,
 )
 
 logger = logging.getLogger(__name__)
@@ -29,7 +30,7 @@ def run_proximal_distal_center_comparison(
     output_dir: Path,
     force_processing: bool = False,
     heatmap_space: str = "linear",
-    cmap: str = "jet",
+    cmap: str = "inferno",
     iff_metric: str = "mean",
 ) -> None:
     if iff_metric not in IFF_METRICS:
@@ -72,6 +73,11 @@ def run_proximal_distal_center_comparison(
 
         npz = np.load(npz_path, allow_pickle=True)
 
+        forearm_uv = npz['forearm_uv'].astype(np.float64)
+        forearm_V = npz['forearm_V'].astype(np.float64)
+        forearm_faces = npz['forearm_faces'].astype(np.int32)
+        uv_to_mm = compute_uv_to_mm_scale(forearm_uv, forearm_V, forearm_faces)
+
         missing = [g for g in _REQUIRED_GTYPES if f'boundary_centroid_uv_{g}' not in npz]
         if missing:
             for mg in missing:
@@ -85,9 +91,9 @@ def run_proximal_distal_center_comparison(
         centroid_proximal = npz['boundary_centroid_uv_stroke_proximal'].astype(np.float64)
         centroid_distal = npz['boundary_centroid_uv_stroke_distal'].astype(np.float64)
 
-        offset_proximal = centroid_proximal - centroid_all
-        offset_distal = centroid_distal - centroid_all
-        dist_uv = float(np.linalg.norm(centroid_proximal - centroid_distal))
+        offset_proximal = (centroid_proximal - centroid_all) * uv_to_mm
+        offset_distal = (centroid_distal - centroid_all) * uv_to_mm
+        dist_mm = float(np.linalg.norm(centroid_proximal - centroid_distal)) * uv_to_mm
 
         # Task 4.1 — attempt hotspot loading; degrade gracefully if keys missing
         hotspot_available = True
@@ -106,19 +112,18 @@ def run_proximal_distal_center_comparison(
             hotspot_proximal = npz['boundary_peak_uv_stroke_proximal'].astype(np.float64)
             hotspot_distal = npz['boundary_peak_uv_stroke_distal'].astype(np.float64)
 
-            # Task 4.2 — compute hotspot offsets relative to stroke hotspot
-            hotspot_offset_proximal = hotspot_proximal - hotspot_stroke
-            hotspot_offset_distal = hotspot_distal - hotspot_stroke
-            hotspot_dist_uv = float(np.linalg.norm(hotspot_proximal - hotspot_distal))
-            centroid_hotspot_distance_uv_stroke = float(np.linalg.norm(centroid_all - hotspot_stroke))
+            hotspot_offset_proximal = (hotspot_proximal - hotspot_stroke) * uv_to_mm
+            hotspot_offset_distal = (hotspot_distal - hotspot_stroke) * uv_to_mm
+            hotspot_dist_mm = float(np.linalg.norm(hotspot_proximal - hotspot_distal)) * uv_to_mm
+            centroid_hotspot_distance_mm_stroke = float(np.linalg.norm(centroid_all - hotspot_stroke)) * uv_to_mm
         else:
             hotspot_stroke = None
             hotspot_proximal = None
             hotspot_distal = None
             hotspot_offset_proximal = None
             hotspot_offset_distal = None
-            hotspot_dist_uv = None
-            centroid_hotspot_distance_uv_stroke = None
+            hotspot_dist_mm = None
+            centroid_hotspot_distance_mm_stroke = None
 
         gesture_types = list(npz['gesture_types'])
         gestures_with_centroid: dict[str, tuple] = {}
@@ -148,7 +153,6 @@ def run_proximal_distal_center_comparison(
             )
             all_titles.append(title)
 
-        forearm_uv = npz['forearm_uv'].astype(np.float64)
         all_forearm_uv.append(forearm_uv)
 
         valid_data.append({
@@ -161,44 +165,44 @@ def run_proximal_distal_center_comparison(
             'centroid_distal': centroid_distal,
             'offset_proximal': offset_proximal,
             'offset_distal': offset_distal,
-            'dist_uv': dist_uv,
+            'dist_mm': dist_mm,
             'hotspot_available': hotspot_available,
             'hotspot_stroke': hotspot_stroke,
             'hotspot_proximal': hotspot_proximal,
             'hotspot_distal': hotspot_distal,
             'hotspot_offset_proximal': hotspot_offset_proximal,
             'hotspot_offset_distal': hotspot_offset_distal,
-            'hotspot_dist_uv': hotspot_dist_uv,
-            'centroid_hotspot_distance_uv_stroke': centroid_hotspot_distance_uv_stroke,
+            'hotspot_dist_mm': hotspot_dist_mm,
+            'centroid_hotspot_distance_mm_stroke': centroid_hotspot_distance_mm_stroke,
         })
 
-        # Task 4.4 — hotspot CSV columns (NaN when unavailable)
         nan = float('nan')
         summary_rows.append({
             'session_id': session_id,
+            'uv_to_mm_scale': uv_to_mm,
             'centroid_u_all': float(centroid_all[0]),
             'centroid_v_all': float(centroid_all[1]),
             'centroid_u_proximal': float(centroid_proximal[0]),
             'centroid_v_proximal': float(centroid_proximal[1]),
             'centroid_u_distal': float(centroid_distal[0]),
             'centroid_v_distal': float(centroid_distal[1]),
-            'offset_u_proximal': float(offset_proximal[0]),
-            'offset_v_proximal': float(offset_proximal[1]),
-            'offset_u_distal': float(offset_distal[0]),
-            'offset_v_distal': float(offset_distal[1]),
-            'proximal_distal_distance_uv': dist_uv,
+            'offset_u_proximal_mm': float(offset_proximal[0]),
+            'offset_v_proximal_mm': float(offset_proximal[1]),
+            'offset_u_distal_mm': float(offset_distal[0]),
+            'offset_v_distal_mm': float(offset_distal[1]),
+            'proximal_distal_distance_mm': dist_mm,
             'hotspot_u_stroke': float(hotspot_stroke[0]) if hotspot_available else nan,
             'hotspot_v_stroke': float(hotspot_stroke[1]) if hotspot_available else nan,
             'hotspot_u_proximal': float(hotspot_proximal[0]) if hotspot_available else nan,
             'hotspot_v_proximal': float(hotspot_proximal[1]) if hotspot_available else nan,
             'hotspot_u_distal': float(hotspot_distal[0]) if hotspot_available else nan,
             'hotspot_v_distal': float(hotspot_distal[1]) if hotspot_available else nan,
-            'hotspot_offset_u_proximal': float(hotspot_offset_proximal[0]) if hotspot_available else nan,
-            'hotspot_offset_v_proximal': float(hotspot_offset_proximal[1]) if hotspot_available else nan,
-            'hotspot_offset_u_distal': float(hotspot_offset_distal[0]) if hotspot_available else nan,
-            'hotspot_offset_v_distal': float(hotspot_offset_distal[1]) if hotspot_available else nan,
-            'hotspot_proximal_distal_distance_uv': hotspot_dist_uv if hotspot_available else nan,
-            'centroid_hotspot_distance_uv_stroke': centroid_hotspot_distance_uv_stroke if hotspot_available else nan,
+            'hotspot_offset_u_proximal_mm': float(hotspot_offset_proximal[0]) if hotspot_available else nan,
+            'hotspot_offset_v_proximal_mm': float(hotspot_offset_proximal[1]) if hotspot_available else nan,
+            'hotspot_offset_u_distal_mm': float(hotspot_offset_distal[0]) if hotspot_available else nan,
+            'hotspot_offset_v_distal_mm': float(hotspot_offset_distal[1]) if hotspot_available else nan,
+            'hotspot_proximal_distal_distance_mm': hotspot_dist_mm if hotspot_available else nan,
+            'centroid_hotspot_distance_mm_stroke': centroid_hotspot_distance_mm_stroke if hotspot_available else nan,
         })
 
     if not valid_data:
@@ -226,7 +230,7 @@ def run_proximal_distal_center_comparison(
     longest_title = max(all_titles, key=len) if all_titles else ""
     standalone_figwidth = compute_standalone_figwidth(longest_title)
 
-    aggregate_uv_limits = _compute_aggregate_uv_limits(valid_data)
+    aggregate_mm_limits = _compute_aggregate_mm_limits(valid_data)
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -277,29 +281,30 @@ def run_proximal_distal_center_comparison(
     # Pass 3 — cross-session outputs
     df = pd.DataFrame(summary_rows).astype({
         'session_id': str,
+        'uv_to_mm_scale': np.float64,
         'centroid_u_all': np.float64,
         'centroid_v_all': np.float64,
         'centroid_u_proximal': np.float64,
         'centroid_v_proximal': np.float64,
         'centroid_u_distal': np.float64,
         'centroid_v_distal': np.float64,
-        'offset_u_proximal': np.float64,
-        'offset_v_proximal': np.float64,
-        'offset_u_distal': np.float64,
-        'offset_v_distal': np.float64,
-        'proximal_distal_distance_uv': np.float64,
+        'offset_u_proximal_mm': np.float64,
+        'offset_v_proximal_mm': np.float64,
+        'offset_u_distal_mm': np.float64,
+        'offset_v_distal_mm': np.float64,
+        'proximal_distal_distance_mm': np.float64,
         'hotspot_u_stroke': np.float64,
         'hotspot_v_stroke': np.float64,
         'hotspot_u_proximal': np.float64,
         'hotspot_v_proximal': np.float64,
         'hotspot_u_distal': np.float64,
         'hotspot_v_distal': np.float64,
-        'hotspot_offset_u_proximal': np.float64,
-        'hotspot_offset_v_proximal': np.float64,
-        'hotspot_offset_u_distal': np.float64,
-        'hotspot_offset_v_distal': np.float64,
-        'hotspot_proximal_distal_distance_uv': np.float64,
-        'centroid_hotspot_distance_uv_stroke': np.float64,
+        'hotspot_offset_u_proximal_mm': np.float64,
+        'hotspot_offset_v_proximal_mm': np.float64,
+        'hotspot_offset_u_distal_mm': np.float64,
+        'hotspot_offset_v_distal_mm': np.float64,
+        'hotspot_proximal_distal_distance_mm': np.float64,
+        'centroid_hotspot_distance_mm_stroke': np.float64,
     })
     csv_path = output_dir / 'rf_center_proximal_distal_summary.csv'
     df.to_csv(csv_path, index=False)
@@ -316,10 +321,9 @@ def run_proximal_distal_center_comparison(
     render_proximal_distal_aggregate(
         session_centroids=session_centroids,
         output_path=output_dir / 'rf_center_proximal_distal_aggregate.png',
-        uv_limits=aggregate_uv_limits,
+        mm_limits=aggregate_mm_limits,
     )
 
-    # Task 4.5 — render hotspot aggregate using only sessions with hotspot data
     hotspot_valid_data = [d for d in valid_data if d['hotspot_available']]
     if hotspot_valid_data:
         session_hotspots = {
@@ -329,13 +333,13 @@ def run_proximal_distal_center_comparison(
             }
             for d in hotspot_valid_data
         }
-        hotspot_aggregate_uv_limits = _compute_aggregate_uv_limits_from_offsets(
+        hotspot_aggregate_mm_limits = _compute_aggregate_mm_limits_from_offsets(
             [(d['hotspot_offset_proximal'], d['hotspot_offset_distal']) for d in hotspot_valid_data]
         )
         render_proximal_distal_hotspot_aggregate(
             session_hotspots=session_hotspots,
             output_path=output_dir / 'rf_hotspot_proximal_distal_aggregate.png',
-            uv_limits=hotspot_aggregate_uv_limits,
+            mm_limits=hotspot_aggregate_mm_limits,
         )
     else:
         logger.warning("[RF Center Comparison] no sessions with hotspot data — skipping hotspot aggregate plot.")
@@ -345,14 +349,14 @@ def run_proximal_distal_center_comparison(
     logger.info("[RF Center Comparison] wrote sentinel → %s", sentinel_path.name)
 
 
-def _compute_aggregate_uv_limits(
+def _compute_aggregate_mm_limits(
     valid_data: list[dict],
 ) -> tuple[tuple[float, float], tuple[float, float]] | None:
     pairs = [(d['offset_proximal'], d['offset_distal']) for d in valid_data]
-    return _compute_aggregate_uv_limits_from_offsets(pairs)
+    return _compute_aggregate_mm_limits_from_offsets(pairs)
 
 
-def _compute_aggregate_uv_limits_from_offsets(
+def _compute_aggregate_mm_limits_from_offsets(
     offset_pairs: list[tuple[np.ndarray, np.ndarray]],
 ) -> tuple[tuple[float, float], tuple[float, float]] | None:
     all_offsets = []

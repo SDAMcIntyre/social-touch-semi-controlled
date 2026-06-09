@@ -56,7 +56,7 @@ logger = logging.getLogger(__name__)
 
 SIDEBAR_W = 160
 
-_COLORMAPS = ["YlOrRd", "viridis", "plasma", "inferno", "magma", "coolwarm", "RdBu_r", "jet"]
+_COLORMAPS = ["inferno", "viridis", "plasma", "magma", "cividis", "batlow", "YlOrRd", "coolwarm", "RdBu_r", "jet"]
 
 _MODE_BY_CLUSTER = "By Cluster"
 _MODE_BY_SESSION = "By Session"
@@ -71,10 +71,10 @@ class _GallerySettings:
     forearm_size: int = 3
     forearm_spheres: bool = False
     use_vertex_colors: bool = True
-    contact_cmap: str = "jet"
+    contact_cmap: str = "inferno"
     contact_size: float = 5.0
     contact_spheres: bool = False
-    cmap: str = "jet"
+    cmap: str = "inferno"
     display_metric: str = "spike_ratio"
     show_scalar_bar: bool = True
     hull_display_mode: str = "perimeter"

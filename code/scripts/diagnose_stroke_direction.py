@@ -29,6 +29,8 @@ from tkinter import filedialog
 import numpy as np
 import pandas as pd
 
+from analysis.pipeline.output_dirs import TOUCH_PREPARE_SESSIONS
+
 GROUP_KEYS = ['block_order_id', 'trial_id', 'single_touch_id']
 GESTURE_TYPES = ('tap', 'stroke_proximal', 'stroke_distal')
 GROUP_FFILL_COLUMNS = [
@@ -325,7 +327,7 @@ def phase5_interpolation_boundary(raw_dir: Path, preparation_dir: Path) -> None:
 # GUI directory picker
 # ---------------------------------------------------------------------------
 
-_PREPARATION_SUFFIX = Path("4_analysed") / "preparation"
+_PREPARATION_SUFFIX = Path("4_analysed") / TOUCH_PREPARE_SESSIONS
 _MERGED_SUFFIX = Path("3_merged")
 
 

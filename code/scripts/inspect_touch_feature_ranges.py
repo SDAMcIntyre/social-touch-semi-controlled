@@ -15,6 +15,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from analysis.pipeline.output_dirs import STIMULUS_EXTRACT_FEATURES
 from utils import path_tools
 
 TOUCH_KEYS = {"block_order_id", "trial_id", "single_touch_id"}
@@ -42,7 +43,7 @@ def main() -> None:
         print("ERROR: could not resolve project data root.")
         sys.exit(1)
 
-    touch_features_dir = project_data_root / "4_analysed" / "touch_features"
+    touch_features_dir = project_data_root / "4_analysed" / STIMULUS_EXTRACT_FEATURES
     if not touch_features_dir.is_dir():
         print(f"ERROR: touch_features directory not found: {touch_features_dir}")
         sys.exit(1)

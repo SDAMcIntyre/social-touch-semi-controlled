@@ -25,6 +25,7 @@ trimesh==4.7.4
 vtk==9.4.2
 
 # --- Image & Computer Vision ---
+cmcrameri
 opencv-contrib-python==4.12.0.88
 Pillow==11.3.0
 seaborn
