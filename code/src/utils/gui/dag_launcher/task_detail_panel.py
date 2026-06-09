@@ -90,6 +90,7 @@ _OPTION_ENUMS: dict[str, list[tuple[str, object]]] = {
         ("Plasma", "plasma"),
         ("Magma", "magma"),
         ("Cividis", "cividis"),
+        ("Batlow", "batlow"),
         ("Nipy Spectral", "nipy_spectral"),
         ("Rainbow", "rainbow"),
         ("Turbo", "turbo"),

@@ -13,6 +13,7 @@ from analysis.receptive_field_mapping.data.rf_extraction_io import (
     load_rf_camera_rotation,
 )
 from analysis.receptive_field_mapping.metrics.rf_grid_cell_metrics import compute_grid_cell_metrics
+from analysis.pipeline.output_dirs import SPATIAL_SET_CAMERA
 from utils.should_process_task import should_process_task
 
 logger = logging.getLogger(__name__)
@@ -220,12 +221,12 @@ def run_population_rf_grid_metrics(
             )
 
         if group_name is not None:
-            output_session_dir = output_dir / "population_rf_grid_metrics" / group_name / session_id
+            output_session_dir = output_dir / group_name / session_id
         else:
-            output_session_dir = output_dir / "population_rf_grid_metrics" / session_id
+            output_session_dir = output_dir / session_id
         sentinel = output_session_dir / "population_rf_grid_metrics_summary.json"
 
-        camera_settings_dir = output_dir / 'rf_camera_settings'
+        camera_settings_dir = output_dir.parent / SPATIAL_SET_CAMERA
         camera_settings_json = camera_settings_dir / RF_CAMERA_SETTINGS_FILENAME
         extra_inputs = [camera_settings_json] if camera_settings_json.exists() else []
 
@@ -244,7 +245,7 @@ def run_population_rf_grid_metrics(
                 f"from {forearm_ply_path}"
             )
 
-        session_R = load_rf_camera_rotation(output_dir / 'rf_camera_settings', session_id)
+        session_R = load_rf_camera_rotation(output_dir.parent / SPATIAL_SET_CAMERA, session_id)
         slim_cache_path = (
             slim_uv_cache_dir / session_id / f"{session_id}_slim_uv.npz"
             if slim_uv_cache_dir is not None

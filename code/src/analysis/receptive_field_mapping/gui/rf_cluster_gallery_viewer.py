@@ -56,7 +56,7 @@ logger = logging.getLogger(__name__)
 
 SIDEBAR_W = 160
 
-_COLORMAPS = ["inferno", "viridis", "plasma", "magma", "cividis", "YlOrRd", "coolwarm", "RdBu_r", "jet"]
+_COLORMAPS = ["inferno", "viridis", "plasma", "magma", "cividis", "batlow", "YlOrRd", "coolwarm", "RdBu_r", "jet"]
 
 _MODE_BY_CLUSTER = "By Cluster"
 _MODE_BY_SESSION = "By Session"

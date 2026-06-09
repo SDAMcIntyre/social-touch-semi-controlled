@@ -12,6 +12,7 @@ import pandas as pd
 
 _bracket_re = re.compile(r'\[([^\[\]]+)\]')
 
+from analysis.pipeline.output_dirs import TOUCH_PREPARE_SESSIONS
 from analysis.receptive_field_mapping.data.rf_data_loader import (
     load_forearm_vertices,
     resolve_forearm_ply,
@@ -195,7 +196,7 @@ def resolve_preparation_paths(
     for csv_path, database_path in input_items:
         session_id = session_id_from_path(csv_path)
 
-        prepared_csv = database_path / '4_analysed' / 'preparation' / f'{session_id}_prepared.csv'
+        prepared_csv = database_path / '4_analysed' / TOUCH_PREPARE_SESSIONS / f'{session_id}_prepared.csv'
         if not prepared_csv.exists():
             raise ValueError(
                 f"resolve_preparation_paths: prepared CSV does not exist: {prepared_csv}"

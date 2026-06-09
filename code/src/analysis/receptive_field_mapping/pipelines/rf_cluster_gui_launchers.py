@@ -362,6 +362,7 @@ def launch_gallery_viewer(
 def launch_rf_surface_viewer(
     input_items: List[Tuple[Path, Path]],
     neuron_mode: str = "iff",
+    iff_metric: str = "mean",
 ) -> None:
     """Launch the RF Surface Viewer for all sessions in input_items.
 
@@ -376,6 +377,8 @@ def launch_rf_surface_viewer(
         List of ``(aggregated_csv_path, database_path)`` tuples.
     neuron_mode:
         Accepted for interface consistency; the NPZ is mode-agnostic.
+    iff_metric:
+        Which IFF aggregation variant to load (``"mean"`` or ``"max"``).
     """
     from analysis.receptive_field_mapping.gui.rf_surface_viewer import RFSurfaceViewer
     from PyQt5.QtWidgets import QApplication
@@ -389,7 +392,8 @@ def launch_rf_surface_viewer(
         session_id = session_id_from_path(csv_path)
         npz_path = (
             database_path / "4_analysed" / SPATIAL_EXTRACT_BOUNDARIES
-            / session_id / f"{session_id}_population_response_fields.npz"
+            / f"iff_{iff_metric}" / session_id
+            / f"{session_id}_population_response_fields.npz"
         )
         if not npz_path.exists():
             raise ValueError(
