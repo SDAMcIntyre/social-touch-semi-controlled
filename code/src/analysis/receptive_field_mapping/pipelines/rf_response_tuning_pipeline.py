@@ -1,4 +1,4 @@
-"""Pipeline orchestrator for IFF / spike-count tuning curve plots.
+"""Pipeline orchestrator for response tuning curve plots.
 
 For each selected touch feature, bins touches into equal-width ranges across
 all sessions and renders:
@@ -8,13 +8,16 @@ all sessions and renders:
 
 Output layout::
 
-    4_analysed/stimulus_iff_tuning_curves/
-        iff_tuning_sentinel.json
+    4_analysed/stimulus_response_tuning/
+        response_tuning_sentinel.json
         {feature}/
             {gesture_subset}/
-                {metric_subdir}/
-                    {session_id}_tuning.png
-                    overlay_tuning.png
+                {overlap_dir}/
+                    {metric_subdir}/
+                        {session_id}_{feature}_{gesture_subset}_{metric_subdir}_tuning.png
+                        overlay_{feature}_{gesture_subset}_{metric_subdir}_tuning_by_type.png
+                        overlay_{feature}_{gesture_subset}_{metric_subdir}_tuning_by_session.png
+                        overlay_{feature}_{gesture_subset}_{metric_subdir}_tuning.csv
 """
 
 import json
@@ -26,7 +29,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from analysis.pipeline.output_dirs import STIMULUS_IFF_TUNING_CURVES
+from analysis.pipeline.output_dirs import STIMULUS_RESPONSE_TUNING
 from analysis.pipeline.shared_constants import (
     GESTURE_TYPES,
     TOUCH_ID_COLS,
@@ -35,7 +38,7 @@ from analysis.pipeline.shared_constants import (
 from analysis.receptive_field_mapping.pipelines.rf_touch_feature_radar_pipeline import (
     _find_feature_csv,
 )
-from analysis.receptive_field_mapping.rendering.rf_iff_tuning_renderer import (
+from analysis.receptive_field_mapping.rendering.rf_response_tuning_renderer import (
     _bin_data,
     _cat_display,
     render_session_tuning_curve,
@@ -625,7 +628,7 @@ def _write_raw_dots_csv(
 # ---------------------------------------------------------------------------
 
 
-def run_iff_tuning_curves(
+def run_response_tuning(
     session_config_paths: list[tuple[Path, Path]],
     options: dict,
     output_base_dir: Path,
@@ -643,7 +646,7 @@ def run_iff_tuning_curves(
        ``render_overlay_tuning_curve`` (cross-session), using globally
        consistent axis limits.
 
-    Idempotency is provided by ``iff_tuning_sentinel.json`` in *output_base_dir*.
+    Idempotency is provided by ``response_tuning_sentinel.json`` in *output_base_dir*.
     When the sentinel exists and ``force_processing`` is ``False`` the entire task
     is skipped.
 
@@ -663,7 +666,7 @@ def run_iff_tuning_curves(
         - ``force_processing`` — if ``True``, re-render even when sentinel exists.
     output_base_dir:
         Root output directory, e.g.
-        ``database_path / '4_analysed' / STIMULUS_IFF_TUNING_CURVES``.
+        ``database_path / '4_analysed' / STIMULUS_RESPONSE_TUNING``.
 
     Raises
     ------
@@ -675,7 +678,7 @@ def run_iff_tuning_curves(
     tuning_features: list[str] = list(options.get("tuning_features") or [])
     if not tuning_features:
         raise ValueError(
-            "run_iff_tuning_curves: 'tuning_features' is empty. "
+            "run_response_tuning: 'tuning_features' is empty. "
             "Select at least one feature in the DAG config."
         )
 
@@ -694,18 +697,18 @@ def run_iff_tuning_curves(
     binning_strategy: str = str(options.get("binning_strategy", "sliding_window"))
     if binning_strategy not in {"sliding_window", "raw_dots"}:
         raise ValueError(
-            f"run_iff_tuning_curves: unknown binning_strategy '{binning_strategy}'. "
+            f"run_response_tuning: unknown binning_strategy '{binning_strategy}'. "
             f"Valid values: 'sliding_window', 'raw_dots'."
         )
     fit_degree: int = int(options.get("fit_degree", 1))
     dot_alpha: float = float(options.get("dot_alpha", 0.35))
     show_fit_ci: bool = bool(options.get("show_fit_ci", False))
 
-    sentinel = output_base_dir / "iff_tuning_sentinel.json"
+    sentinel = output_base_dir / "response_tuning_sentinel.json"
 
     if sentinel.exists() and not force_processing:
         logger.info(
-            "[IFF Tuning Curves] Up-to-date — skipping (sentinel: %s).", sentinel
+            "[Response Tuning] Up-to-date — skipping (sentinel: %s).", sentinel
         )
         return
 
@@ -741,18 +744,18 @@ def run_iff_tuning_curves(
                 missing_in_mean = [c for c in touch_id_cols if c not in df.columns]
                 if missing_in_mean:
                     raise ValueError(
-                        f"[IFF Tuning Curves] {session_id}: TOUCH_ID_COLS columns "
+                        f"[Response Tuning] {session_id}: TOUCH_ID_COLS columns "
                         f"{missing_in_mean} not found in mean CSV {mean_csv}."
                     )
                 missing_in_agg = [c for c in touch_id_cols if c not in df_agg.columns]
                 if missing_in_agg:
                     raise ValueError(
-                        f"[IFF Tuning Curves] {session_id}: TOUCH_ID_COLS columns "
+                        f"[Response Tuning] {session_id}: TOUCH_ID_COLS columns "
                         f"{missing_in_agg} not found in '{agg_folder}' CSV {agg_csv}."
                     )
                 if response_col not in df_agg.columns:
                     raise ValueError(
-                        f"[IFF Tuning Curves] {session_id}: column '{response_col}' "
+                        f"[Response Tuning] {session_id}: column '{response_col}' "
                         f"not found in '{agg_folder}' CSV {agg_csv}. "
                         f"Available columns: {sorted(df_agg.columns)}. "
                         f"Ensure 'stimulus_extract_features' with aggregation "
@@ -768,7 +771,7 @@ def run_iff_tuning_curves(
                 n_merged_rows = len(df)
                 if n_merged_rows != n_mean_rows:
                     raise ValueError(
-                        f"[IFF Tuning Curves] {session_id}: inner merge on TOUCH_ID_COLS "
+                        f"[Response Tuning] {session_id}: inner merge on TOUCH_ID_COLS "
                         f"yielded {n_merged_rows} rows but the mean CSV had {n_mean_rows} rows. "
                         f"Touch IDs must be identical across aggregation CSVs — check that "
                         f"'stimulus_extract_features' (mean and '{agg_folder}') was run on "
@@ -777,7 +780,7 @@ def run_iff_tuning_curves(
 
             if _GESTURE_COL not in df.columns:
                 raise ValueError(
-                    f"[IFF Tuning Curves] {session_id}: column '{_GESTURE_COL}' not found in "
+                    f"[Response Tuning] {session_id}: column '{_GESTURE_COL}' not found in "
                     f"the loaded DataFrame. Available columns: {sorted(df.columns)}."
                 )
 
@@ -798,7 +801,7 @@ def run_iff_tuning_curves(
                 n_after = len(df)
                 if n_after != n_before:
                     raise ValueError(
-                        f"[IFF Tuning Curves] {session_id}: inner merge with metadata "
+                        f"[Response Tuning] {session_id}: inner merge with metadata "
                         f"dropped rows ({n_before} → {n_after}). "
                         f"Touch IDs in the metadata CSV must cover every touch in the "
                         f"feature CSV."
@@ -810,7 +813,7 @@ def run_iff_tuning_curves(
             })
 
         if not session_data:
-            logger.info("[IFF Tuning Curves] No sessions to process.")
+            logger.info("[Response Tuning] No sessions to process.")
             return
 
         # =====================================================================
@@ -823,7 +826,7 @@ def run_iff_tuning_curves(
         absent_features = [f for f in tuning_features if f not in all_cols]
         if absent_features:
             raise ValueError(
-                f"[IFF Tuning Curves] The following features are absent from all session "
+                f"[Response Tuning] The following features are absent from all session "
                 f"DataFrames: {absent_features}. "
                 f"Ensure 'stimulus_extract_features' (mean) has run and the feature names "
                 f"are correct. Available columns (sample): {sorted(all_cols)[:20]}"
@@ -835,7 +838,7 @@ def run_iff_tuning_curves(
             unmapped = [f for f in valid_features if f not in count_category_by]
             if unmapped:
                 raise ValueError(
-                    f"[IFF Tuning Curves] The following tuning features are not mapped in "
+                    f"[Response Tuning] The following tuning features are not mapped in "
                     f"'count_category_by': {unmapped}. "
                     f"Add each feature → designed-metadata column entry to 'count_category_by' "
                     f"in the DAG config, or leave 'count_category_by' empty to disable "
@@ -854,7 +857,7 @@ def run_iff_tuning_curves(
         for cat_col in dict.fromkeys(count_category_by.values()):
             if cat_col not in pooled.columns:
                 raise ValueError(
-                    f"[IFF Tuning Curves] Category column '{cat_col}' from "
+                    f"[Response Tuning] Category column '{cat_col}' from "
                     f"'count_category_by' is not present in the pooled DataFrame. "
                     f"Available columns: {sorted(pooled.columns.tolist())[:20]}"
                 )
@@ -904,7 +907,7 @@ def run_iff_tuning_curves(
         neuron_summary_xlsx_str: str | None = options.get("neuron_summary_xlsx") or None
         if not neuron_summary_xlsx_str:
             raise ValueError(
-                "run_iff_tuning_curves: 'neuron_summary_xlsx' is not set in the task options. "
+                "run_response_tuning: 'neuron_summary_xlsx' is not set in the task options. "
                 "Set configs/analyse_workflow_processing_dag.yaml parameters.neuron_summary_xlsx "
                 "to the path of MNG-DataSummary.xlsx (absolute, or relative to the database root)."
             )
@@ -913,7 +916,7 @@ def run_iff_tuning_curves(
             xlsx_path = database_path / xlsx_path
         if not xlsx_path.is_file():
             raise FileNotFoundError(
-                f"run_iff_tuning_curves: neuron_summary_xlsx not found: {xlsx_path}"
+                f"run_response_tuning: neuron_summary_xlsx not found: {xlsx_path}"
             )
         scheme: SessionColorScheme = build_session_color_scheme(session_ids, xlsx_path)
 
@@ -938,7 +941,7 @@ def run_iff_tuning_curves(
                     filtered = _filter_gesture(df, gesture_subset)
                     if len(filtered) < _MIN_ROWS:
                         logger.warning(
-                            "[IFF Tuning Curves] %s / %s / %s / %s: only %d row(s) after "
+                            "[Response Tuning] %s / %s / %s / %s: only %d row(s) after "
                             "gesture filter — skipping (need ≥%d).",
                             metric_subdir, feature, gesture_subset, session_id,
                             len(filtered), _MIN_ROWS,
@@ -961,7 +964,7 @@ def run_iff_tuning_curves(
                             / gesture_subset
                             / overlap_dir
                             / metric_subdir
-                            / f"{session_id}_tuning.png"
+                            / f"{session_id}_{feature}_{gesture_subset}_{metric_subdir}_tuning.png"
                         )
                         render_session_tuning_curve(
                             bin_centers=bin_centers,
@@ -990,7 +993,7 @@ def run_iff_tuning_curves(
                             out_path=csv_out_path,
                         )
                         print(
-                            f"[IFF Tuning Curves] {metric_subdir} / {feature} / "
+                            f"[Response Tuning] {metric_subdir} / {feature} / "
                             f"{gesture_subset} / {session_id}: saved {out_path.name}",
                             flush=True,
                         )
@@ -1013,7 +1016,7 @@ def run_iff_tuning_curves(
                             / gesture_subset
                             / overlap_dir
                             / metric_subdir
-                            / f"{session_id}_tuning.png"
+                            / f"{session_id}_{feature}_{gesture_subset}_{metric_subdir}_tuning.png"
                         )
                         render_session_raw_dots(
                             feature_vals=feat_arr,
@@ -1041,7 +1044,7 @@ def run_iff_tuning_curves(
                             out_path=csv_out_path,
                         )
                         print(
-                            f"[IFF Tuning Curves] {metric_subdir} / {feature} / "
+                            f"[Response Tuning] {metric_subdir} / {feature} / "
                             f"{gesture_subset} / {session_id}: saved {out_path.name}",
                             flush=True,
                         )
@@ -1051,7 +1054,7 @@ def run_iff_tuning_curves(
 
                 if len(overlay_session_data) < 2:
                     logger.warning(
-                        "[IFF Tuning Curves] %s / %s / %s: fewer than 2 sessions "
+                        "[Response Tuning] %s / %s / %s: fewer than 2 sessions "
                         "have ≥%d rows — skipping overlay.",
                         metric_subdir, feature, gesture_subset, _MIN_ROWS,
                     )
@@ -1063,7 +1066,7 @@ def run_iff_tuning_curves(
                     / gesture_subset
                     / overlap_dir
                     / metric_subdir
-                    / "overlay_tuning_by_type.png"
+                    / f"overlay_{feature}_{gesture_subset}_{metric_subdir}_tuning_by_type.png"
                 )
                 overlay_path_by_session = (
                     output_base_dir
@@ -1071,7 +1074,7 @@ def run_iff_tuning_curves(
                     / gesture_subset
                     / overlap_dir
                     / metric_subdir
-                    / "overlay_tuning_by_session.png"
+                    / f"overlay_{feature}_{gesture_subset}_{metric_subdir}_tuning_by_session.png"
                 )
                 if binning_strategy == "sliding_window":
                     render_overlay_tuning_curve(
@@ -1131,12 +1134,12 @@ def run_iff_tuning_curves(
                         session_neuron_types=scheme.session_neuron_type,
                         type_colors=scheme.type_color,
                     )
-                overlay_csv_path = overlay_path_by_type.parent / "overlay_tuning.csv"
+                overlay_csv_path = overlay_path_by_type.parent / f"overlay_{feature}_{gesture_subset}_{metric_subdir}_tuning.csv"
                 pd.concat(overlay_csv_dfs, ignore_index=True).to_csv(
                     overlay_csv_path, index=False
                 )
                 print(
-                    f"[IFF Tuning Curves] {metric_subdir} / {feature} / "
+                    f"[Response Tuning] {metric_subdir} / {feature} / "
                     f"{gesture_subset}: saved {overlay_path_by_type.name} + "
                     f"{overlay_path_by_session.name}",
                     flush=True,
@@ -1153,7 +1156,7 @@ def run_iff_tuning_curves(
         n_features=total_features_rendered,
     )
     print(
-        f"[IFF Tuning Curves] Done — {total_features_rendered} feature×metric "
+        f"[Response Tuning] Done — {total_features_rendered} feature×metric "
         f"combination(s), {len(session_config_paths)} session(s). Sentinel written.",
         flush=True,
     )

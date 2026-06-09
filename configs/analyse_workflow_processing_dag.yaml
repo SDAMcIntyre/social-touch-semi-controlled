@@ -7,12 +7,11 @@ parameters:
   # Paths are relative to configs/kinect_configs/.
   kinect_configs: [valid_configs_ST13-01, valid_configs_ST13-02, 
       valid_configs_ST13-03, valid_configs_ST14-01, valid_configs_ST14-02, 
-      valid_configs_ST14-04, valid_configs_ST15-01, valid_configs_ST16-02, 
-      valid_configs_ST16-03, valid_configs_ST16-05, valid_configs_ST18-01, 
-      valid_configs_ST18-04]
+      valid_configs_ST14-04, valid_configs_ST16-02, valid_configs_ST16-03, 
+      valid_configs_ST16-05, valid_configs_ST18-01, valid_configs_ST18-04]
   # Path to MNG-DataSummary.xlsx (neuron type metadata). Absolute, or relative
   # to the database root (e.g. "03_metadata/MNG-DataSummary.xlsx").
-  # Used by stimulus_iff_tuning_curves and stimulus_iff_instruction_tuning.
+  # Used by stimulus_response_tuning and stimulus_response_instruction_tuning.
   neuron_summary_xlsx: "F:/liu-onedrive-nospecial-carac/_Teams/Social touch Kinect
     MNG/03_metadata/MNG-DataSummary.xlsx"
 
@@ -193,6 +192,7 @@ tasks:
       inflection_sigma: 5.0
       heatmap_space: linear
       cmap: inferno
+      flip_u: true
     depends_on: [spatial_map_single_touch, spatial_precompute_slim_uv]
 
   # Aggregate inflection boundary metrics across sessions and render comparison visuals.
@@ -293,7 +293,7 @@ tasks:
             - mean_during_iff
     depends_on: [stimulus_extract_features]
 
-  stimulus_iff_tuning_curves:
+  stimulus_response_tuning:
     category: stimulus_sensitivity
     enabled: true
     options:
@@ -320,7 +320,7 @@ tasks:
         pressure_mean: force_metadata
         contact_depth_mean: force_metadata
     depends_on: [stimulus_extract_features]
-  stimulus_iff_instruction_tuning:
+  stimulus_response_instruction_tuning:
     category: stimulus_sensitivity
     enabled: true
     options:

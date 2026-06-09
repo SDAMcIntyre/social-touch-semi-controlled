@@ -40,8 +40,8 @@ from .pipelines.rf_session_boundary_comparison_pipeline import run_session_rf_bo
 from .pipelines.rf_proximal_distal_center_pipeline import run_proximal_distal_center_comparison
 from .pipelines.rf_touch_feature_radar_pipeline import run_touch_feature_radar
 from .pipelines.rf_stimulus_session_comparison_pipeline import run_stimulus_session_comparison
-from .pipelines.rf_iff_tuning_pipeline import run_iff_tuning_curves
-from .pipelines.rf_iff_instruction_tuning_pipeline import run_iff_instruction_tuning
+from .pipelines.rf_response_tuning_pipeline import run_response_tuning
+from .pipelines.rf_response_instruction_tuning_pipeline import run_response_instruction_tuning
 
 __all__ = [
     "project_to_2d",
@@ -75,6 +75,6 @@ __all__ = [
     "run_proximal_distal_center_comparison",
     "run_touch_feature_radar",
     "run_stimulus_session_comparison",
-    "run_iff_tuning_curves",
-    "run_iff_instruction_tuning",
+    "run_response_tuning",
+    "run_response_instruction_tuning",
 ]
