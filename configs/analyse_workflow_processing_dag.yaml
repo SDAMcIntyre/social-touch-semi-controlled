@@ -184,7 +184,7 @@ tasks:
     category: spatial_sensitivity
     enabled: true
     options:
-      force_processing: true
+      force_processing: false
       neuron_mode: iff
       iff_metric: both
       min_overlap_pct: 25
@@ -203,8 +203,10 @@ tasks:
     category: spatial_sensitivity
     enabled: true
     options:
-      force_processing: true
+      force_processing: false
       iff_metric: both
+      heatmap_space: linear
+      cmap: inferno
     depends_on: [spatial_extract_boundaries]
 
   # Compare RF center positions between proximal and distal strokes per session.
@@ -215,7 +217,7 @@ tasks:
     category: spatial_sensitivity
     enabled: true
     options:
-      force_processing: true
+      force_processing: false
       iff_metric: both
       heatmap_space: linear
       cmap: inferno
@@ -297,18 +299,18 @@ tasks:
     category: stimulus_sensitivity
     enabled: true
     options:
-      force_processing: false
+      force_processing: true
       response_metric: all
       tuning_features:
       - contact_area_mean
       - pressure_mean
       - hand_velocity_amplitude_mean
       - contact_depth_mean
-      n_bins: 50
+      n_bins: 25
       clip_percentile: 1.0
       smoothing_sigma: 1.5
       overlap_ratio: 0.25                  # 0.0 to 0.5; sliding-window bin overlap
-      binning_strategy: "raw_dots"         # sliding_window | raw_dots
+      binning_strategy: "sliding_window"   # sliding_window | raw_dots
       fit_degree: 4                        # raw_dots: polynomial fit degree
       dot_alpha: 0.35                      # raw_dots: per-session scatter opacity
       show_fit_ci: true                    # raw_dots: degree-1 CI band on fit line
@@ -324,7 +326,7 @@ tasks:
     category: stimulus_sensitivity
     enabled: true
     options:
-      force_processing: false
+      force_processing: true
       iff_metric: both
       clip_percentile: 1.0
       tuning_categories:

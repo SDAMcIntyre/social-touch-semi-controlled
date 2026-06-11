@@ -485,6 +485,8 @@ def spatial_compare_boundaries_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
     iff_metric: str = "mean",
+    heatmap_space: str = "linear",
+    cmap: str = "inferno",
     neuron_summary_xlsx: Optional[str] = None,
 ) -> None:
     """Aggregate RF boundary metrics across sessions and render comparison visuals.
@@ -507,6 +509,8 @@ def spatial_compare_boundaries_flow(
             output_dir=output_dir,
             force_processing=force_processing,
             iff_metric=metric,
+            heatmap_space=heatmap_space,
+            cmap=cmap,
             neuron_summary_xlsx=xlsx_path,
         )
 
@@ -1517,6 +1521,8 @@ def _build_pipeline_stages(dag_handler: DagConfigHandler, items_to_process) -> l
             "func": spatial_compare_boundaries_flow,
             "params": lambda: {
                 "iff_metric": dag_handler.get_task_options("spatial_compare_boundaries").get("iff_metric", "mean"),
+                "heatmap_space": dag_handler.get_task_options("spatial_compare_boundaries").get("heatmap_space", "linear"),
+                "cmap": dag_handler.get_task_options("spatial_compare_boundaries").get("cmap", "inferno"),
                 "neuron_summary_xlsx": dag_handler.get_parameter("neuron_summary_xlsx") or None,
             },
         },

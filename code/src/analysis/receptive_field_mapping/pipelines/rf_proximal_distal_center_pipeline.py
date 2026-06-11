@@ -17,6 +17,7 @@ from analysis.receptive_field_mapping.rendering.rf_center_comparison_renderer im
 from analysis.receptive_field_mapping.rendering.rf_population_map_renderer import (
     compute_standalone_figwidth,
     compute_uv_to_mm_scale,
+    render_population_rf_circular_crop,
 )
 
 logger = logging.getLogger(__name__)
@@ -165,6 +166,7 @@ def run_proximal_distal_center_comparison(
             'db_path': db_path_item,
             'gestures_with_centroid': gestures_with_centroid,
             'forearm_uv': forearm_uv,
+            'forearm_V': forearm_V,
             'forearm_faces': forearm_faces,
             'slim_vertex_colors': slim_vertex_colors,
             'centroid_all': centroid_all,
@@ -287,6 +289,44 @@ def run_proximal_distal_center_comparison(
                     peak_uv=peak_uv_gtype,
                     vertex_colors=d['slim_vertex_colors'],
                     forearm_faces=d['forearm_faces'],
+                )
+
+            # Task 1.3 — circular crops: centroid (always) and peak (guarded)
+            render_population_rf_circular_crop(
+                u_grid=grid_u,
+                v_grid=grid_v,
+                interp_grid=grid_z,
+                forearm_uv=d['forearm_uv'],
+                forearm_V=d['forearm_V'],
+                forearm_faces=d['forearm_faces'],
+                center_uv=centroid_uv_gtype,
+                radius_mm=50.0,
+                vmax=global_vmax,
+                vmin=global_vmin,
+                output_path=session_output_dir / f'{session_id}_rf_circular_centroid_{gtype}_{cmap}.png',
+                vertex_colors=d['slim_vertex_colors'],
+                heatmap_space=heatmap_space,
+                dpi=300,
+                cmap=cmap,
+            )
+
+            if peak_uv_gtype is not None:
+                render_population_rf_circular_crop(
+                    u_grid=grid_u,
+                    v_grid=grid_v,
+                    interp_grid=grid_z,
+                    forearm_uv=d['forearm_uv'],
+                    forearm_V=d['forearm_V'],
+                    forearm_faces=d['forearm_faces'],
+                    center_uv=peak_uv_gtype,
+                    radius_mm=50.0,
+                    vmax=global_vmax,
+                    vmin=global_vmin,
+                    output_path=session_output_dir / f'{session_id}_rf_circular_peak_{gtype}_{cmap}.png',
+                    vertex_colors=d['slim_vertex_colors'],
+                    heatmap_space=heatmap_space,
+                    dpi=300,
+                    cmap=cmap,
                 )
 
     # Pass 3 — cross-session outputs
