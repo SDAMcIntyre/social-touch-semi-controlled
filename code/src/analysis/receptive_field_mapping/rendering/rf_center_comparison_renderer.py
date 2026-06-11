@@ -9,6 +9,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.colors import LogNorm, Normalize
 
+from analysis.receptive_field_mapping.rendering.rf_population_map_renderer import (
+    _draw_forearm_mesh_background,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -28,6 +32,8 @@ def render_center_marked_heatmap(
     heatmap_space: str = "linear",
     cmap: str = "inferno",
     peak_uv: np.ndarray | None = None,
+    vertex_colors: np.ndarray | None = None,
+    forearm_faces: np.ndarray | None = None,
 ) -> None:
     norm = LogNorm(vmin=vmin, vmax=vmax) if heatmap_space == "log" else Normalize(vmin=vmin, vmax=vmax)
 
@@ -42,11 +48,14 @@ def render_center_marked_heatmap(
         spine.set_edgecolor('white')
     ax.set_aspect('equal')
 
-    stride_bg = max(1, len(forearm_uv) // 5000)
-    ax.scatter(
-        forearm_uv[::stride_bg, 0], forearm_uv[::stride_bg, 1],
-        c='#404040', s=4, alpha=0.5, linewidths=0, rasterized=True,
-    )
+    if forearm_faces is not None:
+        _draw_forearm_mesh_background(ax, forearm_uv, forearm_faces, vertex_colors=vertex_colors)
+    else:
+        stride_bg = max(1, len(forearm_uv) // 5000)
+        ax.scatter(
+            forearm_uv[::stride_bg, 0], forearm_uv[::stride_bg, 1],
+            c='#404040', s=4, alpha=0.5, linewidths=0, rasterized=True,
+        )
 
     display_grid = np.where(interp_grid > 0, interp_grid, np.nan)
     ax.pcolormesh(u_grid, v_grid, display_grid, cmap=cmap, norm=norm, shading='auto')

@@ -91,6 +91,7 @@ def run_population_response_field_extraction(
     heatmap_space: str = "linear",
     cmap: str = "inferno",
     iff_metric: str = "mean",
+    flip_u: bool = False,
 ) -> None:
     """Render per-session 2D population RF heatmap PNGs projected via SLIM UV.
 
@@ -123,6 +124,10 @@ def run_population_response_field_extraction(
     iff_metric:
         Which IFF aggregation NPZ to consume — ``"mean"`` (default) or
         ``"max"``.  Must be one of ``IFF_METRICS``.
+    flip_u:
+        If True, negate the U-axis (column 0) of the aligned forearm UV
+        coordinates after PCA alignment. Mirrors the heatmap and all
+        boundary metrics along the vertical axis of the output plots.
     """
     if iff_metric not in IFF_METRICS:
         raise ValueError(
@@ -334,6 +339,13 @@ def run_population_response_field_extraction(
         )
         forearm_uv = apply_uv_alignment(forearm_uv, alignment_center, alignment_rotation_matrix)
 
+        if flip_u:
+            forearm_uv[:, 0] *= -1
+            logger.info(
+                "[Population Response Fields] %s: U-axis flipped (flip_u=True)",
+                session_id,
+            )
+
         # --- Render per-gesture PNGs with session-wide colour scale ---
         finite_maxima = [
             float(np.nanmax(h))
@@ -399,6 +411,7 @@ def run_population_response_field_extraction(
                 inflection_boundary=boundary,
                 heatmap_space=heatmap_space,
                 cmap=cmap,
+                vertex_colors=slim_vertex_colors,
             )
             produced.append(png_path)
             print(f"[Population Response Fields] {session_id}: saved {png_path.name}")
@@ -418,6 +431,8 @@ def run_population_response_field_extraction(
             alignment_center=alignment_center,
             alignment_rotation_matrix=alignment_rotation_matrix,
             alignment_angle_deg=alignment_angle_deg,
+            flip_u=flip_u,
+            slim_vertex_colors=slim_vertex_colors,
         )
         _write_sentinel(
             sentinel, session_id, produced=produced,
@@ -543,6 +558,7 @@ def run_population_response_field_extraction(
                 inflection_boundaries=inflection_boundaries,
                 heatmap_space=heatmap_space,
                 cmap=cmap,
+                vertex_colors=sd.slim_vertex_colors,
             )
             sd.produced.append(composite_path)
             print(
@@ -568,6 +584,8 @@ def run_population_response_field_extraction(
                 ylim=global_uv_ylim,
                 heatmap_space=heatmap_space,
                 cmap=cmap,
+                vertex_colors=sd.slim_vertex_colors,
+                forearm_faces=sd.forearm_faces,
             )
             sd.produced.append(standalone_path)
             print(f"[Population Response Fields] {sd.session_id}: saved {standalone_path.name}")
@@ -669,6 +687,8 @@ def _save_response_fields_npz(
     alignment_center: np.ndarray,
     alignment_rotation_matrix: np.ndarray,
     alignment_angle_deg: float,
+    flip_u: bool = False,
+    slim_vertex_colors: np.ndarray | None = None,
 ) -> Path:
     npz_path = output_dir / f'{session_id}_population_response_fields.npz'
 
@@ -681,6 +701,7 @@ def _save_response_fields_npz(
         'min_overlap_pct': np.float64(min_overlap_pct),
         'gesture_types': np.array(list(results.keys()), dtype=object),
         'inflection_sigma': np.float64(inflection_sigma if inflection_sigma is not None else float('nan')),
+        'flip_u': np.bool_(flip_u),
     }
 
     for gtype in results.keys():
@@ -744,6 +765,9 @@ def _save_response_fields_npz(
     data_dict['alignment_center_uv'] = alignment_center.astype(np.float64)
     data_dict['alignment_rotation_matrix'] = alignment_rotation_matrix.astype(np.float64)
     data_dict['alignment_rotation_deg'] = np.float64(alignment_angle_deg)
+
+    if slim_vertex_colors is not None:
+        data_dict['slim_vertex_colors'] = slim_vertex_colors.astype(np.float64)
 
     np.savez(npz_path, **data_dict)
     logger.info("[Population Response Fields] %s: saved response fields NPZ → %s", session_id, npz_path.name)

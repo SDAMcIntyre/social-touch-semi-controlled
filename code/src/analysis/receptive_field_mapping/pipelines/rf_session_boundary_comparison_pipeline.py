@@ -7,6 +7,10 @@ import pandas as pd
 
 from analysis.pipeline.output_dirs import SPATIAL_EXTRACT_BOUNDARIES
 from analysis.pipeline.shared_constants import IFF_METRICS, session_id_from_path
+from analysis.receptive_field_mapping.rendering.neuron_type_colors import (
+    SessionColorScheme,
+    build_session_color_scheme,
+)
 from analysis.receptive_field_mapping.rendering.rf_boundary_comparison_renderer import (
     render_boundary_contour_overlay,
     render_boundary_metric_panels,
@@ -35,6 +39,7 @@ def run_session_rf_boundary_comparison(
     output_dir: Path,
     force_processing: bool = False,
     iff_metric: str = "mean",
+    neuron_summary_xlsx: Path | None = None,
 ) -> None:
     if iff_metric not in IFF_METRICS:
         raise ValueError(
@@ -63,6 +68,17 @@ def run_session_rf_boundary_comparison(
     df.to_csv(csv_path, index=False)
     logger.info("[Session RF Boundary Comparison] wrote %s", csv_path.name)
 
+    # Build per-session color scheme when neuron_summary_xlsx is provided.
+    # When None, session_colors and neuron_type_legend remain None and the
+    # renderer falls back to uniform steelblue (explicitly required by plan).
+    session_colors: dict[str, str] | None = None
+    neuron_type_legend: dict[str, str] | None = None
+    if neuron_summary_xlsx is not None:
+        session_ids = df['session_id'].unique().tolist()
+        scheme: SessionColorScheme = build_session_color_scheme(session_ids, neuron_summary_xlsx)
+        session_colors = scheme.session_color
+        neuron_type_legend = scheme.type_color
+
     metric_limits = _global_metric_limits(df, PANEL_METRICS)
     uv_limits = _global_uv_limits(contour_data)
 
@@ -86,6 +102,8 @@ def run_session_rf_boundary_comparison(
             metrics=PANEL_METRICS,
             output_path=metric_panels_dir / f'metric_panels_{gtype}.png',
             metric_limits=metric_limits,
+            session_colors=session_colors,
+            neuron_type_legend=neuron_type_legend,
         )
 
     for metric in PANEL_METRICS:

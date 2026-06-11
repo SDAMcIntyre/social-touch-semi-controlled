@@ -76,6 +76,11 @@ def run_proximal_distal_center_comparison(
         forearm_uv = npz['forearm_uv'].astype(np.float64)
         forearm_V = npz['forearm_V'].astype(np.float64)
         forearm_faces = npz['forearm_faces'].astype(np.int32)
+        slim_vertex_colors = (
+            npz['slim_vertex_colors'].astype(np.float64)
+            if 'slim_vertex_colors' in npz
+            else None
+        )
         uv_to_mm = compute_uv_to_mm_scale(forearm_uv, forearm_V, forearm_faces)
 
         missing = [g for g in _REQUIRED_GTYPES if f'boundary_centroid_uv_{g}' not in npz]
@@ -160,6 +165,8 @@ def run_proximal_distal_center_comparison(
             'db_path': db_path_item,
             'gestures_with_centroid': gestures_with_centroid,
             'forearm_uv': forearm_uv,
+            'forearm_faces': forearm_faces,
+            'slim_vertex_colors': slim_vertex_colors,
             'centroid_all': centroid_all,
             'centroid_proximal': centroid_proximal,
             'centroid_distal': centroid_distal,
@@ -256,6 +263,8 @@ def run_proximal_distal_center_comparison(
                 ylim=global_uv_ylim,
                 heatmap_space=heatmap_space,
                 cmap=cmap,
+                vertex_colors=d['slim_vertex_colors'],
+                forearm_faces=d['forearm_faces'],
             )
 
             # Task 4.3 — render hotspot PNG when peak_uv is available for this gtype
@@ -276,6 +285,8 @@ def run_proximal_distal_center_comparison(
                     heatmap_space=heatmap_space,
                     cmap=cmap,
                     peak_uv=peak_uv_gtype,
+                    vertex_colors=d['slim_vertex_colors'],
+                    forearm_faces=d['forearm_faces'],
                 )
 
     # Pass 3 — cross-session outputs

@@ -182,6 +182,36 @@ def compute_interpolated_grid(
     return grid_u, grid_v, grid_z
 
 
+def _draw_forearm_mesh_background(
+    ax,
+    forearm_uv: np.ndarray,
+    forearm_faces: np.ndarray,
+    vertex_colors: np.ndarray | None = None,
+) -> None:
+    """Draw a triangulated forearm mesh as a PolyCollection background on ``ax``.
+
+    Parameters
+    ----------
+    ax:
+        Matplotlib axes to draw on.
+    forearm_uv:
+        (V, 2) UV coordinates of forearm vertices.
+    forearm_faces:
+        (F, 3) triangle index array into ``forearm_uv``.
+    vertex_colors:
+        (V, 4) float64 RGBA per-vertex colors. When provided, each face color
+        is the mean of its three vertex colors. When None, all faces are
+        rendered in grey (#404040).
+    """
+    tri_verts = forearm_uv[forearm_faces]  # shape (F, 3, 2)
+    if vertex_colors is not None:
+        face_colors = vertex_colors[forearm_faces].mean(axis=1)  # shape (F, 4) RGBA
+    else:
+        face_colors = np.tile([0x40 / 255, 0x40 / 255, 0x40 / 255, 1.0], (len(forearm_faces), 1))
+    mesh_coll = PolyCollection(tri_verts, facecolors=face_colors, edgecolors="none", zorder=0)
+    ax.add_collection(mesh_coll)
+
+
 def _draw_inflection_boundary(
     ax,
     contour_uv: np.ndarray,
@@ -209,6 +239,7 @@ def render_population_rf_map(
     inflection_boundary: InflectionBoundary | None = None,
     heatmap_space: str = "linear",
     cmap: str = "inferno",
+    vertex_colors: np.ndarray | None = None,
 ) -> None:
     """Render a two-panel population RF heatmap (scatter + interpolated) and save as PNG.
 
@@ -233,6 +264,10 @@ def render_population_rf_map(
         directly. Must be the output of ``compute_interpolated_grid()``.
     inflection_boundary:
         If provided, draw the inflection contour on the interpolated heatmap panel.
+    vertex_colors:
+        (V, 4) float64 RGBA per-vertex skin colors. Passed to
+        ``_draw_forearm_mesh_background()`` for both panels. When None, panels
+        render with a grey mesh background.
     """
     matplotlib.use('Agg')
 
@@ -258,11 +293,7 @@ def render_population_rf_map(
     # --- Panel 1: scatter ---
     ax_scatter = axes[0]
 
-    stride = max(1, len(forearm_uv) // 5000)
-    ax_scatter.scatter(
-        forearm_uv[::stride, 0], forearm_uv[::stride, 1],
-        c='#404040', s=4, alpha=0.5, linewidths=0, rasterized=True,
-    )
+    _draw_forearm_mesh_background(ax_scatter, forearm_uv, forearm_faces, vertex_colors)
 
     if len(valid_uv) > 0:
         sc = ax_scatter.scatter(
@@ -282,11 +313,7 @@ def render_population_rf_map(
     # --- Panel 2: interpolated heatmap ---
     ax_hm = axes[1]
 
-    stride_bg = max(1, len(forearm_uv) // 5000)
-    ax_hm.scatter(
-        forearm_uv[::stride_bg, 0], forearm_uv[::stride_bg, 1],
-        c='#404040', s=4, alpha=0.5, linewidths=0, rasterized=True,
-    )
+    _draw_forearm_mesh_background(ax_hm, forearm_uv, forearm_faces, vertex_colors)
 
     if precomputed_grid is not None:
         grid_u, grid_v, grid_z = precomputed_grid
@@ -377,6 +404,8 @@ def render_population_rf_standalone_interpolated(
     ylim: tuple[float, float] | None = None,
     heatmap_space: str = "linear",
     cmap: str = "inferno",
+    vertex_colors: np.ndarray | None = None,
+    forearm_faces: np.ndarray | None = None,
 ) -> None:
     """Render a single-panel interpolated population RF heatmap and save as PNG.
 
@@ -418,6 +447,15 @@ def render_population_rf_standalone_interpolated(
         UV V-axis limits shared across sessions.
     cmap:
         Matplotlib colormap name (default ``"inferno"``).
+    vertex_colors:
+        (V, 4) float64 RGBA per-vertex skin colors. When provided (together with
+        ``forearm_faces``), the background is a triangulated mesh colored by
+        skin texture. When either is None, falls back to a grey mesh.
+    forearm_faces:
+        (F, 3) integer triangle indices into ``forearm_uv``. Must be provided
+        alongside ``vertex_colors`` for skin-colored mesh rendering. When None,
+        ``_draw_forearm_mesh_background`` is not called and a plain grey scatter
+        is used as fallback (backward-compat).
     """
     if (boundary_u is None) != (boundary_v is None):
         raise ValueError(
@@ -440,11 +478,14 @@ def render_population_rf_standalone_interpolated(
         spine.set_edgecolor('white')
     ax.set_aspect('equal')
 
-    stride_bg = max(1, len(forearm_uv) // 5000)
-    ax.scatter(
-        forearm_uv[::stride_bg, 0], forearm_uv[::stride_bg, 1],
-        c='#404040', s=4, alpha=0.5, linewidths=0, rasterized=True,
-    )
+    if forearm_faces is not None:
+        _draw_forearm_mesh_background(ax, forearm_uv, forearm_faces, vertex_colors)
+    else:
+        stride_bg = max(1, len(forearm_uv) // 5000)
+        ax.scatter(
+            forearm_uv[::stride_bg, 0], forearm_uv[::stride_bg, 1],
+            c='#404040', s=4, alpha=0.5, linewidths=0, rasterized=True,
+        )
 
     display_grid = np.where(interp_grid > 0, interp_grid, np.nan)
     im = ax.pcolormesh(
@@ -638,13 +679,7 @@ def render_population_rf_circular_crop(
     ax.set_aspect('equal')
     ax.axis('off')
 
-    tri_verts = forearm_uv[selected_faces]  # shape (M, 3, 2)
-    if vertex_colors is not None:
-        face_colors = vertex_colors[selected_faces].mean(axis=1)  # shape (M, 4) RGBA
-    else:
-        face_colors = np.tile([0.5, 0.5, 0.5, 1.0], (len(selected_faces), 1))
-    mesh_coll = PolyCollection(tri_verts, facecolors=face_colors, edgecolors="none")
-    ax.add_collection(mesh_coll)
+    _draw_forearm_mesh_background(ax, forearm_uv, selected_faces, vertex_colors)
 
     if heatmap_space == "log":
         norm = LogNorm(vmin=max(vmin, 1e-9), vmax=vmax)
@@ -689,6 +724,7 @@ def render_population_rf_composite(
     inflection_boundaries: dict[str, InflectionBoundary | None] | None = None,
     heatmap_space: str = "linear",
     cmap: str = "inferno",
+    vertex_colors: np.ndarray | None = None,
 ) -> None:
     """Render a multi-panel composite (one panel per gesture type) and save as PNG.
 
@@ -725,6 +761,10 @@ def render_population_rf_composite(
         Boundaries are drawn on the interpolated panel only.
     cmap:
         Matplotlib colormap name (default ``"inferno"``).
+    vertex_colors:
+        (V, 4) float64 RGBA per-vertex skin colors. Passed to
+        ``_draw_forearm_mesh_background()`` for each panel. When None, panels
+        render with a grey mesh background.
     """
     matplotlib.use('Agg')
 
@@ -737,7 +777,6 @@ def render_population_rf_composite(
 
     n_panels = len(ordered_gtypes)
     norm = LogNorm(vmin=vmin, vmax=vmax) if heatmap_space == "log" else Normalize(vmin=vmin, vmax=vmax)
-    stride = max(1, len(forearm_uv) // 5000)
 
     fig, axes = plt.subplots(1, n_panels, figsize=(7 * n_panels, 6), facecolor='black')
     if n_panels == 1:
@@ -774,10 +813,7 @@ def render_population_rf_composite(
         valid_uv = forearm_uv[valid_mask]
         valid_vals = heatmap_val[valid_mask]
 
-        ax.scatter(
-            forearm_uv[::stride, 0], forearm_uv[::stride, 1],
-            c='#404040', s=4, alpha=0.5, linewidths=0, rasterized=True,
-        )
+        _draw_forearm_mesh_background(ax, forearm_uv, forearm_faces, vertex_colors)
 
         if panel_type == 'scatter':
             if len(valid_uv) > 0:

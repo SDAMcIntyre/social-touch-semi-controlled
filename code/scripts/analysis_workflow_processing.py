@@ -485,6 +485,7 @@ def spatial_compare_boundaries_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
     iff_metric: str = "mean",
+    neuron_summary_xlsx: Optional[str] = None,
 ) -> None:
     """Aggregate RF boundary metrics across sessions and render comparison visuals.
 
@@ -497,6 +498,7 @@ def spatial_compare_boundaries_flow(
     if not input_items:
         return
 
+    xlsx_path = Path(neuron_summary_xlsx) if neuron_summary_xlsx is not None else None
     metrics = ["mean", "max"] if iff_metric == "both" else [iff_metric]
     for metric in metrics:
         output_dir = input_items[0][1] / '4_analysed' / SPATIAL_COMPARE_BOUNDARIES / f"iff_{metric}"
@@ -505,6 +507,7 @@ def spatial_compare_boundaries_flow(
             output_dir=output_dir,
             force_processing=force_processing,
             iff_metric=metric,
+            neuron_summary_xlsx=xlsx_path,
         )
 
 
@@ -1514,6 +1517,7 @@ def _build_pipeline_stages(dag_handler: DagConfigHandler, items_to_process) -> l
             "func": spatial_compare_boundaries_flow,
             "params": lambda: {
                 "iff_metric": dag_handler.get_task_options("spatial_compare_boundaries").get("iff_metric", "mean"),
+                "neuron_summary_xlsx": dag_handler.get_parameter("neuron_summary_xlsx") or None,
             },
         },
         {
