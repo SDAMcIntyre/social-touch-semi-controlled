@@ -703,6 +703,8 @@ def run_response_tuning(
     fit_degree: int = int(options.get("fit_degree", 1))
     dot_alpha: float = float(options.get("dot_alpha", 0.35))
     show_fit_ci: bool = bool(options.get("show_fit_ci", False))
+    secondary_color_by: dict = dict(options.get("secondary_color_by") or {})
+    normalize_per_neuron: bool = bool(options.get("normalize_per_neuron", False))
 
     sentinel = output_base_dir / "response_tuning_sentinel.json"
 
@@ -807,9 +809,12 @@ def run_response_tuning(
                         f"feature CSV."
                     )
 
+            r_min = float(df[response_col].min()) if response_col in df.columns else 0.0
+            r_max = float(df[response_col].max()) if response_col in df.columns else 1.0
             session_data.append({
                 "session_id": session_id,
                 "df": df,
+                "response_range": (r_min, r_max),
             })
 
         if not session_data:
@@ -1006,9 +1011,17 @@ def run_response_tuning(
                         # raw_dots strategy: extract the same raw feature/response
                         # arrays the sliding_window path bins, drop NaN pairs, and
                         # plot every touch as a dot with a polynomial fit line.
-                        valid_rows = filtered[[feature, response_col]].dropna()
+                        secondary_col = secondary_color_by.get(feature)
+                        if secondary_col is not None and secondary_col in filtered.columns:
+                            cols_to_load = [feature, response_col, secondary_col]
+                        else:
+                            cols_to_load = [feature, response_col]
+                            secondary_col = None
+
+                        valid_rows = filtered[cols_to_load].dropna(subset=[feature, response_col])
                         feat_arr = valid_rows[feature].to_numpy(dtype=float)
                         resp_arr = valid_rows[response_col].to_numpy(dtype=float)
+                        sec_arr = valid_rows[secondary_col].to_numpy(dtype=float) if secondary_col is not None else None
 
                         out_path = (
                             output_base_dir
@@ -1031,6 +1044,9 @@ def run_response_tuning(
                             dot_alpha=dot_alpha,
                             show_fit_ci=show_fit_ci,
                             line_color=scheme.session_color[session_id],
+                            secondary_vals=sec_arr,
+                            secondary_label=secondary_col or "",
+                            secondary_cmap="viridis",
                         )
                         csv_out_path = out_path.with_suffix(".csv")
                         _write_raw_dots_csv(
@@ -1049,7 +1065,7 @@ def run_response_tuning(
                             flush=True,
                         )
 
-                        overlay_session_data[session_id] = (feat_arr, resp_arr)
+                        overlay_session_data[session_id] = (feat_arr, resp_arr, sec_arr)
                         overlay_csv_dfs.append(pd.read_csv(csv_out_path))
 
                 if len(overlay_session_data) < 2:
@@ -1118,6 +1134,8 @@ def run_response_tuning(
                         legend_mode="by_type",
                         session_neuron_types=scheme.session_neuron_type,
                         type_colors=scheme.type_color,
+                        secondary_label=secondary_color_by.get(feature) or "",
+                        secondary_cmap="viridis",
                     )
                     render_overlay_raw_dots(
                         session_data=overlay_session_data,
@@ -1133,6 +1151,8 @@ def run_response_tuning(
                         legend_mode="by_session",
                         session_neuron_types=scheme.session_neuron_type,
                         type_colors=scheme.type_color,
+                        secondary_label=secondary_color_by.get(feature) or "",
+                        secondary_cmap="viridis",
                     )
                 overlay_csv_path = overlay_path_by_type.parent / f"overlay_{feature}_{gesture_subset}_{metric_subdir}_tuning.csv"
                 pd.concat(overlay_csv_dfs, ignore_index=True).to_csv(
@@ -1144,6 +1164,135 @@ def run_response_tuning(
                     f"{overlay_path_by_session.name}",
                     flush=True,
                 )
+
+        # =====================================================================
+        # Pass 3 — Normalized output (optional)
+        # =====================================================================
+        if normalize_per_neuron and binning_strategy == "raw_dots":
+            for feature in valid_features:
+                for gesture_subset in _GESTURE_SUBSETS:
+                    norm_overlay_session_data: dict = {}
+
+                    for entry in session_data:
+                        session_id = entry["session_id"]
+                        df = entry["df"]
+                        r_min, r_max = entry["response_range"]
+
+                        filtered = _filter_gesture(df, gesture_subset)
+                        if len(filtered) < _MIN_ROWS:
+                            continue
+
+                        secondary_col = secondary_color_by.get(feature)
+                        if secondary_col is not None and secondary_col in filtered.columns:
+                            cols_to_load = [feature, response_col, secondary_col]
+                        else:
+                            cols_to_load = [feature, response_col]
+                            secondary_col = None
+
+                        valid_rows = filtered[cols_to_load].dropna(subset=[feature, response_col])
+                        feat_arr = valid_rows[feature].to_numpy(dtype=float)
+                        resp_arr = valid_rows[response_col].to_numpy(dtype=float)
+                        sec_arr = valid_rows[secondary_col].to_numpy(dtype=float) if secondary_col is not None else None
+
+                        if r_max > r_min:
+                            norm_resp = (resp_arr - r_min) / (r_max - r_min)
+                        else:
+                            norm_resp = np.zeros_like(resp_arr)
+
+                        norm_out_path = (
+                            output_base_dir
+                            / feature
+                            / gesture_subset
+                            / overlap_dir
+                            / metric_subdir
+                            / "normalized"
+                            / f"{session_id}_{feature}_{gesture_subset}_{metric_subdir}_normalized.png"
+                        )
+                        render_session_raw_dots(
+                            feature_vals=feat_arr,
+                            response_vals=norm_resp,
+                            feature_name=feature,
+                            session_id=session_id,
+                            gesture_subset=gesture_subset,
+                            out_path=norm_out_path,
+                            iff_ylim=(0.0, 1.0),
+                            iff_ylabel="Normalized response",
+                            fit_degree=fit_degree,
+                            dot_alpha=dot_alpha,
+                            show_fit_ci=show_fit_ci,
+                            line_color=scheme.session_color[session_id],
+                            secondary_vals=sec_arr,
+                            secondary_label=secondary_col or "",
+                            secondary_cmap="viridis",
+                        )
+                        print(
+                            f"[Response Tuning] {metric_subdir} / {feature} / "
+                            f"{gesture_subset} / {session_id}: saved normalized {norm_out_path.name}",
+                            flush=True,
+                        )
+
+                        norm_overlay_session_data[session_id] = (feat_arr, norm_resp, sec_arr)
+
+                    if len(norm_overlay_session_data) < 2:
+                        continue
+
+                    norm_overlay_path_by_type = (
+                        output_base_dir
+                        / feature
+                        / gesture_subset
+                        / overlap_dir
+                        / metric_subdir
+                        / "normalized"
+                        / f"overlay_{feature}_{gesture_subset}_{metric_subdir}_normalized_by_type.png"
+                    )
+                    norm_overlay_path_by_session = (
+                        output_base_dir
+                        / feature
+                        / gesture_subset
+                        / overlap_dir
+                        / metric_subdir
+                        / "normalized"
+                        / f"overlay_{feature}_{gesture_subset}_{metric_subdir}_normalized_by_session.png"
+                    )
+                    render_overlay_raw_dots(
+                        session_data=norm_overlay_session_data,
+                        feature_name=feature,
+                        gesture_subset=gesture_subset,
+                        out_path=norm_overlay_path_by_type,
+                        iff_ylim=(0.0, 1.0),
+                        session_colors={sid: scheme.session_color[sid] for sid in norm_overlay_session_data},
+                        iff_ylabel="Normalized response",
+                        fit_degree=fit_degree,
+                        dot_alpha=0.15,
+                        show_fit_ci=show_fit_ci,
+                        legend_mode="by_type",
+                        session_neuron_types=scheme.session_neuron_type,
+                        type_colors=scheme.type_color,
+                        secondary_label=secondary_color_by.get(feature) or "",
+                        secondary_cmap="viridis",
+                    )
+                    render_overlay_raw_dots(
+                        session_data=norm_overlay_session_data,
+                        feature_name=feature,
+                        gesture_subset=gesture_subset,
+                        out_path=norm_overlay_path_by_session,
+                        iff_ylim=(0.0, 1.0),
+                        session_colors={sid: scheme.session_color[sid] for sid in norm_overlay_session_data},
+                        iff_ylabel="Normalized response",
+                        fit_degree=fit_degree,
+                        dot_alpha=0.15,
+                        show_fit_ci=show_fit_ci,
+                        legend_mode="by_session",
+                        session_neuron_types=scheme.session_neuron_type,
+                        type_colors=scheme.type_color,
+                        secondary_label=secondary_color_by.get(feature) or "",
+                        secondary_cmap="viridis",
+                    )
+                    print(
+                        f"[Response Tuning] {metric_subdir} / {feature} / "
+                        f"{gesture_subset}: saved normalized overlays.",
+                        flush=True,
+                    )
 
         total_features_rendered += len(valid_features)
 

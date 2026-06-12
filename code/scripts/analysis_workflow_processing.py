@@ -450,6 +450,7 @@ def spatial_extract_boundaries_flow(
     heatmap_space: str = "linear",
     cmap: str = "inferno",
     flip_u: bool = False,
+    contour_color: str = "red",
 ) -> None:
     """Render per-session 2D population RF heatmap PNGs projected via SLIM UV.
 
@@ -477,6 +478,7 @@ def spatial_extract_boundaries_flow(
             cmap=cmap,
             iff_metric=metric,
             flip_u=flip_u,
+            contour_color=contour_color,
         )
 
 
@@ -522,6 +524,7 @@ def spatial_compare_rf_centers_flow(
     heatmap_space: str = "linear",
     cmap: str = "inferno",
     iff_metric: str = "mean",
+    contour_color: str = "red",
 ) -> None:
     """Compare RF center positions between proximal and distal strokes across sessions.
 
@@ -544,6 +547,7 @@ def spatial_compare_rf_centers_flow(
             heatmap_space=heatmap_space,
             cmap=cmap,
             iff_metric=metric,
+            contour_color=contour_color,
         )
 
 
@@ -1004,6 +1008,8 @@ def stimulus_response_tuning_flow(
     metadata_dir: str = "touch_prepare_sessions",
     metadata_filename: str = "{session_id}_prepared.csv",
     count_category_by: Optional[dict] = None,
+    secondary_color_by: Optional[dict] = None,
+    normalize_per_neuron: bool = False,
     neuron_summary_xlsx: Optional[str] = None,
 ) -> None:
     """Per-feature response tuning curve plots across all sessions.
@@ -1034,6 +1040,8 @@ def stimulus_response_tuning_flow(
             "metadata_dir": metadata_dir,
             "metadata_filename": metadata_filename,
             "count_category_by": count_category_by or {},
+            "secondary_color_by": secondary_color_by or {},
+            "normalize_per_neuron": normalize_per_neuron,
             "neuron_summary_xlsx": neuron_summary_xlsx,
         },
         output_base_dir=output_dir,
@@ -1504,6 +1512,7 @@ def _build_pipeline_stages(dag_handler: DagConfigHandler, items_to_process) -> l
                 "heatmap_space": dag_handler.get_task_options("spatial_extract_boundaries").get("heatmap_space", "linear"),
                 "cmap": dag_handler.get_task_options("spatial_extract_boundaries").get("cmap", "inferno"),
                 "flip_u": bool(dag_handler.get_task_options("spatial_extract_boundaries").get("flip_u", False)),
+                "contour_color": dag_handler.get_task_options("spatial_extract_boundaries").get("contour_color", "red"),
                 **(
                     {"median_filter_size": int(dag_handler.get_task_options("spatial_extract_boundaries")["median_filter_size"])}
                     if dag_handler.get_task_options("spatial_extract_boundaries").get("median_filter_size") is not None
@@ -1533,6 +1542,7 @@ def _build_pipeline_stages(dag_handler: DagConfigHandler, items_to_process) -> l
                 "heatmap_space": dag_handler.get_task_options("spatial_compare_rf_centers").get("heatmap_space", "linear"),
                 "cmap": dag_handler.get_task_options("spatial_compare_rf_centers").get("cmap", "inferno"),
                 "iff_metric": dag_handler.get_task_options("spatial_compare_rf_centers").get("iff_metric", "mean"),
+                "contour_color": dag_handler.get_task_options("spatial_compare_rf_centers").get("contour_color", "red"),
             },
         },
         {
@@ -1576,6 +1586,8 @@ def _build_pipeline_stages(dag_handler: DagConfigHandler, items_to_process) -> l
                 "metadata_dir": str(dag_handler.get_task_options("stimulus_response_tuning").get("metadata_dir", "touch_prepare_sessions")),
                 "metadata_filename": str(dag_handler.get_task_options("stimulus_response_tuning").get("metadata_filename", "{session_id}_prepared.csv")),
                 "count_category_by": dag_handler.get_task_options("stimulus_response_tuning").get("count_category_by") or {},
+                "secondary_color_by": dag_handler.get_task_options("stimulus_response_tuning").get("secondary_color_by") or {},
+                "normalize_per_neuron": bool(dag_handler.get_task_options("stimulus_response_tuning").get("normalize_per_neuron", False)),
                 "neuron_summary_xlsx": dag_handler.get_parameter("neuron_summary_xlsx") or None,
             },
         },

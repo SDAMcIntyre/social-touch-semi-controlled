@@ -34,6 +34,7 @@ def render_center_marked_heatmap(
     peak_uv: np.ndarray | None = None,
     vertex_colors: np.ndarray | None = None,
     forearm_faces: np.ndarray | None = None,
+    contour_color: str = "red",
 ) -> None:
     norm = LogNorm(vmin=vmin, vmax=vmax) if heatmap_space == "log" else Normalize(vmin=vmin, vmax=vmax)
 
@@ -62,7 +63,7 @@ def render_center_marked_heatmap(
 
     ax.plot(
         centroid_uv[0], centroid_uv[1],
-        color='violet', marker='+', markersize=10, markeredgewidth=2, zorder=7,
+        color=contour_color, marker='+', markersize=10, markeredgewidth=2, zorder=7,
     )
 
     if peak_uv is not None:

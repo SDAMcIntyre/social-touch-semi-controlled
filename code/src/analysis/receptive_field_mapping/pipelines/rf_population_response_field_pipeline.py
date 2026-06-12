@@ -92,6 +92,7 @@ def run_population_response_field_extraction(
     cmap: str = "inferno",
     iff_metric: str = "mean",
     flip_u: bool = False,
+    contour_color: str = "red",
 ) -> None:
     """Render per-session 2D population RF heatmap PNGs projected via SLIM UV.
 
@@ -392,6 +393,7 @@ def run_population_response_field_extraction(
                 compute_inflection_boundary(
                     grid_u, grid_v, grid_z, inflection_sigma,
                     snapshot_dir=inspection_dir, snapshot_label=gtype,
+                    contour_color=contour_color,
                 )
                 if inflection_sigma is not None
                 else None
@@ -412,6 +414,7 @@ def run_population_response_field_extraction(
                 heatmap_space=heatmap_space,
                 cmap=cmap,
                 vertex_colors=slim_vertex_colors,
+                contour_color=contour_color,
             )
             produced.append(png_path)
             print(f"[Population Response Fields] {session_id}: saved {png_path.name}")
@@ -533,6 +536,7 @@ def run_population_response_field_extraction(
                         compute_inflection_boundary(
                             grid_u_g, grid_v_g, grid_z_g, inflection_sigma,
                             snapshot_dir=inspection_dir, snapshot_label=f"{sd.session_id}_{gtype}_composite",
+                            contour_color=contour_color,
                         )
                         if inflection_sigma is not None
                         else None
@@ -559,6 +563,7 @@ def run_population_response_field_extraction(
                 heatmap_space=heatmap_space,
                 cmap=cmap,
                 vertex_colors=sd.slim_vertex_colors,
+                contour_color=contour_color,
             )
             sd.produced.append(composite_path)
             print(
@@ -586,6 +591,7 @@ def run_population_response_field_extraction(
                 cmap=cmap,
                 vertex_colors=sd.slim_vertex_colors,
                 forearm_faces=sd.forearm_faces,
+                contour_color=contour_color,
             )
             sd.produced.append(standalone_path)
             print(f"[Population Response Fields] {sd.session_id}: saved {standalone_path.name}")

@@ -360,6 +360,9 @@ def render_session_raw_dots(
     dot_alpha: float = 0.35,
     show_fit_ci: bool = False,
     line_color: str = _IFF_COLOR,
+    secondary_vals: "np.ndarray | None" = None,
+    secondary_label: str = "",
+    secondary_cmap: str = "viridis",
 ) -> None:
     """Per-session raw-touch scatter + polynomial fit line.
 
@@ -383,11 +386,24 @@ def render_session_raw_dots(
     _style_dark_ax(ax)
     ax.grid(alpha=0.15, color='white', linestyle='--')
 
-    ax.scatter(
-        feat, resp,
-        s=20, color=line_color, alpha=dot_alpha,
-        edgecolors='none', zorder=3,
-    )
+    if secondary_vals is not None and len(secondary_vals) == len(feat):
+        sc = ax.scatter(
+            feat, resp,
+            s=20, c=secondary_vals, cmap=secondary_cmap,
+            alpha=dot_alpha, edgecolors='none', zorder=3,
+        )
+        cbar = plt.colorbar(sc, ax=ax, shrink=0.8)
+        cbar.ax.yaxis.set_tick_params(color='white')
+        cbar.ax.yaxis.label.set_color('white')
+        plt.setp(cbar.ax.yaxis.get_ticklabels(), color='white')
+        if secondary_label:
+            cbar.set_label(_display_id(secondary_label), color='white')
+    else:
+        ax.scatter(
+            feat, resp,
+            s=20, color=line_color, alpha=dot_alpha,
+            edgecolors='none', zorder=3,
+        )
 
     coeffs, r2 = _fit_polynomial(feat, resp, fit_degree)
     if coeffs is not None:
@@ -440,7 +456,7 @@ def render_session_raw_dots(
 
 
 def render_overlay_raw_dots(
-    session_data: dict[str, tuple[np.ndarray, np.ndarray]],
+    session_data: "dict[str, tuple[np.ndarray, np.ndarray, np.ndarray | None]]",
     feature_name: str,
     gesture_subset: str,
     out_path: Path,
@@ -453,6 +469,8 @@ def render_overlay_raw_dots(
     legend_mode: str = "by_session",
     session_neuron_types: dict[str, str] | None = None,
     type_colors: dict[str, str] | None = None,
+    secondary_label: str = "",
+    secondary_cmap: str = "viridis",
 ) -> None:
     """Multi-session raw-touch scatter + per-session fit lines.
 
@@ -468,7 +486,21 @@ def render_overlay_raw_dots(
     _style_dark_ax(ax)
     ax.grid(alpha=0.15, color='white', linestyle='--')
 
-    for session_id, (feature_vals, response_vals) in session_data.items():
+    # Compute shared colorbar range from pooled secondary values across sessions.
+    sec_arrays = [tup[2] for tup in session_data.values() if len(tup) > 2 and tup[2] is not None]
+    shared_sec_norm = None
+    if sec_arrays and secondary_label:
+        all_sec = np.concatenate([s for s in sec_arrays if len(s) > 0])
+        all_sec_finite = all_sec[np.isfinite(all_sec)]
+        if len(all_sec_finite) > 0:
+            sec_vmin = float(np.min(all_sec_finite))
+            sec_vmax = float(np.max(all_sec_finite))
+            if sec_vmax > sec_vmin:
+                shared_sec_norm = plt.Normalize(vmin=sec_vmin, vmax=sec_vmax)
+
+    for session_id, session_tup in session_data.items():
+        feature_vals, response_vals = session_tup[0], session_tup[1]
+        sec_vals = session_tup[2] if len(session_tup) > 2 else None
         color = session_colors[session_id]
         if legend_mode == "by_type" and session_neuron_types is not None:
             line_label = session_neuron_types[session_id]
@@ -483,11 +515,23 @@ def render_overlay_raw_dots(
         if feat.size == 0:
             continue
 
-        ax.scatter(
-            feat, resp,
-            s=20, color=color, alpha=dot_alpha,
-            edgecolors='none', zorder=2,
+        use_secondary = (
+            shared_sec_norm is not None
+            and sec_vals is not None
+            and len(sec_vals) == len(feat)
         )
+        if use_secondary:
+            ax.scatter(
+                feat, resp,
+                s=20, c=sec_vals, cmap=secondary_cmap, norm=shared_sec_norm,
+                alpha=dot_alpha, edgecolors='none', zorder=2,
+            )
+        else:
+            ax.scatter(
+                feat, resp,
+                s=20, color=color, alpha=dot_alpha,
+                edgecolors='none', zorder=2,
+            )
 
         coeffs, _ = _fit_polynomial(feat, resp, fit_degree)
         if coeffs is not None:
@@ -497,6 +541,16 @@ def render_overlay_raw_dots(
                 x_line, y_line,
                 color=color, linewidth=2.5, label=line_label, zorder=3,
             )
+
+    if shared_sec_norm is not None:
+        sm = plt.cm.ScalarMappable(cmap=secondary_cmap, norm=shared_sec_norm)
+        sm.set_array([])
+        cbar = plt.colorbar(sm, ax=ax, shrink=0.8)
+        cbar.ax.yaxis.set_tick_params(color='white')
+        cbar.ax.yaxis.label.set_color('white')
+        plt.setp(cbar.ax.yaxis.get_ticklabels(), color='white')
+        if secondary_label:
+            cbar.set_label(_display_id(secondary_label), color='white')
 
     ax.set_ylim(iff_ylim)
     ax.set_ylabel(iff_ylabel, color='white', fontsize=10)

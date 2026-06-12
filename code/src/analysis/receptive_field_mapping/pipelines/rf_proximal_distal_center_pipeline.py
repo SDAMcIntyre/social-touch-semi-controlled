@@ -33,6 +33,7 @@ def run_proximal_distal_center_comparison(
     heatmap_space: str = "linear",
     cmap: str = "inferno",
     iff_metric: str = "mean",
+    contour_color: str = "red",
 ) -> None:
     if iff_metric not in IFF_METRICS:
         raise ValueError(
@@ -267,6 +268,7 @@ def run_proximal_distal_center_comparison(
                 cmap=cmap,
                 vertex_colors=d['slim_vertex_colors'],
                 forearm_faces=d['forearm_faces'],
+                contour_color=contour_color,
             )
 
             # Task 4.3 — render hotspot PNG when peak_uv is available for this gtype
@@ -289,6 +291,7 @@ def run_proximal_distal_center_comparison(
                     peak_uv=peak_uv_gtype,
                     vertex_colors=d['slim_vertex_colors'],
                     forearm_faces=d['forearm_faces'],
+                    contour_color=contour_color,
                 )
 
             # Task 1.3 — circular crops: centroid (always) and peak (guarded)

@@ -193,6 +193,7 @@ tasks:
       heatmap_space: linear
       cmap: inferno
       flip_u: true
+      contour_color: red
     depends_on: [spatial_map_single_touch, spatial_precompute_slim_uv]
 
   # Aggregate inflection boundary metrics across sessions and render comparison visuals.
@@ -221,6 +222,7 @@ tasks:
       iff_metric: both
       heatmap_space: linear
       cmap: inferno
+      contour_color: red
     depends_on: [spatial_extract_boundaries]
 
   # Stage 2b (Feature Extraction): Per-session feature extraction. Each enabled feature extracts to its own folder.
@@ -321,6 +323,10 @@ tasks:
         hand_velocity_amplitude_mean: speed_metadata
         pressure_mean: force_metadata
         contact_depth_mean: force_metadata
+      normalize_per_neuron: false          # raw_dots: extra normalized output images (Y in [0, 1])
+      secondary_color_by:  # raw_dots only: primary feature -> secondary feature for dot coloring
+        hand_velocity_amplitude_mean: contact_depth_mean
+        contact_depth_mean: hand_velocity_amplitude_mean
     depends_on: [stimulus_extract_features]
   stimulus_response_instruction_tuning:
     category: stimulus_sensitivity
