@@ -700,7 +700,21 @@ def run_response_tuning(
             f"run_response_tuning: unknown binning_strategy '{binning_strategy}'. "
             f"Valid values: 'sliding_window', 'raw_dots'."
         )
-    fit_degree: int = int(options.get("fit_degree", 1))
+    _fit_degree_raw = options.get("fit_degree", 1)
+    if isinstance(_fit_degree_raw, int):
+        fit_degrees: list[int] = [_fit_degree_raw]
+    elif isinstance(_fit_degree_raw, list):
+        if not all(isinstance(d, int) for d in _fit_degree_raw):
+            raise ValueError(
+                f"run_response_tuning: 'fit_degree' list must contain only integers, "
+                f"got {_fit_degree_raw!r}."
+            )
+        fit_degrees = list(_fit_degree_raw)
+    else:
+        raise ValueError(
+            f"run_response_tuning: 'fit_degree' must be an int or list[int], "
+            f"got {type(_fit_degree_raw).__name__!r}: {_fit_degree_raw!r}."
+        )
     dot_alpha: float = float(options.get("dot_alpha", 0.35))
     show_fit_ci: bool = bool(options.get("show_fit_ci", False))
     secondary_color_by: dict = dict(options.get("secondary_color_by") or {})
@@ -715,7 +729,8 @@ def run_response_tuning(
         return
 
     if binning_strategy == "raw_dots":
-        overlap_dir = f"raw_dots_d{fit_degree}"
+        degrees_tag = "_".join(str(d) for d in fit_degrees)
+        overlap_dir = f"raw_dots_d{degrees_tag}"
     else:
         overlap_dir = f"b{n_bins}_ov{overlap_ratio:.2f}"
 
@@ -1040,7 +1055,7 @@ def run_response_tuning(
                             out_path=out_path,
                             iff_ylim=response_ylim,
                             iff_ylabel=response_ylabel,
-                            fit_degree=fit_degree,
+                            fit_degrees=fit_degrees,
                             dot_alpha=dot_alpha,
                             show_fit_ci=show_fit_ci,
                             line_color=scheme.session_color[session_id],
@@ -1055,7 +1070,7 @@ def run_response_tuning(
                             session_id=session_id,
                             feature=feature,
                             gesture_subset=gesture_subset,
-                            fit_degree=fit_degree,
+                            fit_degree=fit_degrees[0],
                             metric=metric_subdir,
                             out_path=csv_out_path,
                         )
@@ -1128,7 +1143,7 @@ def run_response_tuning(
                         iff_ylim=response_ylim,
                         session_colors={sid: scheme.session_color[sid] for sid in overlay_session_data},
                         iff_ylabel=response_ylabel,
-                        fit_degree=fit_degree,
+                        fit_degrees=fit_degrees,
                         dot_alpha=0.15,
                         show_fit_ci=show_fit_ci,
                         legend_mode="by_type",
@@ -1145,7 +1160,7 @@ def run_response_tuning(
                         iff_ylim=response_ylim,
                         session_colors={sid: scheme.session_color[sid] for sid in overlay_session_data},
                         iff_ylabel=response_ylabel,
-                        fit_degree=fit_degree,
+                        fit_degrees=fit_degrees,
                         dot_alpha=0.15,
                         show_fit_ci=show_fit_ci,
                         legend_mode="by_session",
@@ -1217,7 +1232,7 @@ def run_response_tuning(
                             out_path=norm_out_path,
                             iff_ylim=(0.0, 1.0),
                             iff_ylabel="Normalized response",
-                            fit_degree=fit_degree,
+                            fit_degrees=fit_degrees,
                             dot_alpha=dot_alpha,
                             show_fit_ci=show_fit_ci,
                             line_color=scheme.session_color[session_id],
@@ -1262,7 +1277,7 @@ def run_response_tuning(
                         iff_ylim=(0.0, 1.0),
                         session_colors={sid: scheme.session_color[sid] for sid in norm_overlay_session_data},
                         iff_ylabel="Normalized response",
-                        fit_degree=fit_degree,
+                        fit_degrees=fit_degrees,
                         dot_alpha=0.15,
                         show_fit_ci=show_fit_ci,
                         legend_mode="by_type",
@@ -1279,7 +1294,7 @@ def run_response_tuning(
                         iff_ylim=(0.0, 1.0),
                         session_colors={sid: scheme.session_color[sid] for sid in norm_overlay_session_data},
                         iff_ylabel="Normalized response",
-                        fit_degree=fit_degree,
+                        fit_degrees=fit_degrees,
                         dot_alpha=0.15,
                         show_fit_ci=show_fit_ci,
                         legend_mode="by_session",

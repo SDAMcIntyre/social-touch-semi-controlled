@@ -315,7 +315,7 @@ def render_session_tuning_curve(
     plt.close(fig)
 
 
-def _fit_polynomial(
+def fit_polynomial(
     feature_vals: np.ndarray,
     response_vals: np.ndarray,
     fit_degree: int,
@@ -347,6 +347,15 @@ def _fit_polynomial(
     return coeffs, r2
 
 
+# Backward-compatible alias kept for any external callers that referenced the
+# private name before it was made public.
+_fit_polynomial = fit_polynomial
+
+
+_FIT_LINESTYLES = ['-', '--', ':', '-.']
+_FIT_COLORS = ['#4ec9b0', '#f28b30', '#c586c0', '#9cdcfe']
+
+
 def render_session_raw_dots(
     feature_vals: np.ndarray,
     response_vals: np.ndarray,
@@ -356,6 +365,7 @@ def render_session_raw_dots(
     out_path: Path,
     iff_ylim: tuple[float, float],
     iff_ylabel: str = "IFF (Hz)",
+    fit_degrees: "list[int] | None" = None,
     fit_degree: int = 1,
     dot_alpha: float = 0.35,
     show_fit_ci: bool = False,
@@ -364,14 +374,18 @@ def render_session_raw_dots(
     secondary_label: str = "",
     secondary_cmap: str = "viridis",
 ) -> None:
-    """Per-session raw-touch scatter + polynomial fit line.
+    """Per-session raw-touch scatter + polynomial fit line(s).
 
     Every touch is plotted as a semi-transparent dot at its exact
-    ``(feature_value, response_value)`` coordinate. A degree-``fit_degree``
-    polynomial regression line is drawn through the points. The total touch
-    count N and the fit R² are reported in the title (there are no bins, so no
-    right-axis count bars are drawn).
+    ``(feature_value, response_value)`` coordinate. One polynomial regression
+    line is drawn per entry in ``fit_degrees`` (or the single ``fit_degree``
+    when ``fit_degrees`` is None). When multiple degrees are given, each line
+    gets a distinct color and linestyle, and an R² annotation box is added to
+    the axes.
     """
+    if fit_degrees is None:
+        fit_degrees = [fit_degree]
+
     feature_vals = np.asarray(feature_vals, dtype=float)
     response_vals = np.asarray(response_vals, dtype=float)
 
@@ -405,50 +419,73 @@ def render_session_raw_dots(
             edgecolors='none', zorder=3,
         )
 
-    coeffs, r2 = _fit_polynomial(feat, resp, fit_degree)
-    if coeffs is not None:
-        r2_text = f"{r2:.2f}"
-        x_line = np.linspace(float(np.min(feat)), float(np.max(feat)), 200)
-        y_line = np.polyval(coeffs, x_line)
-        ax.plot(x_line, y_line, color=line_color, linewidth=2.5, zorder=5)
+    multi = len(fit_degrees) > 1
+    r2_lines: list[str] = []
+    x_line = np.linspace(float(np.min(feat)), float(np.max(feat)), 200) if n > 0 else None
 
-        # CI band: closed-form, degree-1 only. For higher degrees the simple
-        # standard-error formula does not apply, so we warn and disable it
-        # gracefully (explicitly requested in plan).
-        if show_fit_ci and fit_degree > 1:
-            warnings.warn(
-                "render_session_raw_dots: show_fit_ci is only supported for "
-                f"fit_degree=1; got fit_degree={fit_degree}. Disabling the CI "
-                "band.",
-                stacklevel=2,
+    for i, deg in enumerate(fit_degrees):
+        fit_color = _FIT_COLORS[i % len(_FIT_COLORS)] if multi else line_color
+        fit_ls = _FIT_LINESTYLES[i % len(_FIT_LINESTYLES)] if multi else '-'
+
+        coeffs, r2 = fit_polynomial(feat, resp, deg)
+        if coeffs is not None:
+            r2_lines.append(f"deg {deg}: R²={r2:.2f}")
+            y_line = np.polyval(coeffs, x_line)
+            ax.plot(x_line, y_line, color=fit_color, linewidth=2.5, linestyle=fit_ls, zorder=5)
+
+            if show_fit_ci and not multi and deg == 1 and n >= 3:
+                predicted = np.polyval(coeffs, feat)
+                residuals = resp - predicted
+                dof = n - 2
+                s_err = np.sqrt(np.sum(residuals ** 2) / dof)
+                x_mean = float(np.mean(feat))
+                ss_xx = float(np.sum((feat - x_mean) ** 2))
+                if ss_xx > 0:
+                    se_line = s_err * np.sqrt(
+                        1.0 / n + (x_line - x_mean) ** 2 / ss_xx
+                    )
+                    ci = 1.96 * se_line
+                    ax.fill_between(
+                        x_line, y_line - ci, y_line + ci,
+                        color=fit_color, alpha=0.2, zorder=4, linewidth=0,
+                    )
+            elif show_fit_ci and deg > 1:
+                warnings.warn(
+                    "render_session_raw_dots: show_fit_ci is only supported for "
+                    f"fit_degree=1; got fit_degree={deg}. Disabling the CI band.",
+                    stacklevel=2,
+                )
+        else:
+            r2_lines.append(f"deg {deg}: R²=n/a")
+
+    if r2_lines:
+        if multi:
+            annotation = "\n".join(r2_lines)
+            ax.text(
+                0.03, 0.97, annotation,
+                transform=ax.transAxes,
+                fontsize=8, verticalalignment='top',
+                color='white',
+                bbox=dict(boxstyle='round,pad=0.3', facecolor='#333333', alpha=0.7, edgecolor='#555555'),
             )
-        elif show_fit_ci and fit_degree == 1 and n >= 3:
-            predicted = np.polyval(coeffs, feat)
-            residuals = resp - predicted
-            dof = n - 2
-            s_err = np.sqrt(np.sum(residuals ** 2) / dof)
-            x_mean = float(np.mean(feat))
-            ss_xx = float(np.sum((feat - x_mean) ** 2))
-            if ss_xx > 0:
-                # 95% CI for the mean response (t≈1.96 large-sample approx).
-                se_line = s_err * np.sqrt(
-                    1.0 / n + (x_line - x_mean) ** 2 / ss_xx
-                )
-                ci = 1.96 * se_line
-                ax.fill_between(
-                    x_line, y_line - ci, y_line + ci,
-                    color=line_color, alpha=0.2, zorder=4, linewidth=0,
-                )
+        title_r2 = r2_lines[0] if len(r2_lines) == 1 else ""
     else:
-        r2_text = "n/a"
+        title_r2 = "R²=n/a"
 
     ax.set_ylim(iff_ylim)
     ax.set_ylabel(iff_ylabel, color='white', fontsize=10)
     ax.set_xlabel(_display_id(feature_name), color='white', fontsize=10)
-    ax.set_title(
-        f"{session_id} | {gesture_subset} | N={n}, R²={r2_text}",
-        color='white', fontsize=11,
-    )
+    if multi:
+        ax.set_title(
+            f"{session_id} | {gesture_subset} | N={n}",
+            color='white', fontsize=11,
+        )
+    else:
+        r2_str = r2_lines[0].split(": ")[1] if r2_lines else "R²=n/a"
+        ax.set_title(
+            f"{session_id} | {gesture_subset} | N={n}, {r2_str}",
+            color='white', fontsize=11,
+        )
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=150, bbox_inches='tight', facecolor=fig.get_facecolor())
@@ -463,6 +500,7 @@ def render_overlay_raw_dots(
     iff_ylim: tuple[float, float],
     session_colors: dict[str, str],
     iff_ylabel: str = "IFF (Hz)",
+    fit_degrees: "list[int] | None" = None,
     fit_degree: int = 1,
     dot_alpha: float = 0.15,
     show_fit_ci: bool = False,
@@ -475,11 +513,19 @@ def render_overlay_raw_dots(
     """Multi-session raw-touch scatter + per-session fit lines.
 
     Each session contributes a faint scatter cloud (``alpha=dot_alpha``,
-    ``s=20``) and a bold polynomial fit line (``linewidth=2.5``) in its
-    neuron-type / session colour. The legend block mirrors
-    ``render_overlay_tuning_curve`` (``by_type`` / ``by_session`` modes).
+    ``s=20``) and one bold polynomial fit line per degree in ``fit_degrees``
+    (``linewidth=2.5``) in its neuron-type / session colour. When multiple
+    degrees are requested, each degree gets a distinct linestyle; an R²
+    annotation box is added per session listing all degrees. The legend block
+    mirrors ``render_overlay_tuning_curve`` (``by_type`` / ``by_session``
+    modes).
     """
     from matplotlib.lines import Line2D
+
+    if fit_degrees is None:
+        fit_degrees = [fit_degree]
+
+    multi = len(fit_degrees) > 1
 
     fig, ax = plt.subplots(figsize=(8, 5), dpi=150)
     fig.patch.set_facecolor(_BG)
@@ -497,6 +543,8 @@ def render_overlay_raw_dots(
             sec_vmax = float(np.max(all_sec_finite))
             if sec_vmax > sec_vmin:
                 shared_sec_norm = plt.Normalize(vmin=sec_vmin, vmax=sec_vmax)
+
+    legend_labels_seen: set[str] = set()
 
     for session_id, session_tup in session_data.items():
         feature_vals, response_vals = session_tup[0], session_tup[1]
@@ -533,14 +581,41 @@ def render_overlay_raw_dots(
                 edgecolors='none', zorder=2,
             )
 
-        coeffs, _ = _fit_polynomial(feat, resp, fit_degree)
-        if coeffs is not None:
-            x_line = np.linspace(float(np.min(feat)), float(np.max(feat)), 200)
-            y_line = np.polyval(coeffs, x_line)
-            ax.plot(
-                x_line, y_line,
-                color=color, linewidth=2.5, label=line_label, zorder=3,
+        x_line = np.linspace(float(np.min(feat)), float(np.max(feat)), 200)
+        r2_lines: list[str] = []
+
+        for i, deg in enumerate(fit_degrees):
+            fit_ls = _FIT_LINESTYLES[i % len(_FIT_LINESTYLES)] if multi else '-'
+            coeffs, r2 = fit_polynomial(feat, resp, deg)
+            if coeffs is not None:
+                y_line = np.polyval(coeffs, x_line)
+                plot_label = line_label if (not multi and line_label not in legend_labels_seen) else (
+                    f"{line_label} (d{deg})" if multi and (f"{line_label} (d{deg})" not in legend_labels_seen) else None
+                )
+                ax.plot(
+                    x_line, y_line,
+                    color=color, linewidth=2.5, linestyle=fit_ls,
+                    label=plot_label if plot_label is not None else "_nolegend_",
+                    zorder=3,
+                )
+                if plot_label is not None:
+                    legend_labels_seen.add(plot_label)
+                r2_lines.append(f"d{deg}: R²={r2:.2f}")
+            else:
+                r2_lines.append(f"d{deg}: R²=n/a")
+
+        if multi and r2_lines:
+            annotation = f"{session_id}\n" + "\n".join(r2_lines)
+            ax.text(
+                0.03, 0.97, annotation,
+                transform=ax.transAxes,
+                fontsize=6, verticalalignment='top',
+                color=color,
+                bbox=dict(boxstyle='round,pad=0.3', facecolor='#222222', alpha=0.6, edgecolor=color),
             )
+        elif not multi and r2_lines:
+            if line_label not in legend_labels_seen:
+                legend_labels_seen.add(line_label)
 
     if shared_sec_norm is not None:
         sm = plt.cm.ScalarMappable(cmap=secondary_cmap, norm=shared_sec_norm)

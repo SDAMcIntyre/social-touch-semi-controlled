@@ -32,6 +32,8 @@ PANEL_METRICS = [
     'pca_aspect_ratio',
     'pca_orientation_deg',
     'mean_iff_on_contour',
+    'centroid_shift_tap_vs_stroke_mm',
+    'centroid_shift_proximal_vs_distal_mm',
 ]
 
 
@@ -377,6 +379,72 @@ def _load_heatmap_rendering_data_from_npz(npz_path: Path) -> dict:
     }
 
 
+def _centroid_distance_3d(
+    df: pd.DataFrame,
+    session_id: str,
+    gtype_a: str,
+    gtype_b: str,
+) -> float:
+    """Euclidean distance between the XYZ centroids of two gesture types for one session.
+
+    Returns NaN when either gesture type has no inflection boundary (centroid is NaN).
+    Raises if the session/gesture row is missing entirely — that indicates a corrupt
+    DataFrame, not a valid absent-boundary case.
+    """
+    xyz_cols = ['centroid_x_mm', 'centroid_y_mm', 'centroid_z_mm']
+    session_df = df[df['session_id'] == session_id]
+
+    mask_a = session_df['gesture_type'] == gtype_a
+    mask_b = session_df['gesture_type'] == gtype_b
+
+    if not mask_a.any():
+        raise ValueError(
+            f"_centroid_distance_3d: session '{session_id}' has no row for gesture_type "
+            f"'{gtype_a}' — DataFrame is structurally incomplete."
+        )
+    if not mask_b.any():
+        raise ValueError(
+            f"_centroid_distance_3d: session '{session_id}' has no row for gesture_type "
+            f"'{gtype_b}' — DataFrame is structurally incomplete."
+        )
+
+    xyz_a = session_df.loc[mask_a, xyz_cols].to_numpy(dtype=np.float64).squeeze()
+    xyz_b = session_df.loc[mask_b, xyz_cols].to_numpy(dtype=np.float64).squeeze()
+
+    if not np.all(np.isfinite(xyz_a)) or not np.all(np.isfinite(xyz_b)):
+        return float('nan')
+
+    return float(np.linalg.norm(xyz_a - xyz_b))
+
+
+def _add_centroid_shift_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Add pairwise centroid shift distance columns to the summary DataFrame.
+
+    Computes per session:
+    - ``centroid_shift_tap_vs_stroke_mm``: Euclidean distance between 'tap' and 'stroke'
+      centroids in 3D mm space.
+    - ``centroid_shift_proximal_vs_distal_mm``: Euclidean distance between
+      'stroke_proximal' and 'stroke_distal' centroids in 3D mm space.
+
+    Both columns are NaN when either gesture type in the pair has no inflection boundary.
+    The columns are broadcast to every row for that session (one value per session, repeated
+    across all gesture-type rows), so bar chart renderers can pivot on any gesture type.
+    """
+    shift_tap_stroke: dict[str, float] = {}
+    shift_prox_dist: dict[str, float] = {}
+
+    for session_id in df['session_id'].unique():
+        shift_tap_stroke[session_id] = _centroid_distance_3d(df, session_id, 'tap', 'stroke')
+        shift_prox_dist[session_id] = _centroid_distance_3d(
+            df, session_id, 'stroke_proximal', 'stroke_distal'
+        )
+
+    df = df.copy()
+    df['centroid_shift_tap_vs_stroke_mm'] = df['session_id'].map(shift_tap_stroke).astype(np.float64)
+    df['centroid_shift_proximal_vs_distal_mm'] = df['session_id'].map(shift_prox_dist).astype(np.float64)
+    return df
+
+
 def _build_summary_dataframe(
     session_configs: list[tuple[Path, Path]],
     iff_metric: str = "mean",
@@ -431,6 +499,8 @@ def _build_summary_dataframe(
         'area_uv_mm2': np.float64,
         'perimeter_uv_mm': np.float64,
     })
+
+    df = _add_centroid_shift_columns(df)
 
     return df, contour_data, centroid_data
 

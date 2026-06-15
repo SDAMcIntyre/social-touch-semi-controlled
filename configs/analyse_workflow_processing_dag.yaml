@@ -184,7 +184,7 @@ tasks:
     category: spatial_sensitivity
     enabled: true
     options:
-      force_processing: false
+      force_processing: true
       neuron_mode: iff
       iff_metric: both
       min_overlap_pct: 25
@@ -204,7 +204,7 @@ tasks:
     category: spatial_sensitivity
     enabled: true
     options:
-      force_processing: false
+      force_processing: true
       iff_metric: both
       heatmap_space: linear
       cmap: inferno
@@ -218,7 +218,7 @@ tasks:
     category: spatial_sensitivity
     enabled: true
     options:
-      force_processing: false
+      force_processing: true
       iff_metric: both
       heatmap_space: linear
       cmap: inferno
@@ -312,8 +312,8 @@ tasks:
       clip_percentile: 1.0
       smoothing_sigma: 1.5
       overlap_ratio: 0.25                  # 0.0 to 0.5; sliding-window bin overlap
-      binning_strategy: "sliding_window"   # sliding_window | raw_dots
-      fit_degree: 4                        # raw_dots: polynomial fit degree
+      binning_strategy: "raw_dots"         # sliding_window | raw_dots
+      fit_degree: 4                        # raw_dots: polynomial fit degree — int or list[int], e.g. [1, 2, 3, 4]
       dot_alpha: 0.35                      # raw_dots: per-session scatter opacity
       show_fit_ci: true                    # raw_dots: degree-1 CI band on fit line
       metadata_dir: touch_prepare_sessions # under <database>/4_analysed/
@@ -332,7 +332,7 @@ tasks:
     category: stimulus_sensitivity
     enabled: true
     options:
-      force_processing: true
+      force_processing: false
       iff_metric: both
       clip_percentile: 1.0
       tuning_categories:
@@ -343,6 +343,31 @@ tasks:
       metadata_filename: '{session_id}_prepared.csv'
     depends_on:
     - stimulus_extract_features
+
+  # RF spatial tuning: RF boundary metrics (area, circularity, PCA) vs binned stimulus parameters.
+  # Bins touches by velocity / depth / contact_area, computes a population RF heatmap per bin,
+  # extracts the inflection boundary, and renders scatter + polynomial fit figures.
+  # Also produces the area dismissal figure (contact_area → RF area, Spearman annotation).
+  # Output: 4_analysed/spatial_tuning_rf_metrics/{feature}/{gesture_subset}/
+  spatial_tuning_rf_metrics:
+    category: spatial_sensitivity
+    enabled: true
+    options:
+      force_processing: true
+      gesture_subsets: [all, tap, stroke_proximal, stroke_distal]
+      tuning_features:
+      - hand_velocity_amplitude_mean
+      - contact_depth_mean
+      - contact_area_mean
+      n_bins: 8
+      min_touches_per_bin: 5
+      fit_degrees: [1, 2]    # int or list[int] polynomial degrees to overlay
+      vertex_threshold: 0.05  # fraction of touches that must contact a vertex
+      inflection_sigma: 4.0   # Gaussian sigma for Laplacian boundary detection
+      clip_percentile: 1.0
+      dot_alpha: 0.7
+      iff_metric: mean
+    depends_on: [spatial_extract_boundaries, stimulus_extract_features]
 
   # Population RF grid: sweep N-D feature space, average single-touch RFs per cell.
   # Depends on: spatial_map_single_touch (RF maps), stimulus_extract_features (feature CSVs).

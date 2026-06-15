@@ -13,6 +13,7 @@ SPATIAL_SLIM_UV = "spatial_slim_uv"
 SPATIAL_EXTRACT_BOUNDARIES = "spatial_extract_boundaries"
 SPATIAL_COMPARE_BOUNDARIES = "spatial_compare_boundaries"
 SPATIAL_COMPARE_RF_CENTERS = "spatial_compare_rf_centers"
+SPATIAL_TUNING_RF_METRICS = "spatial_tuning_rf_metrics"
 
 # -- Stimulus sensitivity -----------------------------------------------------
 STIMULUS_EXTRACT_FEATURES = "stimulus_extract_features"

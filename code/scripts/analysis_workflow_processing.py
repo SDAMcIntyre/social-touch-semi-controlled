@@ -43,6 +43,7 @@ from analysis.receptive_field_mapping import (
     run_stimulus_session_comparison,
     run_response_tuning,
     run_response_instruction_tuning,
+    run_spatial_tuning,
     launch_rf_camera_settings_viewer,
     launch_slim_uv_config_viewer,
 )
@@ -67,6 +68,7 @@ from analysis.pipeline.output_dirs import (
     SPATIAL_COMPARE_BOUNDARIES,
     SPATIAL_COMPARE_RF_CENTERS,
     SPATIAL_EXTRACT_BOUNDARIES,
+    SPATIAL_TUNING_RF_METRICS,
     SPATIAL_MAP_BASELINE,
     SPATIAL_MAP_SINGLE_TOUCH,
     SPATIAL_SET_CAMERA,
@@ -1048,6 +1050,55 @@ def stimulus_response_tuning_flow(
     )
 
 
+@flow(name="spatial_tuning_rf_metrics")
+def spatial_tuning_rf_metrics_flow(
+    input_items: List[Tuple[Path, Path]],
+    force_processing: bool = False,
+    tuning_features: Optional[list] = None,
+    gesture_subsets: Optional[list] = None,
+    n_bins: int = 8,
+    min_touches_per_bin: int = 5,
+    fit_degrees: Optional[list] = None,
+    vertex_threshold: float = 0.05,
+    inflection_sigma: float = 4.0,
+    clip_percentile: float = 1.0,
+    dot_alpha: float = 0.7,
+    iff_metric: str = "mean",
+    neuron_summary_xlsx: Optional[str] = None,
+) -> None:
+    """RF spatial tuning curves: RF boundary metrics vs binned stimulus parameters.
+
+    For each session × gesture subset × tuning feature, bins touches by the
+    stimulus feature, computes a population RF heatmap per bin, extracts the
+    inflection boundary, and renders 4-subplot scatter + fit figures
+    (area_mm2, circularity, pca_aspect_ratio, pca_orientation_deg).
+    Also renders cross-session overlay figures coloured by neuron type.
+    Output: 4_analysed/spatial_tuning_rf_metrics/{feature}/{gesture_subset}/
+    """
+    print(f"[Batch Analysis] Rendering RF spatial tuning curves for {len(input_items)} item(s)...")
+    if not input_items:
+        return
+    output_dir = input_items[0][1] / '4_analysed' / SPATIAL_TUNING_RF_METRICS
+    run_spatial_tuning(
+        session_config_paths=input_items,
+        options={
+            "tuning_features": tuning_features or [],
+            "gesture_subsets": gesture_subsets or ["all", "tap", "stroke_proximal", "stroke_distal"],
+            "n_bins": n_bins,
+            "min_touches_per_bin": min_touches_per_bin,
+            "fit_degrees": fit_degrees or [1, 2],
+            "vertex_threshold": vertex_threshold,
+            "inflection_sigma": inflection_sigma,
+            "clip_percentile": clip_percentile,
+            "force_processing": force_processing,
+            "dot_alpha": dot_alpha,
+            "iff_metric": iff_metric,
+            "neuron_summary_xlsx": neuron_summary_xlsx,
+        },
+        output_base_dir=output_dir,
+    )
+
+
 @flow(name="stimulus_response_instruction_tuning")
 def stimulus_response_instruction_tuning_flow(
     input_items: List[Tuple[Path, Path]],
@@ -1600,6 +1651,23 @@ def _build_pipeline_stages(dag_handler: DagConfigHandler, items_to_process) -> l
                 "clip_percentile": float(dag_handler.get_task_options("stimulus_response_instruction_tuning").get("clip_percentile", 1.0)),
                 "metadata_dir": str(dag_handler.get_task_options("stimulus_response_instruction_tuning").get("metadata_dir", "touch_prepare_sessions")),
                 "metadata_filename": str(dag_handler.get_task_options("stimulus_response_instruction_tuning").get("metadata_filename", "{session_id}_prepared.csv")),
+                "neuron_summary_xlsx": dag_handler.get_parameter("neuron_summary_xlsx") or None,
+            },
+        },
+        {
+            "name": "spatial_tuning_rf_metrics",
+            "func": spatial_tuning_rf_metrics_flow,
+            "params": lambda: {
+                "tuning_features": list(dag_handler.get_task_options("spatial_tuning_rf_metrics").get("tuning_features") or []),
+                "gesture_subsets": list(dag_handler.get_task_options("spatial_tuning_rf_metrics").get("gesture_subsets") or []),
+                "n_bins": int(dag_handler.get_task_options("spatial_tuning_rf_metrics").get("n_bins", 8)),
+                "min_touches_per_bin": int(dag_handler.get_task_options("spatial_tuning_rf_metrics").get("min_touches_per_bin", 5)),
+                "fit_degrees": list(dag_handler.get_task_options("spatial_tuning_rf_metrics").get("fit_degrees") or [1, 2]),
+                "vertex_threshold": float(dag_handler.get_task_options("spatial_tuning_rf_metrics").get("vertex_threshold", 0.05)),
+                "inflection_sigma": float(dag_handler.get_task_options("spatial_tuning_rf_metrics").get("inflection_sigma", 4.0)),
+                "clip_percentile": float(dag_handler.get_task_options("spatial_tuning_rf_metrics").get("clip_percentile", 1.0)),
+                "dot_alpha": float(dag_handler.get_task_options("spatial_tuning_rf_metrics").get("dot_alpha", 0.7)),
+                "iff_metric": str(dag_handler.get_task_options("spatial_tuning_rf_metrics").get("iff_metric", "mean")),
                 "neuron_summary_xlsx": dag_handler.get_parameter("neuron_summary_xlsx") or None,
             },
         },

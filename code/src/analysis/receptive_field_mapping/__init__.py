@@ -42,6 +42,7 @@ from .pipelines.rf_touch_feature_radar_pipeline import run_touch_feature_radar
 from .pipelines.rf_stimulus_session_comparison_pipeline import run_stimulus_session_comparison
 from .pipelines.rf_response_tuning_pipeline import run_response_tuning
 from .pipelines.rf_response_instruction_tuning_pipeline import run_response_instruction_tuning
+from .pipelines.rf_spatial_tuning_pipeline import run_spatial_tuning
 
 __all__ = [
     "project_to_2d",
@@ -77,4 +78,5 @@ __all__ = [
     "run_stimulus_session_comparison",
     "run_response_tuning",
     "run_response_instruction_tuning",
+    "run_spatial_tuning",
 ]
