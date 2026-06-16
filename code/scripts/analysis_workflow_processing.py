@@ -973,6 +973,7 @@ def stimulus_compare_sessions_flow(
     force_processing: bool = False,
     comparison_groups: Optional[dict] = None,
     plot_type: str = 'box_strip',
+    neuron_summary_xlsx: Optional[str] = None,
 ) -> None:
     """Cross-session touch feature comparison plots.
 
@@ -990,6 +991,7 @@ def stimulus_compare_sessions_flow(
         output_dir=output_dir,
         plot_type=plot_type,
         force_processing=force_processing,
+        neuron_summary_xlsx=Path(neuron_summary_xlsx) if neuron_summary_xlsx is not None else None,
     )
 
 
