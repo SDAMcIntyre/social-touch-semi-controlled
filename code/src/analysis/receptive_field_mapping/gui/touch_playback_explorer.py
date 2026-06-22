@@ -300,6 +300,14 @@ class TouchPlaybackExplorer(QMainWindow):
         self._iff_sum = np.zeros(n_verts, dtype=np.float64)
         self._contact_count = np.zeros(n_verts, dtype=np.float64)
         self._reset_heatmap()
+        # Replay accumulation for preceding frames so the heatmap
+        # is persistent, matching Play-mode behaviour.
+        touch = self._current_touch
+        for fi in range(value):
+            verts = touch.frame_vertex_indices[fi]
+            np.add.at(self._spike_sum, verts, float(touch.frame_spikes[fi]))
+            np.add.at(self._iff_sum, verts, float(touch.frame_iff[fi]))
+            np.add.at(self._contact_count, verts, 1.0)
         self._render_frame(value)
 
     def _on_session_changed(self, index: int) -> None:

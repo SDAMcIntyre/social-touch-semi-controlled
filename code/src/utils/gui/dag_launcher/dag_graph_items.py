@@ -113,6 +113,7 @@ class DagTaskNode(QGraphicsRectItem):
         self._label.setStyleSheet("font-weight: bold; font-size: 13pt;")
         self._label.setWordWrap(False)
         self._label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self._label.setAttribute(Qt.WA_TransparentForMouseEvents)
         inner_layout.addWidget(self._label)
 
         cb_row = QWidget()
