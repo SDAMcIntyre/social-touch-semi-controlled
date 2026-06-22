@@ -12,7 +12,7 @@ SPATIAL_MAP_BASELINE = "spatial_map_baseline"
 SPATIAL_SLIM_UV = "spatial_slim_uv"
 SPATIAL_EXTRACT_BOUNDARIES = "spatial_extract_boundaries"
 SPATIAL_COMPARE_BOUNDARIES = "spatial_compare_boundaries"
-SPATIAL_COMPARE_RF_CENTERS = "spatial_compare_rf_centers"
+SPATIAL_COMPARE_PROXIMAL_DISTAL = "spatial_compare_proximal_distal"
 SPATIAL_EXTRACT_RF_PROFILES = "spatial_extract_rf_profiles"
 SPATIAL_TUNING_RF_METRICS = "spatial_tuning_rf_metrics"
 
@@ -44,7 +44,8 @@ RENAME_MAPPING: dict[str, str] = {
     "forearm_slim_uv": SPATIAL_SLIM_UV,
     "population_response_fields": SPATIAL_EXTRACT_BOUNDARIES,
     "session_rf_boundary_comparison": SPATIAL_COMPARE_BOUNDARIES,
-    "rf_center_proximal_distal": SPATIAL_COMPARE_RF_CENTERS,
+    "rf_center_proximal_distal": SPATIAL_COMPARE_PROXIMAL_DISTAL,
+    "spatial_compare_rf_centers": SPATIAL_COMPARE_PROXIMAL_DISTAL,
     "touch_features": STIMULUS_EXTRACT_FEATURES,
     "touch_clusters": STIMULUS_CLUSTER_TOUCHES,
     "touch_comparisons": STIMULUS_COMPARE_CLUSTERS,

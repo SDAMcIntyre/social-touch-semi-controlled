@@ -204,17 +204,18 @@ tasks:
     category: spatial_sensitivity
     enabled: true
     options:
-      force_processing: false
+      force_processing: true
       iff_metric: both
       heatmap_space: linear
       cmap: inferno
     depends_on: [spatial_extract_boundaries]
 
-  # Compare RF center positions between proximal and distal strokes per session.
-  # Reads per-session NPZ files from spatial_extract_boundaries.
-  # Produces per-session center-marked heatmap PNGs, aggregate PNG, and summary CSV.
-  # Output: 4_analysed/rf_center_proximal_distal/
-  spatial_compare_rf_centers:
+  # Proximal-distal RF comparison: comprehensive paired contrast of RF properties between stroke directions.
+  # Reads per-session NPZ files from spatial_extract_boundaries; computes boundary metric deltas,
+  # contour overlap (IoU/Dice), heatmap correlation, and centroid shift decomposition.
+  # Produces contour overlays, heatmap triptychs, metric delta bar charts, population strip charts,
+  # and centroid shift decomposition figures. Output: 4_analysed/spatial_compare_proximal_distal/
+  spatial_compare_proximal_distal:
     category: spatial_sensitivity
     enabled: true
     options:
@@ -367,7 +368,7 @@ tasks:
   # Output: 4_analysed/spatial_tuning_rf_metrics/{feature}/{gesture_subset}/
   spatial_tuning_rf_metrics:
     category: spatial_sensitivity
-    enabled: true
+    enabled: false
     options:
       force_processing: false
       gesture_subsets: [all, tap, stroke, stroke_proximal, stroke_distal]

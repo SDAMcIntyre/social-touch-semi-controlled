@@ -73,6 +73,7 @@ def render_boundary_contour_overlay(
         ax.set_ylim(*uv_limits[1])
     fig.tight_layout()
     fig.savefig(output_path, dpi=120)
+    fig.savefig(output_path.with_suffix('.svg'), bbox_inches='tight')
     plt.close(fig)
 
 
@@ -125,6 +126,7 @@ def render_boundary_metric_panels(
     fig.tight_layout()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, dpi=120)
+    fig.savefig(output_path.with_suffix('.svg'), bbox_inches='tight')
     plt.close(fig)
 
 
@@ -192,4 +194,5 @@ def render_session_gesture_heatmap(
     fig.tight_layout()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, dpi=120)
+    fig.savefig(output_path.with_suffix('.svg'), bbox_inches='tight')
     plt.close(fig)

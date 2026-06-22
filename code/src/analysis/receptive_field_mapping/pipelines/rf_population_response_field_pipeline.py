@@ -31,6 +31,7 @@ from analysis.receptive_field_mapping.data.rf_population_heatmap import (
 )
 from analysis.receptive_field_mapping.metrics.rf_inflection_boundary import (
     compute_inflection_boundary,
+    compute_laplacian_arrays,
     inflection_boundary_to_dict,
 )
 from analysis.receptive_field_mapping.metrics.rf_pca_alignment import (
@@ -719,6 +720,11 @@ def _save_response_fields_npz(
         data_dict[f'grid_u_{gtype}'] = grid_u.astype(np.float64)
         data_dict[f'grid_v_{gtype}'] = grid_v.astype(np.float64)
         data_dict[f'grid_z_{gtype}'] = grid_z.astype(np.float64)
+
+        if inflection_sigma is not None:
+            smoothed, lap = compute_laplacian_arrays(grid_z, inflection_sigma)
+            data_dict[f'smoothed_{gtype}'] = smoothed.astype(np.float64)
+            data_dict[f'laplacian_{gtype}'] = lap.astype(np.float64)
 
         boundary = gesture_boundaries.get(gtype)
         if boundary is not None:

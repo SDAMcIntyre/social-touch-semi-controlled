@@ -60,6 +60,26 @@ class InflectionBoundary:
 
 
 # ---------------------------------------------------------------------------
+# Public Laplacian computation
+# ---------------------------------------------------------------------------
+
+
+def compute_laplacian_arrays(
+    grid_z: np.ndarray,
+    gaussian_sigma: float = 4.0,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Compute the Gaussian-smoothed field and its Laplacian for a 2D heatmap.
+
+    Returns (smoothed, laplacian) — both (R, C) arrays with NaN where
+    grid_z is NaN. ``smoothed`` is the NaN-aware Gaussian normalisation;
+    ``laplacian`` is the discrete Laplacian of the extrapolated field,
+    re-masked to the original NaN cells.
+    """
+    result = _compute_masked_laplacian(grid_z, gaussian_sigma)
+    return result.normalized, result.laplacian
+
+
+# ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
 

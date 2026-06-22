@@ -37,7 +37,7 @@ from .rendering.rf_session_comparison_renderer import run_session_comparison_vis
 from .metrics.rf_baseline_deviation import BaselineDeviationMetrics, compute_baseline_deviation
 from .pipelines.rf_population_response_field_pipeline import run_population_response_field_extraction
 from .pipelines.rf_session_boundary_comparison_pipeline import run_session_rf_boundary_comparison
-from .pipelines.rf_proximal_distal_center_pipeline import run_proximal_distal_center_comparison
+from .pipelines.rf_proximal_distal_comparison_pipeline import run_proximal_distal_comparison
 from .pipelines.rf_touch_feature_radar_pipeline import run_touch_feature_radar
 from .pipelines.rf_stimulus_session_comparison_pipeline import run_stimulus_session_comparison
 from .pipelines.rf_response_tuning_pipeline import run_response_tuning
@@ -74,7 +74,7 @@ __all__ = [
     "compute_baseline_deviation",
     "run_population_response_field_extraction",
     "run_session_rf_boundary_comparison",
-    "run_proximal_distal_center_comparison",
+    "run_proximal_distal_comparison",
     "run_touch_feature_radar",
     "run_stimulus_session_comparison",
     "run_response_tuning",
