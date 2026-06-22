@@ -115,6 +115,16 @@ _OPTION_ENUMS: dict[str, list[tuple[str, object]]] = {
         ("Sliding Window (default)", "sliding_window"),
         ("Raw Dots", "raw_dots"),
     ],
+    "contour_color": [
+        ("Red (default)", "red"),
+        ("Violet", "violet"),
+        ("White", "white"),
+        ("Cyan", "cyan"),
+        ("Lime", "lime"),
+        ("Yellow", "yellow"),
+        ("Orange", "orange"),
+        ("Magenta", "magenta"),
+    ],
 }
 
 

@@ -48,6 +48,9 @@ from analysis.receptive_field_mapping.rendering.neuron_type_colors import (
     build_session_color_scheme,
     SessionColorScheme,
 )
+from analysis.receptive_field_mapping.rendering.rf_cross_neuron_renderer import (
+    render_cross_neuron_comparison_multicondition,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -321,6 +324,9 @@ def run_response_instruction_tuning(
                 .first()
                 .reset_index()
             )
+            overlap_cols = [c for c in tuning_categories if c in df.columns]
+            if overlap_cols:
+                df = df.drop(columns=overlap_cols)
             n_before = len(df)
             df = df.merge(meta_deduped, on=touch_id_cols, how="inner")
             n_after = len(df)
@@ -522,6 +528,41 @@ def run_response_instruction_tuning(
                     f"{overlay_path_by_session.name}",
                     flush=True,
                 )
+
+                cross_neuron_data: dict[str, dict[str, list[float]]] = {}
+                for sid, cat_result in overlay_session_data.items():
+                    neuron_type = scheme.session_neuron_type.get(sid)
+                    if neuron_type is None:
+                        continue
+                    if neuron_type not in cross_neuron_data:
+                        cross_neuron_data[neuron_type] = {}
+                    for level_label, mean_val in zip(cat_result.category_labels, cat_result.mean_iff):
+                        if not np.isfinite(mean_val):
+                            continue
+                        if level_label not in cross_neuron_data[neuron_type]:
+                            cross_neuron_data[neuron_type][level_label] = []
+                        cross_neuron_data[neuron_type][level_label].append(float(mean_val))
+
+                if cross_neuron_data:
+                    cross_neuron_path = (
+                        metric_dir
+                        / category_col
+                        / gesture_subset
+                        / f"cross_neuron_{category_col}_{gesture_subset}_{metric_subdir}.png"
+                    )
+                    render_cross_neuron_comparison_multicondition(
+                        neuron_data=cross_neuron_data,
+                        metric_name=f"{metric_subdir} | {category_col}",
+                        condition_labels=levels,
+                        output_path=cross_neuron_path,
+                        ylabel=response_ylabel,
+                        title=f"Cross-neuron | {category_col} | {gesture_subset} | {metric_subdir}",
+                    )
+                    print(
+                        f"[Response Instruction Tuning] {metric_subdir} / {category_col} / "
+                        f"{gesture_subset}: saved {cross_neuron_path.name}",
+                        flush=True,
+                    )
 
         # =====================================================================
         # Write per-metric sentinel
