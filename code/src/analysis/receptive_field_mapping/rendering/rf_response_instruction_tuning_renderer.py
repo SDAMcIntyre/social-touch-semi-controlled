@@ -7,7 +7,7 @@ import numpy as np
 from pathlib import Path
 from typing import NamedTuple
 
-from analysis.receptive_field_mapping.rendering.rf_iff_tuning_renderer import (
+from analysis.receptive_field_mapping.rendering.rf_response_tuning_renderer import (
     _cat_display,
     _style_dark_ax,
     _BG,
@@ -284,6 +284,16 @@ def render_overlay_instruction_tuning(
             s=30,
             zorder=3,
             label=scatter_label,
+        )
+
+        # Connecting line between same-session dots for visual traceability.
+        ax.plot(
+            x_jittered[valid_mask],
+            mean_iff[valid_mask],
+            color=color,
+            alpha=0.4,
+            linewidth=1.0,
+            zorder=2,
         )
 
     ax.set_xticks(x_pos)

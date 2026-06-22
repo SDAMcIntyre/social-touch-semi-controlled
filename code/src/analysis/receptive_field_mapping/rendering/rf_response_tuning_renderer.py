@@ -315,7 +315,7 @@ def render_session_tuning_curve(
     plt.close(fig)
 
 
-def _fit_polynomial(
+def fit_polynomial(
     feature_vals: np.ndarray,
     response_vals: np.ndarray,
     fit_degree: int,
@@ -347,6 +347,15 @@ def _fit_polynomial(
     return coeffs, r2
 
 
+# Backward-compatible alias kept for any external callers that referenced the
+# private name before it was made public.
+_fit_polynomial = fit_polynomial
+
+
+_FIT_LINESTYLES = ['-', '--', ':', '-.']
+_FIT_COLORS = ['#4ec9b0', '#f28b30', '#c586c0', '#9cdcfe']
+
+
 def render_session_raw_dots(
     feature_vals: np.ndarray,
     response_vals: np.ndarray,
@@ -356,19 +365,32 @@ def render_session_raw_dots(
     out_path: Path,
     iff_ylim: tuple[float, float],
     iff_ylabel: str = "IFF (Hz)",
+    fit_models: "list[str] | None" = None,
+    fit_degrees: "list[int] | None" = None,
     fit_degree: int = 1,
     dot_alpha: float = 0.35,
     show_fit_ci: bool = False,
     line_color: str = _IFF_COLOR,
+    secondary_vals: "np.ndarray | None" = None,
+    secondary_label: str = "",
+    secondary_cmap: str = "viridis",
 ) -> None:
-    """Per-session raw-touch scatter + polynomial fit line.
+    """Per-session raw-touch scatter + fit line(s).
 
     Every touch is plotted as a semi-transparent dot at its exact
-    ``(feature_value, response_value)`` coordinate. A degree-``fit_degree``
-    polynomial regression line is drawn through the points. The total touch
-    count N and the fit R² are reported in the title (there are no bins, so no
-    right-axis count bars are drawn).
+    ``(feature_value, response_value)`` coordinate. One regression line is
+    drawn per entry in ``fit_models`` (named model strings) or ``fit_degrees``
+    (legacy polynomial degrees). When multiple fits are given, each line gets
+    a distinct color and linestyle, and an R² annotation box is added.
     """
+    from .fit_models import fit_model as _fit_model
+
+    if fit_models is None:
+        if fit_degrees is not None:
+            fit_models = [f"poly{d}" for d in fit_degrees]
+        else:
+            fit_models = [f"poly{fit_degree}"]
+
     feature_vals = np.asarray(feature_vals, dtype=float)
     response_vals = np.asarray(response_vals, dtype=float)
 
@@ -383,56 +405,92 @@ def render_session_raw_dots(
     _style_dark_ax(ax)
     ax.grid(alpha=0.15, color='white', linestyle='--')
 
-    ax.scatter(
-        feat, resp,
-        s=20, color=line_color, alpha=dot_alpha,
-        edgecolors='none', zorder=3,
-    )
-
-    coeffs, r2 = _fit_polynomial(feat, resp, fit_degree)
-    if coeffs is not None:
-        r2_text = f"{r2:.2f}"
-        x_line = np.linspace(float(np.min(feat)), float(np.max(feat)), 200)
-        y_line = np.polyval(coeffs, x_line)
-        ax.plot(x_line, y_line, color=line_color, linewidth=2.5, zorder=5)
-
-        # CI band: closed-form, degree-1 only. For higher degrees the simple
-        # standard-error formula does not apply, so we warn and disable it
-        # gracefully (explicitly requested in plan).
-        if show_fit_ci and fit_degree > 1:
-            warnings.warn(
-                "render_session_raw_dots: show_fit_ci is only supported for "
-                f"fit_degree=1; got fit_degree={fit_degree}. Disabling the CI "
-                "band.",
-                stacklevel=2,
-            )
-        elif show_fit_ci and fit_degree == 1 and n >= 3:
-            predicted = np.polyval(coeffs, feat)
-            residuals = resp - predicted
-            dof = n - 2
-            s_err = np.sqrt(np.sum(residuals ** 2) / dof)
-            x_mean = float(np.mean(feat))
-            ss_xx = float(np.sum((feat - x_mean) ** 2))
-            if ss_xx > 0:
-                # 95% CI for the mean response (t≈1.96 large-sample approx).
-                se_line = s_err * np.sqrt(
-                    1.0 / n + (x_line - x_mean) ** 2 / ss_xx
-                )
-                ci = 1.96 * se_line
-                ax.fill_between(
-                    x_line, y_line - ci, y_line + ci,
-                    color=line_color, alpha=0.2, zorder=4, linewidth=0,
-                )
+    if secondary_vals is not None and len(secondary_vals) == len(feat):
+        sc = ax.scatter(
+            feat, resp,
+            s=20, c=secondary_vals, cmap=secondary_cmap,
+            alpha=dot_alpha, edgecolors='none', zorder=3,
+        )
+        cbar = plt.colorbar(sc, ax=ax, shrink=0.8)
+        cbar.ax.yaxis.set_tick_params(color='white')
+        cbar.ax.yaxis.label.set_color('white')
+        plt.setp(cbar.ax.yaxis.get_ticklabels(), color='white')
+        if secondary_label:
+            cbar.set_label(_display_id(secondary_label), color='white')
     else:
-        r2_text = "n/a"
+        ax.scatter(
+            feat, resp,
+            s=20, color=line_color, alpha=dot_alpha,
+            edgecolors='none', zorder=3,
+        )
+
+    multi = len(fit_models) > 1
+    r2_lines: list[str] = []
+    x_line = np.linspace(float(np.min(feat)), float(np.max(feat)), 200) if n > 0 else None
+
+    for i, model_name in enumerate(fit_models):
+        fit_color = _FIT_COLORS[i % len(_FIT_COLORS)] if multi else line_color
+        fit_ls = _FIT_LINESTYLES[i % len(_FIT_LINESTYLES)] if multi else '-'
+
+        result = _fit_model(feat, resp, model_name)
+        if result.params is not None:
+            r2_lines.append(f"{result.display_label}: R²={result.r_squared:.2f}")
+            y_line = result.evaluate(x_line)
+            ax.plot(x_line, y_line, color=fit_color, linewidth=2.5, linestyle=fit_ls, zorder=5)
+
+            if show_fit_ci and not multi and model_name == "poly1" and n >= 3:
+                predicted = result.evaluate(feat)
+                residuals = resp - predicted
+                dof = n - 2
+                s_err = np.sqrt(np.sum(residuals ** 2) / dof)
+                x_mean = float(np.mean(feat))
+                ss_xx = float(np.sum((feat - x_mean) ** 2))
+                if ss_xx > 0:
+                    se_line = s_err * np.sqrt(
+                        1.0 / n + (x_line - x_mean) ** 2 / ss_xx
+                    )
+                    ci = 1.96 * se_line
+                    ax.fill_between(
+                        x_line, y_line - ci, y_line + ci,
+                        color=fit_color, alpha=0.2, zorder=4, linewidth=0,
+                    )
+            elif show_fit_ci and model_name != "poly1":
+                warnings.warn(
+                    "render_session_raw_dots: show_fit_ci is only supported for "
+                    f"poly1; got {model_name}. Disabling the CI band.",
+                    stacklevel=2,
+                )
+        else:
+            r2_lines.append(f"{result.display_label}: R²=n/a")
+
+    if r2_lines:
+        if multi:
+            annotation = "\n".join(r2_lines)
+            ax.text(
+                0.03, 0.97, annotation,
+                transform=ax.transAxes,
+                fontsize=8, verticalalignment='top',
+                color='white',
+                bbox=dict(boxstyle='round,pad=0.3', facecolor='#333333', alpha=0.7, edgecolor='#555555'),
+            )
+        title_r2 = r2_lines[0] if len(r2_lines) == 1 else ""
+    else:
+        title_r2 = "R²=n/a"
 
     ax.set_ylim(iff_ylim)
     ax.set_ylabel(iff_ylabel, color='white', fontsize=10)
     ax.set_xlabel(_display_id(feature_name), color='white', fontsize=10)
-    ax.set_title(
-        f"{session_id} | {gesture_subset} | N={n}, R²={r2_text}",
-        color='white', fontsize=11,
-    )
+    if multi:
+        ax.set_title(
+            f"{session_id} | {gesture_subset} | N={n}",
+            color='white', fontsize=11,
+        )
+    else:
+        r2_str = r2_lines[0].split(": ")[1] if r2_lines else "R²=n/a"
+        ax.set_title(
+            f"{session_id} | {gesture_subset} | N={n}, {r2_str}",
+            color='white', fontsize=11,
+        )
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=150, bbox_inches='tight', facecolor=fig.get_facecolor())
@@ -440,35 +498,66 @@ def render_session_raw_dots(
 
 
 def render_overlay_raw_dots(
-    session_data: dict[str, tuple[np.ndarray, np.ndarray]],
+    session_data: "dict[str, tuple[np.ndarray, np.ndarray, np.ndarray | None]]",
     feature_name: str,
     gesture_subset: str,
     out_path: Path,
     iff_ylim: tuple[float, float],
     session_colors: dict[str, str],
     iff_ylabel: str = "IFF (Hz)",
+    fit_models: "list[str] | None" = None,
+    fit_degrees: "list[int] | None" = None,
     fit_degree: int = 1,
     dot_alpha: float = 0.15,
     show_fit_ci: bool = False,
     legend_mode: str = "by_session",
     session_neuron_types: dict[str, str] | None = None,
     type_colors: dict[str, str] | None = None,
+    secondary_label: str = "",
+    secondary_cmap: str = "viridis",
 ) -> None:
     """Multi-session raw-touch scatter + per-session fit lines.
 
     Each session contributes a faint scatter cloud (``alpha=dot_alpha``,
-    ``s=20``) and a bold polynomial fit line (``linewidth=2.5``) in its
-    neuron-type / session colour. The legend block mirrors
-    ``render_overlay_tuning_curve`` (``by_type`` / ``by_session`` modes).
+    ``s=20``) and one bold fit line per entry in ``fit_models``
+    (``linewidth=2.5``) in its neuron-type / session colour. When multiple
+    models are requested, each gets a distinct linestyle; an R² annotation
+    box is added per session listing all models. The legacy ``fit_degrees``
+    parameter is accepted for backward compatibility.
     """
     from matplotlib.lines import Line2D
+    from .fit_models import fit_model as _fit_model
+
+    if fit_models is None:
+        if fit_degrees is not None:
+            fit_models = [f"poly{d}" for d in fit_degrees]
+        else:
+            fit_models = [f"poly{fit_degree}"]
+
+    multi = len(fit_models) > 1
 
     fig, ax = plt.subplots(figsize=(8, 5), dpi=150)
     fig.patch.set_facecolor(_BG)
     _style_dark_ax(ax)
     ax.grid(alpha=0.15, color='white', linestyle='--')
 
-    for session_id, (feature_vals, response_vals) in session_data.items():
+    # Compute shared colorbar range from pooled secondary values across sessions.
+    sec_arrays = [tup[2] for tup in session_data.values() if len(tup) > 2 and tup[2] is not None]
+    shared_sec_norm = None
+    if sec_arrays and secondary_label:
+        all_sec = np.concatenate([s for s in sec_arrays if len(s) > 0])
+        all_sec_finite = all_sec[np.isfinite(all_sec)]
+        if len(all_sec_finite) > 0:
+            sec_vmin = float(np.min(all_sec_finite))
+            sec_vmax = float(np.max(all_sec_finite))
+            if sec_vmax > sec_vmin:
+                shared_sec_norm = plt.Normalize(vmin=sec_vmin, vmax=sec_vmax)
+
+    legend_labels_seen: set[str] = set()
+
+    for session_id, session_tup in session_data.items():
+        feature_vals, response_vals = session_tup[0], session_tup[1]
+        sec_vals = session_tup[2] if len(session_tup) > 2 else None
         color = session_colors[session_id]
         if legend_mode == "by_type" and session_neuron_types is not None:
             line_label = session_neuron_types[session_id]
@@ -483,20 +572,69 @@ def render_overlay_raw_dots(
         if feat.size == 0:
             continue
 
-        ax.scatter(
-            feat, resp,
-            s=20, color=color, alpha=dot_alpha,
-            edgecolors='none', zorder=2,
+        use_secondary = (
+            shared_sec_norm is not None
+            and sec_vals is not None
+            and len(sec_vals) == len(feat)
         )
-
-        coeffs, _ = _fit_polynomial(feat, resp, fit_degree)
-        if coeffs is not None:
-            x_line = np.linspace(float(np.min(feat)), float(np.max(feat)), 200)
-            y_line = np.polyval(coeffs, x_line)
-            ax.plot(
-                x_line, y_line,
-                color=color, linewidth=2.5, label=line_label, zorder=3,
+        if use_secondary:
+            ax.scatter(
+                feat, resp,
+                s=20, c=sec_vals, cmap=secondary_cmap, norm=shared_sec_norm,
+                alpha=dot_alpha, edgecolors='none', zorder=2,
             )
+        else:
+            ax.scatter(
+                feat, resp,
+                s=20, color=color, alpha=dot_alpha,
+                edgecolors='none', zorder=2,
+            )
+
+        x_line = np.linspace(float(np.min(feat)), float(np.max(feat)), 200)
+        r2_lines: list[str] = []
+
+        for i, model_name in enumerate(fit_models):
+            fit_ls = _FIT_LINESTYLES[i % len(_FIT_LINESTYLES)] if multi else '-'
+            result = _fit_model(feat, resp, model_name)
+            if result.params is not None:
+                y_line = result.evaluate(x_line)
+                plot_label = line_label if (not multi and line_label not in legend_labels_seen) else (
+                    f"{line_label} ({result.display_label})" if multi and (f"{line_label} ({result.display_label})" not in legend_labels_seen) else None
+                )
+                ax.plot(
+                    x_line, y_line,
+                    color=color, linewidth=2.5, linestyle=fit_ls,
+                    label=plot_label if plot_label is not None else "_nolegend_",
+                    zorder=3,
+                )
+                if plot_label is not None:
+                    legend_labels_seen.add(plot_label)
+                r2_lines.append(f"{result.display_label}: R²={result.r_squared:.2f}")
+            else:
+                r2_lines.append(f"{result.display_label}: R²=n/a")
+
+        if multi and r2_lines:
+            annotation = f"{session_id}\n" + "\n".join(r2_lines)
+            ax.text(
+                0.03, 0.97, annotation,
+                transform=ax.transAxes,
+                fontsize=6, verticalalignment='top',
+                color=color,
+                bbox=dict(boxstyle='round,pad=0.3', facecolor='#222222', alpha=0.6, edgecolor=color),
+            )
+        elif not multi and r2_lines:
+            if line_label not in legend_labels_seen:
+                legend_labels_seen.add(line_label)
+
+    if shared_sec_norm is not None:
+        sm = plt.cm.ScalarMappable(cmap=secondary_cmap, norm=shared_sec_norm)
+        sm.set_array([])
+        cbar = plt.colorbar(sm, ax=ax, shrink=0.8)
+        cbar.ax.yaxis.set_tick_params(color='white')
+        cbar.ax.yaxis.label.set_color('white')
+        plt.setp(cbar.ax.yaxis.get_ticklabels(), color='white')
+        if secondary_label:
+            cbar.set_label(_display_id(secondary_label), color='white')
 
     ax.set_ylim(iff_ylim)
     ax.set_ylabel(iff_ylabel, color='white', fontsize=10)

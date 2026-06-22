@@ -73,6 +73,7 @@ def render_boundary_contour_overlay(
         ax.set_ylim(*uv_limits[1])
     fig.tight_layout()
     fig.savefig(output_path, dpi=120)
+    fig.savefig(output_path.with_suffix('.svg'), bbox_inches='tight')
     plt.close(fig)
 
 
@@ -82,6 +83,8 @@ def render_boundary_metric_panels(
     metrics: list[str],
     output_path: Path,
     metric_limits: dict[str, tuple[float, float]] | None = None,
+    session_colors: dict[str, str] | None = None,
+    neuron_type_legend: dict[str, str] | None = None,
 ) -> None:
     n_metrics = len(metrics)
     if n_metrics == 0:
@@ -97,13 +100,24 @@ def render_boundary_metric_panels(
         ax = axes[idx]
         values = df[metric_name].to_numpy(dtype=float)
         session_ids = df['session_id'].tolist()
-        ax.bar(range(len(session_ids)), values, color='steelblue')
+        if session_colors is not None:
+            bar_colors = [session_colors.get(sid, 'steelblue') for sid in session_ids]
+        else:
+            bar_colors = 'steelblue'
+        ax.bar(range(len(session_ids)), values, color=bar_colors)
         ax.set_xticks(range(len(session_ids)))
         ax.set_xticklabels(session_ids, rotation=45, ha='right', fontsize=7)
         ax.set_title(metric_name, fontsize=10)
         ax.set_ylabel(metric_name, fontsize=8)
         if metric_limits is not None and metric_name in metric_limits:
             ax.set_ylim(*metric_limits[metric_name])
+        if neuron_type_legend is not None and idx == 0:
+            from matplotlib.patches import Patch
+            legend_handles = [
+                Patch(facecolor=color, label=label)
+                for label, color in neuron_type_legend.items()
+            ]
+            ax.legend(handles=legend_handles, fontsize=7, loc='upper right')
 
     for idx in range(n_metrics, len(axes)):
         axes[idx].set_visible(False)
@@ -112,6 +126,7 @@ def render_boundary_metric_panels(
     fig.tight_layout()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, dpi=120)
+    fig.savefig(output_path.with_suffix('.svg'), bbox_inches='tight')
     plt.close(fig)
 
 
@@ -179,4 +194,5 @@ def render_session_gesture_heatmap(
     fig.tight_layout()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, dpi=120)
+    fig.savefig(output_path.with_suffix('.svg'), bbox_inches='tight')
     plt.close(fig)

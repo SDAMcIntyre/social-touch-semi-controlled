@@ -7,6 +7,10 @@ import pandas as pd
 
 from analysis.pipeline.output_dirs import SPATIAL_EXTRACT_BOUNDARIES
 from analysis.pipeline.shared_constants import IFF_METRICS, session_id_from_path
+from analysis.receptive_field_mapping.rendering.neuron_type_colors import (
+    SessionColorScheme,
+    build_session_color_scheme,
+)
 from analysis.receptive_field_mapping.rendering.rf_boundary_comparison_renderer import (
     render_boundary_contour_overlay,
     render_boundary_metric_panels,
@@ -14,6 +18,7 @@ from analysis.receptive_field_mapping.rendering.rf_boundary_comparison_renderer 
 )
 from analysis.receptive_field_mapping.rendering.rf_population_map_renderer import (
     compute_uv_to_mm_scale,
+    render_population_rf_circular_crop,
 )
 
 logger = logging.getLogger(__name__)
@@ -27,6 +32,8 @@ PANEL_METRICS = [
     'pca_aspect_ratio',
     'pca_orientation_deg',
     'mean_iff_on_contour',
+    'centroid_shift_tap_vs_stroke_mm',
+    'centroid_shift_proximal_vs_distal_mm',
 ]
 
 
@@ -35,6 +42,9 @@ def run_session_rf_boundary_comparison(
     output_dir: Path,
     force_processing: bool = False,
     iff_metric: str = "mean",
+    neuron_summary_xlsx: Path | None = None,
+    heatmap_space: str = "linear",
+    cmap: str = "inferno",
 ) -> None:
     if iff_metric not in IFF_METRICS:
         raise ValueError(
@@ -63,6 +73,17 @@ def run_session_rf_boundary_comparison(
     df.to_csv(csv_path, index=False)
     logger.info("[Session RF Boundary Comparison] wrote %s", csv_path.name)
 
+    # Build per-session color scheme when neuron_summary_xlsx is provided.
+    # When None, session_colors and neuron_type_legend remain None and the
+    # renderer falls back to uniform steelblue (explicitly required by plan).
+    session_colors: dict[str, str] | None = None
+    neuron_type_legend: dict[str, str] | None = None
+    if neuron_summary_xlsx is not None:
+        session_ids = df['session_id'].unique().tolist()
+        scheme: SessionColorScheme = build_session_color_scheme(session_ids, neuron_summary_xlsx)
+        session_colors = scheme.session_color
+        neuron_type_legend = scheme.type_color
+
     metric_limits = _global_metric_limits(df, PANEL_METRICS)
     uv_limits = _global_uv_limits(contour_data)
 
@@ -86,6 +107,8 @@ def run_session_rf_boundary_comparison(
             metrics=PANEL_METRICS,
             output_path=metric_panels_dir / f'metric_panels_{gtype}.png',
             metric_limits=metric_limits,
+            session_colors=session_colors,
+            neuron_type_legend=neuron_type_legend,
         )
 
     for metric in PANEL_METRICS:
@@ -94,6 +117,70 @@ def run_session_rf_boundary_comparison(
             metric_name=metric,
             output_path=heatmap_dir / f'heatmap_{metric}.png',
             cluster_sessions=(df['session_id'].nunique() >= 3),
+        )
+
+    # --- Circular crops per session × gesture type ---
+    circular_crops_root = output_dir / 'circular_crops'
+
+    # Collect all grid_z values across sessions and gtypes to compute global vmin/vmax
+    all_grid_z_values: list[np.ndarray] = []
+    render_data_per_session: list[tuple[str, dict]] = []
+
+    for sc_csv_path, sc_db_path in session_configs:
+        sc_csv_path = Path(sc_csv_path)
+        sc_db_path = Path(sc_db_path)
+        session_id = session_id_from_path(sc_csv_path)
+        npz_path = (
+            sc_db_path / '4_analysed' / SPATIAL_EXTRACT_BOUNDARIES
+            / f"iff_{iff_metric}" / session_id / f'{session_id}_population_response_fields.npz'
+        )
+        render_data = _load_heatmap_rendering_data_from_npz(npz_path)
+        render_data_per_session.append((session_id, render_data))
+        for gdata in render_data['per_gtype'].values():
+            if gdata['centroid_uv'] is None:
+                continue
+            finite_z = gdata['grid_z'][np.isfinite(gdata['grid_z']) & (gdata['grid_z'] > 0)]
+            if finite_z.size > 0:
+                all_grid_z_values.append(finite_z)
+
+    if all_grid_z_values:
+        all_z_concat = np.concatenate(all_grid_z_values)
+        global_vmax = float(all_z_concat.max())
+        vmin_candidates = all_z_concat[all_z_concat > 0]
+        global_vmin = float(vmin_candidates.min()) if vmin_candidates.size > 0 else global_vmax * 1e-3
+
+        for session_id, render_data in render_data_per_session:
+            session_crops_dir = circular_crops_root / session_id
+            session_crops_dir.mkdir(parents=True, exist_ok=True)
+            for gtype, gdata in render_data['per_gtype'].items():
+                if gdata['centroid_uv'] is None:
+                    continue
+                crop_path = session_crops_dir / f'{session_id}_rf_circular_centroid_{gtype}.png'
+                render_population_rf_circular_crop(
+                    u_grid=gdata['grid_u'],
+                    v_grid=gdata['grid_v'],
+                    interp_grid=gdata['grid_z'],
+                    forearm_uv=render_data['forearm_uv'],
+                    forearm_V=render_data['forearm_V'],
+                    forearm_faces=render_data['forearm_faces'],
+                    center_uv=gdata['centroid_uv'],
+                    radius_mm=50.0,
+                    vmax=global_vmax,
+                    vmin=global_vmin,
+                    output_path=crop_path,
+                    vertex_colors=render_data['slim_vertex_colors'],
+                    heatmap_space=heatmap_space,
+                    cmap=cmap,
+                    dpi=300,
+                )
+                logger.info(
+                    "[Session RF Boundary Comparison] %s: saved circular crop → %s",
+                    session_id, crop_path.name,
+                )
+    else:
+        logger.warning(
+            "[Session RF Boundary Comparison] no valid heatmap data found across sessions "
+            "— skipping circular crop rendering."
         )
 
     _write_sentinel(sentinel_path, n_sessions=len(session_configs))
@@ -241,6 +328,123 @@ def _load_boundary_metrics_from_npz(
     return rows, contours_by_gtype, centroids_by_gtype
 
 
+def _load_heatmap_rendering_data_from_npz(npz_path: Path) -> dict:
+    """Load mesh and per-gesture heatmap arrays from a session NPZ for circular crop rendering.
+
+    Returns a dict with:
+    - ``forearm_uv`` (N, 2) float64
+    - ``forearm_V``  (N, 3) float64
+    - ``forearm_faces`` (F, 3) int32
+    - ``slim_vertex_colors`` (N, 4) float64, or zeros array if key absent
+    - ``per_gtype`` dict keyed by gesture type string, each value a dict with:
+        - ``grid_u``, ``grid_v``, ``grid_z`` — interpolated heatmap meshgrids
+        - ``centroid_uv`` — (2,) float64 centroid, or None if key absent for that gtype
+    """
+    npz = np.load(npz_path, allow_pickle=True)
+
+    forearm_uv = npz['forearm_uv'].astype(np.float64)
+    forearm_V = npz['forearm_V'].astype(np.float64)
+    forearm_faces = npz['forearm_faces'].astype(np.int32)
+
+    if 'slim_vertex_colors' in npz:
+        slim_vertex_colors = npz['slim_vertex_colors'].astype(np.float64)
+    else:
+        slim_vertex_colors = np.zeros((forearm_V.shape[0], 4), dtype=np.float64)
+
+    # Discover gesture types from grid_u_* keys
+    npz_keys = set(npz.files)
+    gtypes = [k[len('grid_u_'):] for k in npz_keys if k.startswith('grid_u_')]
+
+    per_gtype: dict[str, dict] = {}
+    for gtype in gtypes:
+        centroid_key = f'boundary_centroid_uv_{gtype}'
+        centroid_uv = (
+            npz[centroid_key].astype(np.float64)
+            if centroid_key in npz_keys
+            else None
+        )
+        per_gtype[gtype] = {
+            'grid_u': npz[f'grid_u_{gtype}'],
+            'grid_v': npz[f'grid_v_{gtype}'],
+            'grid_z': npz[f'grid_z_{gtype}'],
+            'centroid_uv': centroid_uv,
+        }
+
+    return {
+        'forearm_uv': forearm_uv,
+        'forearm_V': forearm_V,
+        'forearm_faces': forearm_faces,
+        'slim_vertex_colors': slim_vertex_colors,
+        'per_gtype': per_gtype,
+    }
+
+
+def _centroid_distance_3d(
+    df: pd.DataFrame,
+    session_id: str,
+    gtype_a: str,
+    gtype_b: str,
+) -> float:
+    """Euclidean distance between the XYZ centroids of two gesture types for one session.
+
+    Returns NaN when either gesture type has no inflection boundary (centroid is NaN).
+    Raises if the session/gesture row is missing entirely — that indicates a corrupt
+    DataFrame, not a valid absent-boundary case.
+    """
+    xyz_cols = ['centroid_x_mm', 'centroid_y_mm', 'centroid_z_mm']
+    session_df = df[df['session_id'] == session_id]
+
+    mask_a = session_df['gesture_type'] == gtype_a
+    mask_b = session_df['gesture_type'] == gtype_b
+
+    if not mask_a.any():
+        raise ValueError(
+            f"_centroid_distance_3d: session '{session_id}' has no row for gesture_type "
+            f"'{gtype_a}' — DataFrame is structurally incomplete."
+        )
+    if not mask_b.any():
+        raise ValueError(
+            f"_centroid_distance_3d: session '{session_id}' has no row for gesture_type "
+            f"'{gtype_b}' — DataFrame is structurally incomplete."
+        )
+
+    xyz_a = session_df.loc[mask_a, xyz_cols].to_numpy(dtype=np.float64).squeeze()
+    xyz_b = session_df.loc[mask_b, xyz_cols].to_numpy(dtype=np.float64).squeeze()
+
+    if not np.all(np.isfinite(xyz_a)) or not np.all(np.isfinite(xyz_b)):
+        return float('nan')
+
+    return float(np.linalg.norm(xyz_a - xyz_b))
+
+
+def _add_centroid_shift_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Add pairwise centroid shift distance columns to the summary DataFrame.
+
+    Computes per session:
+    - ``centroid_shift_tap_vs_stroke_mm``: Euclidean distance between 'tap' and 'stroke'
+      centroids in 3D mm space.
+    - ``centroid_shift_proximal_vs_distal_mm``: Euclidean distance between
+      'stroke_proximal' and 'stroke_distal' centroids in 3D mm space.
+
+    Both columns are NaN when either gesture type in the pair has no inflection boundary.
+    The columns are broadcast to every row for that session (one value per session, repeated
+    across all gesture-type rows), so bar chart renderers can pivot on any gesture type.
+    """
+    shift_tap_stroke: dict[str, float] = {}
+    shift_prox_dist: dict[str, float] = {}
+
+    for session_id in df['session_id'].unique():
+        shift_tap_stroke[session_id] = _centroid_distance_3d(df, session_id, 'tap', 'stroke')
+        shift_prox_dist[session_id] = _centroid_distance_3d(
+            df, session_id, 'stroke_proximal', 'stroke_distal'
+        )
+
+    df = df.copy()
+    df['centroid_shift_tap_vs_stroke_mm'] = df['session_id'].map(shift_tap_stroke).astype(np.float64)
+    df['centroid_shift_proximal_vs_distal_mm'] = df['session_id'].map(shift_prox_dist).astype(np.float64)
+    return df
+
+
 def _build_summary_dataframe(
     session_configs: list[tuple[Path, Path]],
     iff_metric: str = "mean",
@@ -295,6 +499,8 @@ def _build_summary_dataframe(
         'area_uv_mm2': np.float64,
         'perimeter_uv_mm': np.float64,
     })
+
+    df = _add_centroid_shift_columns(df)
 
     return df, contour_data, centroid_data
 

@@ -12,7 +12,9 @@ SPATIAL_MAP_BASELINE = "spatial_map_baseline"
 SPATIAL_SLIM_UV = "spatial_slim_uv"
 SPATIAL_EXTRACT_BOUNDARIES = "spatial_extract_boundaries"
 SPATIAL_COMPARE_BOUNDARIES = "spatial_compare_boundaries"
-SPATIAL_COMPARE_RF_CENTERS = "spatial_compare_rf_centers"
+SPATIAL_COMPARE_PROXIMAL_DISTAL = "spatial_compare_proximal_distal"
+SPATIAL_EXTRACT_RF_PROFILES = "spatial_extract_rf_profiles"
+SPATIAL_TUNING_RF_METRICS = "spatial_tuning_rf_metrics"
 
 # -- Stimulus sensitivity -----------------------------------------------------
 STIMULUS_EXTRACT_FEATURES = "stimulus_extract_features"
@@ -20,8 +22,8 @@ STIMULUS_CLUSTER_TOUCHES = "stimulus_cluster_touches"
 STIMULUS_COMPARE_CLUSTERS = "stimulus_compare_clusters"
 STIMULUS_RENDER_RADAR = "stimulus_render_radar"
 STIMULUS_COMPARE_SESSIONS = "stimulus_compare_sessions"
-STIMULUS_IFF_TUNING_CURVES = "stimulus_iff_tuning_curves"
-STIMULUS_IFF_INSTRUCTION_TUNING = "stimulus_iff_instruction_tuning"
+STIMULUS_RESPONSE_TUNING = "stimulus_response_tuning"
+STIMULUS_RESPONSE_INSTRUCTION_TUNING = "stimulus_response_instruction_tuning"
 STIMULUS_ANALYSE_EFFICACY = "stimulus_analyse_efficacy"
 
 # -- Cross-domain -------------------------------------------------------------
@@ -42,12 +44,15 @@ RENAME_MAPPING: dict[str, str] = {
     "forearm_slim_uv": SPATIAL_SLIM_UV,
     "population_response_fields": SPATIAL_EXTRACT_BOUNDARIES,
     "session_rf_boundary_comparison": SPATIAL_COMPARE_BOUNDARIES,
-    "rf_center_proximal_distal": SPATIAL_COMPARE_RF_CENTERS,
+    "rf_center_proximal_distal": SPATIAL_COMPARE_PROXIMAL_DISTAL,
+    "spatial_compare_rf_centers": SPATIAL_COMPARE_PROXIMAL_DISTAL,
     "touch_features": STIMULUS_EXTRACT_FEATURES,
     "touch_clusters": STIMULUS_CLUSTER_TOUCHES,
     "touch_comparisons": STIMULUS_COMPARE_CLUSTERS,
     "touch_feature_radar": STIMULUS_RENDER_RADAR,
     "stimulus_compare_sessions": STIMULUS_COMPARE_SESSIONS,
+    "stimulus_iff_tuning_curves": STIMULUS_RESPONSE_TUNING,
+    "stimulus_iff_instruction_tuning": STIMULUS_RESPONSE_INSTRUCTION_TUNING,
     "ap_efficacy": STIMULUS_ANALYSE_EFFICACY,
     "population_rf_grid": CROSS_MAP_FEATURE_GRID,
     "population_rf_grid_metrics": CROSS_EXTRACT_GRID_METRICS,
