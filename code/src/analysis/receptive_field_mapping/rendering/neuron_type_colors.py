@@ -11,11 +11,11 @@ import pandas as pd
 # ---------------------------------------------------------------------------
 
 NEURON_TYPE_COLORS: dict[str, str] = {
-    "SAI":   "#e06c75",  # red
-    "SAII":  "#61afef",  # blue
-    "Field": "#98c379",  # green
-    "HFA":   "#e5c07b",  # yellow/amber
-    "CT":    "#c678dd",  # purple
+    "SAI":   "#E69F00",  # Okabe-Ito orange
+    "SAII":  "#56B4E9",  # Okabe-Ito sky blue
+    "CT":    "#009E73",  # Okabe-Ito bluish green
+    "Field": "#0072B2",  # Okabe-Ito blue
+    "HFA":   "#D55E00",  # Okabe-Ito vermillion
 }
 
 NEURON_TYPE_ORDER: list[str] = ["SAI", "SAII", "Field", "HFA", "CT"]

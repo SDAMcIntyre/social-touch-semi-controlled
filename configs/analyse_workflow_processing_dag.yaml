@@ -184,7 +184,7 @@ tasks:
     category: spatial_sensitivity
     enabled: true
     options:
-      force_processing: true
+      force_processing: false
       neuron_mode: iff
       iff_metric: both
       min_overlap_pct: 25
@@ -193,6 +193,7 @@ tasks:
       heatmap_space: linear
       cmap: inferno
       flip_u: true
+      contour_color: red
     depends_on: [spatial_map_single_touch, spatial_precompute_slim_uv]
 
   # Aggregate inflection boundary metrics across sessions and render comparison visuals.
@@ -205,20 +206,36 @@ tasks:
     options:
       force_processing: true
       iff_metric: both
+      heatmap_space: linear
+      cmap: inferno
     depends_on: [spatial_extract_boundaries]
 
-  # Compare RF center positions between proximal and distal strokes per session.
-  # Reads per-session NPZ files from spatial_extract_boundaries.
-  # Produces per-session center-marked heatmap PNGs, aggregate PNG, and summary CSV.
-  # Output: 4_analysed/rf_center_proximal_distal/
-  spatial_compare_rf_centers:
+  # Proximal-distal RF comparison: comprehensive paired contrast of RF properties between stroke directions.
+  # Reads per-session NPZ files from spatial_extract_boundaries; computes boundary metric deltas,
+  # contour overlap (IoU/Dice), heatmap correlation, and centroid shift decomposition.
+  # Produces contour overlays, heatmap triptychs, metric delta bar charts, population strip charts,
+  # and centroid shift decomposition figures. Output: 4_analysed/spatial_compare_proximal_distal/
+  spatial_compare_proximal_distal:
     category: spatial_sensitivity
     enabled: true
     options:
-      force_processing: true
+      force_processing: false
       iff_metric: both
       heatmap_space: linear
       cmap: inferno
+      contour_color: red
+    depends_on: [spatial_extract_boundaries]
+
+  # Extract 1D cross-section profiles from interpolated RF heatmap grids.
+  # Reads per-session NPZ files from spatial_extract_boundaries.
+  # Produces per-gesture CSVs and two PNG figure types (profile strip + representative profiles).
+  # Output: 4_analysed/spatial_extract_rf_profiles/iff_<iff_metric>/<session_id>/
+  spatial_extract_rf_profiles:
+    category: spatial_sensitivity
+    enabled: true
+    options:
+      force_processing: false
+      iff_metric: both
     depends_on: [spatial_extract_boundaries]
 
   # Stage 2b (Feature Extraction): Per-session feature extraction. Each enabled feature extracts to its own folder.
@@ -279,6 +296,7 @@ tasks:
     options:
       force_processing: false
       plot_type: box_strip
+      neuron_summary_xlsx:
       comparison_groups:
         canonical_iff:
           enabled: true
@@ -304,12 +322,13 @@ tasks:
       - pressure_mean
       - hand_velocity_amplitude_mean
       - contact_depth_mean
-      n_bins: 50
+      n_bins: 25
       clip_percentile: 1.0
       smoothing_sigma: 1.5
       overlap_ratio: 0.25                  # 0.0 to 0.5; sliding-window bin overlap
       binning_strategy: "raw_dots"         # sliding_window | raw_dots
-      fit_degree: 4                        # raw_dots: polynomial fit degree
+      # fit_degree: 4                      # legacy polynomial degree — int or list[int], e.g. [1, 2, 3, 4]
+      fit_models: "all"                     # named fit models (overrides fit_degree); "all" or list, e.g. ["poly4", "power", "log"]; available: poly1-9, power, log, naka_rushton, sigmoid, exp_sat
       dot_alpha: 0.35                      # raw_dots: per-session scatter opacity
       show_fit_ci: true                    # raw_dots: degree-1 CI band on fit line
       metadata_dir: touch_prepare_sessions # under <database>/4_analysed/
@@ -319,6 +338,10 @@ tasks:
         hand_velocity_amplitude_mean: speed_metadata
         pressure_mean: force_metadata
         contact_depth_mean: force_metadata
+      normalize_per_neuron: false          # raw_dots: extra normalized output images (Y in [0, 1])
+      secondary_color_by:  # raw_dots only: primary feature -> secondary feature for dot coloring
+        hand_velocity_amplitude_mean: contact_depth_mean
+        contact_depth_mean: hand_velocity_amplitude_mean
     depends_on: [stimulus_extract_features]
   stimulus_response_instruction_tuning:
     category: stimulus_sensitivity
@@ -331,10 +354,40 @@ tasks:
       - contact_area_metadata
       - speed_metadata
       - force_metadata
+      - gesture_broad_type
+      - gesture_type
       metadata_dir: touch_prepare_sessions
       metadata_filename: '{session_id}_prepared.csv'
     depends_on:
     - stimulus_extract_features
+
+  # RF spatial tuning: RF boundary metrics (area, circularity, PCA) vs binned stimulus parameters.
+  # Bins touches by velocity / depth / contact_area, computes a population RF heatmap per bin,
+  # extracts the inflection boundary, and renders scatter + polynomial fit figures.
+  # Also produces the area dismissal figure (contact_area → RF area, Spearman annotation).
+  # Output: 4_analysed/spatial_tuning_rf_metrics/{feature}/{gesture_subset}/
+  spatial_tuning_rf_metrics:
+    category: spatial_sensitivity
+    enabled: false
+    options:
+      force_processing: false
+      gesture_subsets: [all, tap, stroke, stroke_proximal, stroke_distal]
+      tuning_features:
+      - hand_velocity_amplitude_mean
+      - contact_depth_mean
+      - contact_area_mean
+      n_bins: 20
+      min_touches_per_bin: 5
+      compute_per_touch_std: true           # per-touch boundary STD error bars; disable for ~10× speedup
+      max_workers: 4                        # parallel session computation threads (1 = sequential)
+      # fit_degrees: [1, 2]                # legacy polynomial degrees — int or list[int]
+      fit_models: "all"                     # named fit models (overrides fit_degrees); "all" or list, e.g. ["poly1", "power", "log"]; available: poly1-9, power, log, naka_rushton, sigmoid, exp_sat
+      vertex_threshold: 0.05  # fraction of touches that must contact a vertex
+      inflection_sigma: 4.0   # Gaussian sigma for Laplacian boundary detection
+      clip_percentile: 1.0
+      dot_alpha: 0.7
+      iff_metric: mean
+    depends_on: [spatial_extract_boundaries, stimulus_extract_features]
 
   # Population RF grid: sweep N-D feature space, average single-touch RFs per cell.
   # Depends on: spatial_map_single_touch (RF maps), stimulus_extract_features (feature CSVs).

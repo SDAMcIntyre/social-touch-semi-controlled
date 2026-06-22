@@ -37,6 +37,10 @@ from analysis.receptive_field_mapping.pipelines.rf_touch_feature_radar_pipeline 
     _resolve_required_aggregation_folders,
     _DISPLAY_NAMES,
 )
+from analysis.receptive_field_mapping.rendering.neuron_type_colors import build_session_color_scheme
+from analysis.receptive_field_mapping.rendering.rf_cross_neuron_renderer import (
+    render_cross_neuron_comparison,
+)
 from analysis.receptive_field_mapping.rendering.rf_stimulus_session_comparison_renderer import (
     assign_session_colors,
     render_feature_session_comparison,
@@ -130,6 +134,7 @@ def run_stimulus_session_comparison(
     output_dir: Path,
     plot_type: Literal["box_strip", "violin", "bar_error"] = "box_strip",
     force_processing: bool = False,
+    neuron_summary_xlsx: Path | None = None,
 ) -> None:
     """Render cross-session touch feature comparison plots for each enabled group.
 
@@ -162,13 +167,20 @@ def run_stimulus_session_comparison(
         dots, default), ``'violin'``, or ``'bar_error'`` (mean ± std).
     force_processing:
         If ``True``, reprocess groups even when the sentinel file is present.
+    neuron_summary_xlsx:
+        Optional path to MNG-DataSummary.xlsx.  When provided, sessions are
+        colored by afferent type (Okabe-Ito palette) and a neuron-type legend
+        is added to each figure.  When ``None`` (default), the tab20 fallback
+        from ``assign_session_colors`` is used.
 
     Raises
     ------
     ValueError
         If *comparison_groups* is empty, if a group's ``features`` spec is
         empty or missing, if ``gesture_type`` column is absent from a loaded
-        DataFrame, or if any feature column has no finite values.
+        DataFrame, if any feature column has no finite values, or if
+        ``neuron_summary_xlsx`` is provided but a session unit cannot be
+        resolved to a known neuron type.
     """
     if not comparison_groups:
         raise ValueError(
@@ -278,7 +290,14 @@ def run_stimulus_session_comparison(
         ylims = _compute_ylims(pooled, resolved_cols)
 
         session_ids = [s["session_id"] for s in session_data]
-        colors = assign_session_colors(session_ids)
+
+        neuron_type_map: dict[str, str] | None = None
+        if neuron_summary_xlsx is not None:
+            scheme = build_session_color_scheme(session_ids, Path(neuron_summary_xlsx))
+            colors = scheme.session_color
+            neuron_type_map = scheme.session_neuron_type
+        else:
+            colors = assign_session_colors(session_ids)
 
         # =================================================================
         # Pass 2 — Render
@@ -301,6 +320,7 @@ def run_stimulus_session_comparison(
                     output_path=out_png,
                     gesture_type=gesture,
                     ylim=ylims[col],
+                    neuron_type_map=neuron_type_map,
                 )
                 print(
                     f"[Stimulus Compare Sessions] {group_name} / {gesture} / {col}: "
@@ -320,12 +340,47 @@ def run_stimulus_session_comparison(
                 output_path=grid_png,
                 gesture_type=gesture,
                 ylims=ylims,
+                neuron_type_map=neuron_type_map,
             )
             print(
                 f"[Stimulus Compare Sessions] {group_name} / {gesture}: "
                 f"saved {grid_png.name}",
                 flush=True,
             )
+
+            if neuron_type_map is not None:
+                df_gesture = pooled if gesture == "all" else pooled[pooled["gesture_type"] == gesture]
+                for col, label in zip(resolved_cols, display_labels):
+                    type_values: dict[str, list[float]] = {}
+                    for sid in session_ids:
+                        ntype = neuron_type_map.get(sid)
+                        if ntype is None:
+                            continue
+                        vals = (
+                            df_gesture[df_gesture["session_id"] == sid][col]
+                            .dropna()
+                            .tolist()
+                        )
+                        if not vals:
+                            continue
+                        if ntype not in type_values:
+                            type_values[ntype] = []
+                        type_values[ntype].append(float(np.mean(vals)))
+                    if not type_values:
+                        continue
+                    cross_neuron_png = gesture_dir / f"cross_neuron_{col}.png"
+                    render_cross_neuron_comparison(
+                        neuron_data=type_values,
+                        metric_name=col,
+                        output_path=cross_neuron_png,
+                        ylabel=label,
+                        title=f"Cross-neuron | {gesture} | {label}",
+                    )
+                    print(
+                        f"[Stimulus Compare Sessions] {group_name} / {gesture} / {col}: "
+                        f"saved {cross_neuron_png.name}",
+                        flush=True,
+                    )
 
         # =================================================================
         # Write sentinel
