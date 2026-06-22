@@ -39,10 +39,13 @@ Before you begin, ensure you have the following installed on your system:
   * **Conda**: An installation of [Anaconda](https://www.anaconda.com/products/distribution) or [Miniconda](https://docs.conda.io/en/latest/miniconda.html) to manage the Python environment.
   * **Git**: For cloning the repository.
   * **MKVToolNix**: Required for post-processing video files to remove the Kinect's IR track. You can download it from the [official website](https://mkvtoolnix.download/).
+  * **Azure Kinect SDK 1.4.x** *(Windows)*: Required by `pyk4a` to read Kinect recordings. See the [install guide](https://github.com/microsoft/Azure-Kinect-Sensor-SDK/blob/develop/docs/usage.md).
 
 -----
 
 ## ⚙️ Installation
+
+> 📄 **Full environment setup** — the conda `environment.yml` workflow, the Azure Kinect SDK prerequisite, and manual GPU package installs (PyTorch, CuPy) — is documented in **[environment-setup.md](environment-setup.md)**. The quick steps below cover a basic install.
 
 Follow these steps to set up your local development environment.
 
