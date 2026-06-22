@@ -184,7 +184,7 @@ tasks:
     category: spatial_sensitivity
     enabled: true
     options:
-      force_processing: true
+      force_processing: false
       neuron_mode: iff
       iff_metric: both
       min_overlap_pct: 25
@@ -204,7 +204,7 @@ tasks:
     category: spatial_sensitivity
     enabled: true
     options:
-      force_processing: true
+      force_processing: false
       iff_metric: both
       heatmap_space: linear
       cmap: inferno
@@ -218,11 +218,23 @@ tasks:
     category: spatial_sensitivity
     enabled: true
     options:
-      force_processing: true
+      force_processing: false
       iff_metric: both
       heatmap_space: linear
       cmap: inferno
       contour_color: red
+    depends_on: [spatial_extract_boundaries]
+
+  # Extract 1D cross-section profiles from interpolated RF heatmap grids.
+  # Reads per-session NPZ files from spatial_extract_boundaries.
+  # Produces per-gesture CSVs and two PNG figure types (profile strip + representative profiles).
+  # Output: 4_analysed/spatial_extract_rf_profiles/iff_<iff_metric>/<session_id>/
+  spatial_extract_rf_profiles:
+    category: spatial_sensitivity
+    enabled: true
+    options:
+      force_processing: false
+      iff_metric: both
     depends_on: [spatial_extract_boundaries]
 
   # Stage 2b (Feature Extraction): Per-session feature extraction. Each enabled feature extracts to its own folder.
@@ -283,7 +295,7 @@ tasks:
     options:
       force_processing: false
       plot_type: box_strip
-      neuron_summary_xlsx: null
+      neuron_summary_xlsx:
       comparison_groups:
         canonical_iff:
           enabled: true
@@ -302,7 +314,7 @@ tasks:
     category: stimulus_sensitivity
     enabled: true
     options:
-      force_processing: true
+      force_processing: false
       response_metric: all
       tuning_features:
       - contact_area_mean
@@ -314,8 +326,8 @@ tasks:
       smoothing_sigma: 1.5
       overlap_ratio: 0.25                  # 0.0 to 0.5; sliding-window bin overlap
       binning_strategy: "raw_dots"         # sliding_window | raw_dots
-      fit_degree: 4                        # legacy polynomial degree — int or list[int], e.g. [1, 2, 3, 4]
-      # fit_models: ["poly4", "power", "log"]  # named fit models (overrides fit_degree); available: poly1-9, power, log, naka_rushton, sigmoid, exp_sat
+      # fit_degree: 4                      # legacy polynomial degree — int or list[int], e.g. [1, 2, 3, 4]
+      fit_models: "all"                     # named fit models (overrides fit_degree); "all" or list, e.g. ["poly4", "power", "log"]; available: poly1-9, power, log, naka_rushton, sigmoid, exp_sat
       dot_alpha: 0.35                      # raw_dots: per-session scatter opacity
       show_fit_ci: true                    # raw_dots: degree-1 CI band on fit line
       metadata_dir: touch_prepare_sessions # under <database>/4_analysed/
@@ -357,16 +369,18 @@ tasks:
     category: spatial_sensitivity
     enabled: true
     options:
-      force_processing: true
-      gesture_subsets: [all, tap, stroke_proximal, stroke_distal]
+      force_processing: false
+      gesture_subsets: [all, tap, stroke, stroke_proximal, stroke_distal]
       tuning_features:
       - hand_velocity_amplitude_mean
       - contact_depth_mean
       - contact_area_mean
-      n_bins: 8
+      n_bins: 20
       min_touches_per_bin: 5
-      fit_degrees: [1, 2]    # legacy polynomial degrees — int or list[int]
-      # fit_models: ["poly1", "power", "log"]  # named fit models (overrides fit_degrees); available: poly1-9, power, log, naka_rushton, sigmoid, exp_sat
+      compute_per_touch_std: true           # per-touch boundary STD error bars; disable for ~10× speedup
+      max_workers: 4                        # parallel session computation threads (1 = sequential)
+      # fit_degrees: [1, 2]                # legacy polynomial degrees — int or list[int]
+      fit_models: "all"                     # named fit models (overrides fit_degrees); "all" or list, e.g. ["poly1", "power", "log"]; available: poly1-9, power, log, naka_rushton, sigmoid, exp_sat
       vertex_threshold: 0.05  # fraction of touches that must contact a vertex
       inflection_sigma: 4.0   # Gaussian sigma for Laplacian boundary detection
       clip_percentile: 1.0
