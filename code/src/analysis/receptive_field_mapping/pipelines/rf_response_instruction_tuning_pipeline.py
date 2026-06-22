@@ -324,6 +324,9 @@ def run_response_instruction_tuning(
                 .first()
                 .reset_index()
             )
+            overlap_cols = [c for c in tuning_categories if c in df.columns]
+            if overlap_cols:
+                df = df.drop(columns=overlap_cols)
             n_before = len(df)
             df = df.merge(meta_deduped, on=touch_id_cols, how="inner")
             n_after = len(df)

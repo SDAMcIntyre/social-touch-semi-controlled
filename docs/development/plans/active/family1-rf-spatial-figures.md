@@ -130,7 +130,7 @@ Per knowledge base (`note-3d-to-2d-surface-projection-algorithms.md`): populatio
 - [x] Task 3.4 — Collect (bin_center, area_mm2, circularity, pca_aspect_ratio, pca_orientation_deg) tuples across bins; skip bins with too few touches or no inflection boundary
 - [x] Task 3.5 — Create `rf_spatial_tuning_renderer.py` with scatter + fit rendering: X = bin center, Y = RF metric, one subplot per RF metric, polynomial fit overlay using the multi-fit infrastructure from Phase 2
 - [x] Task 3.6 — Add Spearman correlation + p-value annotation to each subplot (for the area dismissal figure)
-- [x] Task 3.7 — Iterate over gesture subsets (all, tap, stroke_proximal, stroke_distal) and tuning features (velocity, depth, contact_area)
+- [x] Task 3.7 — Iterate over gesture subsets (all, tap, stroke, stroke_proximal, stroke_distal) and tuning features (velocity, depth, contact_area)
 - [x] Task 3.8 — Add per-session and cross-session (overlay by neuron type) rendering modes
 - [x] Task 3.9 — Register as DAG task `spatial_tuning_rf_metrics` in `analysis_workflow_processing.py` and add config section to `analyse_workflow_processing_dag.yaml`
 - [x] Task 3.10 — Wire into the analysis workflow DAG with `depends_on: [spatial_extract_boundaries, stimulus_extract_features]`

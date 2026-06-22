@@ -24,7 +24,7 @@ touch_prepare_sessions ───────────────────
    │                               │                 │                                                     ││
    │                               │                 └──► spatial_extract_boundaries ──┬──► spatial_compare_boundaries
    │                               │                                                  │                    ││
-   │                               │                                                  └──► spatial_compare_rf_centers
+   │                               │                                                  └──► spatial_compare_proximal_distal
    │                               │                                                                       ││
    │                               ├──► cross_map_feature_grid* ──► cross_extract_grid_metrics*            ││
    │                               │         (also needs stimulus_extract_features)       │                ││
@@ -270,7 +270,7 @@ is raised if absent.
 | `stroke_distal` | `gesture_type == 'stroke_distal'` |
 | `stroke` | Virtual: `stroke_proximal` + `stroke_distal` combined (excludes tap) |
 
-**Consumed by:** `spatial_compare_boundaries`, `spatial_compare_rf_centers`
+**Consumed by:** `spatial_compare_boundaries`, `spatial_compare_proximal_distal`
 
 ---
 
@@ -294,24 +294,25 @@ is raised if absent.
 
 ---
 
-### spatial_compare_rf_centers
+### spatial_compare_proximal_distal
 
 | Field | Value |
 |-------|-------|
-| DAG key | `spatial_compare_rf_centers` |
+| DAG key | `spatial_compare_proximal_distal` |
 | Category | `spatial_sensitivity` |
 | Depends on | `spatial_extract_boundaries` |
-| Output dir | `spatial_compare_rf_centers/` |
+| Output dir | `spatial_compare_proximal_distal/` |
 
 **Outcomes:**
 
 | Artifact | Format | Description |
 |----------|--------|-------------|
-| Per-session heatmap PNGs (centroid) | PNG | Heatmap with violet `+` marker at RF centroid, one per gesture type per session |
-| Per-session heatmap PNGs (hotspot) | PNG | Heatmap with red `*` marker at intensity maximum, one per gesture type per session |
-| Aggregate centroid scatter plot | PNG | Cross-session scatter: delta-U / delta-V from stroke centroid (proximal vs distal offsets) |
-| Aggregate hotspot scatter plot | PNG | Cross-session scatter: delta-U / delta-V from stroke hotspot |
-| `rf_center_comparison_summary.csv` | CSV | Per-session centroid and hotspot offsets relative to the `stroke` aggregate baseline |
+| Per-session contour overlay PNG | PNG | Proximal (cyan) and distal (magenta) inflection contours on shared forearm axes; stroke reference (dashed grey); annotated with IoU and area ratio |
+| Per-session heatmap triptych PNG | PNG | Three-panel figure: proximal heatmap \| distal heatmap \| signed difference (RdBu_r) |
+| Metric delta bar charts PNG | PNG | Multi-panel cross-session bar charts, one panel per delta metric, sessions colored by neuron type |
+| Population strip chart PNG | PNG | One column per delta metric with Wilcoxon signed-rank p-value annotation; horizontal zero line |
+| Centroid shift decomposition PNG | PNG | Arrow plot: per-session centroid shift vectors decomposed into along-arm (U) and across-arm (V) components |
+| `rf_proximal_distal_comparison_summary.csv` | CSV | Per-session scalar metrics for each direction, signed deltas, ratios, contour overlap (IoU/Dice), heatmap Pearson r, and centroid shift decomposition |
 
 ---
 
@@ -680,7 +681,7 @@ which tasks consume it.
 | Camera settings JSON | `spatial_set_camera` | `spatial_map_baseline`, `cross_extract_grid_metrics`, `cross_render_cluster_rf`, `cross_render_sessions` |
 | SLIM UV config YAML | `spatial_configure_slim_uv` | `spatial_precompute_slim_uv` |
 | SLIM UV cache NPZ | `spatial_precompute_slim_uv` | `spatial_extract_boundaries` |
-| Population RF NPZ (boundaries) | `spatial_extract_boundaries` | `spatial_compare_boundaries`, `spatial_compare_rf_centers`, `explore_rf_surface` |
+| Population RF NPZ (boundaries) | `spatial_extract_boundaries` | `spatial_compare_boundaries`, `spatial_compare_proximal_distal`, `explore_rf_surface` |
 | Feature CSVs | `stimulus_extract_features` | `stimulus_cluster_touches`, `stimulus_render_radar`, `stimulus_compare_sessions`, `stimulus_iff_tuning_curves`, `stimulus_iff_instruction_tuning`, `stimulus_analyse_efficacy`, `cross_map_feature_grid`, `cross_render_sessions` |
 | Clustered CSV | `stimulus_cluster_touches` | `stimulus_compare_clusters`, `cross_extract_cluster_rf` |
 | Cluster RF extraction artifacts | `cross_extract_cluster_rf` | `cross_compute_cluster_metrics`, `cross_render_cluster_rf`, `explore_rf_gallery` |
