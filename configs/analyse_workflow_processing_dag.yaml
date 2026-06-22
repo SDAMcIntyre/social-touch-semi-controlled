@@ -204,7 +204,7 @@ tasks:
     category: spatial_sensitivity
     enabled: true
     options:
-      force_processing: false
+      force_processing: true
       iff_metric: both
       heatmap_space: linear
       cmap: inferno
@@ -368,7 +368,7 @@ tasks:
   # Output: 4_analysed/spatial_tuning_rf_metrics/{feature}/{gesture_subset}/
   spatial_tuning_rf_metrics:
     category: spatial_sensitivity
-    enabled: true
+    enabled: false
     options:
       force_processing: false
       gesture_subsets: [all, tap, stroke, stroke_proximal, stroke_distal]

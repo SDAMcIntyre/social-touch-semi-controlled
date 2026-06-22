@@ -17,8 +17,8 @@ from matplotlib.lines import Line2D
 from pathlib import Path
 from scipy import stats
 
+from analysis.receptive_field_mapping.rendering.fit_models import fit_model as _fit_model
 from analysis.receptive_field_mapping.rendering.rf_response_tuning_renderer import (
-    fit_polynomial,
     _BG,
     _AX_BG,
     _SPINE_COLOR,
@@ -75,12 +75,14 @@ def _draw_scatter_subplot(
     xlabel: str,
     ylabel: str,
     title: str,
-    fit_degrees: list[int],
-    dot_color: str,
-    dot_alpha: float,
+    fit_models: "list[str] | None" = None,
+    fit_degrees: "list[int] | None" = None,
+    dot_color: str = '#4ec9b0',
+    dot_alpha: float = 0.7,
     multi_session: bool = False,
+    metric_stds: "np.ndarray | None" = None,
 ) -> None:
-    """Draw a single RF-metric vs bin-center scatter subplot with polynomial fit(s).
+    """Draw a single RF-metric vs bin-center scatter subplot with fit line(s).
 
     Parameters
     ----------
@@ -96,16 +98,27 @@ def _draw_scatter_subplot(
         Y-axis label.
     title:
         Axes title.
+    fit_models:
+        List of named model strings to overlay (preferred).
     fit_degrees:
-        List of polynomial degrees to overlay.
+        Legacy list of polynomial degrees (converted to model names).
     dot_color:
-        Colour for scatter dots and (single-degree) fit line.
+        Colour for scatter dots and (single-model) fit line.
     dot_alpha:
         Scatter dot opacity.
     multi_session:
         When True, draw fit lines with distinct colors from _FIT_COLORS
-        regardless of how many degrees are requested.
+        regardless of how many models are requested.
+    metric_stds:
+        Per-bin standard deviations for error bars (same length as
+        *bin_centers*).  NaN entries are silently skipped.
     """
+    if fit_models is None:
+        if fit_degrees is not None:
+            fit_models = [f"poly{d}" for d in fit_degrees]
+        else:
+            fit_models = ["poly1"]
+
     _style_dark_ax(ax)
     ax.grid(alpha=0.15, color='white', linestyle='--')
 
@@ -115,21 +128,31 @@ def _draw_scatter_subplot(
 
     ax.scatter(x, y, s=30, color=dot_color, alpha=dot_alpha, edgecolors='none', zorder=3)
 
-    multi = len(fit_degrees) > 1 or multi_session
+    if metric_stds is not None:
+        valid_stds = metric_stds[valid]
+        std_mask = np.isfinite(valid_stds)
+        if std_mask.any():
+            ax.errorbar(
+                x[std_mask], y[std_mask], yerr=valid_stds[std_mask],
+                fmt='none', ecolor=dot_color, alpha=dot_alpha * 0.7,
+                capsize=3, capthick=1, elinewidth=1, zorder=2,
+            )
+
+    multi = len(fit_models) > 1 or multi_session
     r2_lines: list[str] = []
     x_line = np.linspace(float(x.min()), float(x.max()), 200) if len(x) > 0 else None
 
-    for i, deg in enumerate(fit_degrees):
+    for i, model_name in enumerate(fit_models):
         fit_color = _FIT_COLORS[i % len(_FIT_COLORS)] if multi else dot_color
         fit_ls = _FIT_LINESTYLES[i % len(_FIT_LINESTYLES)] if multi else '-'
 
-        coeffs, r2 = fit_polynomial(x, y, deg)
-        if coeffs is not None and x_line is not None:
-            r2_lines.append(f"deg {deg}: R²={r2:.2f}")
-            ax.plot(x_line, np.polyval(coeffs, x_line),
+        result = _fit_model(x, y, model_name)
+        if result.params is not None and x_line is not None:
+            r2_lines.append(f"{result.display_label}: R²={result.r_squared:.2f}")
+            ax.plot(x_line, result.evaluate(x_line),
                     color=fit_color, linewidth=2.0, linestyle=fit_ls, zorder=5)
         else:
-            r2_lines.append(f"deg {deg}: R²=n/a")
+            r2_lines.append(f"{result.display_label}: R²=n/a")
 
     spearman_str = _spearman_annotation(x, y)
 
@@ -162,7 +185,8 @@ def render_session_spatial_tuning(
     tuning_feature: str,
     gesture_subset: str,
     out_path: Path,
-    fit_degrees: list[int],
+    fit_models: "list[str] | None" = None,
+    fit_degrees: "list[int] | None" = None,
     dot_alpha: float = 0.7,
     line_color: str = '#4ec9b0',
 ) -> None:
@@ -186,12 +210,14 @@ def render_session_spatial_tuning(
         Gesture subset label (used in the figure title).
     out_path:
         Destination PNG file path.
+    fit_models:
+        Named model strings to overlay on each subplot (preferred).
     fit_degrees:
-        Polynomial degrees to overlay on each subplot.
+        Legacy polynomial degrees (converted to model names).
     dot_alpha:
         Scatter dot opacity (default 0.7).
     line_color:
-        Hex color string for scatter dots and single-degree fit lines.
+        Hex color string for scatter dots and single-model fit lines.
 
     Raises
     ------
@@ -211,6 +237,10 @@ def render_session_spatial_tuning(
         key: np.array([b[key] for b in bins_data], dtype=float)
         for key in _RF_METRIC_KEYS
     }
+    std_arrays: dict[str, np.ndarray] = {
+        key: np.array([b.get(f"{key}_std", float("nan")) for b in bins_data], dtype=float)
+        for key in _RF_METRIC_KEYS
+    }
 
     fig, axes = plt.subplots(2, 2, figsize=(12, 9), dpi=150)
     fig.patch.set_facecolor(_BG)
@@ -227,9 +257,11 @@ def render_session_spatial_tuning(
             xlabel=_display_id(tuning_feature),
             ylabel=ylabel,
             title=ylabel,
+            fit_models=fit_models,
             fit_degrees=fit_degrees,
             dot_color=line_color,
             dot_alpha=dot_alpha,
+            metric_stds=std_arrays[key],
         )
 
     fig.tight_layout()
@@ -248,8 +280,9 @@ def render_overlay_spatial_tuning(
     tuning_feature: str,
     gesture_subset: str,
     out_path: Path,
-    fit_degrees: list[int],
-    session_colors: dict[str, str],
+    fit_models: "list[str] | None" = None,
+    fit_degrees: "list[int] | None" = None,
+    session_colors: dict[str, str] = None,
     dot_alpha: float = 0.4,
     legend_mode: str = "by_session",
     session_neuron_types: dict[str, str] | None = None,
@@ -264,7 +297,7 @@ def render_overlay_spatial_tuning(
     Parameters
     ----------
     all_sessions_data:
-        Dict mapping session_id → list of per-bin dicts (same format as
+        Dict mapping session_id -> list of per-bin dicts (same format as
         ``render_session_spatial_tuning``). Sessions with empty lists are skipped.
     tuning_feature:
         Column name of the stimulus feature (X axis).
@@ -272,24 +305,32 @@ def render_overlay_spatial_tuning(
         Gesture subset label.
     out_path:
         Destination PNG file path.
+    fit_models:
+        Named model strings to overlay per session (preferred).
     fit_degrees:
-        Polynomial degrees to overlay per session.
+        Legacy polynomial degrees (converted to model names).
     session_colors:
-        session_id → hex color string.
+        session_id -> hex color string.
     dot_alpha:
         Scatter dot opacity (default 0.4).
     legend_mode:
-        ``"by_session"`` or ``"by_type"`` — controls the legend.
+        ``"by_session"`` or ``"by_type"`` -- controls the legend.
     session_neuron_types:
-        session_id → neuron type string; required when ``legend_mode="by_type"``.
+        session_id -> neuron type string; required when ``legend_mode="by_type"``.
     type_colors:
-        neuron_type → hex color string; required when ``legend_mode="by_type"``.
+        neuron_type -> hex color string; required when ``legend_mode="by_type"``.
 
     Raises
     ------
     ValueError
         If ``all_sessions_data`` is entirely empty.
     """
+    if fit_models is None:
+        if fit_degrees is not None:
+            fit_models = [f"poly{d}" for d in fit_degrees]
+        else:
+            fit_models = ["poly1"]
+
     non_empty = {sid: data for sid, data in all_sessions_data.items() if data}
     if not non_empty:
         raise ValueError(
@@ -304,7 +345,7 @@ def render_overlay_spatial_tuning(
         color='white', fontsize=11, y=1.01,
     )
 
-    multi = len(fit_degrees) > 1
+    multi = len(fit_models) > 1
     legend_labels_seen: set[str] = set()
 
     for ax_idx, (ax, (key, ylabel)) in enumerate(zip(axes.ravel(), _RF_METRICS)):
@@ -323,6 +364,9 @@ def render_overlay_spatial_tuning(
 
             bin_centers = np.array([b["bin_center"] for b in bins_data], dtype=float)
             metric_vals = np.array([b[key] for b in bins_data], dtype=float)
+            metric_stds = np.array(
+                [b.get(f"{key}_std", float("nan")) for b in bins_data], dtype=float,
+            )
 
             valid = np.isfinite(bin_centers) & np.isfinite(metric_vals)
             x = bin_centers[valid]
@@ -334,23 +378,32 @@ def render_overlay_spatial_tuning(
             ax.scatter(x, y, s=20, color=color, alpha=dot_alpha,
                        edgecolors='none', zorder=2)
 
+            valid_stds = metric_stds[valid]
+            std_mask = np.isfinite(valid_stds)
+            if std_mask.any():
+                ax.errorbar(
+                    x[std_mask], y[std_mask], yerr=valid_stds[std_mask],
+                    fmt='none', ecolor=color, alpha=dot_alpha * 0.7,
+                    capsize=2, capthick=0.8, elinewidth=0.8, zorder=1,
+                )
+
             x_line = np.linspace(float(x.min()), float(x.max()), 200)
             r2_lines: list[str] = []
 
-            for i, deg in enumerate(fit_degrees):
+            for i, model_name in enumerate(fit_models):
                 fit_ls = _FIT_LINESTYLES[i % len(_FIT_LINESTYLES)] if multi else '-'
-                coeffs, r2 = fit_polynomial(x, y, deg)
-                if coeffs is not None:
-                    y_line = np.polyval(coeffs, x_line)
-                    label_key = f"{line_label} (d{deg})" if multi else line_label
+                result = _fit_model(x, y, model_name)
+                if result.params is not None:
+                    y_line = result.evaluate(x_line)
+                    label_key = f"{line_label} ({result.display_label})" if multi else line_label
                     plot_label = label_key if (ax_idx == 0 and label_key not in legend_labels_seen) else "_nolegend_"
                     ax.plot(x_line, y_line, color=color, linewidth=2.0,
                             linestyle=fit_ls, label=plot_label, zorder=3)
                     if plot_label != "_nolegend_":
                         legend_labels_seen.add(label_key)
-                    r2_lines.append(f"d{deg}: R²={r2:.2f}")
+                    r2_lines.append(f"{result.display_label}: R²={result.r_squared:.2f}")
                 else:
-                    r2_lines.append(f"d{deg}: R²=n/a")
+                    r2_lines.append(f"{result.display_label}: R²=n/a")
 
             spearman_str = _spearman_annotation(x, y)
             annotation = f"{session_id}\n" + "\n".join(r2_lines) + f"\n{spearman_str}"
