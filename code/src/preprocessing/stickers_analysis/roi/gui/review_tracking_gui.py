@@ -520,10 +520,20 @@ class TrackerReviewGUI:
         
     # --- NEW: Explicit method to destroy window ---
     def destroy_window(self):
-        """Destroys the root window."""
+        """Destroys the root window and forces GC in the main thread.
+
+        Calling gc.collect() here ensures that Tkinter Variable objects
+        (StringVar, IntVar, ImageTk.PhotoImage, …) created during setup_ui()
+        are collected while we are still on the main thread.  Without this,
+        Python's GC may collect them later inside one of Prefect's background
+        threads, which causes the fatal 'Tcl_AsyncDelete: async handler deleted
+        by the wrong thread' crash.
+        """
+        import gc
         if self.root:
             self.root.destroy()
             self.root = None
+        gc.collect()
 
     # --- UI UPDATE METHODS (Called by the Controller) ---
 

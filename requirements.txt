@@ -5,27 +5,27 @@
 
 # --- Core Scientific Computing & Data Analysis ---
 h5py==3.14.0
-matplotlib==3.10.6
-numpy #==2.3.3
+# matplotlib==3.10.6  # managed by conda (installed: 3.10.8) — do not pip-install
+# numpy               # managed by conda (installed: 2.0.0)  — do not pip-install
 pandas==2.3.3
 scikit-image==0.25.2
 scikit-learn==1.7.2
-scipy==1.15.3 #1.16.2
+# scipy==1.15.3       # managed by conda (installed: 1.15.2) — do not pip-install
 
 # --- 3D, Visualization & Geometry ---
-chumpy==0.70
-open3d==0.19.0
+# chumpy==0.70        # managed by conda (installed: 0.70) — do not pip-install
+# open3d==0.19.0    # install separately: pip install open3d==0.19.0 pyvista==0.46.1 pyvistaqt==0.11.3 --no-deps
 plyfile==1.1.2
 pygltflib==1.16.5
-pyvista==0.46.1
-pyvistaqt==0.11.3
+# pyvista==0.46.1   # see above
+# pyvistaqt==0.11.3 # see above
 transforms3d==0.4.2
 trimesh==4.7.4
-vtk==9.4.2
+# vtk==9.4.2          # managed by conda (installed: 9.6.0) — do not pip-install
 
 # --- Image & Computer Vision ---
 opencv-contrib-python==4.12.0.88
-Pillow==11.3.0
+# Pillow==11.3.0      # managed by conda (installed: 12.1.1) — do not pip-install
 seaborn
 
 # --- Pydantic & Data Validation ---
@@ -44,6 +44,12 @@ PyQt5_sip==12.17.0
 # PyQt6==6.9.1
 # PyQt6-Qt6==6.9.1
 # pyqt6_sip==13.10.2
+
+# --- Visualization & Plotting ---
+dash
+plotly>=6
+ipywidgets>=8.0.4
+nbformat>=5.7.0
 
 # --- Workflow Orchestration ---
 prefect==3.4.22

@@ -4,6 +4,23 @@
 
 A Python application to run semi-controlled social touch experiments for microneurography and psychophysics studies.
 
+-----
+
+## 🔧 Local Fork Changes — `dev-haonan`
+
+This branch adapts the preprocessing pipeline to run **locally on Windows** against a self-hosted [HaMeR](https://github.com/KateKovzalenko/hamer_liu) hand-tracking server. Summary of changes (Haonan, April 2026):
+
+| Area | File(s) | Change |
+|---|---|---|
+| CuPy / NumPy 2.0 crash | `preprocess_workflow_kinect_auto.py`, `preprocess_workflow_kinect_visualisation.py` | Added an early `import cupy` guard before any preprocessing imports — NumPy 2.0 removed the `bool8` alias CuPy needs, and C-extensions imported first corrupt the dtype state. |
+| HaMeR hand tracking | `_3_preprocessing/_2_hand_tracking/track_hands_on_video.py`, `preprocess_workflow_kinect_auto.py` | `max_workers=1` (single-GPU inference → avoids CUDA OOM) and `use_video_api=False` (frame-by-frame upload → avoids the HTTP timeout that produced empty `.pkl` files on long videos). |
+| Prefect 422 error | `merging_pipeline_neuron_to_kinect_auto.py`, `preprocess_workflow_kinect_manual.py` | Removed nested `@flow` decorators — Prefect 3.4.x double-serialises parameters when one `@flow` calls another, raising `422 Unprocessable Entity`. |
+| GUI cleanup on Windows | `review_tracking_gui.py` | Added `gc.collect()` after window / `cv2.VideoWriter` teardown so buffers are freed on the main thread (avoids `Tcl_AsyncDelete` crashes and lingering file handles). |
+| Machine-specific path | `configs/merging_pipeline_neuron_to_kinect_auto_dag.yaml` | Changed `neural_quality_xlsx` from a hardcoded absolute path to a relative one resolved at runtime. |
+| Environment pins | `environment.yml`, `requirements.txt` | Pinned `numpy<2.0` and `cupy-cuda12x` for reproducible Windows installs. |
+
+> **Manual step (Windows + conda VTK):** rename `…/conda_env/Library/bin/opengl32.dll` (Mesa software GL) to e.g. `opengl32.dll.mesa_bak` so Open3D's GUI loads the NVIDIA driver instead of crashing with `wglCreateContextAttribsARB() failed, error 87`.
+
 ## ✨ Features
 
   * **Two Experiment Modes**: Tailored workflows for **Microneurography** and **Psychophysics**.

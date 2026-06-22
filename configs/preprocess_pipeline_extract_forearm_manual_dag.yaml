@@ -3,15 +3,14 @@
 # =============================================================================
 
 parameters:
-  forearm_configs: [session_2022-06-22_ST18-01.yaml, session_2022-06-22_ST18-02.yaml,
-    session_2022-06-22_ST18-04.yaml]
+  forearm_configs: .
   force_session_processing: true  # Controls .SUCCESS flag skipping
 tasks:
   # Step 1: Interactive forearm segmentation (ROI annotation + point cloud extraction)
   extract_forearm:
     enabled: true
     options:
-      force_processing: true
+      force_processing: false
     depends_on: []
 
   # Step 2: Manual artifact removal GUI (box-select and remove unwanted points)

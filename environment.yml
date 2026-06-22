@@ -14,7 +14,7 @@ dependencies:
   - vtk>=9.4
 
   # --- Core scientific (MKL-linked builds from conda) ---
-  - numpy>=2.0
+  - numpy==2.0
   - scipy>=1.15
 
   # --- Media / codecs (needed by OpenCV for video I/O) ---
@@ -30,7 +30,7 @@ dependencies:
       - tifffile>=2025.5
 
       # --- 3D, Visualization & Geometry ---
-      - chumpy>=0.70
+      - # chumpy>=0.70    # pip install chumpy>=0.70 --no-build-isolation
       - open3d>=0.19
       - plyfile>=1.1
       - pygltflib>=1.16

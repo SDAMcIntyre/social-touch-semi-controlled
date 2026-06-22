@@ -7,6 +7,14 @@ import time
 import traceback
 from multiprocessing import Queue, freeze_support
 
+# CuPy import guard — must precede any preprocessing imports (project convention)
+# Several preprocessing C-extensions modify NumPy's dtype state in a way that
+# causes CuPy's Cython _dtype init to fail with "bool8 removed in NumPy 2.0".
+try:
+    import cupy  # noqa: F401
+except Exception:
+    pass
+
 from prefect import flow, get_run_logger
 
 # Setup a basic logger
@@ -247,7 +255,7 @@ def track_hands_model_flow(
     name_baseline = rgb_video_path.stem + "_handmodel"
     tracked_hands_path = output_dir / (name_baseline + "_tracked_hands.pkl")
     
-    track_hands_on_video(rgb_video_path, tracked_hands_path, force_processing=force_processing)
+    track_hands_on_video(rgb_video_path, tracked_hands_path, force_processing=force_processing, use_video_api=False)
     
     return tracked_hands_path
 

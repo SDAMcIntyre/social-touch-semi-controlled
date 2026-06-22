@@ -266,7 +266,7 @@ def track_hands_on_video(
 
     # 1. Initialize Config
     config = ProcessingConfig(
-        max_workers=16  # Aggressive I/O threading for HTTP requests
+        max_workers=1  # Server runs single-GPU inference; concurrent requests cause CUDA OOM
     )
 
     # 2. Run Pipeline

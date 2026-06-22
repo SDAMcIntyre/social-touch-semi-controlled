@@ -118,7 +118,6 @@ def filter_by_neural_quality_flow(
     )
 
 
-@flow(name="Run Single Session Pipeline")
 def run_single_session_pipeline(
     config: KinectConfig,
     dag_handler: DagConfigHandler

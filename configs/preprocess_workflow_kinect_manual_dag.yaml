@@ -11,7 +11,7 @@
 
 parameters:
   kinect_configs: 
-    valid_configs_ST13-02/kinect_config_2022-06-14_ST13-02_semicontrolled_block-order04.yaml
+    kinect_config_2022-06-17_ST16-05_semicontrolled_block-order02.yaml
   #kinect_configs: "valid_configs_ST16-05"
 
 tasks:
@@ -36,7 +36,7 @@ tasks:
     description: "Manually define/review the tracking ROI for stickers on the hand."
     depends_on: []
     options:
-      force_processing: false
+      force_processing: true
 
   # PHASE 2: REFINEMENT
   prepare_stickers_colorspace:

@@ -1,5 +1,12 @@
 import argparse
 from pathlib import Path
+
+# CuPy import guard — must precede any preprocessing imports (project convention)
+try:
+    import cupy  # noqa: F401
+except Exception:
+    pass
+
 from prefect import flow
 import utils.path_tools as path_tools
 from utils.pipeline.pipeline_config_manager import DagConfigHandler

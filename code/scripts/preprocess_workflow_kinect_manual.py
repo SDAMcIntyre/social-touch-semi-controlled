@@ -34,7 +34,6 @@ from _3_preprocessing._6_metadata_matching import (
 
 
 # --- Sub-Flows (Manual Tasks) ---
-@flow(name="3. Track LED Blinking")
 def prepare_led_tracking(
     rgb_video_path: Path, 
     output_dir: Path, 
@@ -48,7 +47,6 @@ def prepare_led_tracking(
     return True
 
 
-@flow(name="Manual: Prepare Hand Model")
 def assign_hand_model_metadata_flow(
     rgb_video_path: Path,
     hand_models_dir: Path,
@@ -79,7 +77,6 @@ def assign_hand_model_metadata_flow(
     
     return metadata_path
 
-@flow(name="Manual: Review Stickers")
 def review_2d_stickers(
     rgb_video_path: Path,
     objects_to_track: list[str],
@@ -105,7 +102,6 @@ def review_2d_stickers(
 
     return stickers_roi_csv_path
 
-@flow(name="Manual: Define Colorspace")
 def prepare_stickers_colorspace(
     rgb_video_path: Path,
     output_dir: Path,
@@ -127,7 +123,6 @@ def prepare_stickers_colorspace(
     )
     return
 
-@flow(name="Manual: Define correlation videos thresholding")
 def review_handstickers_color_threshold(
     rgb_video_path: Path,
     output_dir: Path,
@@ -150,7 +145,6 @@ def review_handstickers_color_threshold(
     )
     return
 
-@flow(name="Manual: Define trial chunks.")
 def define_trial_chunks_flow(
     rgb_video_path: Path,
     sticker_dir: Path,
@@ -174,7 +168,6 @@ def define_trial_chunks_flow(
     )
     return True
 
-@flow(name="Manual: Curate Hamer Models")
 def run_curate_hamer_hand_models(
     rgb_video_path: Path,
     kinematics_dir: Path,
@@ -215,7 +208,6 @@ def run_curate_hamer_hand_models(
     )
     return output_file_path
 
-@flow(name="Manual: Review Single Touches")
 def review_single_touches_flow(
     rgb_video_path: Path,
     sticker_dir: Path, 
@@ -247,8 +239,7 @@ def review_single_touches_flow(
     return auto_touches_path
 
 
-# --- The "Worker" Flow ---
-@flow(name="Run Single Session Manual Pipeline")
+# --- The "Worker" Function ---
 def run_single_session_pipeline(
     config: KinectConfig,
     dag_handler: DagConfigHandler
