@@ -2,7 +2,8 @@
 
 **Date:** 2026-06-22
 **Author:** Basil Duvernoy
-**Status:** In Progress
+**Status:** Completed
+**Completed:** 2026-06-22 17:57
 **Base Branch:** `feature/spatial-extract-rf-profiles`
 **Branch:** `feature/spatial-proximal-distal-comparison`
 
