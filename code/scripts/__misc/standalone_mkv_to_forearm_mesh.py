@@ -15,7 +15,7 @@ Usage::
 Steps:
     1. Frame selection   -- browse the MKV colour stream, pick one frame
     2. ROI selection     -- draw a rotated rectangle around the forearm
-    3. Forearm extraction -- interactive segmentation (downsample, crop,
+    3. Forearm extraction -- interactive segmentation (crop,
                             skin-colour filter, DBSCAN clustering)
     4. Cleaning          -- XY-dedup, keep lowest Z per unique (X, Y)
     5. Normal estimation -- Open3D KDTree hybrid search + tangent-plane
@@ -24,7 +24,10 @@ Steps:
 
 # ── Standard library ────────────────────────────────────────────────
 import argparse
+import contextlib
+import multiprocessing
 import os
+import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -51,9 +54,9 @@ import numpy as np
 import open3d as o3d
 import pandas as pd
 import tkinter as tk
+from tkinter import filedialog
 from scipy.spatial import Delaunay
 import trimesh
-
 # ── Project imports ─────────────────────────────────────────────────
 from preprocessing.common.gui.video_frame_selector import VideoFrameSelector
 from preprocessing.common.gui.frame_roi_rotatable import FrameROIRotatable
@@ -68,6 +71,34 @@ from preprocessing.forearm_extraction.models.forearm_parameters import (
 # ====================================================================
 # Copied / adapted helpers (avoid pulling in pipeline dependencies)
 # ====================================================================
+
+@contextlib.contextmanager
+def _k4a_safe_path(path: Path):
+    """Yield an ASCII-safe path for pyk4a (K4A SDK cannot open non-ASCII paths).
+
+    Tries the Windows 8.3 short path first; falls back to copying the file to
+    a temporary directory with an ASCII-only name.
+    """
+    path_str = str(path)
+    if path_str.isascii():
+        yield path_str
+        return
+
+    if sys.platform == "win32":
+        import ctypes
+        buf = ctypes.create_unicode_buffer(32768)
+        ret = ctypes.windll.kernel32.GetShortPathNameW(path_str, buf, len(buf))
+        if ret > 0 and buf.value.isascii():
+            yield buf.value
+            return
+
+    print(f"   Path contains non-ASCII characters; copying to temp for pyk4a...")
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp_path = Path(tmp_dir) / "recording.mkv"
+        shutil.copy2(path, tmp_path)
+        print(f"   Temp copy ready: {tmp_path}")
+        yield str(tmp_path)
+
 
 def _get_3d_cuboid_from_roi(frame: KinectFrame, roi: RegionOfInterest) -> np.ndarray:
     """Convert a 2D ROI into 3D corner points for the box filter.
@@ -143,61 +174,85 @@ def _clean_xy_duplicates(pcd: o3d.geometry.PointCloud) -> o3d.geometry.PointClou
 # Pipeline steps
 # ====================================================================
 
-def step_select_frame(mkv_path: str) -> int:
-    """Step 1: Browse MKV colour stream and pick a frame index."""
+def _gui_worker(mkv_path_str, result_queue):
+    """Subprocess: file dialog + frame selection + ROI selection.
+
+    Runs in a child process so Tkinter/OpenCV window state cannot
+    corrupt the OpenGL context that Open3D's Filament renderer needs.
+    """
+    if mkv_path_str is None:
+        root = tk.Tk()
+        root.withdraw()
+        mkv_path_str = filedialog.askopenfilename(
+            title="Select Kinect MKV Recording",
+            filetypes=[("MKV files", "*.mkv"), ("All files", "*.*")],
+        )
+        root.destroy()
+        if not mkv_path_str:
+            result_queue.put(None)
+            return
+
+    mkv_path = Path(mkv_path_str).resolve()
+    if not mkv_path.exists():
+        result_queue.put({"error": f"MKV file not found: {mkv_path}"})
+        return
+
+    # Step 1: Frame selection
     print("\n=== Step 1: Frame Selection ===")
     print("Use the slider or arrow keys to browse. Click 'Proceed' to confirm.")
 
-    cap = cv2.VideoCapture(mkv_path)
+    cap = cv2.VideoCapture(str(mkv_path))
     if not cap.isOpened():
-        raise RuntimeError(f"Cannot open video file: {mkv_path}")
+        result_queue.put({"error": f"Cannot open video file: {mkv_path}"})
+        return
 
-    try:
-        root = tk.Tk()
-        root.withdraw()
-
-        selector = VideoFrameSelector(root, cap, title="Select Frame")
-        frame_idx = selector.select_frame()
-
-        root.destroy()
-    finally:
-        cap.release()
+    root = tk.Tk()
+    root.geometry("1x1+10000+10000")
+    selector = VideoFrameSelector(root, cap, title="Select Frame")
+    frame_idx = selector.select_frame()
+    root.destroy()
 
     if frame_idx is None:
-        print("Frame selection cancelled.")
-        sys.exit(0)
+        cap.release()
+        result_queue.put(None)
+        return
 
     print(f"   Selected frame: {frame_idx}")
-    return frame_idx
 
-
-def step_select_roi(mkv: KinectMKV, frame_idx: int) -> RegionOfInterest:
-    """Step 2: Draw a rotated ROI on the colour frame."""
+    # Step 2: ROI selection (use cv2.VideoCapture for the colour frame)
     print("\n=== Step 2: ROI Selection ===")
     print("Draw a rectangle around the forearm. Confirm with Enter/Space.")
 
-    frame: KinectFrame = mkv[frame_idx]
-    color = frame.color
-    if color is None:
-        raise RuntimeError(f"Frame {frame_idx} has no colour data.")
+    cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+    ret, color = cap.read()
+    cap.release()
+    if not ret:
+        result_queue.put({"error": f"Failed to read colour frame {frame_idx}"})
+        return
 
     roi_ui = FrameROIRotatable(
         color,
-        is_rgb=False,  # KinectFrame.color returns BGR
+        is_rgb=False,
         window_title=f"Draw Forearm ROI -- frame {frame_idx}",
     )
     roi_ui.run()
     roi_data = roi_ui.get_roi_data()
+    cv2.destroyAllWindows()
+    cv2.waitKey(1)
 
     if roi_data is None:
-        print("ROI selection cancelled.")
-        sys.exit(0)
+        result_queue.put(None)
+        return
 
-    roi = _roi_from_rotated_rect(roi_data)
     print(f"   ROI centre: ({roi_data['cx']:.0f}, {roi_data['cy']:.0f}), "
           f"size: ({roi_data['width']:.0f} x {roi_data['height']:.0f}), "
           f"angle: {roi_data['angle_deg']:.1f}")
-    return roi
+
+    result_queue.put({
+        "frame_idx": frame_idx,
+        "roi_data": roi_data,
+        "mkv_path": str(mkv_path),
+    })
 
 
 def step_extract_forearm(
@@ -215,7 +270,7 @@ def step_extract_forearm(
         raise RuntimeError(f"Frame {frame_idx} produced an empty point cloud.")
 
     cuboid_corners = _get_3d_cuboid_from_roi(frame, roi)
-    segmenter = ArmSegmentation(interactive=True)
+    segmenter = ArmSegmentation(params={"down_sampling": {"enabled": False}}, interactive=True)
 
     pcd = segmenter.preprocess(pcd, cuboid_corners)
     pcd = segmenter.extract_arm(pcd)
@@ -365,8 +420,11 @@ def main():
     )
     parser.add_argument(
         "mkv_path",
+        nargs="?",
+        default=None,
         type=str,
-        help="Path to the Kinect MKV recording file.",
+        help="Path to the Kinect MKV recording file. "
+             "If omitted, a file-picker dialog opens.",
     )
     parser.add_argument(
         "--output-dir",
@@ -381,27 +439,37 @@ def main():
     )
     args = parser.parse_args()
 
-    mkv_path = Path(args.mkv_path).resolve()
-    if not mkv_path.exists():
-        raise FileNotFoundError(f"MKV file not found: {mkv_path}")
+    # Steps 1-2 run in a child process so Tkinter/OpenCV cannot corrupt
+    # the OpenGL context that Open3D needs for step 3.
+    q = multiprocessing.Queue()
+    p = multiprocessing.Process(target=_gui_worker, args=(args.mkv_path, q))
+    p.start()
+    p.join()
+
+    if p.exitcode != 0:
+        raise RuntimeError(f"GUI selection process exited with code {p.exitcode}")
+
+    result = q.get_nowait()
+    if result is None:
+        print("Selection cancelled.")
+        sys.exit(0)
+    if "error" in result:
+        raise RuntimeError(result["error"])
+
+    frame_idx = result["frame_idx"]
+    roi = _roi_from_rotated_rect(result["roi_data"])
+    mkv_path = Path(result["mkv_path"]).resolve()
 
     output_dir = Path(args.output_dir).resolve() if args.output_dir else mkv_path.parent
     output_dir.mkdir(parents=True, exist_ok=True)
 
     stem = mkv_path.stem
 
-    print(f"MKV file:   {mkv_path}")
+    print(f"\nMKV file:   {mkv_path}")
     print(f"Output dir: {output_dir}")
 
-    # Step 1: Frame selection (lightweight cv2.VideoCapture)
-    frame_idx = step_select_frame(str(mkv_path))
-
-    # Steps 2-3 require KinectMKV for depth/point-cloud access
-    with KinectMKV(str(mkv_path)) as mkv:
-        # Step 2: ROI selection
-        roi = step_select_roi(mkv, frame_idx)
-
-        # Step 3: Forearm extraction
+    # Step 3: Forearm extraction (Open3D GUI — clean OpenGL state)
+    with _k4a_safe_path(mkv_path) as safe_path, KinectMKV(safe_path) as mkv:
         pcd = step_extract_forearm(mkv, frame_idx, roi)
 
     if args.save_intermediates:

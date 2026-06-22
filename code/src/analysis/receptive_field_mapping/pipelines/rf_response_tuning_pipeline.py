@@ -571,7 +571,7 @@ def _write_raw_dots_csv(
     session_id: str,
     feature: str,
     gesture_subset: str,
-    fit_degree: int,
+    fit_models: str,
     metric: str,
     out_path: Path,
 ) -> None:
@@ -579,7 +579,7 @@ def _write_raw_dots_csv(
 
     One row per touch.  Columns written (in order):
         session_id, feature_value, response_value, gesture_subset,
-        fit_degree, metric.
+        fit_models, metric.
 
     Parameters
     ----------
@@ -593,8 +593,8 @@ def _write_raw_dots_csv(
         Feature column name (used for messaging / validation only).
     gesture_subset:
         Gesture subset label (constant across all rows).
-    fit_degree:
-        Polynomial fit degree (constant across all rows).
+    fit_models:
+        Comma-separated model name string (constant across all rows).
     metric:
         Response-metric subdir token (constant across all rows).
     out_path:
@@ -616,7 +616,7 @@ def _write_raw_dots_csv(
         "feature_value": feature_vals,
         "response_value": response_vals,
         "gesture_subset": gesture_subset,
-        "fit_degree": fit_degree,
+        "fit_models": fit_models,
         "metric": metric,
     }
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -700,7 +700,10 @@ def run_response_tuning(
             f"run_response_tuning: unknown binning_strategy '{binning_strategy}'. "
             f"Valid values: 'sliding_window', 'raw_dots'."
         )
-    fit_degree: int = int(options.get("fit_degree", 1))
+    from analysis.receptive_field_mapping.rendering.fit_models import parse_fit_config
+    fit_model_names: list[str] = parse_fit_config(
+        options, degree_key="fit_degree", models_key="fit_models",
+    )
     dot_alpha: float = float(options.get("dot_alpha", 0.35))
     show_fit_ci: bool = bool(options.get("show_fit_ci", False))
     secondary_color_by: dict = dict(options.get("secondary_color_by") or {})
@@ -715,7 +718,7 @@ def run_response_tuning(
         return
 
     if binning_strategy == "raw_dots":
-        overlap_dir = f"raw_dots_d{fit_degree}"
+        overlap_dir = "raw_dots"
     else:
         overlap_dir = f"b{n_bins}_ov{overlap_ratio:.2f}"
 
@@ -1023,45 +1026,53 @@ def run_response_tuning(
                         resp_arr = valid_rows[response_col].to_numpy(dtype=float)
                         sec_arr = valid_rows[secondary_col].to_numpy(dtype=float) if secondary_col is not None else None
 
-                        out_path = (
+                        session_base_dir = (
                             output_base_dir
                             / feature
                             / gesture_subset
                             / overlap_dir
                             / metric_subdir
-                            / f"{session_id}_{feature}_{gesture_subset}_{metric_subdir}_tuning.png"
                         )
-                        render_session_raw_dots(
-                            feature_vals=feat_arr,
-                            response_vals=resp_arr,
-                            feature_name=feature,
-                            session_id=session_id,
-                            gesture_subset=gesture_subset,
-                            out_path=out_path,
-                            iff_ylim=response_ylim,
-                            iff_ylabel=response_ylabel,
-                            fit_degree=fit_degree,
-                            dot_alpha=dot_alpha,
-                            show_fit_ci=show_fit_ci,
-                            line_color=scheme.session_color[session_id],
-                            secondary_vals=sec_arr,
-                            secondary_label=secondary_col or "",
-                            secondary_cmap="viridis",
+                        csv_out_path = (
+                            session_base_dir
+                            / f"{session_id}_{feature}_{gesture_subset}_{metric_subdir}_tuning.csv"
                         )
-                        csv_out_path = out_path.with_suffix(".csv")
                         _write_raw_dots_csv(
                             feature_vals=feat_arr,
                             response_vals=resp_arr,
                             session_id=session_id,
                             feature=feature,
                             gesture_subset=gesture_subset,
-                            fit_degree=fit_degree,
+                            fit_models=",".join(fit_model_names),
                             metric=metric_subdir,
                             out_path=csv_out_path,
                         )
+                        for model_name in fit_model_names:
+                            out_path = (
+                                session_base_dir
+                                / f"{session_id}_{feature}_{gesture_subset}_{metric_subdir}_tuning_{model_name}.png"
+                            )
+                            render_session_raw_dots(
+                                feature_vals=feat_arr,
+                                response_vals=resp_arr,
+                                feature_name=feature,
+                                session_id=session_id,
+                                gesture_subset=gesture_subset,
+                                out_path=out_path,
+                                iff_ylim=response_ylim,
+                                iff_ylabel=response_ylabel,
+                                fit_models=[model_name],
+                                dot_alpha=dot_alpha,
+                                show_fit_ci=show_fit_ci,
+                                line_color=scheme.session_color[session_id],
+                                secondary_vals=sec_arr,
+                                secondary_label=secondary_col or "",
+                                secondary_cmap="viridis",
+                            )
                         print(
                             f"[Response Tuning] {metric_subdir} / {feature} / "
-                            f"{gesture_subset} / {session_id}: saved {out_path.name}",
+                            f"{gesture_subset} / {session_id}: "
+                            f"saved {len(fit_model_names)} fit figure(s).",
                             flush=True,
                         )
 
@@ -1076,23 +1087,19 @@ def run_response_tuning(
                     )
                     continue
 
-                overlay_path_by_type = (
-                    output_base_dir
-                    / feature
-                    / gesture_subset
-                    / overlap_dir
-                    / metric_subdir
-                    / f"overlay_{feature}_{gesture_subset}_{metric_subdir}_tuning_by_type.png"
-                )
-                overlay_path_by_session = (
-                    output_base_dir
-                    / feature
-                    / gesture_subset
-                    / overlap_dir
-                    / metric_subdir
-                    / f"overlay_{feature}_{gesture_subset}_{metric_subdir}_tuning_by_session.png"
+                overlay_base_dir = (
+                    output_base_dir / feature / gesture_subset
+                    / overlap_dir / metric_subdir
                 )
                 if binning_strategy == "sliding_window":
+                    overlay_path_by_type = (
+                        overlay_base_dir
+                        / f"overlay_{feature}_{gesture_subset}_{metric_subdir}_tuning_by_type.png"
+                    )
+                    overlay_path_by_session = (
+                        overlay_base_dir
+                        / f"overlay_{feature}_{gesture_subset}_{metric_subdir}_tuning_by_session.png"
+                    )
                     render_overlay_tuning_curve(
                         session_data=overlay_session_data,
                         feature_name=feature,
@@ -1120,48 +1127,56 @@ def run_response_tuning(
                         type_colors=scheme.type_color,
                     )
                 else:
-                    render_overlay_raw_dots(
-                        session_data=overlay_session_data,
-                        feature_name=feature,
-                        gesture_subset=gesture_subset,
-                        out_path=overlay_path_by_type,
-                        iff_ylim=response_ylim,
-                        session_colors={sid: scheme.session_color[sid] for sid in overlay_session_data},
-                        iff_ylabel=response_ylabel,
-                        fit_degree=fit_degree,
-                        dot_alpha=0.15,
-                        show_fit_ci=show_fit_ci,
-                        legend_mode="by_type",
-                        session_neuron_types=scheme.session_neuron_type,
-                        type_colors=scheme.type_color,
-                        secondary_label=secondary_color_by.get(feature) or "",
-                        secondary_cmap="viridis",
-                    )
-                    render_overlay_raw_dots(
-                        session_data=overlay_session_data,
-                        feature_name=feature,
-                        gesture_subset=gesture_subset,
-                        out_path=overlay_path_by_session,
-                        iff_ylim=response_ylim,
-                        session_colors={sid: scheme.session_color[sid] for sid in overlay_session_data},
-                        iff_ylabel=response_ylabel,
-                        fit_degree=fit_degree,
-                        dot_alpha=0.15,
-                        show_fit_ci=show_fit_ci,
-                        legend_mode="by_session",
-                        session_neuron_types=scheme.session_neuron_type,
-                        type_colors=scheme.type_color,
-                        secondary_label=secondary_color_by.get(feature) or "",
-                        secondary_cmap="viridis",
-                    )
-                overlay_csv_path = overlay_path_by_type.parent / f"overlay_{feature}_{gesture_subset}_{metric_subdir}_tuning.csv"
+                    for model_name in fit_model_names:
+                        overlay_path_by_type = (
+                            overlay_base_dir
+                            / f"overlay_{feature}_{gesture_subset}_{metric_subdir}_tuning_by_type_{model_name}.png"
+                        )
+                        render_overlay_raw_dots(
+                            session_data=overlay_session_data,
+                            feature_name=feature,
+                            gesture_subset=gesture_subset,
+                            out_path=overlay_path_by_type,
+                            iff_ylim=response_ylim,
+                            session_colors={sid: scheme.session_color[sid] for sid in overlay_session_data},
+                            iff_ylabel=response_ylabel,
+                            fit_models=[model_name],
+                            dot_alpha=0.15,
+                            show_fit_ci=show_fit_ci,
+                            legend_mode="by_type",
+                            session_neuron_types=scheme.session_neuron_type,
+                            type_colors=scheme.type_color,
+                            secondary_label=secondary_color_by.get(feature) or "",
+                            secondary_cmap="viridis",
+                        )
+                        overlay_path_by_session = (
+                            overlay_base_dir
+                            / f"overlay_{feature}_{gesture_subset}_{metric_subdir}_tuning_by_session_{model_name}.png"
+                        )
+                        render_overlay_raw_dots(
+                            session_data=overlay_session_data,
+                            feature_name=feature,
+                            gesture_subset=gesture_subset,
+                            out_path=overlay_path_by_session,
+                            iff_ylim=response_ylim,
+                            session_colors={sid: scheme.session_color[sid] for sid in overlay_session_data},
+                            iff_ylabel=response_ylabel,
+                            fit_models=[model_name],
+                            dot_alpha=0.15,
+                            show_fit_ci=show_fit_ci,
+                            legend_mode="by_session",
+                            session_neuron_types=scheme.session_neuron_type,
+                            type_colors=scheme.type_color,
+                            secondary_label=secondary_color_by.get(feature) or "",
+                            secondary_cmap="viridis",
+                        )
+                overlay_csv_path = overlay_base_dir / f"overlay_{feature}_{gesture_subset}_{metric_subdir}_tuning.csv"
                 pd.concat(overlay_csv_dfs, ignore_index=True).to_csv(
                     overlay_csv_path, index=False
                 )
                 print(
                     f"[Response Tuning] {metric_subdir} / {feature} / "
-                    f"{gesture_subset}: saved {overlay_path_by_type.name} + "
-                    f"{overlay_path_by_session.name}",
+                    f"{gesture_subset}: saved overlay figures.",
                     flush=True,
                 )
 
@@ -1199,35 +1214,37 @@ def run_response_tuning(
                         else:
                             norm_resp = np.zeros_like(resp_arr)
 
-                        norm_out_path = (
-                            output_base_dir
-                            / feature
-                            / gesture_subset
-                            / overlap_dir
-                            / metric_subdir
-                            / "normalized"
-                            / f"{session_id}_{feature}_{gesture_subset}_{metric_subdir}_normalized.png"
-                        )
-                        render_session_raw_dots(
-                            feature_vals=feat_arr,
-                            response_vals=norm_resp,
-                            feature_name=feature,
-                            session_id=session_id,
-                            gesture_subset=gesture_subset,
-                            out_path=norm_out_path,
-                            iff_ylim=(0.0, 1.0),
-                            iff_ylabel="Normalized response",
-                            fit_degree=fit_degree,
-                            dot_alpha=dot_alpha,
-                            show_fit_ci=show_fit_ci,
-                            line_color=scheme.session_color[session_id],
-                            secondary_vals=sec_arr,
-                            secondary_label=secondary_col or "",
-                            secondary_cmap="viridis",
-                        )
+                        for model_name in fit_model_names:
+                            norm_out_path = (
+                                output_base_dir
+                                / feature
+                                / gesture_subset
+                                / overlap_dir
+                                / metric_subdir
+                                / "normalized"
+                                / f"{session_id}_{feature}_{gesture_subset}_{metric_subdir}_normalized_{model_name}.png"
+                            )
+                            render_session_raw_dots(
+                                feature_vals=feat_arr,
+                                response_vals=norm_resp,
+                                feature_name=feature,
+                                session_id=session_id,
+                                gesture_subset=gesture_subset,
+                                out_path=norm_out_path,
+                                iff_ylim=(0.0, 1.0),
+                                iff_ylabel="Normalized response",
+                                fit_models=[model_name],
+                                dot_alpha=dot_alpha,
+                                show_fit_ci=show_fit_ci,
+                                line_color=scheme.session_color[session_id],
+                                secondary_vals=sec_arr,
+                                secondary_label=secondary_col or "",
+                                secondary_cmap="viridis",
+                            )
                         print(
                             f"[Response Tuning] {metric_subdir} / {feature} / "
-                            f"{gesture_subset} / {session_id}: saved normalized {norm_out_path.name}",
+                            f"{gesture_subset} / {session_id}: "
+                            f"saved {len(fit_model_names)} normalized fit figure(s).",
                             flush=True,
                         )
 
@@ -1236,61 +1253,63 @@ def run_response_tuning(
                     if len(norm_overlay_session_data) < 2:
                         continue
 
-                    norm_overlay_path_by_type = (
-                        output_base_dir
-                        / feature
-                        / gesture_subset
-                        / overlap_dir
-                        / metric_subdir
-                        / "normalized"
-                        / f"overlay_{feature}_{gesture_subset}_{metric_subdir}_normalized_by_type.png"
-                    )
-                    norm_overlay_path_by_session = (
-                        output_base_dir
-                        / feature
-                        / gesture_subset
-                        / overlap_dir
-                        / metric_subdir
-                        / "normalized"
-                        / f"overlay_{feature}_{gesture_subset}_{metric_subdir}_normalized_by_session.png"
-                    )
-                    render_overlay_raw_dots(
-                        session_data=norm_overlay_session_data,
-                        feature_name=feature,
-                        gesture_subset=gesture_subset,
-                        out_path=norm_overlay_path_by_type,
-                        iff_ylim=(0.0, 1.0),
-                        session_colors={sid: scheme.session_color[sid] for sid in norm_overlay_session_data},
-                        iff_ylabel="Normalized response",
-                        fit_degree=fit_degree,
-                        dot_alpha=0.15,
-                        show_fit_ci=show_fit_ci,
-                        legend_mode="by_type",
-                        session_neuron_types=scheme.session_neuron_type,
-                        type_colors=scheme.type_color,
-                        secondary_label=secondary_color_by.get(feature) or "",
-                        secondary_cmap="viridis",
-                    )
-                    render_overlay_raw_dots(
-                        session_data=norm_overlay_session_data,
-                        feature_name=feature,
-                        gesture_subset=gesture_subset,
-                        out_path=norm_overlay_path_by_session,
-                        iff_ylim=(0.0, 1.0),
-                        session_colors={sid: scheme.session_color[sid] for sid in norm_overlay_session_data},
-                        iff_ylabel="Normalized response",
-                        fit_degree=fit_degree,
-                        dot_alpha=0.15,
-                        show_fit_ci=show_fit_ci,
-                        legend_mode="by_session",
-                        session_neuron_types=scheme.session_neuron_type,
-                        type_colors=scheme.type_color,
-                        secondary_label=secondary_color_by.get(feature) or "",
-                        secondary_cmap="viridis",
-                    )
+                    for model_name in fit_model_names:
+                        norm_overlay_path_by_type = (
+                            output_base_dir
+                            / feature
+                            / gesture_subset
+                            / overlap_dir
+                            / metric_subdir
+                            / "normalized"
+                            / f"overlay_{feature}_{gesture_subset}_{metric_subdir}_normalized_by_type_{model_name}.png"
+                        )
+                        render_overlay_raw_dots(
+                            session_data=norm_overlay_session_data,
+                            feature_name=feature,
+                            gesture_subset=gesture_subset,
+                            out_path=norm_overlay_path_by_type,
+                            iff_ylim=(0.0, 1.0),
+                            session_colors={sid: scheme.session_color[sid] for sid in norm_overlay_session_data},
+                            iff_ylabel="Normalized response",
+                            fit_models=[model_name],
+                            dot_alpha=0.15,
+                            show_fit_ci=show_fit_ci,
+                            legend_mode="by_type",
+                            session_neuron_types=scheme.session_neuron_type,
+                            type_colors=scheme.type_color,
+                            secondary_label=secondary_color_by.get(feature) or "",
+                            secondary_cmap="viridis",
+                        )
+                        norm_overlay_path_by_session = (
+                            output_base_dir
+                            / feature
+                            / gesture_subset
+                            / overlap_dir
+                            / metric_subdir
+                            / "normalized"
+                            / f"overlay_{feature}_{gesture_subset}_{metric_subdir}_normalized_by_session_{model_name}.png"
+                        )
+                        render_overlay_raw_dots(
+                            session_data=norm_overlay_session_data,
+                            feature_name=feature,
+                            gesture_subset=gesture_subset,
+                            out_path=norm_overlay_path_by_session,
+                            iff_ylim=(0.0, 1.0),
+                            session_colors={sid: scheme.session_color[sid] for sid in norm_overlay_session_data},
+                            iff_ylabel="Normalized response",
+                            fit_models=[model_name],
+                            dot_alpha=0.15,
+                            show_fit_ci=show_fit_ci,
+                            legend_mode="by_session",
+                            session_neuron_types=scheme.session_neuron_type,
+                            type_colors=scheme.type_color,
+                            secondary_label=secondary_color_by.get(feature) or "",
+                            secondary_cmap="viridis",
+                        )
                     print(
                         f"[Response Tuning] {metric_subdir} / {feature} / "
-                        f"{gesture_subset}: saved normalized overlays.",
+                        f"{gesture_subset}: saved normalized overlays — "
+                        f"{len(fit_model_names)} fit(s) × 2 legend modes.",
                         flush=True,
                     )
 
