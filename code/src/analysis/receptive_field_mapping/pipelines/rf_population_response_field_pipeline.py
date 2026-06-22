@@ -31,6 +31,7 @@ from analysis.receptive_field_mapping.data.rf_population_heatmap import (
 )
 from analysis.receptive_field_mapping.metrics.rf_inflection_boundary import (
     compute_inflection_boundary,
+    compute_laplacian_arrays,
     inflection_boundary_to_dict,
 )
 from analysis.receptive_field_mapping.metrics.rf_pca_alignment import (
@@ -92,6 +93,7 @@ def run_population_response_field_extraction(
     cmap: str = "inferno",
     iff_metric: str = "mean",
     flip_u: bool = False,
+    contour_color: str = "red",
 ) -> None:
     """Render per-session 2D population RF heatmap PNGs projected via SLIM UV.
 
@@ -392,6 +394,7 @@ def run_population_response_field_extraction(
                 compute_inflection_boundary(
                     grid_u, grid_v, grid_z, inflection_sigma,
                     snapshot_dir=inspection_dir, snapshot_label=gtype,
+                    contour_color=contour_color,
                 )
                 if inflection_sigma is not None
                 else None
@@ -412,6 +415,7 @@ def run_population_response_field_extraction(
                 heatmap_space=heatmap_space,
                 cmap=cmap,
                 vertex_colors=slim_vertex_colors,
+                contour_color=contour_color,
             )
             produced.append(png_path)
             print(f"[Population Response Fields] {session_id}: saved {png_path.name}")
@@ -533,6 +537,7 @@ def run_population_response_field_extraction(
                         compute_inflection_boundary(
                             grid_u_g, grid_v_g, grid_z_g, inflection_sigma,
                             snapshot_dir=inspection_dir, snapshot_label=f"{sd.session_id}_{gtype}_composite",
+                            contour_color=contour_color,
                         )
                         if inflection_sigma is not None
                         else None
@@ -559,6 +564,7 @@ def run_population_response_field_extraction(
                 heatmap_space=heatmap_space,
                 cmap=cmap,
                 vertex_colors=sd.slim_vertex_colors,
+                contour_color=contour_color,
             )
             sd.produced.append(composite_path)
             print(
@@ -586,6 +592,7 @@ def run_population_response_field_extraction(
                 cmap=cmap,
                 vertex_colors=sd.slim_vertex_colors,
                 forearm_faces=sd.forearm_faces,
+                contour_color=contour_color,
             )
             sd.produced.append(standalone_path)
             print(f"[Population Response Fields] {sd.session_id}: saved {standalone_path.name}")
@@ -713,6 +720,11 @@ def _save_response_fields_npz(
         data_dict[f'grid_u_{gtype}'] = grid_u.astype(np.float64)
         data_dict[f'grid_v_{gtype}'] = grid_v.astype(np.float64)
         data_dict[f'grid_z_{gtype}'] = grid_z.astype(np.float64)
+
+        if inflection_sigma is not None:
+            smoothed, lap = compute_laplacian_arrays(grid_z, inflection_sigma)
+            data_dict[f'smoothed_{gtype}'] = smoothed.astype(np.float64)
+            data_dict[f'laplacian_{gtype}'] = lap.astype(np.float64)
 
         boundary = gesture_boundaries.get(gtype)
         if boundary is not None:

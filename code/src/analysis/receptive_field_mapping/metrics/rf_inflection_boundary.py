@@ -60,6 +60,26 @@ class InflectionBoundary:
 
 
 # ---------------------------------------------------------------------------
+# Public Laplacian computation
+# ---------------------------------------------------------------------------
+
+
+def compute_laplacian_arrays(
+    grid_z: np.ndarray,
+    gaussian_sigma: float = 4.0,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Compute the Gaussian-smoothed field and its Laplacian for a 2D heatmap.
+
+    Returns (smoothed, laplacian) — both (R, C) arrays with NaN where
+    grid_z is NaN. ``smoothed`` is the NaN-aware Gaussian normalisation;
+    ``laplacian`` is the discrete Laplacian of the extrapolated field,
+    re-masked to the original NaN cells.
+    """
+    result = _compute_masked_laplacian(grid_z, gaussian_sigma)
+    return result.normalized, result.laplacian
+
+
+# ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
 
@@ -393,6 +413,7 @@ def _render_step_contour(
     grid_z: np.ndarray,
     contour_rc: np.ndarray,
     peak_rc: tuple[int, int],
+    contour_color: str = "red",
 ) -> "plt.Figure":
     """Step 4: marching-squares contour overlaid on input heatmap."""
     import matplotlib.pyplot as plt
@@ -402,7 +423,7 @@ def _render_step_contour(
 
     fig, ax = plt.subplots(figsize=(6, 5))
     ax.imshow(np.ma.masked_invalid(grid_z), cmap=jet, origin="upper")
-    ax.plot(contour_rc[:, 1], contour_rc[:, 0], "-", color="violet", linewidth=1.5)
+    ax.plot(contour_rc[:, 1], contour_rc[:, 0], "-", color=contour_color, linewidth=1.5)
     ax.plot(peak_rc[1], peak_rc[0], "rx", markersize=10, markeredgewidth=2)
     ax.set_title("Contour extraction")
 
@@ -422,6 +443,7 @@ def _render_step_uv(
     pca_orientation_deg: float,
     area_uv: float,
     circularity: float,
+    contour_color: str = "red",
 ) -> "plt.Figure":
     """Step 5: contour in UV space with PCA axes and metric annotations."""
     import matplotlib.pyplot as plt
@@ -433,10 +455,10 @@ def _render_step_uv(
     ax.pcolormesh(grid_u, grid_v, np.ma.masked_invalid(grid_z), cmap=jet, shading="auto")
 
     closed = np.vstack([contour_uv, contour_uv[:1]])
-    ax.plot(closed[:, 0], closed[:, 1], "-", color="violet", linewidth=1.5)
+    ax.plot(closed[:, 0], closed[:, 1], "-", color=contour_color, linewidth=1.5)
 
     cu, cv = centroid_uv
-    ax.plot(cu, cv, "+", color="violet", markersize=12, markeredgewidth=2)
+    ax.plot(cu, cv, "+", color=contour_color, markersize=12, markeredgewidth=2)
 
     angle_rad = math.radians(pca_orientation_deg)
     cos_a, sin_a = math.cos(angle_rad), math.sin(angle_rad)
@@ -486,6 +508,7 @@ def _save_inflection_snapshots(
     circularity: float | None,
     snapshot_dir: pathlib.Path,
     snapshot_label: str,
+    contour_color: str = "red",
 ) -> None:
     """Save per-step diagnostic PNGs for the inflection boundary pipeline."""
     import matplotlib
@@ -506,16 +529,18 @@ def _save_inflection_snapshots(
 
     if contour_rc is not None:
         cr = contour_rc
+        cc = contour_color
         steps.append((f"{prefix}_step4_contour.png",
-                       lambda: _render_step_contour(grid_z, cr, peak_rc)))
+                       lambda: _render_step_contour(grid_z, cr, peak_rc, cc)))
 
     if contour_uv is not None and centroid_uv is not None:
         cuv, cen = contour_uv, centroid_uv
         maj, mino, ori = pca_major_uv, pca_minor_uv, pca_orientation_deg
         a, ci = area_uv, circularity
+        cc = contour_color
         steps.append((f"{prefix}_step5_uv.png",
                        lambda: _render_step_uv(
-                           grid_u, grid_v, grid_z, cuv, cen, maj, mino, ori, a, ci)))
+                           grid_u, grid_v, grid_z, cuv, cen, maj, mino, ori, a, ci, cc)))
 
     for filename, build_fig in steps:
         fig = build_fig()
@@ -537,6 +562,7 @@ def compute_inflection_boundary(
     gaussian_sigma: float = 4.0,
     snapshot_dir: pathlib.Path | None = None,
     snapshot_label: str = "",
+    contour_color: str = "red",
 ) -> InflectionBoundary | None:
     """Detect the inflection boundary on a 2D IFF population heatmap.
 
@@ -631,6 +657,7 @@ def compute_inflection_boundary(
                 circularity=None,
                 snapshot_dir=snapshot_dir,
                 snapshot_label=snapshot_label,
+                contour_color=contour_color,
             )
         return None
 
@@ -675,6 +702,7 @@ def compute_inflection_boundary(
             circularity=circularity,
             snapshot_dir=snapshot_dir,
             snapshot_label=snapshot_label,
+            contour_color=contour_color,
         )
 
     return InflectionBoundary(

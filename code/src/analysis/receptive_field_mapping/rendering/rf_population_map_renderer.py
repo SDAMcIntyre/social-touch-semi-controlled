@@ -216,12 +216,13 @@ def _draw_inflection_boundary(
     ax,
     contour_uv: np.ndarray,
     centroid_uv: tuple[float, float],
+    contour_color: str = "red",
 ) -> None:
     closed = np.vstack([contour_uv, contour_uv[0]])
-    ax.plot(closed[:, 0], closed[:, 1], color='violet', linewidth=1.5, zorder=6)
+    ax.plot(closed[:, 0], closed[:, 1], color=contour_color, linewidth=1.5, zorder=6)
     ax.plot(
         centroid_uv[0], centroid_uv[1],
-        color='violet', marker='+', markersize=8, zorder=7,
+        color=contour_color, marker='+', markersize=8, zorder=7,
     )
 
 
@@ -240,6 +241,7 @@ def render_population_rf_map(
     heatmap_space: str = "linear",
     cmap: str = "inferno",
     vertex_colors: np.ndarray | None = None,
+    contour_color: str = "red",
 ) -> None:
     """Render a two-panel population RF heatmap (scatter + interpolated) and save as PNG.
 
@@ -338,7 +340,7 @@ def render_population_rf_map(
     )
 
     if inflection_boundary is not None:
-        _draw_inflection_boundary(ax_hm, inflection_boundary.contour_uv, inflection_boundary.centroid_uv)
+        _draw_inflection_boundary(ax_hm, inflection_boundary.contour_uv, inflection_boundary.centroid_uv, contour_color=contour_color)
     cbar2 = plt.colorbar(im, ax=ax_hm, label='Mean IFF / spike', shrink=0.8)
     cbar2.ax.yaxis.set_tick_params(color='white')
     cbar2.ax.yaxis.label.set_color('white')
@@ -406,6 +408,7 @@ def render_population_rf_standalone_interpolated(
     cmap: str = "inferno",
     vertex_colors: np.ndarray | None = None,
     forearm_faces: np.ndarray | None = None,
+    contour_color: str = "red",
 ) -> None:
     """Render a single-panel interpolated population RF heatmap and save as PNG.
 
@@ -496,7 +499,7 @@ def render_population_rf_standalone_interpolated(
     if boundary_u is not None:
         closed_u = np.append(boundary_u, boundary_u[0])
         closed_v = np.append(boundary_v, boundary_v[0])
-        ax.plot(closed_u, closed_v, color='violet', linewidth=1.5, zorder=6)
+        ax.plot(closed_u, closed_v, color=contour_color, linewidth=1.5, zorder=6)
 
     ax.set_xlabel('U')
     ax.set_ylabel('V')
@@ -725,6 +728,7 @@ def render_population_rf_composite(
     heatmap_space: str = "linear",
     cmap: str = "inferno",
     vertex_colors: np.ndarray | None = None,
+    contour_color: str = "red",
 ) -> None:
     """Render a multi-panel composite (one panel per gesture type) and save as PNG.
 
@@ -845,6 +849,7 @@ def render_population_rf_composite(
                     ax,
                     inflection_boundaries[gtype].contour_uv,
                     inflection_boundaries[gtype].centroid_uv,
+                    contour_color=contour_color,
                 )
 
         subtitle = (

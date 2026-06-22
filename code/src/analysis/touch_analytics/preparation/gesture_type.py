@@ -94,9 +94,47 @@ def classify_gesture_type(group: pd.DataFrame) -> str:
     return 'stroke_proximal' if slope > 0 else 'stroke_distal'
 
 
+def derive_gesture_broad_type(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Add a ``gesture_broad_type`` column derived from ``gesture_type``.
+
+    Mapping:
+    - ``'tap'`` → ``'tap'``
+    - ``'stroke_proximal'`` → ``'stroke'``
+    - ``'stroke_distal'`` → ``'stroke'``
+    - anything else (NaN, ``'stroke_unknown'``, etc.) → ``pd.NA``
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DataFrame containing a ``gesture_type`` column.
+
+    Returns
+    -------
+    pd.DataFrame
+        Same DataFrame with a new ``gesture_broad_type`` column appended.
+
+    Raises
+    ------
+    ValueError
+        If ``gesture_type`` column is absent.
+    """
+    if 'gesture_type' not in df.columns:
+        raise ValueError("derive_gesture_broad_type: 'gesture_type' column is absent")
+
+    _BROAD_MAP = {
+        'tap': 'tap',
+        'stroke_proximal': 'stroke',
+        'stroke_distal': 'stroke',
+    }
+    df = df.copy()
+    df['gesture_broad_type'] = df['gesture_type'].map(_BROAD_MAP)
+    return df
+
+
 def assign_gesture_type(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Add a ``gesture_type`` column to *df* by classifying each touch group.
+    Add ``gesture_type`` and ``gesture_broad_type`` columns to *df*.
 
     Groups where ``single_touch_id == 0`` are skipped; their rows receive NaN.
 
@@ -110,7 +148,8 @@ def assign_gesture_type(df: pd.DataFrame) -> pd.DataFrame:
     Returns
     -------
     pd.DataFrame
-        Same DataFrame with a new ``gesture_type`` column appended.
+        Same DataFrame with new ``gesture_type`` and ``gesture_broad_type``
+        columns appended.
     """
     df = df.copy()
     df['gesture_type'] = None
@@ -131,4 +170,5 @@ def assign_gesture_type(df: pd.DataFrame) -> pd.DataFrame:
         )
         df.loc[mask, 'gesture_type'] = label
 
+    df = derive_gesture_broad_type(df)
     return df
