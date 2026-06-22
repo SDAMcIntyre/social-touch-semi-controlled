@@ -619,6 +619,11 @@ def render_population_rf_circular_crop(
     heatmap_space: str = "linear",
     dpi: int = 300,
     cmap: str = "inferno",
+    contour_levels: int | None = None,
+    contour_color: str = "white",
+    contour_alpha: float = 0.7,
+    centroid_uv: np.ndarray | None = None,
+    centroid_color: str = "red",
 ) -> None:
     """Render a transparent circular crop of a population RF heatmap and save as PNG.
 
@@ -662,6 +667,16 @@ def render_population_rf_circular_crop(
         Output resolution (default 300).
     cmap:
         Matplotlib colormap name (default ``"inferno"``).
+    contour_levels:
+        Number of evenly-spaced contour levels to overlay. None disables contours.
+    contour_color:
+        Contour line color (default ``"white"``).
+    contour_alpha:
+        Contour line alpha (default 0.7).
+    centroid_uv:
+        (2,) UV coordinate for a centroid ``+`` marker. None disables the marker.
+    centroid_color:
+        Centroid marker color (default ``"red"``).
     """
     from matplotlib.patches import Circle
 
@@ -691,9 +706,25 @@ def render_population_rf_circular_crop(
 
     ax.pcolormesh(u_grid, v_grid, interp_grid, cmap=cmap, norm=norm, alpha=1.0, zorder=1, shading='auto')
 
+    if contour_levels is not None:
+        finite_vals = interp_grid[np.isfinite(interp_grid)]
+        if finite_vals.size > 0 and finite_vals.min() != finite_vals.max():
+            levels = np.linspace(finite_vals.min(), finite_vals.max(), contour_levels + 2)[1:-1]
+            ax.contour(
+                u_grid, v_grid, interp_grid,
+                levels=levels, colors=contour_color, alpha=contour_alpha,
+                linewidths=0.8, zorder=2,
+            )
+
+    if centroid_uv is not None:
+        ax.plot(
+            centroid_uv[0], centroid_uv[1],
+            color=centroid_color, marker='+', markersize=8, zorder=7,
+        )
+
     clip_circle = Circle(center_uv, radius_uv, transform=ax.transData, fill=False, edgecolor='none')
     ax.add_patch(clip_circle)
-    for artist in ax.collections:
+    for artist in list(ax.collections) + list(ax.lines):
         artist.set_clip_path(clip_circle)
 
     margin = radius_uv * 0.05

@@ -32,6 +32,7 @@ PANEL_METRICS = [
     'pca_aspect_ratio',
     'pca_orientation_deg',
     'mean_iff_on_contour',
+    'iff_at_centroid',
     'centroid_shift_tap_vs_stroke_mm',
     'centroid_shift_proximal_vs_distal_mm',
 ]
@@ -172,6 +173,8 @@ def run_session_rf_boundary_comparison(
                     heatmap_space=heatmap_space,
                     cmap=cmap,
                     dpi=300,
+                    contour_levels=6,
+                    centroid_uv=gdata['centroid_uv'],
                 )
                 logger.info(
                     "[Session RF Boundary Comparison] %s: saved circular crop → %s",
@@ -273,6 +276,8 @@ def _load_boundary_metrics_from_npz(
             pca_minor_mm = float(npz[f'boundary_pca_minor_uv_{gtype}']) * uv_to_mm
             pca_orientation_deg = float(npz[f'boundary_pca_orientation_deg_{gtype}'])
             mean_iff_on_contour = float(npz[f'boundary_mean_iff_on_contour_{gtype}'])
+            iff_at_centroid_key = f'boundary_iff_at_centroid_{gtype}'
+            iff_at_centroid = float(npz[iff_at_centroid_key]) if iff_at_centroid_key in npz else float('nan')
             area_uv_mm2 = float(npz[f'boundary_area_uv_{gtype}']) * uv_to_mm ** 2
             perimeter_uv_mm = float(npz[f'boundary_perimeter_uv_{gtype}']) * uv_to_mm
             centroid_xyz = npz[f'boundary_centroid_xyz_{gtype}'].astype(np.float64)
@@ -291,6 +296,7 @@ def _load_boundary_metrics_from_npz(
                 'pca_aspect_ratio': pca_aspect_ratio,
                 'pca_orientation_deg': pca_orientation_deg,
                 'mean_iff_on_contour': mean_iff_on_contour,
+                'iff_at_centroid': iff_at_centroid,
                 'centroid_x_mm': float(centroid_xyz[0]),
                 'centroid_y_mm': float(centroid_xyz[1]),
                 'centroid_z_mm': float(centroid_xyz[2]),
@@ -310,6 +316,7 @@ def _load_boundary_metrics_from_npz(
                 'pca_aspect_ratio': float('nan'),
                 'pca_orientation_deg': float('nan'),
                 'mean_iff_on_contour': float('nan'),
+                'iff_at_centroid': float('nan'),
                 'centroid_x_mm': float('nan'),
                 'centroid_y_mm': float('nan'),
                 'centroid_z_mm': float('nan'),
@@ -493,6 +500,7 @@ def _build_summary_dataframe(
         'pca_aspect_ratio': np.float64,
         'pca_orientation_deg': np.float64,
         'mean_iff_on_contour': np.float64,
+        'iff_at_centroid': np.float64,
         'centroid_x_mm': np.float64,
         'centroid_y_mm': np.float64,
         'centroid_z_mm': np.float64,

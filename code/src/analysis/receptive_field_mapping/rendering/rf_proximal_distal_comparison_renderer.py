@@ -470,20 +470,38 @@ def render_proximal_distal_population_strips(
         # Horizontal reference line at y=0 for delta metrics; skip for bounded metrics
         ax.axhline(0, color='gray', lw=0.8, linestyle='--')
 
+        annotations = []
+
         # Wilcoxon signed-rank test when enough observations
         n_valid = len(values)
         if n_valid >= 5:
             from scipy.stats import wilcoxon
             try:
                 _stat, p_val = wilcoxon(values)
-                y_top = ax.get_ylim()[1] if ax.get_ylim()[1] != 0 else 1.0
-                ax.text(
-                    0, 1.0, f"p={p_val:.3f}",
-                    transform=ax.get_xaxis_transform(),
-                    ha='center', va='bottom', fontsize=7,
-                )
+                annotations.append(f"W p={p_val:.3f}")
             except Exception:
                 pass  # wilcoxon raises when all values are zero or only one unique value
+
+            # Exact sign test
+            from scipy.stats import binomtest
+            n_positive = sum(1 for v in values if v > 0)
+            n_nonzero = sum(1 for v in values if v != 0)
+            if n_nonzero > 0:
+                sign_result = binomtest(n_positive, n_nonzero, 0.5)
+                sign_p = sign_result.pvalue
+                annotations.append(f"S p={sign_p:.3f}")
+
+                # Consistency count with Clopper-Pearson CI
+                from scipy.stats import beta as beta_dist
+                n_negative = n_nonzero - n_positive
+                majority = n_positive if n_positive >= n_negative else n_negative
+                ci_lo = beta_dist.ppf(0.025, majority, n_nonzero - majority + 1) if majority > 0 else 0.0
+                ci_hi = beta_dist.ppf(0.975, majority + 1, n_nonzero - majority) if majority < n_nonzero else 1.0
+                annotations.append(f"{majority}/{n_nonzero} [{ci_lo:.0%}-{ci_hi:.0%}]")
+
+        for i, txt in enumerate(annotations):
+            ax.text(0, 1.0 + i * 0.06, txt, transform=ax.get_xaxis_transform(),
+                    ha='center', va='bottom', fontsize=7)
 
         ax.set_xlim(-0.5, 0.5)
         ax.set_xticks([])
