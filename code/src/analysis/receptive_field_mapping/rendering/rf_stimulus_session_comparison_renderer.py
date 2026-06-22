@@ -7,10 +7,16 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
+import matplotlib.patches as mpatches
 import numpy as np
 import pandas as pd
 from pathlib import Path
 from typing import Literal
+
+from analysis.receptive_field_mapping.rendering.neuron_type_colors import (
+    NEURON_TYPE_COLORS,
+    NEURON_TYPE_ORDER,
+)
 
 
 _BG = '#1a1a1a'
@@ -32,6 +38,29 @@ def assign_session_colors(session_ids: list[str]) -> dict[str, tuple]:
     cmap = cm.get_cmap('tab20')
     n = max(len(session_ids), 1)
     return {sid: cmap(i / n) for i, sid in enumerate(session_ids)}
+
+
+def _add_neuron_type_legend(
+    ax,
+    neuron_type_map: dict[str, str],
+    session_ids: list[str],
+) -> None:
+    """Add a neuron-type legend to *ax*, grouped by type in NEURON_TYPE_ORDER."""
+    present_types = {neuron_type_map[sid] for sid in session_ids if sid in neuron_type_map}
+    ordered = [nt for nt in NEURON_TYPE_ORDER if nt in present_types]
+    handles = [
+        mpatches.Patch(color=NEURON_TYPE_COLORS[nt], label=nt)
+        for nt in ordered
+    ]
+    ax.legend(
+        handles=handles,
+        loc='upper right',
+        framealpha=0.3,
+        facecolor=_BG,
+        edgecolor=_SPINE_COLOR,
+        labelcolor='white',
+        fontsize=8,
+    )
 
 
 def _draw_feature_on_ax(
@@ -158,6 +187,7 @@ def render_feature_session_comparison(
     output_path: Path,
     gesture_type: str = 'all',
     ylim: tuple[float, float] | None = None,
+    neuron_type_map: dict[str, str] | None = None,
 ) -> None:
     """Render a single feature comparison figure across all sessions."""
     if feature_col not in df.columns:
@@ -179,7 +209,10 @@ def render_feature_session_comparison(
     _annotate_session_counts(ax, df_gesture, feature_col, session_ids)
     ax.set_title(f"{gesture_type} | {display_label}", color='white', fontsize=11)
 
-    fig.tight_layout()
+    if neuron_type_map is not None:
+        _add_neuron_type_legend(ax, neuron_type_map, session_ids)
+
+    fig.subplots_adjust(left=0.12, right=0.95, top=0.92, bottom=0.22)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, dpi=150, bbox_inches='tight', facecolor=fig.get_facecolor())
     plt.close(fig)
@@ -195,6 +228,7 @@ def render_feature_summary_grid(
     output_path: Path,
     gesture_type: str = 'all',
     ylims: dict[str, tuple[float, float]] | None = None,
+    neuron_type_map: dict[str, str] | None = None,
 ) -> None:
     """Render a multi-panel grid: one axes per feature, 3 columns."""
     if not feature_cols:
@@ -240,7 +274,11 @@ def render_feature_summary_grid(
         fontsize=13,
         y=1.01,
     )
-    fig.tight_layout()
+
+    if neuron_type_map is not None and len(axes_flat) > 0:
+        _add_neuron_type_legend(axes_flat[0], neuron_type_map, session_ids)
+
+    fig.subplots_adjust(left=0.08, right=0.97, top=0.90, bottom=0.18, hspace=0.5, wspace=0.35)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, dpi=150, bbox_inches='tight', facecolor=fig.get_facecolor())
     plt.close(fig)

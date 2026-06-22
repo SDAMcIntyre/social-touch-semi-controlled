@@ -39,10 +39,19 @@ here** — see `classification-receptive-field.md` for:
 
 | Reference | Year | Journal | Site | Afferents | RF content |
 |-----------|------|---------|------|-----------|------------|
+| Järvilehto, Hämäläinen, Laurinen | 1976 | Exp Brain Res 25:45-61 | Dorsal hand (hairy) | 21 RA, 36 SA | 69 fibres. RA thresholds 0.3-1.7 g, SA <0.1-1.7 g. CV: RA 22-41 m/s, SA 10-73 m/s. No subtype split |
+| Konietzny, Hensel | 1977 | Pflügers Arch 368:39-44 | Dorsal hand (hairy) | 38 RA, 16 SA | RA tuning: broadly tuned 5-20 cps or minimum 20-40 cps. SA encode subthreshold vibration |
 | Edin & Abbs | 1991 | J Neurophysiol 65(3):657-670 | Dorsal hand (radial nerve) | SA-I (32%), SA-II (32%), FA-I (28%), FA-II (8%) | 107 units. SA units respond to finger movements even with tiny RFs. FA units near joints |
 | Edin | 1992 | J Neurophysiol 67(5):1105-1113 | Dorsal hand (radial nerve) | SA-I, SA-II | 15 SA units. Strain sensitivity: SA-II more sensitive to lateral stretch, SA-I more to indentation |
 | Vallbo, Olausson, Wessberg, Norrsell | 1993 | Brain Res 628(1-2):301-304 | Hairy forearm | CT | Discovery paper: first report of unmyelinated tactile afferents in human hairy skin |
+| Edin | 2004 | J Neurophysiol 92:3233-3243 | Dorsal hand (radial nerve) | 24 SA (SA-I, SA-II, SA-III), 16 FA | Dynamic strain: SA-III fires at <0.5% strain, SA-II at <1%. SA-III is a novel class with hybrid SA-I/SA-II properties |
 | Moore et al. | 2025 | J Physiol 603(16):4593-4608 | Hairy forearm | CT | CT-hair follicle anatomical coupling. RF responds to hair deflection; ongoing activity ~7.1 s after hair removal |
+
+### Hairy skin — thigh
+
+| Reference | Year | Journal | Site | Afferents | RF content |
+|-----------|------|---------|------|-----------|------------|
+| Edin | 2001 | J Physiol 531:289-297 | Thigh (lateral cutaneous femoral nerve) | SA-I (5), SA-II (2), SA-III (16), FA (6), HFA (24), Field (1), C-mech (6) | 60 units. SA-III: RF <1 mm^2, threshold 12.5-200 mg, encode knee joint position. HFA most numerous (40%) but minimal proprioceptive response |
 
 ### Hairy skin — leg and foot sole
 
@@ -68,17 +77,31 @@ here** — see `classification-receptive-field.md` for:
 | Watkins et al. | 2021 | J Neurophysiol 125(1):232-237 | Glabrous hand (median/ulnar nerve) | Discovery of CT in glabrous skin. CT:myelinated ratio ~1:80, density ~7x lower than hairy skin |
 | Loken et al. | 2022 | J Neurophysiol 127(2):463-473 | Forearm, dorsal hand, lower leg | CT topography across 3 nerves (n=27 forearm, n=8 hand, n=4 leg). Properties similar across sites |
 
+### Cross-site (multiple nerves)
+
+| Reference | Year | Journal | Site | Afferents | RF content |
+|-----------|------|---------|------|-----------|------------|
+| Edin, Essick, Trulsson, Olsson | 1995 | J Neurosci 15(1):830-847 | Glabrous hand (median) + dorsal hand (radial) + face (inferior alveolar) | SA-I (20), SA-II (35), FA-I (34), FA-II (2), FA-hair (2) | 93 units, 70 quantitatively studied. RF geometric mean 0.055 cm^2 across types. Moving stimulus encoding: SA more consistent than FA |
+
 ### Histological / end-organ identity
 
 | Reference | Year | Journal | Site | Afferents | RF content |
 |-----------|------|---------|------|-----------|------------|
+| Halata, Munger | 1981 | Cell Tissue Res 219:437-440 | Scalp (hairy skin) | SA-II (Ruffini) | First EM of Ruffini corpuscle in human hairy skin. ~50 um diameter, single myelinated axon 4-6 um, in reticular dermis between hair follicle bulbs |
 | Pare, Behets, Bhatt | 2003 | J Comp Neurol 456(3):260-266 | Index fingertip | SA-II (Ruffini) | Immunofluorescence shows paucity of Ruffini corpuscles in glabrous fingertip. Challenges SA-II end-organ identity |
+| Reinisch, Tschachler | 2005 | Ann Neurol 58:88-95 | Hairy skin (general) | SA-I (Merkel / touch dome) | Touch dome area 0.193 +/- 0.138 mm^2. Merkel cell density 756 +/- 386/mm^2 within dome vs <50/mm^2 outside. Multiple fibre types (Abeta, Adelta, C) supply each dome |
 
 ### Nociceptors with RF mapping
 
 | Reference | Year | Journal | Site | Afferents | RF content |
 |-----------|------|---------|------|-----------|------------|
 | Nagi et al. | 2019 | Sci Adv 5(7):eaaw1297 | Hairy forearm/hand | A-HTMRs (thick myelinated nociceptors) | New class: fast-conducting nociceptors insensitive to gentle touch, encode noxious indentation. Conduction velocity matches Ab LTMRs |
+
+### Psychophysics — spatial acuity
+
+| Reference | Year | Journal | Site | Measure | RF content |
+|-----------|------|---------|------|---------|------------|
+| Mancini, Bauleo, Cole, Lui, Porro, Haggard, Iannetti | 2014 | Ann Neurol 75(6):917-924 | Whole body (12 sites) | 2PD | Forearm ~27 mm (simultaneous), ~13 mm (successive). Opposite proximal-distal gradients for touch (improves distally) vs pain (improves proximally) on hairy skin of upper limb |
 
 ---
 
@@ -119,10 +142,12 @@ are listed here only for cross-reference.
 The papers most relevant to the naturalistic RF mapping pipeline are:
 
 1. **Vallbo et al. 1993** — CT discovery on forearm (historical anchor)
-2. **Edin & Abbs 1991** + **Edin 1992** — myelinated types on hairy dorsal hand
-3. **Loken et al. 2022** — CT properties across body sites including forearm
-4. **Moore et al. 2025** — CT-hair follicle coupling (most recent)
-5. **Nagi et al. 2019** — A-HTMR discovery (new afferent class on forearm)
+2. **Edin & Abbs 1991** + **Edin 1992** + **Edin 2004** — myelinated types on hairy dorsal hand, including SA-III class
+3. **Edin 2001** — population census on thigh hairy skin (60 units, 7 types)
+4. **Loken et al. 2022** — CT properties across body sites including forearm
+5. **Moore et al. 2025** — CT-hair follicle coupling (most recent)
+6. **Nagi et al. 2019** — A-HTMR discovery (new afferent class on forearm)
+7. **Mancini et al. 2014** — forearm 2PD threshold (~27 mm) benchmarks spatial resolution
 
 ### Methodologically informative
 

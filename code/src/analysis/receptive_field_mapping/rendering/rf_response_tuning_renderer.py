@@ -365,6 +365,7 @@ def render_session_raw_dots(
     out_path: Path,
     iff_ylim: tuple[float, float],
     iff_ylabel: str = "IFF (Hz)",
+    fit_models: "list[str] | None" = None,
     fit_degrees: "list[int] | None" = None,
     fit_degree: int = 1,
     dot_alpha: float = 0.35,
@@ -374,17 +375,21 @@ def render_session_raw_dots(
     secondary_label: str = "",
     secondary_cmap: str = "viridis",
 ) -> None:
-    """Per-session raw-touch scatter + polynomial fit line(s).
+    """Per-session raw-touch scatter + fit line(s).
 
     Every touch is plotted as a semi-transparent dot at its exact
-    ``(feature_value, response_value)`` coordinate. One polynomial regression
-    line is drawn per entry in ``fit_degrees`` (or the single ``fit_degree``
-    when ``fit_degrees`` is None). When multiple degrees are given, each line
-    gets a distinct color and linestyle, and an R² annotation box is added to
-    the axes.
+    ``(feature_value, response_value)`` coordinate. One regression line is
+    drawn per entry in ``fit_models`` (named model strings) or ``fit_degrees``
+    (legacy polynomial degrees). When multiple fits are given, each line gets
+    a distinct color and linestyle, and an R² annotation box is added.
     """
-    if fit_degrees is None:
-        fit_degrees = [fit_degree]
+    from .fit_models import fit_model as _fit_model
+
+    if fit_models is None:
+        if fit_degrees is not None:
+            fit_models = [f"poly{d}" for d in fit_degrees]
+        else:
+            fit_models = [f"poly{fit_degree}"]
 
     feature_vals = np.asarray(feature_vals, dtype=float)
     response_vals = np.asarray(response_vals, dtype=float)
@@ -419,22 +424,22 @@ def render_session_raw_dots(
             edgecolors='none', zorder=3,
         )
 
-    multi = len(fit_degrees) > 1
+    multi = len(fit_models) > 1
     r2_lines: list[str] = []
     x_line = np.linspace(float(np.min(feat)), float(np.max(feat)), 200) if n > 0 else None
 
-    for i, deg in enumerate(fit_degrees):
+    for i, model_name in enumerate(fit_models):
         fit_color = _FIT_COLORS[i % len(_FIT_COLORS)] if multi else line_color
         fit_ls = _FIT_LINESTYLES[i % len(_FIT_LINESTYLES)] if multi else '-'
 
-        coeffs, r2 = fit_polynomial(feat, resp, deg)
-        if coeffs is not None:
-            r2_lines.append(f"deg {deg}: R²={r2:.2f}")
-            y_line = np.polyval(coeffs, x_line)
+        result = _fit_model(feat, resp, model_name)
+        if result.params is not None:
+            r2_lines.append(f"{result.display_label}: R²={result.r_squared:.2f}")
+            y_line = result.evaluate(x_line)
             ax.plot(x_line, y_line, color=fit_color, linewidth=2.5, linestyle=fit_ls, zorder=5)
 
-            if show_fit_ci and not multi and deg == 1 and n >= 3:
-                predicted = np.polyval(coeffs, feat)
+            if show_fit_ci and not multi and model_name == "poly1" and n >= 3:
+                predicted = result.evaluate(feat)
                 residuals = resp - predicted
                 dof = n - 2
                 s_err = np.sqrt(np.sum(residuals ** 2) / dof)
@@ -449,14 +454,14 @@ def render_session_raw_dots(
                         x_line, y_line - ci, y_line + ci,
                         color=fit_color, alpha=0.2, zorder=4, linewidth=0,
                     )
-            elif show_fit_ci and deg > 1:
+            elif show_fit_ci and model_name != "poly1":
                 warnings.warn(
                     "render_session_raw_dots: show_fit_ci is only supported for "
-                    f"fit_degree=1; got fit_degree={deg}. Disabling the CI band.",
+                    f"poly1; got {model_name}. Disabling the CI band.",
                     stacklevel=2,
                 )
         else:
-            r2_lines.append(f"deg {deg}: R²=n/a")
+            r2_lines.append(f"{result.display_label}: R²=n/a")
 
     if r2_lines:
         if multi:
@@ -500,6 +505,7 @@ def render_overlay_raw_dots(
     iff_ylim: tuple[float, float],
     session_colors: dict[str, str],
     iff_ylabel: str = "IFF (Hz)",
+    fit_models: "list[str] | None" = None,
     fit_degrees: "list[int] | None" = None,
     fit_degree: int = 1,
     dot_alpha: float = 0.15,
@@ -513,19 +519,22 @@ def render_overlay_raw_dots(
     """Multi-session raw-touch scatter + per-session fit lines.
 
     Each session contributes a faint scatter cloud (``alpha=dot_alpha``,
-    ``s=20``) and one bold polynomial fit line per degree in ``fit_degrees``
+    ``s=20``) and one bold fit line per entry in ``fit_models``
     (``linewidth=2.5``) in its neuron-type / session colour. When multiple
-    degrees are requested, each degree gets a distinct linestyle; an R²
-    annotation box is added per session listing all degrees. The legend block
-    mirrors ``render_overlay_tuning_curve`` (``by_type`` / ``by_session``
-    modes).
+    models are requested, each gets a distinct linestyle; an R² annotation
+    box is added per session listing all models. The legacy ``fit_degrees``
+    parameter is accepted for backward compatibility.
     """
     from matplotlib.lines import Line2D
+    from .fit_models import fit_model as _fit_model
 
-    if fit_degrees is None:
-        fit_degrees = [fit_degree]
+    if fit_models is None:
+        if fit_degrees is not None:
+            fit_models = [f"poly{d}" for d in fit_degrees]
+        else:
+            fit_models = [f"poly{fit_degree}"]
 
-    multi = len(fit_degrees) > 1
+    multi = len(fit_models) > 1
 
     fig, ax = plt.subplots(figsize=(8, 5), dpi=150)
     fig.patch.set_facecolor(_BG)
@@ -584,13 +593,13 @@ def render_overlay_raw_dots(
         x_line = np.linspace(float(np.min(feat)), float(np.max(feat)), 200)
         r2_lines: list[str] = []
 
-        for i, deg in enumerate(fit_degrees):
+        for i, model_name in enumerate(fit_models):
             fit_ls = _FIT_LINESTYLES[i % len(_FIT_LINESTYLES)] if multi else '-'
-            coeffs, r2 = fit_polynomial(feat, resp, deg)
-            if coeffs is not None:
-                y_line = np.polyval(coeffs, x_line)
+            result = _fit_model(feat, resp, model_name)
+            if result.params is not None:
+                y_line = result.evaluate(x_line)
                 plot_label = line_label if (not multi and line_label not in legend_labels_seen) else (
-                    f"{line_label} (d{deg})" if multi and (f"{line_label} (d{deg})" not in legend_labels_seen) else None
+                    f"{line_label} ({result.display_label})" if multi and (f"{line_label} ({result.display_label})" not in legend_labels_seen) else None
                 )
                 ax.plot(
                     x_line, y_line,
@@ -600,9 +609,9 @@ def render_overlay_raw_dots(
                 )
                 if plot_label is not None:
                     legend_labels_seen.add(plot_label)
-                r2_lines.append(f"d{deg}: R²={r2:.2f}")
+                r2_lines.append(f"{result.display_label}: R²={result.r_squared:.2f}")
             else:
-                r2_lines.append(f"d{deg}: R²=n/a")
+                r2_lines.append(f"{result.display_label}: R²=n/a")
 
         if multi and r2_lines:
             annotation = f"{session_id}\n" + "\n".join(r2_lines)

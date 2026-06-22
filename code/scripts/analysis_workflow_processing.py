@@ -38,12 +38,13 @@ from analysis.receptive_field_mapping import (
     run_session_comparison_visualization,
     run_population_response_field_extraction,
     run_session_rf_boundary_comparison,
-    run_proximal_distal_center_comparison,
+    run_proximal_distal_comparison,
     run_touch_feature_radar,
     run_stimulus_session_comparison,
     run_response_tuning,
     run_response_instruction_tuning,
     run_spatial_tuning,
+    run_rf_profile_extraction,
     launch_rf_camera_settings_viewer,
     launch_slim_uv_config_viewer,
 )
@@ -66,8 +67,9 @@ from analysis.pipeline.output_dirs import (
     CROSS_RENDER_GRID_METRICS,
     CROSS_RENDER_SESSIONS,
     SPATIAL_COMPARE_BOUNDARIES,
-    SPATIAL_COMPARE_RF_CENTERS,
+    SPATIAL_COMPARE_PROXIMAL_DISTAL,
     SPATIAL_EXTRACT_BOUNDARIES,
+    SPATIAL_EXTRACT_RF_PROFILES,
     SPATIAL_TUNING_RF_METRICS,
     SPATIAL_MAP_BASELINE,
     SPATIAL_MAP_SINGLE_TOUCH,
@@ -519,30 +521,32 @@ def spatial_compare_boundaries_flow(
         )
 
 
-@flow(name="spatial_compare_rf_centers")
-def spatial_compare_rf_centers_flow(
+@flow(name="spatial_compare_proximal_distal")
+def spatial_compare_proximal_distal_flow(
     input_items: List[Tuple[Path, Path]],
     force_processing: bool = False,
     heatmap_space: str = "linear",
     cmap: str = "inferno",
     iff_metric: str = "mean",
     contour_color: str = "red",
+    neuron_summary_xlsx: Optional[str] = None,
 ) -> None:
-    """Compare RF center positions between proximal and distal strokes across sessions.
+    """Compare RF properties between proximal and distal strokes across sessions.
 
     Reads per-session NPZ files produced by spatial_extract_boundaries,
     renders per-session center-marked heatmap PNGs, and produces a cross-session
     aggregate scatter plot and summary CSV.
-    Output: 4_analysed/spatial_compare_rf_centers/iff_<iff_metric>/
+    Output: 4_analysed/spatial_compare_proximal_distal/iff_<iff_metric>/
     """
-    print(f"[Batch Analysis] Comparing RF centers for {len(input_items)} item(s)...")
+    print(f"[Batch Analysis] Comparing proximal-distal RF properties for {len(input_items)} item(s)...")
     if not input_items:
         return
 
+    xlsx_path = Path(neuron_summary_xlsx) if neuron_summary_xlsx is not None else None
     metrics = ["mean", "max"] if iff_metric == "both" else [iff_metric]
     for metric in metrics:
-        output_dir = input_items[0][1] / '4_analysed' / SPATIAL_COMPARE_RF_CENTERS / f"iff_{metric}"
-        run_proximal_distal_center_comparison(
+        output_dir = input_items[0][1] / '4_analysed' / SPATIAL_COMPARE_PROXIMAL_DISTAL / f"iff_{metric}"
+        run_proximal_distal_comparison(
             session_configs=input_items,
             output_dir=output_dir,
             force_processing=force_processing,
@@ -550,6 +554,29 @@ def spatial_compare_rf_centers_flow(
             cmap=cmap,
             iff_metric=metric,
             contour_color=contour_color,
+            neuron_summary_xlsx=xlsx_path,
+        )
+
+
+@flow(name="spatial_extract_rf_profiles")
+def spatial_extract_rf_profiles_flow(
+    input_items: List[Tuple[Path, Path]],
+    force_processing: bool = False,
+    iff_metric: str = "mean",
+) -> None:
+    """Extract 1D RF profiles and boundary crossings from population heatmap grids."""
+    print(f"[Batch Analysis] Extracting RF profiles for {len(input_items)} item(s)...")
+    if not input_items:
+        return
+
+    metrics = ["mean", "max"] if iff_metric == "both" else [iff_metric]
+    for metric in metrics:
+        output_dir = input_items[0][1] / '4_analysed' / SPATIAL_EXTRACT_RF_PROFILES
+        run_rf_profile_extraction(
+            session_configs=input_items,
+            output_dir=output_dir,
+            force_processing=force_processing,
+            iff_metric=metric,
         )
 
 
@@ -973,6 +1000,7 @@ def stimulus_compare_sessions_flow(
     force_processing: bool = False,
     comparison_groups: Optional[dict] = None,
     plot_type: str = 'box_strip',
+    neuron_summary_xlsx: Optional[str] = None,
 ) -> None:
     """Cross-session touch feature comparison plots.
 
@@ -990,6 +1018,7 @@ def stimulus_compare_sessions_flow(
         output_dir=output_dir,
         plot_type=plot_type,
         force_processing=force_processing,
+        neuron_summary_xlsx=Path(neuron_summary_xlsx) if neuron_summary_xlsx is not None else None,
     )
 
 
@@ -1587,13 +1616,21 @@ def _build_pipeline_stages(dag_handler: DagConfigHandler, items_to_process) -> l
             },
         },
         {
-            "name": "spatial_compare_rf_centers",
-            "func": spatial_compare_rf_centers_flow,
+            "name": "spatial_compare_proximal_distal",
+            "func": spatial_compare_proximal_distal_flow,
             "params": lambda: {
-                "heatmap_space": dag_handler.get_task_options("spatial_compare_rf_centers").get("heatmap_space", "linear"),
-                "cmap": dag_handler.get_task_options("spatial_compare_rf_centers").get("cmap", "inferno"),
-                "iff_metric": dag_handler.get_task_options("spatial_compare_rf_centers").get("iff_metric", "mean"),
-                "contour_color": dag_handler.get_task_options("spatial_compare_rf_centers").get("contour_color", "red"),
+                "heatmap_space": dag_handler.get_task_options("spatial_compare_proximal_distal").get("heatmap_space", "linear"),
+                "cmap": dag_handler.get_task_options("spatial_compare_proximal_distal").get("cmap", "inferno"),
+                "iff_metric": dag_handler.get_task_options("spatial_compare_proximal_distal").get("iff_metric", "mean"),
+                "contour_color": dag_handler.get_task_options("spatial_compare_proximal_distal").get("contour_color", "red"),
+                "neuron_summary_xlsx": dag_handler.get_parameter("neuron_summary_xlsx") or None,
+            },
+        },
+        {
+            "name": "spatial_extract_rf_profiles",
+            "func": spatial_extract_rf_profiles_flow,
+            "params": lambda: {
+                "iff_metric": dag_handler.get_task_options("spatial_extract_rf_profiles").get("iff_metric", "mean"),
             },
         },
         {
