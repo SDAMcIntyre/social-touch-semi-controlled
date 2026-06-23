@@ -22,6 +22,7 @@ from analysis.receptive_field_mapping.rendering.rf_proximal_distal_comparison_re
     render_proximal_distal_hotspot_aggregate,
     render_proximal_distal_metric_deltas,
     render_proximal_distal_population_strips,
+    render_paired_metric_violins,
     render_shift_decomposition,
 )
 from analysis.receptive_field_mapping.rendering.rf_population_map_renderer import (
@@ -979,6 +980,20 @@ def run_proximal_distal_comparison(
     render_proximal_distal_population_strips(
         df=df,
         output_path=output_dir / 'rf_proximal_distal_population_strips.png',
+        session_colors=session_colors,
+        neuron_type_legend=neuron_type_legend,
+    )
+
+    render_paired_metric_violins(
+        df=df,
+        metric_pairs=[
+            ('area_mm2_proximal', 'area_mm2_distal', 'Area (mm2)'),
+            ('perimeter_mm_proximal', 'perimeter_mm_distal', 'Perimeter (mm)'),
+            ('mean_iff_on_contour_proximal', 'mean_iff_on_contour_distal', 'Mean IFF'),
+            ('peak_iff_proximal', 'peak_iff_distal', 'Max IFF'),
+        ],
+        condition_labels=('Proximal', 'Distal'),
+        output_path=output_dir / 'rf_proximal_distal_metric_violins.png',
         session_colors=session_colors,
         neuron_type_legend=neuron_type_legend,
     )

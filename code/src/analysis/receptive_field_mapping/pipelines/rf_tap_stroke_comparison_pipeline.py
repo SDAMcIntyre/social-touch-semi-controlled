@@ -27,6 +27,7 @@ from analysis.receptive_field_mapping.rendering.rf_tap_stroke_comparison_rendere
 )
 from analysis.receptive_field_mapping.rendering.rf_proximal_distal_comparison_renderer import (
     render_center_marked_heatmap,
+    render_paired_metric_violins,
     render_shift_decomposition,
 )
 from analysis.receptive_field_mapping.rendering.rf_population_map_renderer import (
@@ -963,6 +964,21 @@ def run_tap_stroke_comparison(
     render_tap_stroke_population_strips(
         df=df,
         output_path=output_dir / 'rf_tap_stroke_population_strips.png',
+        session_colors=session_colors,
+        neuron_type_legend=neuron_type_legend,
+    )
+
+    # Paired metric violin plots
+    render_paired_metric_violins(
+        df=df,
+        metric_pairs=[
+            ('area_mm2_tap', 'area_mm2_stroke', 'Area (mm2)'),
+            ('perimeter_mm_tap', 'perimeter_mm_stroke', 'Perimeter (mm)'),
+            ('mean_iff_on_contour_tap', 'mean_iff_on_contour_stroke', 'Mean IFF'),
+            ('peak_iff_tap', 'peak_iff_stroke', 'Max IFF'),
+        ],
+        condition_labels=('Tap', 'Stroke'),
+        output_path=output_dir / 'rf_tap_stroke_metric_violins.png',
         session_colors=session_colors,
         neuron_type_legend=neuron_type_legend,
     )
