@@ -644,6 +644,8 @@ def run_population_response_field_extraction(
                 vertex_colors=sd.slim_vertex_colors,
                 heatmap_space=heatmap_space,
                 cmap=cmap,
+                contour_levels=6,
+                centroid_uv=np.array(all_boundary.centroid_uv),
             )
             sd.produced.append(circular_path)
             print(f"[Population Response Fields] {sd.session_id}: saved {circular_path.name}")
@@ -670,6 +672,8 @@ def run_population_response_field_extraction(
                 vertex_colors=sd.slim_vertex_colors,
                 heatmap_space=heatmap_space,
                 cmap=cmap,
+                contour_levels=6,
+                centroid_uv=np.array(all_boundary.centroid_uv),
             )
             sd.produced.append(circular_local_path)
             print(f"[Population Response Fields] {sd.session_id}: saved {circular_local_path.name}")
@@ -738,6 +742,7 @@ def _save_response_fields_npz(
             data_dict[f'boundary_pca_minor_uv_{gtype}'] = np.float64(boundary.pca_minor_uv)
             data_dict[f'boundary_pca_orientation_deg_{gtype}'] = np.float64(boundary.pca_orientation_deg)
             data_dict[f'boundary_mean_iff_on_contour_{gtype}'] = np.float64(boundary.mean_iff_on_contour)
+            data_dict[f'boundary_iff_at_centroid_{gtype}'] = np.float64(boundary.iff_at_centroid)
 
             contour_xyz = uv_points_to_xyz(
                 boundary.contour_uv, forearm_uv, forearm_faces, forearm_V,

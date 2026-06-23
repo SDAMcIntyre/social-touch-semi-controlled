@@ -539,6 +539,8 @@ def run_proximal_distal_comparison(
                 heatmap_space=heatmap_space,
                 dpi=300,
                 cmap=cmap,
+                contour_levels=6,
+                centroid_uv=centroid_uv_gtype,
             )
 
             if peak_uv_gtype is not None:
@@ -558,6 +560,8 @@ def run_proximal_distal_comparison(
                     heatmap_space=heatmap_space,
                     dpi=300,
                     cmap=cmap,
+                    contour_levels=6,
+                    centroid_uv=centroid_uv_gtype,
                 )
 
         # Phase 3 — contour overlay and heatmap triptych (per-session, outside gesture loop)
