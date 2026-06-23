@@ -58,8 +58,12 @@ from analysis.receptive_field_mapping.data.touch_population_data import (
     load_population_data,
     load_population_rf_data,
 )
+from analysis.receptive_field_mapping.metrics.rf_gradient_boundary import (
+    compute_gradient_ridge,
+)
 from analysis.receptive_field_mapping.metrics.rf_inflection_boundary import (
     compute_inflection_boundary,
+    compute_laplacian_arrays,
 )
 from analysis.receptive_field_mapping.metrics.rf_pca_alignment import (
     apply_uv_alignment,
@@ -232,6 +236,7 @@ def _extract_bins_for_session(
     vertex_threshold_ratio: float,
     inflection_sigma: float,
     touch_triple_keys: np.ndarray,
+    boundary_method: str = "gradient",
     compute_per_touch_std: bool = True,
     grid_u: np.ndarray | None = None,
     grid_v: np.ndarray | None = None,
@@ -403,13 +408,17 @@ def _extract_bins_for_session(
             )
             continue
 
-        boundary = compute_inflection_boundary(
-            grid_u, grid_v, grid_z, inflection_sigma,
-        )
+        if boundary_method == "inflection":
+            boundary = compute_inflection_boundary(
+                grid_u, grid_v, grid_z, inflection_sigma,
+            )
+        else:
+            smoothed, _ = compute_laplacian_arrays(grid_z, inflection_sigma)
+            boundary = compute_gradient_ridge(grid_u, grid_v, grid_z, smoothed)
         if boundary is None:
             logger.info(
-                "[Spatial Tuning] %s / %s / %s bin %d: no inflection boundary — skip.",
-                session_id, gesture_subset, tuning_feature, i,
+                "[Spatial Tuning] %s / %s / %s bin %d: no boundary (%s) — skip.",
+                session_id, gesture_subset, tuning_feature, i, boundary_method,
             )
             continue
 
@@ -437,9 +446,15 @@ def _extract_bins_for_session(
                         forearm_uv, slim_heatmap_single, grid_u, grid_v,
                         trifinder, forearm_faces,
                     )
-                    single_boundary = compute_inflection_boundary(
-                        grid_u, grid_v, g_z, inflection_sigma,
-                    )
+                    if boundary_method == "inflection":
+                        single_boundary = compute_inflection_boundary(
+                            grid_u, grid_v, g_z, inflection_sigma,
+                        )
+                    else:
+                        smoothed_single, _ = compute_laplacian_arrays(g_z, inflection_sigma)
+                        single_boundary = compute_gradient_ridge(
+                            grid_u, grid_v, g_z, smoothed_single,
+                        )
                     if single_boundary is None:
                         continue
                     single_area = single_boundary.area_uv * (mm_scale ** 2)
@@ -699,8 +714,15 @@ def run_spatial_tuning(
     force_processing: bool = bool(options.get("force_processing", False))
     dot_alpha: float = float(options.get("dot_alpha", 0.7))
     iff_metric: str = str(options.get("iff_metric", "mean"))
+    boundary_method: str = str(options.get("boundary_method", "gradient"))
     compute_per_touch_std: bool = bool(options.get("compute_per_touch_std", True))
     max_workers: int = int(options.get("max_workers", min(4, max(1, (os.cpu_count() or 2) - 1))))
+
+    if boundary_method not in ("gradient", "inflection"):
+        raise ValueError(
+            f"run_spatial_tuning: invalid boundary_method {boundary_method!r}. "
+            f"Expected 'gradient' or 'inflection'."
+        )
 
     if iff_metric not in IFF_METRICS:
         raise ValueError(
@@ -907,6 +929,7 @@ def run_spatial_tuning(
                     vertex_threshold_ratio=vertex_threshold,
                     inflection_sigma=inflection_sigma,
                     touch_triple_keys=heavy["touch_triple_keys"],
+                    boundary_method=boundary_method,
                     compute_per_touch_std=compute_per_touch_std,
                     grid_u=heavy["grid_u"],
                     grid_v=heavy["grid_v"],

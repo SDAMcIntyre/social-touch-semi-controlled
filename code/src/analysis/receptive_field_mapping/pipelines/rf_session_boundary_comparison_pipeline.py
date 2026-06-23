@@ -18,7 +18,7 @@ from analysis.receptive_field_mapping.rendering.rf_boundary_comparison_renderer 
     render_session_gesture_heatmap,
 )
 from analysis.receptive_field_mapping.rendering.rf_population_map_renderer import (
-    compute_highest_contour_peak,
+    compute_highest_contour_center,
     compute_uv_to_mm_scale,
     render_population_rf_circular_crop,
 )
@@ -48,6 +48,8 @@ def run_session_rf_boundary_comparison(
     neuron_summary_xlsx: Path | None = None,
     heatmap_space: str = "linear",
     cmap: str = "inferno",
+    contour_color: str = "red",
+    circular_crop_margin: float = 0.0,
 ) -> None:
     if iff_metric not in IFF_METRICS:
         raise ValueError(
@@ -109,6 +111,7 @@ def run_session_rf_boundary_comparison(
             gesture_type=gtype,
             output_path=contour_overlays_dir / f'contour_overlay_circular_{gtype}.png',
             radius_uv=radius_uv_overlay,
+            circular_crop_margin=circular_crop_margin,
         )
 
     for gtype in df['gesture_type'].unique():
@@ -170,7 +173,38 @@ def run_session_rf_boundary_comparison(
                 render_data['forearm_uv'], render_data['forearm_V'], render_data['forearm_faces'],
             )
             radius_uv = radius_mm / scale
-            margin = radius_uv * 0.05
+            margin = radius_uv * circular_crop_margin
+
+            # Session-fixed circle centers from the 'all' gesture
+            all_gdata = render_data['per_gtype'].get('all')
+            if all_gdata is None or all_gdata['centroid_uv'] is None:
+                logger.warning(
+                    "[Session RF Boundary Comparison] %s: no 'all' gesture data — skipping circular crops.",
+                    session_id,
+                )
+                continue
+
+            session_centroid = all_gdata['centroid_uv']
+            session_peak = all_gdata.get('peak_uv')
+            session_contour_center = compute_highest_contour_center(
+                all_gdata['grid_u'], all_gdata['grid_v'], all_gdata['grid_z'], n_levels=6,
+            )
+
+            session_crop_centers: list[np.ndarray] = [session_centroid]
+            if session_peak is not None:
+                session_crop_centers.append(session_peak)
+            if session_contour_center is not None:
+                session_crop_centers.append(session_contour_center)
+
+            centers_arr = np.array(session_crop_centers)
+            shared_xlim = (
+                float(centers_arr[:, 0].min()) - radius_uv - margin,
+                float(centers_arr[:, 0].max()) + radius_uv + margin,
+            )
+            shared_ylim = (
+                float(centers_arr[:, 1].min()) - radius_uv - margin,
+                float(centers_arr[:, 1].max()) + radius_uv + margin,
+            )
 
             centroid_dir = session_crops_dir / 'centroid'
             peak_dir = session_crops_dir / 'peak'
@@ -178,68 +212,69 @@ def run_session_rf_boundary_comparison(
             for d_path in (centroid_dir, peak_dir, contour_center_dir):
                 d_path.mkdir(parents=True, exist_ok=True)
 
-            crop_jobs: list[tuple[str, np.ndarray, np.ndarray, Path, dict]] = []
             for gtype, gdata in render_data['per_gtype'].items():
                 if gdata['centroid_uv'] is None:
                     continue
-                crop_jobs.append((
-                    gtype, gdata['centroid_uv'], gdata['centroid_uv'],
-                    centroid_dir / f'{session_id}_rf_circular_centroid_{gtype}.png',
-                    gdata,
-                ))
-                peak_uv = gdata.get('peak_uv')
-                if peak_uv is not None:
-                    crop_jobs.append((
-                        gtype, peak_uv, gdata['centroid_uv'],
-                        peak_dir / f'{session_id}_rf_circular_peak_{gtype}.png',
-                        gdata,
-                    ))
-                contour_center = compute_highest_contour_peak(
+
+                gtype_peak = gdata.get('peak_uv')
+                gtype_contour_center = compute_highest_contour_center(
                     gdata['grid_u'], gdata['grid_v'], gdata['grid_z'], n_levels=6,
                 )
-                if contour_center is not None:
+
+                crop_jobs: list[tuple[np.ndarray, np.ndarray, Path]] = [
+                    (session_centroid, gdata['centroid_uv'],
+                     centroid_dir / f'{session_id}_rf_circular_centroid_{gtype}.png'),
+                ]
+                if session_peak is not None:
                     crop_jobs.append((
-                        gtype, contour_center, contour_center,
+                        session_peak, gtype_peak if gtype_peak is not None else gdata['centroid_uv'],
+                        peak_dir / f'{session_id}_rf_circular_peak_{gtype}.png',
+                    ))
+                if session_contour_center is not None:
+                    crop_jobs.append((
+                        session_contour_center, gtype_contour_center if gtype_contour_center is not None else session_contour_center,
                         contour_center_dir / f'{session_id}_rf_circular_contour_center_{gtype}.png',
-                        gdata,
                     ))
 
-            all_centers = np.array([center for _, center, _, _, _ in crop_jobs])
-            shared_xlim = (
-                float(all_centers[:, 0].min()) - radius_uv - margin,
-                float(all_centers[:, 0].max()) + radius_uv + margin,
-            )
-            shared_ylim = (
-                float(all_centers[:, 1].min()) - radius_uv - margin,
-                float(all_centers[:, 1].max()) + radius_uv + margin,
-            )
-
-            for gtype, center, centroid, out_path, gdata in crop_jobs:
-                render_population_rf_circular_crop(
-                    u_grid=gdata['grid_u'],
-                    v_grid=gdata['grid_v'],
-                    interp_grid=gdata['grid_z'],
-                    forearm_uv=render_data['forearm_uv'],
-                    forearm_V=render_data['forearm_V'],
-                    forearm_faces=render_data['forearm_faces'],
-                    center_uv=center,
-                    radius_mm=radius_mm,
-                    vmax=global_vmax,
-                    vmin=global_vmin,
-                    output_path=out_path,
-                    vertex_colors=render_data['slim_vertex_colors'],
-                    heatmap_space=heatmap_space,
-                    cmap=cmap,
-                    dpi=300,
-                    contour_levels=6,
-                    centroid_uv=centroid,
-                    xlim=shared_xlim,
-                    ylim=shared_ylim,
-                )
-                logger.info(
-                    "[Session RF Boundary Comparison] %s: saved circular crop → %s",
-                    session_id, out_path.name,
-                )
+                for center_uv, marker_uv, out_path in crop_jobs:
+                    crop_kwargs = dict(
+                        u_grid=gdata['grid_u'],
+                        v_grid=gdata['grid_v'],
+                        interp_grid=gdata['grid_z'],
+                        forearm_uv=render_data['forearm_uv'],
+                        forearm_V=render_data['forearm_V'],
+                        forearm_faces=render_data['forearm_faces'],
+                        center_uv=center_uv,
+                        radius_mm=radius_mm,
+                        vmax=global_vmax,
+                        vmin=global_vmin,
+                        vertex_colors=render_data['slim_vertex_colors'],
+                        heatmap_space=heatmap_space,
+                        cmap=cmap,
+                        dpi=300,
+                        contour_levels=6,
+                        centroid_uv=marker_uv,
+                        xlim=shared_xlim,
+                        ylim=shared_ylim,
+                    )
+                    # Original crop — preserved unchanged (no RF boundary overlay).
+                    render_population_rf_circular_crop(output_path=out_path, **crop_kwargs)
+                    logger.info(
+                        "[Session RF Boundary Comparison] %s: saved circular crop → %s",
+                        session_id, out_path.name,
+                    )
+                    # Duplicate crop with the red closed RF boundary overlaid.
+                    boundary_path = out_path.with_name(f'{out_path.stem}_rfboundary{out_path.suffix}')
+                    render_population_rf_circular_crop(
+                        output_path=boundary_path,
+                        boundary_contour_uv=gdata.get('contour_uv'),
+                        boundary_color=contour_color,
+                        **crop_kwargs,
+                    )
+                    logger.info(
+                        "[Session RF Boundary Comparison] %s: saved circular crop → %s",
+                        session_id, boundary_path.name,
+                    )
     else:
         logger.warning(
             "[Session RF Boundary Comparison] no valid heatmap data found across sessions "
@@ -436,12 +471,19 @@ def _load_heatmap_rendering_data_from_npz(npz_path: Path) -> dict:
             if peak_key in npz_keys
             else None
         )
+        contour_key = f'boundary_contour_uv_{gtype}'
+        contour_uv = (
+            npz[contour_key].astype(np.float64)
+            if contour_key in npz_keys
+            else None
+        )
         per_gtype[gtype] = {
             'grid_u': npz[f'grid_u_{gtype}'],
             'grid_v': npz[f'grid_v_{gtype}'],
             'grid_z': npz[f'grid_z_{gtype}'],
             'centroid_uv': centroid_uv,
             'peak_uv': peak_uv,
+            'contour_uv': contour_uv,
         }
 
     return {

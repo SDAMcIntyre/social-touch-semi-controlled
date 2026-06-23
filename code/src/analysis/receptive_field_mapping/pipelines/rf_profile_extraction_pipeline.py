@@ -11,6 +11,7 @@ from analysis.pipeline.output_dirs import SPATIAL_EXTRACT_BOUNDARIES
 from analysis.pipeline.shared_constants import IFF_METRICS, session_id_from_path
 from analysis.receptive_field_mapping.rendering.rf_profile_renderer import (
     render_center_axis_profile,
+    render_gradient_profile,
     render_laplacian_context,
     render_laplacian_profile,
 )
@@ -81,8 +82,13 @@ def _extract_profiles_for_gesture(
     grid_v = npz[f'grid_v_{gtype}']
     grid_z = npz[f'grid_z_{gtype}']
 
-    contour_key = f'boundary_contour_uv_{gtype}'
-    contour_uv = npz[contour_key] if contour_key in npz else None
+    inflection_contour_key = f'inflection_contour_uv_{gtype}'
+    if inflection_contour_key in npz:
+        contour_uv = npz[inflection_contour_key]
+    elif f'boundary_contour_uv_{gtype}' in npz:
+        contour_uv = npz[f'boundary_contour_uv_{gtype}']
+    else:
+        contour_uv = None
 
     n_cols = grid_v.shape[1]
     rows: list[dict] = []
@@ -283,6 +289,9 @@ def run_rf_profile_extraction(
             contour_key = f'boundary_contour_uv_{gtype}'
             contour_uv = npz[contour_key] if contour_key in npz else None
 
+            gradient_contour_key = f'gradient_contour_uv_{gtype}'
+            gradient_contour_uv = npz[gradient_contour_key] if gradient_contour_key in npz else None
+
             grid_u = npz[f'grid_u_{gtype}']
             grid_v = npz[f'grid_v_{gtype}']
             grid_z = npz[f'grid_z_{gtype}']
@@ -311,6 +320,11 @@ def run_rf_profile_extraction(
                 smoothed = npz[smoothed_key]
                 laplacian = npz[laplacian_key]
 
+            gradient_mag_key = f'gradient_mag_{gtype}'
+            has_gradient = gradient_mag_key in npz
+            if has_gradient:
+                gradient_mag = npz[gradient_mag_key]
+
             if has_laplacian:
                 laplacian_2d_dir = session_output_dir / 'laplacian_2d'
                 laplacian_2d_dir.mkdir(parents=True, exist_ok=True)
@@ -323,6 +337,7 @@ def run_rf_profile_extraction(
                 j = int(np.argmin(np.abs(v_coords - center[1])))
                 iff_u = grid_z[:, j]
                 crossings_u = find_boundary_u_crossings(contour_uv, v_coords[j])
+                grad_crossings_u = find_boundary_u_crossings(gradient_contour_uv, v_coords[j])
                 u_png = session_output_dir / f'{session_id}_rf_profile_u_{center_type}_{gtype}.png'
                 render_center_axis_profile(
                     coords=u_coords,
@@ -331,6 +346,7 @@ def run_rf_profile_extraction(
                     output_path=u_png,
                     title=f"{session_id} | {gtype} | IFF vs U at {center_type} (V={v_coords[j]:.1f} mm)",
                     xlabel="U (mm)",
+                    gradient_crossings=grad_crossings_u if len(grad_crossings_u) > 0 else None,
                 )
                 produced_pngs.append(str(u_png))
                 produced_svgs.append(str(u_png.with_suffix('.svg')))
@@ -346,6 +362,7 @@ def run_rf_profile_extraction(
                         title=f"{session_id} | {gtype} | Smoothed IFF vs U at {center_type} (V={v_coords[j]:.1f} mm)",
                         xlabel="U (mm)",
                         ylabel="Smoothed IFF (Hz)",
+                        gradient_crossings=grad_crossings_u if len(grad_crossings_u) > 0 else None,
                     )
                     produced_pngs.append(str(u_smooth_png))
                     produced_svgs.append(str(u_smooth_png.with_suffix('.svg')))
@@ -377,10 +394,25 @@ def run_rf_profile_extraction(
                     produced_pngs.append(str(u_lap_png))
                     produced_svgs.append(str(u_lap_png.with_suffix('.svg')))
 
+                if has_gradient:
+                    grad_u = gradient_mag[:, j]
+                    u_grad_png = session_output_dir / f'{session_id}_rf_gradient_1d_u_{center_type}_{gtype}.png'
+                    render_gradient_profile(
+                        coords=u_coords,
+                        grad_values=grad_u,
+                        gradient_crossings=grad_crossings_u,
+                        output_path=u_grad_png,
+                        title=f"{session_id} | {gtype} | |∇IFF| vs U at {center_type} (V={v_coords[j]:.1f} mm)",
+                        xlabel="U (mm)",
+                    )
+                    produced_pngs.append(str(u_grad_png))
+                    produced_svgs.append(str(u_grad_png.with_suffix('.svg')))
+
                 # V-profile: IFF vs V at constant U = center_u
                 i = int(np.argmin(np.abs(u_coords - center[0])))
                 iff_v = grid_z[i, :]
                 crossings_v = find_boundary_v_crossings(contour_uv, u_coords[i])
+                grad_crossings_v = find_boundary_v_crossings(gradient_contour_uv, u_coords[i])
                 v_png = session_output_dir / f'{session_id}_rf_profile_v_{center_type}_{gtype}.png'
                 render_center_axis_profile(
                     coords=v_coords,
@@ -389,6 +421,7 @@ def run_rf_profile_extraction(
                     output_path=v_png,
                     title=f"{session_id} | {gtype} | IFF vs V at {center_type} (U={u_coords[i]:.1f} mm)",
                     xlabel="V (mm)",
+                    gradient_crossings=grad_crossings_v if len(grad_crossings_v) > 0 else None,
                 )
                 produced_pngs.append(str(v_png))
                 produced_svgs.append(str(v_png.with_suffix('.svg')))
@@ -404,6 +437,7 @@ def run_rf_profile_extraction(
                         title=f"{session_id} | {gtype} | Smoothed IFF vs V at {center_type} (U={u_coords[i]:.1f} mm)",
                         xlabel="V (mm)",
                         ylabel="Smoothed IFF (Hz)",
+                        gradient_crossings=grad_crossings_v if len(grad_crossings_v) > 0 else None,
                     )
                     produced_pngs.append(str(v_smooth_png))
                     produced_svgs.append(str(v_smooth_png.with_suffix('.svg')))
@@ -434,6 +468,20 @@ def run_rf_profile_extraction(
                     )
                     produced_pngs.append(str(v_lap_png))
                     produced_svgs.append(str(v_lap_png.with_suffix('.svg')))
+
+                if has_gradient:
+                    grad_v = gradient_mag[i, :]
+                    v_grad_png = session_output_dir / f'{session_id}_rf_gradient_1d_v_{center_type}_{gtype}.png'
+                    render_gradient_profile(
+                        coords=v_coords,
+                        grad_values=grad_v,
+                        gradient_crossings=grad_crossings_v,
+                        output_path=v_grad_png,
+                        title=f"{session_id} | {gtype} | |∇IFF| vs V at {center_type} (U={u_coords[i]:.1f} mm)",
+                        xlabel="V (mm)",
+                    )
+                    produced_pngs.append(str(v_grad_png))
+                    produced_svgs.append(str(v_grad_png.with_suffix('.svg')))
 
         sentinel_data = {
             'session_id': session_id,
