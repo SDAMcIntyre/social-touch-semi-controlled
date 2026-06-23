@@ -603,6 +603,50 @@ def compute_uv_to_mm_scale(
     return float(np.median(len_3d[valid] / len_uv[valid]))
 
 
+def compute_highest_contour_peak(
+    u_grid: np.ndarray,
+    v_grid: np.ndarray,
+    interp_grid: np.ndarray,
+    n_levels: int = 6,
+) -> np.ndarray | None:
+    """Return the peak intensity location inside the highest valid contour level.
+
+    Returns (2,) UV coordinate array, or None if no valid contour exists.
+    """
+    from matplotlib.path import Path as MplPath
+
+    finite_vals = interp_grid[np.isfinite(interp_grid)]
+    if finite_vals.size == 0 or finite_vals.min() == finite_vals.max():
+        return None
+
+    levels = np.linspace(finite_vals.min(), finite_vals.max(), n_levels + 2)[1:-1]
+
+    matplotlib.use('Agg')
+    fig = plt.figure()
+    ax = fig.add_subplot(111)
+    cs = ax.contour(u_grid, v_grid, interp_grid, levels=levels)
+    plt.close(fig)
+
+    grid_points = np.column_stack([u_grid.ravel(), v_grid.ravel()])
+
+    for level_idx in range(len(levels) - 1, -1, -1):
+        segments = cs.allsegs[level_idx]
+        if not segments:
+            continue
+        longest = max(segments, key=lambda s: len(s))
+        if len(longest) < 3:
+            continue
+        inside = MplPath(longest).contains_points(grid_points).reshape(u_grid.shape)
+        masked = np.where(inside & np.isfinite(interp_grid), interp_grid, np.nan)
+        if np.all(np.isnan(masked)):
+            continue
+        peak_idx = np.nanargmax(masked)
+        row, col = np.unravel_index(peak_idx, masked.shape)
+        return np.array([float(u_grid[row, col]), float(v_grid[row, col])])
+
+    return None
+
+
 def render_population_rf_circular_crop(
     u_grid: np.ndarray,
     v_grid: np.ndarray,
@@ -624,6 +668,8 @@ def render_population_rf_circular_crop(
     contour_alpha: float = 0.7,
     centroid_uv: np.ndarray | None = None,
     centroid_color: str = "red",
+    xlim: tuple[float, float] | None = None,
+    ylim: tuple[float, float] | None = None,
 ) -> None:
     """Render a transparent circular crop of a population RF heatmap and save as PNG.
 
@@ -677,6 +723,12 @@ def render_population_rf_circular_crop(
         (2,) UV coordinate for a centroid ``+`` marker. None disables the marker.
     centroid_color:
         Centroid marker color (default ``"red"``).
+    xlim:
+        Fixed (xmin, xmax) axis limits in UV space. If None, computed from
+        ``center_uv ± radius_uv``.
+    ylim:
+        Fixed (ymin, ymax) axis limits in UV space. If None, computed from
+        ``center_uv ± radius_uv``.
     """
     from matplotlib.patches import Circle
 
@@ -727,9 +779,13 @@ def render_population_rf_circular_crop(
     for artist in list(ax.collections) + list(ax.lines):
         artist.set_clip_path(clip_circle)
 
-    margin = radius_uv * 0.05
-    ax.set_xlim(center_uv[0] - radius_uv - margin, center_uv[0] + radius_uv + margin)
-    ax.set_ylim(center_uv[1] - radius_uv - margin, center_uv[1] + radius_uv + margin)
+    if xlim is not None and ylim is not None:
+        ax.set_xlim(*xlim)
+        ax.set_ylim(*ylim)
+    else:
+        margin = radius_uv * 0.05
+        ax.set_xlim(center_uv[0] - radius_uv - margin, center_uv[0] + radius_uv + margin)
+        ax.set_ylim(center_uv[1] - radius_uv - margin, center_uv[1] + radius_uv + margin)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, dpi=dpi, bbox_inches='tight', transparent=True)

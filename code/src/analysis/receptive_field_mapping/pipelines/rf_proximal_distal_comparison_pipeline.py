@@ -15,15 +15,17 @@ from analysis.receptive_field_mapping.rendering.neuron_type_colors import (
 )
 from analysis.receptive_field_mapping.rendering.rf_proximal_distal_comparison_renderer import (
     render_center_marked_heatmap,
-    render_centroid_shift_decomposition,
     render_proximal_distal_aggregate,
+    render_proximal_distal_contour_center_aggregate,
     render_proximal_distal_contour_overlay,
     render_proximal_distal_heatmap_triptych,
     render_proximal_distal_hotspot_aggregate,
     render_proximal_distal_metric_deltas,
     render_proximal_distal_population_strips,
+    render_shift_decomposition,
 )
 from analysis.receptive_field_mapping.rendering.rf_population_map_renderer import (
+    compute_highest_contour_peak,
     compute_standalone_figwidth,
     compute_uv_to_mm_scale,
     render_population_rf_circular_crop,
@@ -306,6 +308,46 @@ def run_proximal_distal_comparison(
 
         all_forearm_uv.append(forearm_uv)
 
+        # Contour-center shift decomposition (proximal − distal)
+        _cc_proximal = None
+        _cc_distal = None
+        if 'stroke_proximal' in gestures_with_centroid:
+            _gu, _gv, _gz = gestures_with_centroid['stroke_proximal'][:3]
+            _cc_proximal = compute_highest_contour_peak(_gu, _gv, _gz, n_levels=6)
+        if 'stroke_distal' in gestures_with_centroid:
+            _gu, _gv, _gz = gestures_with_centroid['stroke_distal'][:3]
+            _cc_distal = compute_highest_contour_peak(_gu, _gv, _gz, n_levels=6)
+
+        if _cc_proximal is not None and _cc_distal is not None:
+            _cc_shift_uv = _cc_proximal - _cc_distal
+            _cc_shift_along_arm_mm = float(_cc_shift_uv[0]) * uv_to_mm
+            _cc_shift_across_arm_mm = float(_cc_shift_uv[1]) * uv_to_mm
+        else:
+            _cc_shift_along_arm_mm = nan
+            _cc_shift_across_arm_mm = nan
+
+        # Peak (hotspot) shift decomposition (proximal − distal in UV → mm)
+        if hotspot_available:
+            _peak_shift_uv = hotspot_proximal - hotspot_distal
+            _peak_shift_along_arm_mm = float(_peak_shift_uv[0]) * uv_to_mm
+            _peak_shift_across_arm_mm = float(_peak_shift_uv[1]) * uv_to_mm
+        else:
+            _peak_shift_along_arm_mm = nan
+            _peak_shift_across_arm_mm = nan
+
+        # Contour-center for 'all' gesture type (reference for aggregate scatter)
+        _cc_all = None
+        if 'all' in gestures_with_centroid:
+            _gu_all, _gv_all, _gz_all = gestures_with_centroid['all'][:3]
+            _cc_all = compute_highest_contour_peak(_gu_all, _gv_all, _gz_all, n_levels=6)
+
+        if _cc_all is not None and _cc_proximal is not None and _cc_distal is not None:
+            _cc_offset_proximal = (_cc_proximal - _cc_all) * uv_to_mm
+            _cc_offset_distal = (_cc_distal - _cc_all) * uv_to_mm
+        else:
+            _cc_offset_proximal = None
+            _cc_offset_distal = None
+
         valid_data.append({
             'session_id': session_id,
             'db_path': db_path_item,
@@ -347,6 +389,15 @@ def run_proximal_distal_comparison(
             'heatmap_pearson_r': _heatmap_pearson_r,
             'centroid_shift_along_arm_mm': _centroid_shift_along_arm_mm,
             'centroid_shift_across_arm_mm': _centroid_shift_across_arm_mm,
+            'contour_center_shift_along_arm_mm': _cc_shift_along_arm_mm,
+            'contour_center_shift_across_arm_mm': _cc_shift_across_arm_mm,
+            'peak_shift_along_arm_mm': _peak_shift_along_arm_mm,
+            'peak_shift_across_arm_mm': _peak_shift_across_arm_mm,
+            'cc_all': _cc_all,
+            'cc_proximal': _cc_proximal,
+            'cc_distal': _cc_distal,
+            'cc_offset_proximal': _cc_offset_proximal,
+            'cc_offset_distal': _cc_offset_distal,
             # Phase 3 — contour and grid data for per-session overlay/triptych figures
             'contour_proximal_uv': (
                 npz['boundary_contour_uv_stroke_proximal'].astype(np.float64)
@@ -441,6 +492,16 @@ def run_proximal_distal_comparison(
             'heatmap_pearson_r': _heatmap_pearson_r,
             'centroid_shift_along_arm_mm': _centroid_shift_along_arm_mm,
             'centroid_shift_across_arm_mm': _centroid_shift_across_arm_mm,
+            'contour_center_shift_along_arm_mm': _cc_shift_along_arm_mm,
+            'contour_center_shift_across_arm_mm': _cc_shift_across_arm_mm,
+            'peak_shift_along_arm_mm': _peak_shift_along_arm_mm,
+            'peak_shift_across_arm_mm': _peak_shift_across_arm_mm,
+            'cc_u_all': float(_cc_all[0]) if _cc_all is not None else nan,
+            'cc_v_all': float(_cc_all[1]) if _cc_all is not None else nan,
+            'cc_offset_u_proximal_mm': float(_cc_offset_proximal[0]) if _cc_offset_proximal is not None else nan,
+            'cc_offset_v_proximal_mm': float(_cc_offset_proximal[1]) if _cc_offset_proximal is not None else nan,
+            'cc_offset_u_distal_mm': float(_cc_offset_distal[0]) if _cc_offset_distal is not None else nan,
+            'cc_offset_v_distal_mm': float(_cc_offset_distal[1]) if _cc_offset_distal is not None else nan,
         })
 
     if not valid_data:
@@ -477,6 +538,35 @@ def run_proximal_distal_comparison(
         session_id = d['session_id']
         session_output_dir = output_dir / session_id
         session_output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Pre-pass: collect all crop centers across gesture types for shared limits
+        radius_mm = 50.0
+        scale = compute_uv_to_mm_scale(
+            d['forearm_uv'], d['forearm_V'], d['forearm_faces'],
+        )
+        radius_uv = radius_mm / scale
+        margin = radius_uv * 0.05
+
+        all_crop_centers: list[np.ndarray] = []
+        contour_centers: dict[str, np.ndarray | None] = {}
+        for _gt, (_gu, _gv, _gz, _cent, _nt, _thr, _pk) in d['gestures_with_centroid'].items():
+            all_crop_centers.append(_cent)
+            if _pk is not None:
+                all_crop_centers.append(_pk)
+            _cc = compute_highest_contour_peak(_gu, _gv, _gz, n_levels=6)
+            contour_centers[_gt] = _cc
+            if _cc is not None:
+                all_crop_centers.append(_cc)
+
+        all_centers_arr = np.array(all_crop_centers)
+        shared_crop_xlim = (
+            float(all_centers_arr[:, 0].min()) - radius_uv - margin,
+            float(all_centers_arr[:, 0].max()) + radius_uv + margin,
+        )
+        shared_crop_ylim = (
+            float(all_centers_arr[:, 1].min()) - radius_uv - margin,
+            float(all_centers_arr[:, 1].max()) + radius_uv + margin,
+        )
 
         for gtype, (grid_u, grid_v, grid_z, centroid_uv_gtype, n_touches, _threshold, peak_uv_gtype) in d['gestures_with_centroid'].items():
             render_center_marked_heatmap(
@@ -522,28 +612,31 @@ def run_proximal_distal_comparison(
                     contour_color=contour_color,
                 )
 
-            # Task 1.3 — circular crops: centroid (always) and peak (guarded)
-            render_population_rf_circular_crop(
-                u_grid=grid_u,
-                v_grid=grid_v,
-                interp_grid=grid_z,
-                forearm_uv=d['forearm_uv'],
-                forearm_V=d['forearm_V'],
-                forearm_faces=d['forearm_faces'],
-                center_uv=centroid_uv_gtype,
-                radius_mm=50.0,
-                vmax=global_vmax,
-                vmin=global_vmin,
-                output_path=session_output_dir / f'{session_id}_rf_circular_centroid_{gtype}_{cmap}.png',
-                vertex_colors=d['slim_vertex_colors'],
-                heatmap_space=heatmap_space,
-                dpi=300,
-                cmap=cmap,
-                contour_levels=6,
-                centroid_uv=centroid_uv_gtype,
-            )
+            # Circular crops per center type, each in its own subdirectory
+            centroid_crop_dir = session_output_dir / 'centroid'
+            peak_crop_dir = session_output_dir / 'peak'
+            contour_center_crop_dir = session_output_dir / 'contour_center'
+            for d_path in (centroid_crop_dir, peak_crop_dir, contour_center_crop_dir):
+                d_path.mkdir(parents=True, exist_ok=True)
 
+            contour_center = contour_centers[gtype]
+
+            crop_jobs: list[tuple[np.ndarray, np.ndarray, Path]] = [
+                (centroid_uv_gtype, centroid_uv_gtype,
+                 centroid_crop_dir / f'{session_id}_rf_circular_centroid_{gtype}_{cmap}.png'),
+            ]
             if peak_uv_gtype is not None:
+                crop_jobs.append((
+                    peak_uv_gtype, centroid_uv_gtype,
+                    peak_crop_dir / f'{session_id}_rf_circular_peak_{gtype}_{cmap}.png',
+                ))
+            if contour_center is not None:
+                crop_jobs.append((
+                    contour_center, contour_center,
+                    contour_center_crop_dir / f'{session_id}_rf_circular_contour_center_{gtype}_{cmap}.png',
+                ))
+
+            for center_uv, marker_uv, out_path in crop_jobs:
                 render_population_rf_circular_crop(
                     u_grid=grid_u,
                     v_grid=grid_v,
@@ -551,17 +644,19 @@ def run_proximal_distal_comparison(
                     forearm_uv=d['forearm_uv'],
                     forearm_V=d['forearm_V'],
                     forearm_faces=d['forearm_faces'],
-                    center_uv=peak_uv_gtype,
-                    radius_mm=50.0,
+                    center_uv=center_uv,
+                    radius_mm=radius_mm,
                     vmax=global_vmax,
                     vmin=global_vmin,
-                    output_path=session_output_dir / f'{session_id}_rf_circular_peak_{gtype}_{cmap}.png',
+                    output_path=out_path,
                     vertex_colors=d['slim_vertex_colors'],
                     heatmap_space=heatmap_space,
                     dpi=300,
                     cmap=cmap,
                     contour_levels=6,
-                    centroid_uv=centroid_uv_gtype,
+                    centroid_uv=marker_uv,
+                    xlim=shared_crop_xlim,
+                    ylim=shared_crop_ylim,
                 )
 
         # Phase 3 — contour overlay and heatmap triptych (per-session, outside gesture loop)
@@ -684,6 +779,16 @@ def run_proximal_distal_comparison(
         'heatmap_pearson_r': np.float64,
         'centroid_shift_along_arm_mm': np.float64,
         'centroid_shift_across_arm_mm': np.float64,
+        'contour_center_shift_along_arm_mm': np.float64,
+        'contour_center_shift_across_arm_mm': np.float64,
+        'peak_shift_along_arm_mm': np.float64,
+        'peak_shift_across_arm_mm': np.float64,
+        'cc_u_all': np.float64,
+        'cc_v_all': np.float64,
+        'cc_offset_u_proximal_mm': np.float64,
+        'cc_offset_v_proximal_mm': np.float64,
+        'cc_offset_u_distal_mm': np.float64,
+        'cc_offset_v_distal_mm': np.float64,
     })
     csv_path = output_dir / 'rf_proximal_distal_comparison_summary.csv'
     df.to_csv(csv_path, index=False)
@@ -732,6 +837,29 @@ def run_proximal_distal_comparison(
     else:
         logger.warning("[RF Proximal-Distal Comparison] no sessions with hotspot data — skipping hotspot aggregate plot.")
 
+    cc_valid_data = [d for d in valid_data if d['cc_offset_proximal'] is not None]
+    if cc_valid_data:
+        session_cc_offsets = {
+            d['session_id']: {
+                'stroke_proximal': d['cc_offset_proximal'],
+                'stroke_distal': d['cc_offset_distal'],
+            }
+            for d in cc_valid_data
+        }
+        cc_aggregate_mm_limits = _compute_aggregate_mm_limits_from_offsets(
+            [(d['cc_offset_proximal'], d['cc_offset_distal']) for d in cc_valid_data]
+        )
+        render_proximal_distal_contour_center_aggregate(
+            session_contour_centers=session_cc_offsets,
+            output_path=output_dir / 'rf_contour_center_proximal_distal_aggregate.png',
+            mm_limits=cc_aggregate_mm_limits,
+        )
+    else:
+        logger.warning(
+            "[RF Proximal-Distal Comparison] no sessions with contour-center data — "
+            "skipping contour-center aggregate plot."
+        )
+
     # Phase 4 — cross-session aggregate figures
     render_proximal_distal_metric_deltas(
         df=df,
@@ -747,9 +875,32 @@ def run_proximal_distal_comparison(
         neuron_type_legend=neuron_type_legend,
     )
 
-    render_centroid_shift_decomposition(
+    render_shift_decomposition(
         df=df,
         output_path=output_dir / 'rf_centroid_shift_decomposition.png',
+        along_col='centroid_shift_along_arm_mm',
+        across_col='centroid_shift_across_arm_mm',
+        title='Centroid Shift Decomposition (Proximal − Distal)',
+        session_colors=session_colors,
+        neuron_type_legend=neuron_type_legend,
+    )
+
+    render_shift_decomposition(
+        df=df,
+        output_path=output_dir / 'rf_contour_center_shift_decomposition.png',
+        along_col='contour_center_shift_along_arm_mm',
+        across_col='contour_center_shift_across_arm_mm',
+        title='Contour Center Shift Decomposition (Proximal − Distal)',
+        session_colors=session_colors,
+        neuron_type_legend=neuron_type_legend,
+    )
+
+    render_shift_decomposition(
+        df=df,
+        output_path=output_dir / 'rf_peak_shift_decomposition.png',
+        along_col='peak_shift_along_arm_mm',
+        across_col='peak_shift_across_arm_mm',
+        title='Peak Shift Decomposition (Proximal − Distal)',
         session_colors=session_colors,
         neuron_type_legend=neuron_type_legend,
     )

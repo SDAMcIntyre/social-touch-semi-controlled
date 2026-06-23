@@ -219,7 +219,7 @@ tasks:
     category: spatial_sensitivity
     enabled: true
     options:
-      force_processing: false
+      force_processing: true
       iff_metric: both
       heatmap_space: linear
       cmap: inferno

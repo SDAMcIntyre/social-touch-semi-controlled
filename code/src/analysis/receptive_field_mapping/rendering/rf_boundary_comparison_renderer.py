@@ -77,6 +77,66 @@ def render_boundary_contour_overlay(
     plt.close(fig)
 
 
+def render_boundary_contour_overlay_circular(
+    contours: dict[str, np.ndarray],
+    centroids: dict[str, np.ndarray],
+    gesture_type: str,
+    output_path: Path,
+    radius_uv: float,
+) -> None:
+    """Circular-cropped version of the contour overlay, centered on the mean centroid."""
+    from matplotlib.patches import Circle
+
+    if not contours:
+        raise ValueError("render_boundary_contour_overlay_circular: contours dict is empty")
+
+    all_centroids = np.array([c for c in centroids.values() if c is not None])
+    if all_centroids.size == 0:
+        raise ValueError("render_boundary_contour_overlay_circular: no valid centroids")
+    center = all_centroids.mean(axis=0)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        cmap = matplotlib.colormaps['tab20']
+    except AttributeError:
+        cmap = matplotlib.cm.get_cmap('tab20')
+
+    session_ids = sorted(contours.keys())
+    n = len(session_ids)
+
+    fig, ax = plt.subplots(figsize=(6, 6))
+    fig.patch.set_alpha(0.0)
+    ax.patch.set_facecolor('#303030')
+    ax.set_aspect('equal')
+    ax.axis('off')
+
+    for i, session_id in enumerate(session_ids):
+        color = cmap(i / max(n, 1))
+        contour = contours[session_id]
+        closed_contour = np.vstack([contour, contour[:1]])
+        ax.plot(closed_contour[:, 0], closed_contour[:, 1], color=color, lw=1.5, label=session_id)
+        if session_id in centroids:
+            c = centroids[session_id]
+            ax.plot(c[0], c[1], marker='+', ms=6, color=color, zorder=7)
+
+    clip_circle = Circle(center, radius_uv, transform=ax.transData, fill=False,
+                         edgecolor='white', linewidth=1.0, linestyle='--', zorder=8)
+    ax.add_patch(clip_circle)
+    for artist in list(ax.lines):
+        artist.set_clip_path(clip_circle)
+
+    margin = radius_uv * 0.05
+    ax.set_xlim(center[0] - radius_uv - margin, center[0] + radius_uv + margin)
+    ax.set_ylim(center[1] - radius_uv - margin, center[1] + radius_uv + margin)
+
+    ax.legend(fontsize=6, loc='upper right', framealpha=0.7)
+
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=200, bbox_inches='tight', transparent=True)
+    plt.close(fig)
+
+
 def render_boundary_metric_panels(
     df: pd.DataFrame,
     gesture_type: str,

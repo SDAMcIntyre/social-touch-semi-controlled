@@ -354,6 +354,55 @@ def render_proximal_distal_hotspot_aggregate(
     plt.close(fig)
 
 
+def render_proximal_distal_contour_center_aggregate(
+    session_contour_centers: dict[str, dict[str, np.ndarray]],
+    output_path: Path,
+    mm_limits: tuple[tuple[float, float], tuple[float, float]] | None = None,
+) -> None:
+    if not session_contour_centers:
+        raise ValueError("render_proximal_distal_contour_center_aggregate: session_contour_centers is empty")
+
+    try:
+        cmap_tab20 = matplotlib.colormaps['tab20']
+    except AttributeError:
+        cmap_tab20 = matplotlib.cm.get_cmap('tab20')
+
+    session_ids = sorted(session_contour_centers.keys())
+    n_sessions = len(session_ids)
+
+    fig, ax = plt.subplots(figsize=(8, 7), facecolor='white')
+    ax.set_facecolor('white')
+
+    ax.axhline(0, color='lightgray', lw=0.8, zorder=0)
+    ax.axvline(0, color='lightgray', lw=0.8, zorder=0)
+
+    for i, session_id in enumerate(session_ids):
+        color = cmap_tab20(i / max(n_sessions, 1))
+        offsets = session_contour_centers[session_id]
+        prox = offsets['stroke_proximal']
+        dist = offsets['stroke_distal']
+
+        ax.plot([prox[0], dist[0]], [prox[1], dist[1]], color=color, lw=1.0, zorder=2)
+        ax.plot(prox[0], prox[1], 'o', ms=6, color=color, label=session_id, zorder=3)
+        ax.plot(dist[0], dist[1], 'D', ms=6, color=color, zorder=3)
+
+    ax.set_xlabel('ΔU from all-gesture contour center (mm)')
+    ax.set_ylabel('ΔV from all-gesture contour center (mm)')
+    ax.set_title('Proximal vs Distal RF Contour Center Offsets')
+    ax.set_aspect('equal')
+    ax.legend(fontsize=7, loc='best')
+
+    if mm_limits is not None:
+        ax.set_xlim(*mm_limits[0])
+        ax.set_ylim(*mm_limits[1])
+
+    fig.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(str(output_path), dpi=120)
+    logger.info("Saved proximal-distal contour-center aggregate: %s", output_path)
+    plt.close(fig)
+
+
 _DELTA_METRICS = [
     'delta_area_mm2',
     'delta_area_pct',
@@ -374,6 +423,12 @@ _STRIP_METRICS = [
     'delta_mean_iff_on_contour',
     'contour_overlap_iou',
     'heatmap_pearson_r',
+    'centroid_shift_along_arm_mm',
+    'centroid_shift_across_arm_mm',
+    'contour_center_shift_along_arm_mm',
+    'contour_center_shift_across_arm_mm',
+    'peak_shift_along_arm_mm',
+    'peak_shift_across_arm_mm',
 ]
 
 
@@ -530,13 +585,16 @@ def render_proximal_distal_population_strips(
     plt.close(fig)
 
 
-def render_centroid_shift_decomposition(
+def render_shift_decomposition(
     df: pd.DataFrame,
     output_path: Path,
+    along_col: str,
+    across_col: str,
+    title: str,
     session_colors: dict[str, str] | None = None,
     neuron_type_legend: dict[str, str] | None = None,
 ) -> None:
-    """Arrow/quiver plot showing per-session centroid shift vectors."""
+    """Arrow/quiver plot showing per-session shift vectors for a given center type."""
     try:
         cmap_tab20 = matplotlib.colormaps['tab20']
     except AttributeError:
@@ -553,8 +611,8 @@ def render_centroid_shift_decomposition(
 
     for i, row in enumerate(df.itertuples(index=False)):
         session_id = row.session_id
-        along = getattr(row, 'centroid_shift_along_arm_mm', float('nan'))
-        across = getattr(row, 'centroid_shift_across_arm_mm', float('nan'))
+        along = getattr(row, along_col, float('nan'))
+        across = getattr(row, across_col, float('nan'))
 
         if not (np.isfinite(along) and np.isfinite(across)):
             continue
@@ -575,7 +633,7 @@ def render_centroid_shift_decomposition(
 
     ax.set_xlabel('Along arm (ΔU) mm')
     ax.set_ylabel('Across arm (ΔV) mm')
-    ax.set_title('Centroid Shift Decomposition (Proximal − Distal)')
+    ax.set_title(title)
     ax.set_aspect('equal')
 
     if neuron_type_legend:
