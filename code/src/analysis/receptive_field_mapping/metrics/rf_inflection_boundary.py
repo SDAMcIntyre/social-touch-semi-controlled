@@ -58,6 +58,9 @@ class InflectionBoundary:
     mean_iff_on_contour: float
     """Mean IFF value sampled along the contour path."""
 
+    iff_at_centroid: float
+    """IFF value sampled at the polygon centroid via bilinear interpolation."""
+
 
 # ---------------------------------------------------------------------------
 # Public Laplacian computation
@@ -299,6 +302,28 @@ def _compute_contour_pca(
 # ---------------------------------------------------------------------------
 # Contour IFF sampling
 # ---------------------------------------------------------------------------
+
+
+def _sample_grid_at_uv_point(
+    grid_z: np.ndarray,
+    grid_u: np.ndarray,
+    grid_v: np.ndarray,
+    uv_point: tuple[float, float],
+) -> float:
+    """Bilinear interpolation of grid_z at a single UV-space point.
+
+    Converts the UV coordinate to grid (row, col) using the inverse of
+    ``_contour_pixels_to_uv``, then delegates to ``_sample_grid_along_contour``.
+    """
+    n_rows, n_cols = grid_u.shape
+    u_min, u_max = float(grid_u[0, 0]), float(grid_u[-1, 0])
+    v_min, v_max = float(grid_v[0, 0]), float(grid_v[0, -1])
+
+    row = (uv_point[0] - u_min) / (u_max - u_min) * (n_rows - 1)
+    col = (uv_point[1] - v_min) / (v_max - v_min) * (n_cols - 1)
+
+    point_rc = np.array([[row, col]])
+    return _sample_grid_along_contour(grid_z, point_rc)
 
 
 def _sample_grid_along_contour(
@@ -677,11 +702,13 @@ def compute_inflection_boundary(
     peak_uv = (float(peak_uv_arr[0, 0]), float(peak_uv_arr[0, 1]))
     pca_major, pca_minor, pca_orientation_deg = _compute_contour_pca(contour_uv)
     mean_iff = _sample_grid_along_contour(grid_z, selected)
+    iff_at_centroid = _sample_grid_at_uv_point(grid_z, grid_u, grid_v, centroid_uv)
 
     logger.info(
         "inflection_boundary: SUCCESS — contour_pts=%d, area_uv=%.4f, "
-        "circularity=%.3f, centroid_uv=(%.3f, %.3f)",
+        "circularity=%.3f, centroid_uv=(%.3f, %.3f), iff_at_centroid=%.4f",
         len(contour_uv), area_uv, circularity, centroid_uv[0], centroid_uv[1],
+        iff_at_centroid,
     )
 
     if snapshot_dir is not None:
@@ -716,6 +743,7 @@ def compute_inflection_boundary(
         pca_minor_uv=pca_minor,
         pca_orientation_deg=pca_orientation_deg,
         mean_iff_on_contour=mean_iff,
+        iff_at_centroid=iff_at_centroid,
     )
 
 
@@ -752,4 +780,5 @@ def inflection_boundary_to_dict(boundary: InflectionBoundary) -> dict:
         "pca_minor_uv": _to_json_safe(boundary.pca_minor_uv),
         "pca_orientation_deg": _to_json_safe(boundary.pca_orientation_deg),
         "mean_iff_on_contour": _to_json_safe(boundary.mean_iff_on_contour),
+        "iff_at_centroid": _to_json_safe(boundary.iff_at_centroid),
     }

@@ -145,6 +145,15 @@ class TestCircularGaussian:
             f"expected {expected:.2f}"
         )
 
+    def test_iff_at_centroid_near_peak(self, boundary: InflectionBoundary) -> None:
+        # For a centred symmetric Gaussian the centroid ≈ peak, so the sampled
+        # value should be close to the peak amplitude (100).  Allow 30% tolerance
+        # because the centroid is polygon-based, not exactly on the peak pixel.
+        assert boundary.iff_at_centroid > 50.0, (
+            f"iff_at_centroid {boundary.iff_at_centroid:.2f} unexpectedly low for "
+            f"centred Gaussian with amplitude 100"
+        )
+
     def test_peak_uv_near_grid_center(self, boundary: InflectionBoundary) -> None:
         pu, pv = boundary.peak_uv
         tolerance = 0.05
@@ -308,6 +317,7 @@ class TestSerialization:
             "pca_minor_uv",
             "pca_orientation_deg",
             "mean_iff_on_contour",
+            "iff_at_centroid",
         }
         assert set(d.keys()) == expected_keys
 

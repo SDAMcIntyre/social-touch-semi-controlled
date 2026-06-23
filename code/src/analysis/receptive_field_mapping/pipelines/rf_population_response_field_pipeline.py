@@ -39,8 +39,10 @@ from analysis.receptive_field_mapping.metrics.rf_pca_alignment import (
     compute_rf_pca_alignment,
 )
 from analysis.receptive_field_mapping.rendering.rf_population_map_renderer import (
+    compute_highest_contour_peak,
     compute_interpolated_grid,
     compute_standalone_figwidth,
+    compute_uv_to_mm_scale,
     render_population_rf_circular_crop,
     render_population_rf_map,
     render_population_rf_composite,
@@ -620,63 +622,70 @@ def run_population_response_field_extraction(
                 "but none is available — ensure inflection_sigma is configured"
             )
         all_grid_u, all_grid_v, all_grid_z = sd.per_gesture_grids['all']
-        for center_label, center_uv in (
-            ('centroid', np.array(all_boundary.centroid_uv)),
-            ('peak', np.array(all_boundary.peak_uv)),
-        ):
-            circular_path = sd.output_dir / f'{sd.session_id}_rf_population_all_circular_{center_label}.png'
-            print(
-                f"[Population Response Fields] {sd.session_id}: "
-                f"rendering 'all' circular {center_label}..."
-            )
-            render_population_rf_circular_crop(
-                u_grid=all_grid_u,
-                v_grid=all_grid_v,
-                interp_grid=all_grid_z,
-                forearm_uv=sd.forearm_uv,
-                forearm_V=sd.forearm_V,
-                forearm_faces=sd.forearm_faces,
-                center_uv=center_uv,
-                radius_mm=50.0,
-                vmax=global_vmax,
-                vmin=global_vmin,
-                output_path=circular_path,
-                vertex_colors=sd.slim_vertex_colors,
-                heatmap_space=heatmap_space,
-                cmap=cmap,
-                contour_levels=6,
-                centroid_uv=np.array(all_boundary.centroid_uv),
-            )
-            sd.produced.append(circular_path)
-            print(f"[Population Response Fields] {sd.session_id}: saved {circular_path.name}")
 
-            circular_local_path = (
-                sd.output_dir / f'{sd.session_id}_rf_population_all_circular_{center_label}_local.png'
-            )
-            print(
-                f"[Population Response Fields] {sd.session_id}: "
-                f"rendering 'all' circular {center_label} (local scale)..."
-            )
-            render_population_rf_circular_crop(
-                u_grid=all_grid_u,
-                v_grid=all_grid_v,
-                interp_grid=all_grid_z,
-                forearm_uv=sd.forearm_uv,
-                forearm_V=sd.forearm_V,
-                forearm_faces=sd.forearm_faces,
-                center_uv=center_uv,
-                radius_mm=50.0,
-                vmax=sd.session_vmax,
-                vmin=sd.session_vmin,
-                output_path=circular_local_path,
-                vertex_colors=sd.slim_vertex_colors,
-                heatmap_space=heatmap_space,
-                cmap=cmap,
-                contour_levels=6,
-                centroid_uv=np.array(all_boundary.centroid_uv),
-            )
-            sd.produced.append(circular_local_path)
-            print(f"[Population Response Fields] {sd.session_id}: saved {circular_local_path.name}")
+        centroid_uv = np.array(all_boundary.centroid_uv)
+        peak_uv = np.array(all_boundary.peak_uv)
+        contour_center_uv = compute_highest_contour_peak(
+            all_grid_u, all_grid_v, all_grid_z, n_levels=6,
+        )
+
+        crop_jobs: list[tuple[str, np.ndarray, np.ndarray | None]] = [
+            ('centroid', centroid_uv, centroid_uv),
+            ('peak', peak_uv, peak_uv),
+        ]
+        if contour_center_uv is not None:
+            crop_jobs.append(('contour_center', contour_center_uv, contour_center_uv))
+
+        radius_mm = 50.0
+        scale = compute_uv_to_mm_scale(sd.forearm_uv, sd.forearm_V, sd.forearm_faces)
+        radius_uv = radius_mm / scale
+        margin = radius_uv * 0.05
+        all_centers = np.array([c for _, c, _ in crop_jobs])
+        shared_xlim = (
+            float(all_centers[:, 0].min()) - radius_uv - margin,
+            float(all_centers[:, 0].max()) + radius_uv + margin,
+        )
+        shared_ylim = (
+            float(all_centers[:, 1].min()) - radius_uv - margin,
+            float(all_centers[:, 1].max()) + radius_uv + margin,
+        )
+
+        for center_label, center_uv, marker_uv in crop_jobs:
+            for vmax_val, vmin_val, suffix in (
+                (global_vmax, global_vmin, ''),
+                (sd.session_vmax, sd.session_vmin, '_local'),
+            ):
+                for use_marker, marker_suffix in ((True, ''), (False, '_clean')):
+                    out_path = (
+                        sd.output_dir
+                        / f'{sd.session_id}_rf_population_all_circular_{center_label}{marker_suffix}{suffix}.png'
+                    )
+                    print(
+                        f"[Population Response Fields] {sd.session_id}: "
+                        f"rendering 'all' circular {center_label}{marker_suffix}{suffix}..."
+                    )
+                    render_population_rf_circular_crop(
+                        u_grid=all_grid_u,
+                        v_grid=all_grid_v,
+                        interp_grid=all_grid_z,
+                        forearm_uv=sd.forearm_uv,
+                        forearm_V=sd.forearm_V,
+                        forearm_faces=sd.forearm_faces,
+                        center_uv=center_uv,
+                        radius_mm=radius_mm,
+                        vmax=vmax_val,
+                        vmin=vmin_val,
+                        output_path=out_path,
+                        vertex_colors=sd.slim_vertex_colors,
+                        heatmap_space=heatmap_space,
+                        cmap=cmap,
+                        contour_levels=6,
+                        centroid_uv=marker_uv if use_marker else None,
+                        xlim=shared_xlim,
+                        ylim=shared_ylim,
+                    )
+                    sd.produced.append(out_path)
+                    print(f"[Population Response Fields] {sd.session_id}: saved {out_path.name}")
 
         _write_sentinel(sd.sentinel, sd.session_id, produced=sd.produced,
                         inflection_boundaries=sd.gesture_boundaries,
