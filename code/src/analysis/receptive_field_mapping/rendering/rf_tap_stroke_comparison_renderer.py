@@ -1,4 +1,4 @@
-"""Renderer for proximal-distal RF comparison plots."""
+"""Renderer for tap-vs-stroke RF comparison plots."""
 
 import logging
 from pathlib import Path
@@ -17,137 +17,56 @@ from analysis.receptive_field_mapping.rendering.rf_population_map_renderer impor
 
 logger = logging.getLogger(__name__)
 
+_DELTA_METRICS = [
+    'delta_area_mm2',
+    'delta_area_pct',
+    'delta_perimeter_mm',
+    'delta_circularity',
+    'delta_pca_aspect_ratio',
+    'delta_pca_orientation_deg',
+    'delta_mean_iff_on_contour',
+    'delta_peak_to_centroid_mm',
+    'contour_overlap_iou',
+    'delta_peak_iff',
+    'delta_equivalent_diameter_mm',
+    'delta_rf_sharpness',
+    'delta_iff_at_centroid',
+]
 
-def render_center_marked_heatmap(
-    u_grid: np.ndarray,
-    v_grid: np.ndarray,
-    interp_grid: np.ndarray,
-    forearm_uv: np.ndarray,
-    centroid_uv: np.ndarray,
-    output_path: Path,
-    vmax: float,
-    vmin: float,
-    title: str,
-    figwidth: float,
-    xlim: tuple[float, float] | None = None,
-    ylim: tuple[float, float] | None = None,
-    heatmap_space: str = "linear",
-    cmap: str = "inferno",
-    peak_uv: np.ndarray | None = None,
-    vertex_colors: np.ndarray | None = None,
-    forearm_faces: np.ndarray | None = None,
-    contour_color: str = "red",
-) -> None:
-    norm = LogNorm(vmin=vmin, vmax=vmax) if heatmap_space == "log" else Normalize(vmin=vmin, vmax=vmax)
-
-    fig, ax = plt.subplots(1, 1, figsize=(figwidth, 6), facecolor='black')
-    fig.suptitle(title, color='white', fontsize=9)
-
-    ax.set_facecolor('black')
-    ax.tick_params(colors='white')
-    ax.xaxis.label.set_color('white')
-    ax.yaxis.label.set_color('white')
-    for spine in ax.spines.values():
-        spine.set_edgecolor('white')
-    ax.set_aspect('equal')
-
-    if forearm_faces is not None:
-        _draw_forearm_mesh_background(ax, forearm_uv, forearm_faces, vertex_colors=vertex_colors)
-    else:
-        stride_bg = max(1, len(forearm_uv) // 5000)
-        ax.scatter(
-            forearm_uv[::stride_bg, 0], forearm_uv[::stride_bg, 1],
-            c='#404040', s=4, alpha=0.5, linewidths=0, rasterized=True,
-        )
-
-    display_grid = np.where(interp_grid > 0, interp_grid, np.nan)
-    ax.pcolormesh(u_grid, v_grid, display_grid, cmap=cmap, norm=norm, shading='auto')
-
-    ax.plot(
-        centroid_uv[0], centroid_uv[1],
-        color=contour_color, marker='+', markersize=10, markeredgewidth=2, zorder=7,
-    )
-
-    if peak_uv is not None:
-        ax.plot(
-            peak_uv[0], peak_uv[1],
-            color='red', marker='*', markersize=10, markeredgewidth=1.5, zorder=8,
-        )
-
-    ax.set_xlabel('U')
-    ax.set_ylabel('V')
-
-    if xlim is not None:
-        ax.set_xlim(xlim)
-    if ylim is not None:
-        ax.set_ylim(ylim)
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(str(output_path), dpi=150, facecolor='black')
-    logger.info("Saved center-marked heatmap: %s", output_path)
-    plt.close(fig)
+_STRIP_METRICS = [
+    'delta_area_mm2',
+    'delta_perimeter_mm',
+    'delta_circularity',
+    'delta_pca_aspect_ratio',
+    'delta_mean_iff_on_contour',
+    'contour_overlap_iou',
+    'heatmap_pearson_r',
+    'centroid_shift_along_arm_mm',
+    'centroid_shift_across_arm_mm',
+    'peak_shift_along_arm_mm',
+    'peak_shift_across_arm_mm',
+    'delta_peak_iff',
+    'delta_equivalent_diameter_mm',
+    'delta_rf_sharpness',
+    'delta_iff_at_centroid',
+    'containment_tap_in_stroke',
+    'containment_stroke_in_tap',
+    'contour_center_shift_along_arm_mm',
+    'contour_center_shift_across_arm_mm',
+]
 
 
-def render_proximal_distal_aggregate(
-    session_centroids: dict[str, dict[str, np.ndarray]],
-    output_path: Path,
-    mm_limits: tuple[tuple[float, float], tuple[float, float]] | None = None,
-) -> None:
-    if not session_centroids:
-        raise ValueError("render_proximal_distal_aggregate: session_centroids is empty")
-
-    try:
-        cmap_tab20 = matplotlib.colormaps['tab20']
-    except AttributeError:
-        cmap_tab20 = matplotlib.cm.get_cmap('tab20')
-
-    session_ids = sorted(session_centroids.keys())
-    n_sessions = len(session_ids)
-
-    fig, ax = plt.subplots(figsize=(8, 7), facecolor='white')
-    ax.set_facecolor('white')
-
-    ax.axhline(0, color='lightgray', lw=0.8, zorder=0)
-    ax.axvline(0, color='lightgray', lw=0.8, zorder=0)
-
-    for i, session_id in enumerate(session_ids):
-        color = cmap_tab20(i / max(n_sessions, 1))
-        offsets = session_centroids[session_id]
-        prox = offsets['stroke_proximal']
-        dist = offsets['stroke_distal']
-
-        ax.plot([prox[0], dist[0]], [prox[1], dist[1]], color=color, lw=1.0, zorder=2)
-        ax.plot(prox[0], prox[1], 'o', ms=6, color=color, label=session_id, zorder=3)
-        ax.plot(dist[0], dist[1], 'D', ms=6, color=color, zorder=3)
-
-    ax.set_xlabel('ΔU from all-gesture center (mm)')
-    ax.set_ylabel('ΔV from all-gesture center (mm)')
-    ax.set_title('Proximal vs Distal RF Center Offsets')
-    ax.set_aspect('equal')
-    ax.legend(fontsize=7, loc='best')
-
-    if mm_limits is not None:
-        ax.set_xlim(*mm_limits[0])
-        ax.set_ylim(*mm_limits[1])
-
-    fig.tight_layout()
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(str(output_path), dpi=120)
-    logger.info("Saved proximal-distal aggregate: %s", output_path)
-    plt.close(fig)
-
-
-def render_proximal_distal_contour_overlay(
+def render_tap_stroke_contour_overlay(
     forearm_uv: np.ndarray,
     forearm_faces: np.ndarray,
-    contour_proximal_uv: np.ndarray,
-    contour_distal_uv: np.ndarray,
-    centroid_proximal_uv: np.ndarray,
-    centroid_distal_uv: np.ndarray,
+    contour_tap_uv: np.ndarray,
+    contour_stroke_uv: np.ndarray,
+    centroid_tap_uv: np.ndarray,
+    centroid_stroke_uv: np.ndarray,
     output_path: Path,
-    contour_stroke_uv: np.ndarray | None = None,
-    hotspot_proximal_uv: np.ndarray | None = None,
-    hotspot_distal_uv: np.ndarray | None = None,
+    contour_all_uv: np.ndarray | None = None,
+    hotspot_tap_uv: np.ndarray | None = None,
+    hotspot_stroke_uv: np.ndarray | None = None,
     vertex_colors: np.ndarray | None = None,
     iou: float | None = None,
     area_ratio: float | None = None,
@@ -155,6 +74,7 @@ def render_proximal_distal_contour_overlay(
     xlim: tuple[float, float] | None = None,
     ylim: tuple[float, float] | None = None,
 ) -> None:
+    """Contour overlay: tap (green) vs stroke (red), optional all (dashed grey)."""
     fig, ax = plt.subplots(1, 1, figsize=(8, 6), facecolor='white')
     if title:
         fig.suptitle(title, color='black', fontsize=9)
@@ -169,39 +89,39 @@ def render_proximal_distal_contour_overlay(
 
     _draw_forearm_mesh_background(ax, forearm_uv, forearm_faces, vertex_colors=vertex_colors)
 
-    # Stroke contour (reference) as dashed grey
-    if contour_stroke_uv is not None:
-        _closed = np.vstack([contour_stroke_uv, contour_stroke_uv[0]])
-        ax.plot(_closed[:, 0], _closed[:, 1], color='grey', linestyle='--', lw=1.2, zorder=4, label='stroke')
+    # All-gesture contour (reference) as dashed grey
+    if contour_all_uv is not None:
+        _closed = np.vstack([contour_all_uv, contour_all_uv[0]])
+        ax.plot(_closed[:, 0], _closed[:, 1], color='grey', linestyle='--', lw=1.2, zorder=4, label='all')
 
-    # Proximal contour — cyan solid
-    _prox_closed = np.vstack([contour_proximal_uv, contour_proximal_uv[0]])
-    ax.plot(_prox_closed[:, 0], _prox_closed[:, 1], color='cyan', linestyle='-', lw=1.5, zorder=5, label='proximal')
+    # Tap contour — green solid
+    _tap_closed = np.vstack([contour_tap_uv, contour_tap_uv[0]])
+    ax.plot(_tap_closed[:, 0], _tap_closed[:, 1], color='#2ca02c', linestyle='-', lw=1.5, zorder=5, label='tap')
 
-    # Distal contour — magenta solid
-    _dist_closed = np.vstack([contour_distal_uv, contour_distal_uv[0]])
-    ax.plot(_dist_closed[:, 0], _dist_closed[:, 1], color='magenta', linestyle='-', lw=1.5, zorder=5, label='distal')
+    # Stroke contour — red solid
+    _stroke_closed = np.vstack([contour_stroke_uv, contour_stroke_uv[0]])
+    ax.plot(_stroke_closed[:, 0], _stroke_closed[:, 1], color='#d62728', linestyle='-', lw=1.5, zorder=5, label='stroke')
 
     # Centroids
     ax.plot(
-        centroid_proximal_uv[0], centroid_proximal_uv[1],
-        color='cyan', marker='+', markersize=10, markeredgewidth=2, linestyle='none', zorder=7,
+        centroid_tap_uv[0], centroid_tap_uv[1],
+        color='#2ca02c', marker='+', markersize=10, markeredgewidth=2, linestyle='none', zorder=7,
     )
     ax.plot(
-        centroid_distal_uv[0], centroid_distal_uv[1],
-        color='magenta', marker='+', markersize=10, markeredgewidth=2, linestyle='none', zorder=7,
+        centroid_stroke_uv[0], centroid_stroke_uv[1],
+        color='#d62728', marker='+', markersize=10, markeredgewidth=2, linestyle='none', zorder=7,
     )
 
     # Hotspots (optional)
-    if hotspot_proximal_uv is not None:
+    if hotspot_tap_uv is not None:
         ax.plot(
-            hotspot_proximal_uv[0], hotspot_proximal_uv[1],
-            color='cyan', marker='*', markersize=10, markeredgewidth=1.5, linestyle='none', zorder=8,
+            hotspot_tap_uv[0], hotspot_tap_uv[1],
+            color='#2ca02c', marker='*', markersize=10, markeredgewidth=1.5, linestyle='none', zorder=8,
         )
-    if hotspot_distal_uv is not None:
+    if hotspot_stroke_uv is not None:
         ax.plot(
-            hotspot_distal_uv[0], hotspot_distal_uv[1],
-            color='magenta', marker='*', markersize=10, markeredgewidth=1.5, linestyle='none', zorder=8,
+            hotspot_stroke_uv[0], hotspot_stroke_uv[1],
+            color='#d62728', marker='*', markersize=10, markeredgewidth=1.5, linestyle='none', zorder=8,
         )
 
     # Annotation in top-left corner
@@ -230,15 +150,15 @@ def render_proximal_distal_contour_overlay(
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(str(output_path), dpi=150)
-    logger.info("Saved contour overlay: %s", output_path)
+    logger.info("Saved tap-stroke contour overlay: %s", output_path)
     plt.close(fig)
 
 
-def render_proximal_distal_heatmap_triptych(
+def render_tap_stroke_heatmap_triptych(
     grid_u: np.ndarray,
     grid_v: np.ndarray,
-    grid_z_proximal: np.ndarray,
-    grid_z_distal: np.ndarray,
+    grid_z_tap: np.ndarray,
+    grid_z_stroke: np.ndarray,
     forearm_uv: np.ndarray,
     forearm_faces: np.ndarray,
     output_path: Path,
@@ -251,16 +171,17 @@ def render_proximal_distal_heatmap_triptych(
     xlim: tuple[float, float] | None = None,
     ylim: tuple[float, float] | None = None,
 ) -> None:
+    """Three-panel heatmap: Tap | Stroke | Difference (T - S)."""
     norm = LogNorm(vmin=vmin, vmax=vmax) if heatmap_space == "log" else Normalize(vmin=vmin, vmax=vmax)
 
     fig, axes = plt.subplots(1, 3, figsize=(18, 6), facecolor='black')
     if title:
         fig.suptitle(title, color='white', fontsize=10)
 
-    panel_titles = ["Proximal", "Distal", "Difference (P − D)"]
+    panel_titles = ["Tap", "Stroke", "Difference (T − S)"]
 
     # Compute difference grid
-    diff = grid_z_proximal - grid_z_distal
+    diff = grid_z_tap - grid_z_stroke
     finite_diff = diff[np.isfinite(diff)]
     if finite_diff.size > 0:
         max_abs = float(np.max(np.abs(finite_diff)))
@@ -283,10 +204,10 @@ def render_proximal_distal_heatmap_triptych(
         _draw_forearm_mesh_background(ax, forearm_uv, forearm_faces, vertex_colors=vertex_colors)
 
         if panel_idx == 0:
-            display_grid = np.where(grid_z_proximal > 0, grid_z_proximal, np.nan)
+            display_grid = np.where(grid_z_tap > 0, grid_z_tap, np.nan)
             ax.pcolormesh(grid_u, grid_v, display_grid, cmap=cmap, norm=norm, shading='auto')
         elif panel_idx == 1:
-            display_grid = np.where(grid_z_distal > 0, grid_z_distal, np.nan)
+            display_grid = np.where(grid_z_stroke > 0, grid_z_stroke, np.nan)
             ax.pcolormesh(grid_u, grid_v, display_grid, cmap=cmap, norm=norm, shading='auto')
         else:
             ax.pcolormesh(grid_u, grid_v, diff, cmap='RdBu_r', norm=diff_norm, shading='auto')
@@ -301,17 +222,68 @@ def render_proximal_distal_heatmap_triptych(
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(str(output_path), dpi=150, facecolor='black')
-    logger.info("Saved heatmap triptych: %s", output_path)
+    logger.info("Saved tap-stroke heatmap triptych: %s", output_path)
     plt.close(fig)
 
 
-def render_proximal_distal_hotspot_aggregate(
+def render_tap_stroke_aggregate(
+    session_centroids: dict[str, dict[str, np.ndarray]],
+    output_path: Path,
+    mm_limits: tuple[tuple[float, float], tuple[float, float]] | None = None,
+) -> None:
+    """Scatter plot of tap and stroke centroid offsets relative to all-gesture center."""
+    if not session_centroids:
+        raise ValueError("render_tap_stroke_aggregate: session_centroids is empty")
+
+    try:
+        cmap_tab20 = matplotlib.colormaps['tab20']
+    except AttributeError:
+        cmap_tab20 = matplotlib.cm.get_cmap('tab20')
+
+    session_ids = sorted(session_centroids.keys())
+    n_sessions = len(session_ids)
+
+    fig, ax = plt.subplots(figsize=(8, 7), facecolor='white')
+    ax.set_facecolor('white')
+
+    ax.axhline(0, color='lightgray', lw=0.8, zorder=0)
+    ax.axvline(0, color='lightgray', lw=0.8, zorder=0)
+
+    for i, session_id in enumerate(session_ids):
+        color = cmap_tab20(i / max(n_sessions, 1))
+        offsets = session_centroids[session_id]
+        tap = offsets['tap']
+        stroke = offsets['stroke']
+
+        ax.plot([tap[0], stroke[0]], [tap[1], stroke[1]], color=color, lw=1.0, zorder=2)
+        ax.plot(tap[0], tap[1], 'o', ms=6, color=color, label=session_id, zorder=3)
+        ax.plot(stroke[0], stroke[1], 'D', ms=6, color=color, zorder=3)
+
+    ax.set_xlabel('ΔU from all-gesture center (mm)')
+    ax.set_ylabel('ΔV from all-gesture center (mm)')
+    ax.set_title('Tap vs Stroke RF Center Offsets')
+    ax.set_aspect('equal')
+    ax.legend(fontsize=7, loc='best')
+
+    if mm_limits is not None:
+        ax.set_xlim(*mm_limits[0])
+        ax.set_ylim(*mm_limits[1])
+
+    fig.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(str(output_path), dpi=120)
+    logger.info("Saved tap-stroke aggregate: %s", output_path)
+    plt.close(fig)
+
+
+def render_tap_stroke_hotspot_aggregate(
     session_hotspots: dict[str, dict[str, np.ndarray]],
     output_path: Path,
     mm_limits: tuple[tuple[float, float], tuple[float, float]] | None = None,
 ) -> None:
+    """Scatter of peak offsets relative to all-gesture peak."""
     if not session_hotspots:
-        raise ValueError("render_proximal_distal_hotspot_aggregate: session_hotspots is empty")
+        raise ValueError("render_tap_stroke_hotspot_aggregate: session_hotspots is empty")
 
     try:
         cmap_tab20 = matplotlib.colormaps['tab20']
@@ -330,16 +302,16 @@ def render_proximal_distal_hotspot_aggregate(
     for i, session_id in enumerate(session_ids):
         color = cmap_tab20(i / max(n_sessions, 1))
         offsets = session_hotspots[session_id]
-        prox = offsets['stroke_proximal']
-        dist = offsets['stroke_distal']
+        tap = offsets['tap']
+        stroke = offsets['stroke']
 
-        ax.plot([prox[0], dist[0]], [prox[1], dist[1]], color=color, lw=1.0, zorder=2)
-        ax.plot(prox[0], prox[1], 'o', ms=6, color=color, label=session_id, zorder=3)
-        ax.plot(dist[0], dist[1], 'D', ms=6, color=color, zorder=3)
+        ax.plot([tap[0], stroke[0]], [tap[1], stroke[1]], color=color, lw=1.0, zorder=2)
+        ax.plot(tap[0], tap[1], 'o', ms=6, color=color, label=session_id, zorder=3)
+        ax.plot(stroke[0], stroke[1], 'D', ms=6, color=color, zorder=3)
 
-    ax.set_xlabel('ΔU from stroke hotspot (mm)')
-    ax.set_ylabel('ΔV from stroke hotspot (mm)')
-    ax.set_title('Proximal vs Distal RF Hotspot Offsets')
+    ax.set_xlabel('ΔU from all-gesture hotspot (mm)')
+    ax.set_ylabel('ΔV from all-gesture hotspot (mm)')
+    ax.set_title('Tap vs Stroke RF Hotspot Offsets')
     ax.set_aspect('equal')
     ax.legend(fontsize=7, loc='best')
 
@@ -350,99 +322,11 @@ def render_proximal_distal_hotspot_aggregate(
     fig.tight_layout()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(str(output_path), dpi=120)
-    logger.info("Saved proximal-distal hotspot aggregate: %s", output_path)
+    logger.info("Saved tap-stroke hotspot aggregate: %s", output_path)
     plt.close(fig)
 
 
-def render_proximal_distal_contour_center_aggregate(
-    session_contour_centers: dict[str, dict[str, np.ndarray]],
-    output_path: Path,
-    mm_limits: tuple[tuple[float, float], tuple[float, float]] | None = None,
-) -> None:
-    if not session_contour_centers:
-        raise ValueError("render_proximal_distal_contour_center_aggregate: session_contour_centers is empty")
-
-    try:
-        cmap_tab20 = matplotlib.colormaps['tab20']
-    except AttributeError:
-        cmap_tab20 = matplotlib.cm.get_cmap('tab20')
-
-    session_ids = sorted(session_contour_centers.keys())
-    n_sessions = len(session_ids)
-
-    fig, ax = plt.subplots(figsize=(8, 7), facecolor='white')
-    ax.set_facecolor('white')
-
-    ax.axhline(0, color='lightgray', lw=0.8, zorder=0)
-    ax.axvline(0, color='lightgray', lw=0.8, zorder=0)
-
-    for i, session_id in enumerate(session_ids):
-        color = cmap_tab20(i / max(n_sessions, 1))
-        offsets = session_contour_centers[session_id]
-        prox = offsets['stroke_proximal']
-        dist = offsets['stroke_distal']
-
-        ax.plot([prox[0], dist[0]], [prox[1], dist[1]], color=color, lw=1.0, zorder=2)
-        ax.plot(prox[0], prox[1], 'o', ms=6, color=color, label=session_id, zorder=3)
-        ax.plot(dist[0], dist[1], 'D', ms=6, color=color, zorder=3)
-
-    ax.set_xlabel('ΔU from all-gesture contour center (mm)')
-    ax.set_ylabel('ΔV from all-gesture contour center (mm)')
-    ax.set_title('Proximal vs Distal RF Contour Center Offsets')
-    ax.set_aspect('equal')
-    ax.legend(fontsize=7, loc='best')
-
-    if mm_limits is not None:
-        ax.set_xlim(*mm_limits[0])
-        ax.set_ylim(*mm_limits[1])
-
-    fig.tight_layout()
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(str(output_path), dpi=120)
-    logger.info("Saved proximal-distal contour-center aggregate: %s", output_path)
-    plt.close(fig)
-
-
-_DELTA_METRICS = [
-    'delta_area_mm2',
-    'delta_area_pct',
-    'delta_perimeter_mm',
-    'delta_circularity',
-    'delta_pca_aspect_ratio',
-    'delta_pca_orientation_deg',
-    'delta_mean_iff_on_contour',
-    'delta_peak_to_centroid_mm',
-    'contour_overlap_iou',
-    'delta_peak_iff',
-    'delta_equivalent_diameter_mm',
-    'delta_rf_sharpness',
-    'delta_iff_at_centroid',
-]
-
-_STRIP_METRICS = [
-    'delta_area_mm2',
-    'delta_perimeter_mm',
-    'delta_circularity',
-    'delta_pca_aspect_ratio',
-    'delta_mean_iff_on_contour',
-    'contour_overlap_iou',
-    'heatmap_pearson_r',
-    'centroid_shift_along_arm_mm',
-    'centroid_shift_across_arm_mm',
-    'contour_center_shift_along_arm_mm',
-    'contour_center_shift_across_arm_mm',
-    'peak_shift_along_arm_mm',
-    'peak_shift_across_arm_mm',
-    'delta_peak_iff',
-    'delta_equivalent_diameter_mm',
-    'delta_rf_sharpness',
-    'delta_iff_at_centroid',
-    'containment_proximal_in_distal',
-    'containment_distal_in_proximal',
-]
-
-
-def render_proximal_distal_metric_deltas(
+def render_tap_stroke_metric_deltas(
     df: pd.DataFrame,
     output_path: Path,
     session_colors: dict[str, str] | None = None,
@@ -500,11 +384,11 @@ def render_proximal_distal_metric_deltas(
     fig.tight_layout(rect=[0, 0.05 if neuron_type_legend else 0, 1, 1])
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(str(output_path), dpi=120)
-    logger.info("Saved metric deltas bar chart: %s", output_path)
+    logger.info("Saved tap-stroke metric deltas bar chart: %s", output_path)
     plt.close(fig)
 
 
-def render_proximal_distal_population_strips(
+def render_tap_stroke_population_strips(
     df: pd.DataFrame,
     output_path: Path,
     session_colors: dict[str, str] | None = None,
@@ -591,75 +475,5 @@ def render_proximal_distal_population_strips(
     fig.tight_layout(rect=[0, 0.08 if neuron_type_legend else 0, 1, 1])
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(str(output_path), dpi=120)
-    logger.info("Saved population strip chart: %s", output_path)
-    plt.close(fig)
-
-
-def render_shift_decomposition(
-    df: pd.DataFrame,
-    output_path: Path,
-    along_col: str,
-    across_col: str,
-    title: str,
-    session_colors: dict[str, str] | None = None,
-    neuron_type_legend: dict[str, str] | None = None,
-) -> None:
-    """Arrow/quiver plot showing per-session shift vectors for a given center type."""
-    try:
-        cmap_tab20 = matplotlib.colormaps['tab20']
-    except AttributeError:
-        cmap_tab20 = matplotlib.cm.get_cmap('tab20')
-
-    fig, ax = plt.subplots(figsize=(8, 7), facecolor='white')
-    ax.set_facecolor('white')
-
-    ax.axhline(0, color='lightgray', lw=0.8, zorder=0)
-    ax.axvline(0, color='lightgray', lw=0.8, zorder=0)
-
-    session_ids_all = df['session_id'].tolist()
-    n_sessions = len(session_ids_all)
-
-    for i, row in enumerate(df.itertuples(index=False)):
-        session_id = row.session_id
-        along = getattr(row, along_col, float('nan'))
-        across = getattr(row, across_col, float('nan'))
-
-        if not (np.isfinite(along) and np.isfinite(across)):
-            continue
-
-        if session_colors and session_id in session_colors:
-            color = session_colors[session_id]
-        else:
-            color = cmap_tab20(i / max(n_sessions, 1))
-
-        ax.quiver(
-            0, 0, along, across,
-            color=color,
-            angles='xy', scale_units='xy', scale=1,
-            width=0.004, headwidth=4, headlength=5,
-            zorder=3,
-        )
-        ax.text(along, across, session_id, fontsize=6, color=color, zorder=4)
-
-    ax.set_xlabel('Along arm (ΔU) mm')
-    ax.set_ylabel('Across arm (ΔV) mm')
-    ax.set_title(title)
-    ax.set_aspect('equal')
-
-    if neuron_type_legend:
-        legend_handles = [
-            matplotlib.patches.Patch(facecolor=color, label=ntype)
-            for ntype, color in neuron_type_legend.items()
-        ]
-        ax.legend(
-            handles=legend_handles,
-            fontsize=8,
-            title='Neuron type',
-            loc='best',
-        )
-
-    fig.tight_layout()
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(str(output_path), dpi=120)
-    logger.info("Saved centroid shift decomposition: %s", output_path)
+    logger.info("Saved tap-stroke population strip chart: %s", output_path)
     plt.close(fig)

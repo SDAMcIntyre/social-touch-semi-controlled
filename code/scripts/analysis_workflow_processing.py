@@ -39,6 +39,7 @@ from analysis.receptive_field_mapping import (
     run_population_response_field_extraction,
     run_session_rf_boundary_comparison,
     run_proximal_distal_comparison,
+    run_tap_stroke_comparison,
     run_touch_feature_radar,
     run_stimulus_session_comparison,
     run_response_tuning,
@@ -68,6 +69,7 @@ from analysis.pipeline.output_dirs import (
     CROSS_RENDER_SESSIONS,
     SPATIAL_COMPARE_BOUNDARIES,
     SPATIAL_COMPARE_PROXIMAL_DISTAL,
+    SPATIAL_COMPARE_TAP_STROKE,
     SPATIAL_EXTRACT_BOUNDARIES,
     SPATIAL_EXTRACT_RF_PROFILES,
     SPATIAL_TUNING_RF_METRICS,
@@ -547,6 +549,43 @@ def spatial_compare_proximal_distal_flow(
     for metric in metrics:
         output_dir = input_items[0][1] / '4_analysed' / SPATIAL_COMPARE_PROXIMAL_DISTAL / f"iff_{metric}"
         run_proximal_distal_comparison(
+            session_configs=input_items,
+            output_dir=output_dir,
+            force_processing=force_processing,
+            heatmap_space=heatmap_space,
+            cmap=cmap,
+            iff_metric=metric,
+            contour_color=contour_color,
+            neuron_summary_xlsx=xlsx_path,
+        )
+
+
+@flow(name="spatial_compare_tap_stroke")
+def spatial_compare_tap_stroke_flow(
+    input_items: List[Tuple[Path, Path]],
+    force_processing: bool = False,
+    heatmap_space: str = "linear",
+    cmap: str = "inferno",
+    iff_metric: str = "mean",
+    contour_color: str = "red",
+    neuron_summary_xlsx: Optional[str] = None,
+) -> None:
+    """Compare RF properties between tap and stroke gestures across sessions.
+
+    Reads per-session NPZ files produced by spatial_extract_boundaries,
+    renders per-session center-marked heatmap PNGs, and produces cross-session
+    aggregate figures and summary CSV.
+    Output: 4_analysed/spatial_compare_tap_stroke/iff_<iff_metric>/
+    """
+    print(f"[Batch Analysis] Comparing tap-stroke RF properties for {len(input_items)} item(s)...")
+    if not input_items:
+        return
+
+    xlsx_path = Path(neuron_summary_xlsx) if neuron_summary_xlsx is not None else None
+    metrics = ["mean", "max"] if iff_metric == "both" else [iff_metric]
+    for metric in metrics:
+        output_dir = input_items[0][1] / '4_analysed' / SPATIAL_COMPARE_TAP_STROKE / f"iff_{metric}"
+        run_tap_stroke_comparison(
             session_configs=input_items,
             output_dir=output_dir,
             force_processing=force_processing,
@@ -1623,6 +1662,17 @@ def _build_pipeline_stages(dag_handler: DagConfigHandler, items_to_process) -> l
                 "cmap": dag_handler.get_task_options("spatial_compare_proximal_distal").get("cmap", "inferno"),
                 "iff_metric": dag_handler.get_task_options("spatial_compare_proximal_distal").get("iff_metric", "mean"),
                 "contour_color": dag_handler.get_task_options("spatial_compare_proximal_distal").get("contour_color", "red"),
+                "neuron_summary_xlsx": dag_handler.get_parameter("neuron_summary_xlsx") or None,
+            },
+        },
+        {
+            "name": "spatial_compare_tap_stroke",
+            "func": spatial_compare_tap_stroke_flow,
+            "params": lambda: {
+                "heatmap_space": dag_handler.get_task_options("spatial_compare_tap_stroke").get("heatmap_space", "linear"),
+                "cmap": dag_handler.get_task_options("spatial_compare_tap_stroke").get("cmap", "inferno"),
+                "iff_metric": dag_handler.get_task_options("spatial_compare_tap_stroke").get("iff_metric", "mean"),
+                "contour_color": dag_handler.get_task_options("spatial_compare_tap_stroke").get("contour_color", "red"),
                 "neuron_summary_xlsx": dag_handler.get_parameter("neuron_summary_xlsx") or None,
             },
         },

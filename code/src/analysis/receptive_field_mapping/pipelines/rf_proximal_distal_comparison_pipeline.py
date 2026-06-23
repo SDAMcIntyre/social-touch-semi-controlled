@@ -181,6 +181,21 @@ def run_proximal_distal_comparison(
                     _peak_to_centroid_mm = float(np.linalg.norm(_peak_uv_dir - _centroid_uv_dir)) * uv_to_mm
                 else:
                     _peak_to_centroid_mm = nan
+                # peak_iff — maximum IFF intensity on the heatmap grid
+                _grid_z_key = f'grid_z_{_direction}'
+                if _grid_z_key in npz:
+                    _gz = npz[_grid_z_key]
+                    _finite_positive = _gz[np.isfinite(_gz) & (_gz > 0)]
+                    _peak_iff = float(np.nanmax(_finite_positive)) if _finite_positive.size > 0 else nan
+                else:
+                    _peak_iff = nan
+                # equivalent_diameter_mm — diameter of a circle with the same area
+                _equivalent_diameter_mm = float(np.sqrt(4 * _area_mm2 / np.pi)) if not np.isnan(_area_mm2) and _area_mm2 > 0 else nan
+                # rf_sharpness — peak IFF / mean IFF on contour
+                _rf_sharpness = _peak_iff / _mean_iff_on_contour if (_mean_iff_on_contour > 0 and not np.isnan(_mean_iff_on_contour) and not np.isnan(_peak_iff)) else nan
+                # iff_at_centroid — IFF value at the boundary centroid
+                _iff_at_centroid_key = f'boundary_iff_at_centroid_{_direction}'
+                _iff_at_centroid = float(npz[_iff_at_centroid_key]) if _iff_at_centroid_key in npz else nan
                 _dir_metrics[_direction] = {
                     'area_mm2': _area_mm2,
                     'perimeter_mm': _perimeter_mm,
@@ -192,6 +207,10 @@ def run_proximal_distal_comparison(
                     'mean_iff_on_contour': _mean_iff_on_contour,
                     'n_touches': _n_touches,
                     'peak_to_centroid_mm': _peak_to_centroid_mm,
+                    'peak_iff': _peak_iff,
+                    'equivalent_diameter_mm': _equivalent_diameter_mm,
+                    'rf_sharpness': _rf_sharpness,
+                    'iff_at_centroid': _iff_at_centroid,
                 }
             else:
                 logger.warning(
@@ -209,6 +228,10 @@ def run_proximal_distal_comparison(
                     'mean_iff_on_contour': nan,
                     'n_touches': None,
                     'peak_to_centroid_mm': nan,
+                    'peak_iff': nan,
+                    'equivalent_diameter_mm': nan,
+                    'rf_sharpness': nan,
+                    'iff_at_centroid': nan,
                 }
 
         _pm = _dir_metrics['stroke_proximal']
@@ -248,6 +271,12 @@ def run_proximal_distal_comparison(
         # Task 1.6 — delta_peak_to_centroid_mm
         _delta_peak_to_centroid_mm = _pm['peak_to_centroid_mm'] - _dm['peak_to_centroid_mm']
 
+        # New delta metrics (proximal − distal)
+        _delta_peak_iff = _pm['peak_iff'] - _dm['peak_iff']
+        _delta_equivalent_diameter_mm = _pm['equivalent_diameter_mm'] - _dm['equivalent_diameter_mm']
+        _delta_rf_sharpness = _pm['rf_sharpness'] - _dm['rf_sharpness']
+        _delta_iff_at_centroid = _pm['iff_at_centroid'] - _dm['iff_at_centroid']
+
         # Task 2.3 — centroid shift decomposition (proximal − distal in UV → mm)
         _centroid_shift_uv = centroid_proximal - centroid_distal
         _centroid_shift_along_arm_mm = float(_centroid_shift_uv[0]) * uv_to_mm  # U component
@@ -277,6 +306,26 @@ def run_proximal_distal_comparison(
             )
         else:
             _heatmap_pearson_r = nan
+
+        # Asymmetric containment — fraction of one RF contained within the other
+        _prox_contour_key_c = 'boundary_contour_uv_stroke_proximal'
+        _dist_contour_key_c = 'boundary_contour_uv_stroke_distal'
+        if _prox_contour_key_c in npz and _dist_contour_key_c in npz and 'grid_u_stroke_proximal' in npz:
+            from matplotlib.path import Path as MplPath
+            _contour_prox_c = npz[_prox_contour_key_c].astype(np.float64)
+            _contour_dist_c = npz[_dist_contour_key_c].astype(np.float64)
+            _grid_u_c = npz['grid_u_stroke_proximal']
+            _grid_v_c = npz['grid_v_stroke_proximal']
+            _points_c = np.column_stack([_grid_u_c.ravel(), _grid_v_c.ravel()])
+            _mask_prox = MplPath(_contour_prox_c).contains_points(_points_c)
+            _mask_dist = MplPath(_contour_dist_c).contains_points(_points_c)
+            _n_prox = np.sum(_mask_prox)
+            _n_dist = np.sum(_mask_dist)
+            _containment_proximal_in_distal = float(np.sum(_mask_prox & _mask_dist) / _n_prox) if _n_prox > 0 else nan
+            _containment_distal_in_proximal = float(np.sum(_mask_prox & _mask_dist) / _n_dist) if _n_dist > 0 else nan
+        else:
+            _containment_proximal_in_distal = nan
+            _containment_distal_in_proximal = nan
 
         gesture_types = list(npz['gesture_types'])
         gestures_with_centroid: dict[str, tuple] = {}
@@ -383,6 +432,12 @@ def run_proximal_distal_comparison(
             'delta_pca_orientation_deg': _delta_pca_orientation_deg,
             'delta_mean_iff_on_contour': _delta_mean_iff_on_contour,
             'delta_peak_to_centroid_mm': _delta_peak_to_centroid_mm,
+            'delta_peak_iff': _delta_peak_iff,
+            'delta_equivalent_diameter_mm': _delta_equivalent_diameter_mm,
+            'delta_rf_sharpness': _delta_rf_sharpness,
+            'delta_iff_at_centroid': _delta_iff_at_centroid,
+            'containment_proximal_in_distal': _containment_proximal_in_distal,
+            'containment_distal_in_proximal': _containment_distal_in_proximal,
             # Phase 2 — overlap, correlation, centroid shift decomposition
             'contour_overlap_iou': _contour_overlap_iou,
             'contour_overlap_dice': _contour_overlap_dice,
@@ -476,6 +531,14 @@ def run_proximal_distal_comparison(
             'n_touches_distal': _dm['n_touches'],
             'peak_to_centroid_mm_proximal': _pm['peak_to_centroid_mm'],
             'peak_to_centroid_mm_distal': _dm['peak_to_centroid_mm'],
+            'peak_iff_proximal': _pm['peak_iff'],
+            'peak_iff_distal': _dm['peak_iff'],
+            'equivalent_diameter_mm_proximal': _pm['equivalent_diameter_mm'],
+            'equivalent_diameter_mm_distal': _dm['equivalent_diameter_mm'],
+            'rf_sharpness_proximal': _pm['rf_sharpness'],
+            'rf_sharpness_distal': _dm['rf_sharpness'],
+            'iff_at_centroid_proximal': _pm['iff_at_centroid'],
+            'iff_at_centroid_distal': _dm['iff_at_centroid'],
             # Phase 1 — delta metrics
             'delta_area_mm2': _delta_area_mm2,
             'area_ratio': _area_ratio,
@@ -486,6 +549,12 @@ def run_proximal_distal_comparison(
             'delta_pca_orientation_deg': _delta_pca_orientation_deg,
             'delta_mean_iff_on_contour': _delta_mean_iff_on_contour,
             'delta_peak_to_centroid_mm': _delta_peak_to_centroid_mm,
+            'delta_peak_iff': _delta_peak_iff,
+            'delta_equivalent_diameter_mm': _delta_equivalent_diameter_mm,
+            'delta_rf_sharpness': _delta_rf_sharpness,
+            'delta_iff_at_centroid': _delta_iff_at_centroid,
+            'containment_proximal_in_distal': _containment_proximal_in_distal,
+            'containment_distal_in_proximal': _containment_distal_in_proximal,
             # Phase 2 — overlap, correlation, centroid shift decomposition
             'contour_overlap_iou': _contour_overlap_iou,
             'contour_overlap_dice': _contour_overlap_dice,
@@ -763,6 +832,14 @@ def run_proximal_distal_comparison(
         'n_touches_distal': 'Int64',
         'peak_to_centroid_mm_proximal': np.float64,
         'peak_to_centroid_mm_distal': np.float64,
+        'peak_iff_proximal': np.float64,
+        'peak_iff_distal': np.float64,
+        'equivalent_diameter_mm_proximal': np.float64,
+        'equivalent_diameter_mm_distal': np.float64,
+        'rf_sharpness_proximal': np.float64,
+        'rf_sharpness_distal': np.float64,
+        'iff_at_centroid_proximal': np.float64,
+        'iff_at_centroid_distal': np.float64,
         # Phase 1 — delta metrics
         'delta_area_mm2': np.float64,
         'area_ratio': np.float64,
@@ -773,6 +850,12 @@ def run_proximal_distal_comparison(
         'delta_pca_orientation_deg': np.float64,
         'delta_mean_iff_on_contour': np.float64,
         'delta_peak_to_centroid_mm': np.float64,
+        'delta_peak_iff': np.float64,
+        'delta_equivalent_diameter_mm': np.float64,
+        'delta_rf_sharpness': np.float64,
+        'delta_iff_at_centroid': np.float64,
+        'containment_proximal_in_distal': np.float64,
+        'containment_distal_in_proximal': np.float64,
         # Phase 2 — overlap, correlation, centroid shift decomposition
         'contour_overlap_iou': np.float64,
         'contour_overlap_dice': np.float64,

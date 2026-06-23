@@ -226,6 +226,22 @@ tasks:
       contour_color: red
     depends_on: [spatial_extract_boundaries]
 
+  # Tap-vs-stroke RF comparison: comprehensive paired contrast of RF properties between tap and stroke gestures.
+  # Reads per-session NPZ files from spatial_extract_boundaries; computes boundary metric deltas,
+  # contour overlap (IoU/Dice), heatmap correlation, and shift decomposition.
+  # Produces contour overlays, heatmap triptychs, metric delta bar charts, population strip charts,
+  # and shift decomposition figures. Output: 4_analysed/spatial_compare_tap_stroke/
+  spatial_compare_tap_stroke:
+    category: spatial_sensitivity
+    enabled: true
+    options:
+      force_processing: true
+      iff_metric: both
+      heatmap_space: linear
+      cmap: inferno
+      contour_color: red
+    depends_on: [spatial_extract_boundaries]
+
   # Extract 1D cross-section profiles from interpolated RF heatmap grids.
   # Reads per-session NPZ files from spatial_extract_boundaries.
   # Produces per-gesture CSVs and two PNG figure types (profile strip + representative profiles).
