@@ -5,6 +5,7 @@ from pathlib import Path
 
 import matplotlib
 import matplotlib.patches
+from matplotlib.lines import Line2D
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
@@ -92,6 +93,9 @@ def render_proximal_distal_aggregate(
     session_centroids: dict[str, dict[str, np.ndarray]],
     output_path: Path,
     mm_limits: tuple[tuple[float, float], tuple[float, float]] | None = None,
+    session_colors: dict[str, str] | None = None,
+    session_neuron_types: dict[str, str] | None = None,
+    neuron_type_legend: dict[str, str] | None = None,
 ) -> None:
     if not session_centroids:
         raise ValueError("render_proximal_distal_aggregate: session_centroids is empty")
@@ -124,7 +128,12 @@ def render_proximal_distal_aggregate(
     ax.set_ylabel('ΔV from all-gesture center (mm)')
     ax.set_title('Proximal vs Distal RF Center Offsets')
     ax.set_aspect('equal')
-    ax.legend(fontsize=7, loc='best')
+    marker_handles = [
+        Line2D([], [], marker='o', color='gray', linestyle='None', ms=6, label='Proximal'),
+        Line2D([], [], marker='D', color='gray', linestyle='None', ms=6, label='Distal'),
+    ]
+    handles, labels = ax.get_legend_handles_labels()
+    ax.legend(handles=handles + marker_handles, fontsize=7, loc='best')
 
     if mm_limits is not None:
         ax.set_xlim(*mm_limits[0])
@@ -133,8 +142,56 @@ def render_proximal_distal_aggregate(
     fig.tight_layout()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(str(output_path), dpi=120)
+    fig.savefig(output_path.with_suffix('.svg'), bbox_inches='tight')
     logger.info("Saved proximal-distal aggregate: %s", output_path)
     plt.close(fig)
+
+    # --- by-type variant ---
+    if session_colors is not None:
+        fig_bt, ax_bt = plt.subplots(figsize=(8, 7), facecolor='white')
+        ax_bt.set_facecolor('white')
+        ax_bt.axhline(0, color='lightgray', lw=0.8, zorder=0)
+        ax_bt.axvline(0, color='lightgray', lw=0.8, zorder=0)
+
+        for session_id in session_ids:
+            color = session_colors.get(session_id, 'steelblue')
+            offsets = session_centroids[session_id]
+            prox = offsets['stroke_proximal']
+            dist = offsets['stroke_distal']
+            ax_bt.plot([prox[0], dist[0]], [prox[1], dist[1]], color=color, lw=1.0, zorder=2)
+            ax_bt.plot(prox[0], prox[1], 'o', ms=6, color=color, zorder=3)
+            ax_bt.plot(dist[0], dist[1], 'D', ms=6, color=color, zorder=3)
+            ax_bt.text(prox[0], prox[1], f' {session_id}', fontsize=6, color=color,
+                       ha='left', va='bottom', zorder=4)
+
+        ax_bt.set_xlabel('ΔU from all-gesture center (mm)')
+        ax_bt.set_ylabel('ΔV from all-gesture center (mm)')
+        ax_bt.set_title('Proximal vs Distal RF Center Offsets (by type)')
+        ax_bt.set_aspect('equal')
+
+        all_legend_handles = []
+        if neuron_type_legend:
+            all_legend_handles.extend([
+                matplotlib.patches.Patch(facecolor=c, label=nt)
+                for nt, c in neuron_type_legend.items()
+            ])
+        all_legend_handles.extend([
+            Line2D([], [], marker='o', color='gray', linestyle='None', ms=6, label='Proximal'),
+            Line2D([], [], marker='D', color='gray', linestyle='None', ms=6, label='Distal'),
+        ])
+        ax_bt.legend(handles=all_legend_handles, fontsize=7, loc='best')
+
+        if mm_limits is not None:
+            ax_bt.set_xlim(*mm_limits[0])
+            ax_bt.set_ylim(*mm_limits[1])
+
+        fig_bt.tight_layout()
+        by_type_path = output_path.with_stem(output_path.stem + '_by_type')
+        by_type_path.parent.mkdir(parents=True, exist_ok=True)
+        fig_bt.savefig(str(by_type_path), dpi=120)
+        fig_bt.savefig(by_type_path.with_suffix('.svg'), bbox_inches='tight')
+        logger.info("Saved proximal-distal aggregate (by type): %s", by_type_path)
+        plt.close(fig_bt)
 
 
 def render_proximal_distal_contour_overlay(
@@ -309,6 +366,9 @@ def render_proximal_distal_hotspot_aggregate(
     session_hotspots: dict[str, dict[str, np.ndarray]],
     output_path: Path,
     mm_limits: tuple[tuple[float, float], tuple[float, float]] | None = None,
+    session_colors: dict[str, str] | None = None,
+    session_neuron_types: dict[str, str] | None = None,
+    neuron_type_legend: dict[str, str] | None = None,
 ) -> None:
     if not session_hotspots:
         raise ValueError("render_proximal_distal_hotspot_aggregate: session_hotspots is empty")
@@ -341,7 +401,13 @@ def render_proximal_distal_hotspot_aggregate(
     ax.set_ylabel('ΔV from stroke hotspot (mm)')
     ax.set_title('Proximal vs Distal RF Hotspot Offsets')
     ax.set_aspect('equal')
-    ax.legend(fontsize=7, loc='best')
+
+    marker_handles = [
+        Line2D([], [], marker='o', color='gray', linestyle='None', ms=6, label='Proximal'),
+        Line2D([], [], marker='D', color='gray', linestyle='None', ms=6, label='Distal'),
+    ]
+    handles, labels = ax.get_legend_handles_labels()
+    ax.legend(handles=handles + marker_handles, fontsize=7, loc='best')
 
     if mm_limits is not None:
         ax.set_xlim(*mm_limits[0])
@@ -350,14 +416,65 @@ def render_proximal_distal_hotspot_aggregate(
     fig.tight_layout()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(str(output_path), dpi=120)
+    fig.savefig(output_path.with_suffix('.svg'), bbox_inches='tight')
     logger.info("Saved proximal-distal hotspot aggregate: %s", output_path)
     plt.close(fig)
+
+    # --- by-type variant ---
+    if session_colors is not None:
+        fig_bt, ax_bt = plt.subplots(figsize=(8, 7), facecolor='white')
+        ax_bt.set_facecolor('white')
+        ax_bt.axhline(0, color='lightgray', lw=0.8, zorder=0)
+        ax_bt.axvline(0, color='lightgray', lw=0.8, zorder=0)
+
+        for session_id in session_ids:
+            color = session_colors.get(session_id, 'steelblue')
+            offsets = session_hotspots[session_id]
+            prox = offsets['stroke_proximal']
+            dist = offsets['stroke_distal']
+            ax_bt.plot([prox[0], dist[0]], [prox[1], dist[1]], color=color, lw=1.0, zorder=2)
+            ax_bt.plot(prox[0], prox[1], 'o', ms=6, color=color, zorder=3)
+            ax_bt.plot(dist[0], dist[1], 'D', ms=6, color=color, zorder=3)
+            ax_bt.text(prox[0], prox[1], f' {session_id}', fontsize=6, color=color,
+                       ha='left', va='bottom', zorder=4)
+
+        ax_bt.set_xlabel('ΔU from stroke hotspot (mm)')
+        ax_bt.set_ylabel('ΔV from stroke hotspot (mm)')
+        ax_bt.set_title('Proximal vs Distal RF Hotspot Offsets (by type)')
+        ax_bt.set_aspect('equal')
+
+        all_legend_handles = []
+        if neuron_type_legend:
+            all_legend_handles.extend([
+                matplotlib.patches.Patch(facecolor=c, label=nt)
+                for nt, c in neuron_type_legend.items()
+            ])
+        all_legend_handles.extend([
+            Line2D([], [], marker='o', color='gray', linestyle='None', ms=6, label='Proximal'),
+            Line2D([], [], marker='D', color='gray', linestyle='None', ms=6, label='Distal'),
+        ])
+        ax_bt.legend(handles=all_legend_handles, fontsize=7, loc='best')
+
+        if mm_limits is not None:
+            ax_bt.set_xlim(*mm_limits[0])
+            ax_bt.set_ylim(*mm_limits[1])
+
+        fig_bt.tight_layout()
+        by_type_path = output_path.with_stem(output_path.stem + '_by_type')
+        by_type_path.parent.mkdir(parents=True, exist_ok=True)
+        fig_bt.savefig(str(by_type_path), dpi=120)
+        fig_bt.savefig(by_type_path.with_suffix('.svg'), bbox_inches='tight')
+        logger.info("Saved proximal-distal hotspot aggregate (by type): %s", by_type_path)
+        plt.close(fig_bt)
 
 
 def render_proximal_distal_contour_center_aggregate(
     session_contour_centers: dict[str, dict[str, np.ndarray]],
     output_path: Path,
     mm_limits: tuple[tuple[float, float], tuple[float, float]] | None = None,
+    session_colors: dict[str, str] | None = None,
+    session_neuron_types: dict[str, str] | None = None,
+    neuron_type_legend: dict[str, str] | None = None,
 ) -> None:
     if not session_contour_centers:
         raise ValueError("render_proximal_distal_contour_center_aggregate: session_contour_centers is empty")
@@ -390,7 +507,13 @@ def render_proximal_distal_contour_center_aggregate(
     ax.set_ylabel('ΔV from all-gesture contour center (mm)')
     ax.set_title('Proximal vs Distal RF Contour Center Offsets')
     ax.set_aspect('equal')
-    ax.legend(fontsize=7, loc='best')
+
+    marker_handles = [
+        Line2D([], [], marker='o', color='gray', linestyle='None', ms=6, label='Proximal'),
+        Line2D([], [], marker='D', color='gray', linestyle='None', ms=6, label='Distal'),
+    ]
+    handles, labels = ax.get_legend_handles_labels()
+    ax.legend(handles=handles + marker_handles, fontsize=7, loc='best')
 
     if mm_limits is not None:
         ax.set_xlim(*mm_limits[0])
@@ -399,8 +522,56 @@ def render_proximal_distal_contour_center_aggregate(
     fig.tight_layout()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(str(output_path), dpi=120)
+    fig.savefig(output_path.with_suffix('.svg'), bbox_inches='tight')
     logger.info("Saved proximal-distal contour-center aggregate: %s", output_path)
     plt.close(fig)
+
+    # --- by-type variant ---
+    if session_colors is not None:
+        fig_bt, ax_bt = plt.subplots(figsize=(8, 7), facecolor='white')
+        ax_bt.set_facecolor('white')
+        ax_bt.axhline(0, color='lightgray', lw=0.8, zorder=0)
+        ax_bt.axvline(0, color='lightgray', lw=0.8, zorder=0)
+
+        for session_id in session_ids:
+            color = session_colors.get(session_id, 'steelblue')
+            offsets = session_contour_centers[session_id]
+            prox = offsets['stroke_proximal']
+            dist = offsets['stroke_distal']
+            ax_bt.plot([prox[0], dist[0]], [prox[1], dist[1]], color=color, lw=1.0, zorder=2)
+            ax_bt.plot(prox[0], prox[1], 'o', ms=6, color=color, zorder=3)
+            ax_bt.plot(dist[0], dist[1], 'D', ms=6, color=color, zorder=3)
+            ax_bt.text(prox[0], prox[1], f' {session_id}', fontsize=6, color=color,
+                       ha='left', va='bottom', zorder=4)
+
+        ax_bt.set_xlabel('ΔU from all-gesture contour center (mm)')
+        ax_bt.set_ylabel('ΔV from all-gesture contour center (mm)')
+        ax_bt.set_title('Proximal vs Distal RF Contour Center Offsets (by type)')
+        ax_bt.set_aspect('equal')
+
+        all_legend_handles = []
+        if neuron_type_legend:
+            all_legend_handles.extend([
+                matplotlib.patches.Patch(facecolor=c, label=nt)
+                for nt, c in neuron_type_legend.items()
+            ])
+        all_legend_handles.extend([
+            Line2D([], [], marker='o', color='gray', linestyle='None', ms=6, label='Proximal'),
+            Line2D([], [], marker='D', color='gray', linestyle='None', ms=6, label='Distal'),
+        ])
+        ax_bt.legend(handles=all_legend_handles, fontsize=7, loc='best')
+
+        if mm_limits is not None:
+            ax_bt.set_xlim(*mm_limits[0])
+            ax_bt.set_ylim(*mm_limits[1])
+
+        fig_bt.tight_layout()
+        by_type_path = output_path.with_stem(output_path.stem + '_by_type')
+        by_type_path.parent.mkdir(parents=True, exist_ok=True)
+        fig_bt.savefig(str(by_type_path), dpi=120)
+        fig_bt.savefig(by_type_path.with_suffix('.svg'), bbox_inches='tight')
+        logger.info("Saved proximal-distal contour-center aggregate (by type): %s", by_type_path)
+        plt.close(fig_bt)
 
 
 _DELTA_METRICS = [
@@ -500,6 +671,7 @@ def render_proximal_distal_metric_deltas(
     fig.tight_layout(rect=[0, 0.05 if neuron_type_legend else 0, 1, 1])
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(str(output_path), dpi=120)
+    fig.savefig(output_path.with_suffix('.svg'), bbox_inches='tight')
     logger.info("Saved metric deltas bar chart: %s", output_path)
     plt.close(fig)
 
@@ -591,6 +763,7 @@ def render_proximal_distal_population_strips(
     fig.tight_layout(rect=[0, 0.08 if neuron_type_legend else 0, 1, 1])
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(str(output_path), dpi=120)
+    fig.savefig(output_path.with_suffix('.svg'), bbox_inches='tight')
     logger.info("Saved population strip chart: %s", output_path)
     plt.close(fig)
 
@@ -661,5 +834,6 @@ def render_shift_decomposition(
     fig.tight_layout()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(str(output_path), dpi=120)
+    fig.savefig(output_path.with_suffix('.svg'), bbox_inches='tight')
     logger.info("Saved centroid shift decomposition: %s", output_path)
     plt.close(fig)

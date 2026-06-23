@@ -879,11 +879,13 @@ def run_proximal_distal_comparison(
 
     # Task 4.1 — build per-session color scheme when neuron_summary_xlsx is provided
     session_colors: dict[str, str] | None = None
+    session_neuron_types: dict[str, str] | None = None
     neuron_type_legend: dict[str, str] | None = None
     if neuron_summary_xlsx is not None:
         session_ids = df['session_id'].unique().tolist()
         scheme: SessionColorScheme = build_session_color_scheme(session_ids, neuron_summary_xlsx)
         session_colors = scheme.session_color
+        session_neuron_types = scheme.session_neuron_type
         neuron_type_legend = scheme.type_color
 
     session_centroids = {
@@ -898,6 +900,9 @@ def run_proximal_distal_comparison(
         session_centroids=session_centroids,
         output_path=output_dir / 'rf_center_proximal_distal_aggregate.png',
         mm_limits=aggregate_mm_limits,
+        session_colors=session_colors,
+        session_neuron_types=session_neuron_types,
+        neuron_type_legend=neuron_type_legend,
     )
 
     hotspot_valid_data = [d for d in valid_data if d['hotspot_available']]
@@ -916,6 +921,9 @@ def run_proximal_distal_comparison(
             session_hotspots=session_hotspots,
             output_path=output_dir / 'rf_hotspot_proximal_distal_aggregate.png',
             mm_limits=hotspot_aggregate_mm_limits,
+            session_colors=session_colors,
+            session_neuron_types=session_neuron_types,
+            neuron_type_legend=neuron_type_legend,
         )
     else:
         logger.warning("[RF Proximal-Distal Comparison] no sessions with hotspot data — skipping hotspot aggregate plot.")
@@ -936,6 +944,9 @@ def run_proximal_distal_comparison(
             session_contour_centers=session_cc_offsets,
             output_path=output_dir / 'rf_contour_center_proximal_distal_aggregate.png',
             mm_limits=cc_aggregate_mm_limits,
+            session_colors=session_colors,
+            session_neuron_types=session_neuron_types,
+            neuron_type_legend=neuron_type_legend,
         )
     else:
         logger.warning(
