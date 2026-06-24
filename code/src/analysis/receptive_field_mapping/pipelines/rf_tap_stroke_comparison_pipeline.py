@@ -27,10 +27,11 @@ from analysis.receptive_field_mapping.rendering.rf_tap_stroke_comparison_rendere
 )
 from analysis.receptive_field_mapping.rendering.rf_proximal_distal_comparison_renderer import (
     render_center_marked_heatmap,
+    render_paired_metric_violins,
     render_shift_decomposition,
 )
 from analysis.receptive_field_mapping.rendering.rf_population_map_renderer import (
-    compute_highest_contour_peak,
+    compute_highest_contour_center,
     compute_standalone_figwidth,
     compute_uv_to_mm_scale,
     render_population_rf_circular_crop,
@@ -76,6 +77,7 @@ def run_tap_stroke_comparison(
     iff_metric: str = "mean",
     contour_color: str = "red",
     neuron_summary_xlsx: Path | None = None,
+    circular_crop_margin: float = 0.0,
 ) -> None:
     if iff_metric not in IFF_METRICS:
         raise ValueError(
@@ -356,7 +358,13 @@ def run_tap_stroke_comparison(
                 if f'boundary_peak_uv_{gtype}' in npz
                 else None
             )
-            gestures_with_centroid[gtype] = (grid_u, grid_v, grid_z, centroid_uv_gtype, n_touches, threshold, peak_uv_gtype)
+            if f'boundary_contour_uv_{gtype}' not in npz:
+                raise KeyError(
+                    f"[RF Tap-Stroke Comparison] {session_id}: gesture '{gtype}' has a "
+                    f"centroid but no 'boundary_contour_uv_{gtype}' — inconsistent NPZ."
+                )
+            contour_uv_gtype = npz[f'boundary_contour_uv_{gtype}'].astype(np.float64)
+            gestures_with_centroid[gtype] = (grid_u, grid_v, grid_z, centroid_uv_gtype, n_touches, threshold, peak_uv_gtype, contour_uv_gtype)
 
             finite_z = grid_z[np.isfinite(grid_z) & (grid_z > 0)]
             if finite_z.size > 0:
@@ -375,10 +383,10 @@ def run_tap_stroke_comparison(
         _cc_stroke = None
         if 'tap' in gestures_with_centroid:
             _gu, _gv, _gz = gestures_with_centroid['tap'][:3]
-            _cc_tap = compute_highest_contour_peak(_gu, _gv, _gz, n_levels=6)
+            _cc_tap = compute_highest_contour_center(_gu, _gv, _gz, n_levels=6)
         if 'stroke' in gestures_with_centroid:
             _gu, _gv, _gz = gestures_with_centroid['stroke'][:3]
-            _cc_stroke = compute_highest_contour_peak(_gu, _gv, _gz, n_levels=6)
+            _cc_stroke = compute_highest_contour_center(_gu, _gv, _gz, n_levels=6)
 
         if _cc_tap is not None and _cc_stroke is not None:
             _cc_shift_uv = _cc_tap - _cc_stroke
@@ -401,7 +409,7 @@ def run_tap_stroke_comparison(
         _cc_all = None
         if 'all' in gestures_with_centroid:
             _gu_all, _gv_all, _gz_all = gestures_with_centroid['all'][:3]
-            _cc_all = compute_highest_contour_peak(_gu_all, _gv_all, _gz_all, n_levels=6)
+            _cc_all = compute_highest_contour_center(_gu_all, _gv_all, _gz_all, n_levels=6)
 
         if _cc_all is not None and _cc_tap is not None and _cc_stroke is not None:
             _cc_offset_tap = (_cc_tap - _cc_all) * uv_to_mm
@@ -714,36 +722,34 @@ def run_tap_stroke_comparison(
         session_output_dir = output_dir / session_id
         session_output_dir.mkdir(parents=True, exist_ok=True)
 
-        # Pre-pass: collect all crop centers across gesture types for shared limits
+        # Session-fixed circle centers from the 'all' gesture
         radius_mm = 50.0
         scale = compute_uv_to_mm_scale(
             d['forearm_uv'], d['forearm_V'], d['forearm_faces'],
         )
         radius_uv = radius_mm / scale
-        margin = radius_uv * 0.05
+        margin = radius_uv * circular_crop_margin
 
-        all_crop_centers: list[np.ndarray] = []
-        contour_centers: dict[str, np.ndarray | None] = {}
-        for _gt, (_gu, _gv, _gz, _cent, _nt, _thr, _pk) in d['gestures_with_centroid'].items():
-            all_crop_centers.append(_cent)
-            if _pk is not None:
-                all_crop_centers.append(_pk)
-            _cc = compute_highest_contour_peak(_gu, _gv, _gz, n_levels=6)
-            contour_centers[_gt] = _cc
-            if _cc is not None:
-                all_crop_centers.append(_cc)
+        _all_gu, _all_gv, _all_gz, session_centroid, _, _, session_peak, _all_contour = d['gestures_with_centroid']['all']
+        session_contour_center = compute_highest_contour_center(_all_gu, _all_gv, _all_gz, n_levels=6)
 
-        all_centers_arr = np.array(all_crop_centers)
+        session_crop_centers: list[np.ndarray] = [session_centroid]
+        if session_peak is not None:
+            session_crop_centers.append(session_peak)
+        if session_contour_center is not None:
+            session_crop_centers.append(session_contour_center)
+
+        centers_arr = np.array(session_crop_centers)
         shared_crop_xlim = (
-            float(all_centers_arr[:, 0].min()) - radius_uv - margin,
-            float(all_centers_arr[:, 0].max()) + radius_uv + margin,
+            float(centers_arr[:, 0].min()) - radius_uv - margin,
+            float(centers_arr[:, 0].max()) + radius_uv + margin,
         )
         shared_crop_ylim = (
-            float(all_centers_arr[:, 1].min()) - radius_uv - margin,
-            float(all_centers_arr[:, 1].max()) + radius_uv + margin,
+            float(centers_arr[:, 1].min()) - radius_uv - margin,
+            float(centers_arr[:, 1].max()) + radius_uv + margin,
         )
 
-        for gtype, (grid_u, grid_v, grid_z, centroid_uv_gtype, n_touches, _threshold, peak_uv_gtype) in d['gestures_with_centroid'].items():
+        for gtype, (grid_u, grid_v, grid_z, centroid_uv_gtype, n_touches, _threshold, peak_uv_gtype, contour_uv_gtype) in d['gestures_with_centroid'].items():
             render_center_marked_heatmap(
                 u_grid=grid_u,
                 v_grid=grid_v,
@@ -787,32 +793,32 @@ def run_tap_stroke_comparison(
                     contour_color=contour_color,
                 )
 
-            # Circular crops per center type, each in its own subdirectory
+            # Circular crops — circle center is session-fixed (from 'all' gesture)
             centroid_crop_dir = session_output_dir / 'centroid'
             peak_crop_dir = session_output_dir / 'peak'
             contour_center_crop_dir = session_output_dir / 'contour_center'
             for d_path in (centroid_crop_dir, peak_crop_dir, contour_center_crop_dir):
                 d_path.mkdir(parents=True, exist_ok=True)
 
-            contour_center = contour_centers[gtype]
+            gtype_contour_center = compute_highest_contour_center(grid_u, grid_v, grid_z, n_levels=6)
 
             crop_jobs: list[tuple[np.ndarray, np.ndarray, Path]] = [
-                (centroid_uv_gtype, centroid_uv_gtype,
+                (session_centroid, centroid_uv_gtype,
                  centroid_crop_dir / f'{session_id}_rf_circular_centroid_{gtype}_{cmap}.png'),
             ]
-            if peak_uv_gtype is not None:
+            if session_peak is not None:
                 crop_jobs.append((
-                    peak_uv_gtype, centroid_uv_gtype,
+                    session_peak, peak_uv_gtype if peak_uv_gtype is not None else centroid_uv_gtype,
                     peak_crop_dir / f'{session_id}_rf_circular_peak_{gtype}_{cmap}.png',
                 ))
-            if contour_center is not None:
+            if session_contour_center is not None:
                 crop_jobs.append((
-                    contour_center, contour_center,
+                    session_contour_center, gtype_contour_center if gtype_contour_center is not None else session_contour_center,
                     contour_center_crop_dir / f'{session_id}_rf_circular_contour_center_{gtype}_{cmap}.png',
                 ))
 
             for center_uv, marker_uv, out_path in crop_jobs:
-                render_population_rf_circular_crop(
+                crop_kwargs = dict(
                     u_grid=grid_u,
                     v_grid=grid_v,
                     interp_grid=grid_z,
@@ -823,7 +829,6 @@ def run_tap_stroke_comparison(
                     radius_mm=radius_mm,
                     vmax=global_vmax,
                     vmin=global_vmin,
-                    output_path=out_path,
                     vertex_colors=d['slim_vertex_colors'],
                     heatmap_space=heatmap_space,
                     dpi=300,
@@ -832,6 +837,16 @@ def run_tap_stroke_comparison(
                     centroid_uv=marker_uv,
                     xlim=shared_crop_xlim,
                     ylim=shared_crop_ylim,
+                )
+                # Original crop — preserved unchanged (no RF boundary overlay).
+                render_population_rf_circular_crop(output_path=out_path, **crop_kwargs)
+                # Duplicate crop with the red closed RF boundary overlaid.
+                boundary_path = out_path.with_name(f'{out_path.stem}_rfboundary{out_path.suffix}')
+                render_population_rf_circular_crop(
+                    output_path=boundary_path,
+                    boundary_contour_uv=contour_uv_gtype,
+                    boundary_color=contour_color,
+                    **crop_kwargs,
                 )
 
         # Contour overlay and heatmap triptych (per-session, outside gesture loop)
@@ -953,38 +968,56 @@ def run_tap_stroke_comparison(
         neuron_type_legend=neuron_type_legend,
     )
 
-    # Shift decomposition — centroid
-    render_shift_decomposition(
+    # Paired metric violin plots
+    render_paired_metric_violins(
         df=df,
-        output_path=output_dir / 'rf_centroid_shift_decomposition.png',
-        along_col='centroid_shift_along_arm_mm',
-        across_col='centroid_shift_across_arm_mm',
-        title='Centroid Shift Decomposition (Tap − Stroke)',
+        metric_pairs=[
+            ('area_mm2_tap', 'area_mm2_stroke', 'Area (mm2)'),
+            ('perimeter_mm_tap', 'perimeter_mm_stroke', 'Perimeter (mm)'),
+            ('mean_iff_on_contour_tap', 'mean_iff_on_contour_stroke', 'Mean IFF'),
+            ('peak_iff_tap', 'peak_iff_stroke', 'Max IFF'),
+        ],
+        condition_labels=('Tap', 'Stroke'),
+        output_path=output_dir / 'rf_tap_stroke_metric_violins.png',
         session_colors=session_colors,
         neuron_type_legend=neuron_type_legend,
     )
 
-    # Shift decomposition — contour center
-    render_shift_decomposition(
-        df=df,
-        output_path=output_dir / 'rf_contour_center_shift_decomposition.png',
-        along_col='contour_center_shift_along_arm_mm',
-        across_col='contour_center_shift_across_arm_mm',
-        title='Contour Center Shift Decomposition (Tap − Stroke)',
-        session_colors=session_colors,
-        neuron_type_legend=neuron_type_legend,
-    )
-
-    # Shift decomposition — peak
-    render_shift_decomposition(
-        df=df,
-        output_path=output_dir / 'rf_peak_shift_decomposition.png',
-        along_col='peak_shift_along_arm_mm',
-        across_col='peak_shift_across_arm_mm',
-        title='Peak Shift Decomposition (Tap − Stroke)',
-        session_colors=session_colors,
-        neuron_type_legend=neuron_type_legend,
-    )
+    # Shift decomposition — centroid, contour center, peak (with significance)
+    shift_stats_rows = [
+        render_shift_decomposition(
+            df=df,
+            output_path=output_dir / 'rf_centroid_shift_decomposition.png',
+            along_col='centroid_shift_along_arm_mm',
+            across_col='centroid_shift_across_arm_mm',
+            title='Centroid Shift Decomposition (Tap − Stroke)',
+            session_colors=session_colors,
+            neuron_type_legend=neuron_type_legend,
+        ),
+        render_shift_decomposition(
+            df=df,
+            output_path=output_dir / 'rf_contour_center_shift_decomposition.png',
+            along_col='contour_center_shift_along_arm_mm',
+            across_col='contour_center_shift_across_arm_mm',
+            title='Contour Center Shift Decomposition (Tap − Stroke)',
+            session_colors=session_colors,
+            neuron_type_legend=neuron_type_legend,
+        ),
+        render_shift_decomposition(
+            df=df,
+            output_path=output_dir / 'rf_peak_shift_decomposition.png',
+            along_col='peak_shift_along_arm_mm',
+            across_col='peak_shift_across_arm_mm',
+            title='Peak Shift Decomposition (Tap − Stroke)',
+            session_colors=session_colors,
+            neuron_type_legend=neuron_type_legend,
+        ),
+    ]
+    for _row in shift_stats_rows:
+        _row['comparison'] = 'tap_stroke'
+    shift_stats_csv = output_dir / 'rf_shift_significance.csv'
+    pd.DataFrame(shift_stats_rows).to_csv(shift_stats_csv, index=False)
+    logger.info("[RF Tap-Stroke Comparison] wrote %s", shift_stats_csv.name)
 
     with open(sentinel_path, 'w') as f:
         json.dump({'done': True, 'n_sessions': len(valid_data)}, f)

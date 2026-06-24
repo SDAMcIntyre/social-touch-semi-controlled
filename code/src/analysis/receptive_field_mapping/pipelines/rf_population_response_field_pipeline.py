@@ -34,12 +34,17 @@ from analysis.receptive_field_mapping.metrics.rf_inflection_boundary import (
     compute_laplacian_arrays,
     inflection_boundary_to_dict,
 )
+from analysis.receptive_field_mapping.metrics.rf_gradient_boundary import (
+    compute_gradient_magnitude,
+    compute_gradient_ridge,
+    gradient_boundary_to_dict,
+)
 from analysis.receptive_field_mapping.metrics.rf_pca_alignment import (
     apply_uv_alignment,
     compute_rf_pca_alignment,
 )
 from analysis.receptive_field_mapping.rendering.rf_population_map_renderer import (
-    compute_highest_contour_peak,
+    compute_highest_contour_center,
     compute_interpolated_grid,
     compute_standalone_figwidth,
     compute_uv_to_mm_scale,
@@ -74,6 +79,8 @@ class _SessionCompositeData:
     sentinel: Path
     produced: List[Path] = field(default_factory=list)
     gesture_boundaries: dict = field(default_factory=dict)
+    gesture_inflection_boundaries: dict = field(default_factory=dict)
+    gesture_gradient_boundaries: dict = field(default_factory=dict)
     per_gesture_grids: dict = field(default_factory=dict)
     vertex_data_npz: Path | None = None
     alignment_center: np.ndarray = field(default_factory=lambda: np.zeros(2))
@@ -96,6 +103,8 @@ def run_population_response_field_extraction(
     iff_metric: str = "mean",
     flip_u: bool = False,
     contour_color: str = "red",
+    circular_crop_margin: float = 0.0,
+    boundary_method: str = "gradient",
 ) -> None:
     """Render per-session 2D population RF heatmap PNGs projected via SLIM UV.
 
@@ -137,6 +146,11 @@ def run_population_response_field_extraction(
         raise ValueError(
             f"run_population_response_field_extraction: invalid iff_metric "
             f"{iff_metric!r}. Expected one of {IFF_METRICS}."
+        )
+    if boundary_method not in ("gradient", "inflection"):
+        raise ValueError(
+            f"run_population_response_field_extraction: invalid boundary_method "
+            f"{boundary_method!r}. Expected 'gradient' or 'inflection'."
         )
     npz_filename = single_touch_npz_filename(iff_metric)
     # ---- Pass 1: compute heatmaps + render per-gesture PNGs ----
@@ -377,6 +391,8 @@ def run_population_response_field_extraction(
         inspection_dir.mkdir(parents=True, exist_ok=True)
         produced: List[Path] = []
         gesture_boundaries: dict = {}
+        gesture_inflection_boundaries: dict = {}
+        gesture_gradient_boundaries: dict = {}
         per_gesture_grids: dict = {}
 
         for gtype, (slim_heatmap, n_touches, threshold) in results.items():
@@ -401,7 +417,20 @@ def run_population_response_field_extraction(
                 if inflection_sigma is not None
                 else None
             )
-            gesture_boundaries[gtype] = boundary
+            gesture_inflection_boundaries[gtype] = boundary
+            if inflection_sigma is not None:
+                smoothed_for_grad, _ = compute_laplacian_arrays(grid_z, inflection_sigma)
+                grad_boundary = compute_gradient_ridge(
+                    grid_u, grid_v, grid_z, smoothed_for_grad,
+                    snapshot_dir=inspection_dir, snapshot_label=gtype,
+                )
+            else:
+                grad_boundary = None
+            gesture_gradient_boundaries[gtype] = grad_boundary
+            if boundary_method == "gradient":
+                gesture_boundaries[gtype] = grad_boundary
+            else:
+                gesture_boundaries[gtype] = boundary
             render_population_rf_map(
                 forearm_uv=forearm_uv,
                 heatmap_val=slim_heatmap,
@@ -413,7 +442,7 @@ def run_population_response_field_extraction(
                 forearm_V=slim_V,
                 median_filter_size=median_filter_size,
                 precomputed_grid=(grid_u, grid_v, grid_z),
-                inflection_boundary=boundary,
+                boundary=gesture_boundaries[gtype],
                 heatmap_space=heatmap_space,
                 cmap=cmap,
                 vertex_colors=slim_vertex_colors,
@@ -433,6 +462,9 @@ def run_population_response_field_extraction(
             neuron_mode=neuron_mode,
             min_overlap_pct=min_overlap_pct,
             gesture_boundaries=gesture_boundaries,
+            gesture_gradient_boundaries=gesture_gradient_boundaries,
+            gesture_inflection_boundaries=gesture_inflection_boundaries,
+            boundary_method=boundary_method,
             inflection_sigma=inflection_sigma,
             alignment_center=alignment_center,
             alignment_rotation_matrix=alignment_rotation_matrix,
@@ -462,6 +494,8 @@ def run_population_response_field_extraction(
             sentinel=sentinel,
             produced=produced,
             gesture_boundaries=gesture_boundaries,
+            gesture_inflection_boundaries=gesture_inflection_boundaries,
+            gesture_gradient_boundaries=gesture_gradient_boundaries,
             per_gesture_grids=per_gesture_grids,
             vertex_data_npz=vertex_data_npz,
             alignment_center=alignment_center,
@@ -535,15 +569,23 @@ def run_population_response_field_extraction(
                         median_filter_size=median_filter_size,
                     )
                     precomputed_grids[gtype] = (grid_u_g, grid_v_g, grid_z_g)
-                    inflection_boundaries[gtype] = (
-                        compute_inflection_boundary(
-                            grid_u_g, grid_v_g, grid_z_g, inflection_sigma,
-                            snapshot_dir=inspection_dir, snapshot_label=f"{sd.session_id}_{gtype}_composite",
-                            contour_color=contour_color,
-                        )
-                        if inflection_sigma is not None
-                        else None
-                    )
+                    if inflection_sigma is not None:
+                        if boundary_method == "gradient":
+                            smoothed_comp, _ = compute_laplacian_arrays(grid_z_g, inflection_sigma)
+                            inflection_boundaries[gtype] = compute_gradient_ridge(
+                                grid_u_g, grid_v_g, grid_z_g, smoothed_comp,
+                                snapshot_dir=inspection_dir,
+                                snapshot_label=f"{sd.session_id}_{gtype}_composite",
+                            )
+                        else:
+                            inflection_boundaries[gtype] = compute_inflection_boundary(
+                                grid_u_g, grid_v_g, grid_z_g, inflection_sigma,
+                                snapshot_dir=inspection_dir,
+                                snapshot_label=f"{sd.session_id}_{gtype}_composite",
+                                contour_color=contour_color,
+                            )
+                    else:
+                        inflection_boundaries[gtype] = None
             else:
                 precomputed_grids = None
                 inflection_boundaries = None
@@ -562,7 +604,7 @@ def run_population_response_field_extraction(
                 forearm_V=sd.forearm_V,
                 median_filter_size=median_filter_size,
                 precomputed_grids=precomputed_grids,
-                inflection_boundaries=inflection_boundaries,
+                boundaries=inflection_boundaries,
                 heatmap_space=heatmap_space,
                 cmap=cmap,
                 vertex_colors=sd.slim_vertex_colors,
@@ -625,7 +667,7 @@ def run_population_response_field_extraction(
 
         centroid_uv = np.array(all_boundary.centroid_uv)
         peak_uv = np.array(all_boundary.peak_uv)
-        contour_center_uv = compute_highest_contour_peak(
+        contour_center_uv = compute_highest_contour_center(
             all_grid_u, all_grid_v, all_grid_z, n_levels=6,
         )
 
@@ -639,7 +681,7 @@ def run_population_response_field_extraction(
         radius_mm = 50.0
         scale = compute_uv_to_mm_scale(sd.forearm_uv, sd.forearm_V, sd.forearm_faces)
         radius_uv = radius_mm / scale
-        margin = radius_uv * 0.05
+        margin = radius_uv * circular_crop_margin
         all_centers = np.array([c for _, c, _ in crop_jobs])
         shared_xlim = (
             float(all_centers[:, 0].min()) - radius_uv - margin,
@@ -664,7 +706,7 @@ def run_population_response_field_extraction(
                         f"[Population Response Fields] {sd.session_id}: "
                         f"rendering 'all' circular {center_label}{marker_suffix}{suffix}..."
                     )
-                    render_population_rf_circular_crop(
+                    crop_kwargs = dict(
                         u_grid=all_grid_u,
                         v_grid=all_grid_v,
                         interp_grid=all_grid_z,
@@ -675,7 +717,6 @@ def run_population_response_field_extraction(
                         radius_mm=radius_mm,
                         vmax=vmax_val,
                         vmin=vmin_val,
-                        output_path=out_path,
                         vertex_colors=sd.slim_vertex_colors,
                         heatmap_space=heatmap_space,
                         cmap=cmap,
@@ -684,12 +725,81 @@ def run_population_response_field_extraction(
                         xlim=shared_xlim,
                         ylim=shared_ylim,
                     )
+                    # Original crop — preserved unchanged (no RF boundary overlay).
+                    render_population_rf_circular_crop(output_path=out_path, **crop_kwargs)
                     sd.produced.append(out_path)
                     print(f"[Population Response Fields] {sd.session_id}: saved {out_path.name}")
+                    # Duplicate crop with the red closed RF boundary overlaid.
+                    boundary_path = out_path.with_name(f'{out_path.stem}_rfboundary{out_path.suffix}')
+                    render_population_rf_circular_crop(
+                        output_path=boundary_path,
+                        boundary_contour_uv=all_boundary.contour_uv,
+                        boundary_color=contour_color,
+                        **crop_kwargs,
+                    )
+                    sd.produced.append(boundary_path)
+                    print(f"[Population Response Fields] {sd.session_id}: saved {boundary_path.name}")
 
         _write_sentinel(sd.sentinel, sd.session_id, produced=sd.produced,
                         inflection_boundaries=sd.gesture_boundaries,
                         vertex_data_npz=sd.vertex_data_npz)
+
+
+def _save_boundary_fields(
+    data_dict: dict,
+    prefix: str,
+    gtype: str,
+    boundary,
+    forearm_uv: np.ndarray,
+    forearm_faces: np.ndarray,
+    forearm_V: np.ndarray,
+) -> None:
+    data_dict[f'{prefix}_contour_uv_{gtype}'] = boundary.contour_uv.astype(np.float64)
+    data_dict[f'{prefix}_centroid_uv_{gtype}'] = np.array(boundary.centroid_uv, dtype=np.float64)
+    data_dict[f'{prefix}_peak_uv_{gtype}'] = np.array(boundary.peak_uv, dtype=np.float64)
+    data_dict[f'{prefix}_perimeter_uv_{gtype}'] = np.float64(boundary.perimeter_uv)
+    data_dict[f'{prefix}_area_uv_{gtype}'] = np.float64(boundary.area_uv)
+    data_dict[f'{prefix}_circularity_{gtype}'] = np.float64(boundary.circularity)
+    data_dict[f'{prefix}_pca_major_uv_{gtype}'] = np.float64(boundary.pca_major_uv)
+    data_dict[f'{prefix}_pca_minor_uv_{gtype}'] = np.float64(boundary.pca_minor_uv)
+    data_dict[f'{prefix}_pca_orientation_deg_{gtype}'] = np.float64(boundary.pca_orientation_deg)
+    data_dict[f'{prefix}_mean_iff_on_contour_{gtype}'] = np.float64(boundary.mean_iff_on_contour)
+    data_dict[f'{prefix}_iff_at_centroid_{gtype}'] = np.float64(boundary.iff_at_centroid)
+
+    contour_xyz = uv_points_to_xyz(
+        boundary.contour_uv, forearm_uv, forearm_faces, forearm_V,
+    )
+    centroid_uv_arr = np.array(boundary.centroid_uv, dtype=np.float64).reshape(1, 2)
+    centroid_xyz = uv_points_to_xyz(
+        centroid_uv_arr, forearm_uv, forearm_faces, forearm_V,
+    )[0]
+
+    contour_xyz_closed = np.vstack([contour_xyz, contour_xyz[:1]])
+    perimeter_xyz_mm = float(
+        np.sum(np.linalg.norm(np.diff(contour_xyz_closed, axis=0), axis=1))
+    )
+
+    c = centroid_xyz
+    edges_i = contour_xyz[:-1] - c
+    edges_j = contour_xyz[1:] - c
+    closing_i = contour_xyz[-1] - c
+    closing_j = contour_xyz[0] - c
+    cross_vecs = np.vstack([
+        np.cross(edges_i, edges_j),
+        np.cross(closing_i, closing_j).reshape(1, 3),
+    ])
+    area_xyz_mm2 = 0.5 * float(np.sum(np.linalg.norm(cross_vecs, axis=1)))
+
+    peak_uv_arr = np.array(boundary.peak_uv, dtype=np.float64).reshape(1, 2)
+    peak_xyz = uv_points_to_xyz(
+        peak_uv_arr, forearm_uv, forearm_faces, forearm_V,
+    )[0]
+
+    data_dict[f'{prefix}_contour_xyz_{gtype}'] = contour_xyz.astype(np.float64)
+    data_dict[f'{prefix}_centroid_xyz_{gtype}'] = centroid_xyz.astype(np.float64)
+    data_dict[f'{prefix}_peak_xyz_{gtype}'] = peak_xyz.astype(np.float64)
+    data_dict[f'{prefix}_perimeter_xyz_mm_{gtype}'] = np.float64(perimeter_xyz_mm)
+    data_dict[f'{prefix}_area_xyz_mm2_{gtype}'] = np.float64(area_xyz_mm2)
 
 
 def _save_response_fields_npz(
@@ -703,10 +813,13 @@ def _save_response_fields_npz(
     neuron_mode: str,
     min_overlap_pct: float,
     gesture_boundaries: dict,
-    inflection_sigma: float | None,
-    alignment_center: np.ndarray,
-    alignment_rotation_matrix: np.ndarray,
-    alignment_angle_deg: float,
+    gesture_gradient_boundaries: dict | None = None,
+    gesture_inflection_boundaries: dict | None = None,
+    boundary_method: str = "gradient",
+    inflection_sigma: float | None = None,
+    alignment_center: np.ndarray = None,
+    alignment_rotation_matrix: np.ndarray = None,
+    alignment_angle_deg: float = 0.0,
     flip_u: bool = False,
     slim_vertex_colors: np.ndarray | None = None,
 ) -> Path:
@@ -722,6 +835,7 @@ def _save_response_fields_npz(
         'gesture_types': np.array(list(results.keys()), dtype=object),
         'inflection_sigma': np.float64(inflection_sigma if inflection_sigma is not None else float('nan')),
         'flip_u': np.bool_(flip_u),
+        'boundary_method': np.array(boundary_method, dtype=object),
     }
 
     for gtype in results.keys():
@@ -741,52 +855,28 @@ def _save_response_fields_npz(
 
         boundary = gesture_boundaries.get(gtype)
         if boundary is not None:
-            data_dict[f'boundary_contour_uv_{gtype}'] = boundary.contour_uv.astype(np.float64)
-            data_dict[f'boundary_centroid_uv_{gtype}'] = np.array(boundary.centroid_uv, dtype=np.float64)
-            data_dict[f'boundary_peak_uv_{gtype}'] = np.array(boundary.peak_uv, dtype=np.float64)
-            data_dict[f'boundary_perimeter_uv_{gtype}'] = np.float64(boundary.perimeter_uv)
-            data_dict[f'boundary_area_uv_{gtype}'] = np.float64(boundary.area_uv)
-            data_dict[f'boundary_circularity_{gtype}'] = np.float64(boundary.circularity)
-            data_dict[f'boundary_pca_major_uv_{gtype}'] = np.float64(boundary.pca_major_uv)
-            data_dict[f'boundary_pca_minor_uv_{gtype}'] = np.float64(boundary.pca_minor_uv)
-            data_dict[f'boundary_pca_orientation_deg_{gtype}'] = np.float64(boundary.pca_orientation_deg)
-            data_dict[f'boundary_mean_iff_on_contour_{gtype}'] = np.float64(boundary.mean_iff_on_contour)
-            data_dict[f'boundary_iff_at_centroid_{gtype}'] = np.float64(boundary.iff_at_centroid)
+            _save_boundary_fields(data_dict, 'boundary', gtype, boundary,
+                                  forearm_uv, forearm_faces, forearm_V)
 
-            contour_xyz = uv_points_to_xyz(
-                boundary.contour_uv, forearm_uv, forearm_faces, forearm_V,
-            )
-            centroid_uv_arr = np.array(boundary.centroid_uv, dtype=np.float64).reshape(1, 2)
-            centroid_xyz = uv_points_to_xyz(
-                centroid_uv_arr, forearm_uv, forearm_faces, forearm_V,
-            )[0]
+    # ---- Inflection boundary (explicit prefix) ----
+    if gesture_inflection_boundaries:
+        for gtype in results.keys():
+            infl_boundary = gesture_inflection_boundaries.get(gtype)
+            if infl_boundary is not None:
+                _save_boundary_fields(data_dict, 'inflection', gtype, infl_boundary,
+                                      forearm_uv, forearm_faces, forearm_V)
 
-            contour_xyz_closed = np.vstack([contour_xyz, contour_xyz[:1]])
-            perimeter_xyz_mm = float(
-                np.sum(np.linalg.norm(np.diff(contour_xyz_closed, axis=0), axis=1))
-            )
-
-            c = centroid_xyz
-            edges_i = contour_xyz[:-1] - c
-            edges_j = contour_xyz[1:] - c
-            closing_i = contour_xyz[-1] - c
-            closing_j = contour_xyz[0] - c
-            cross_vecs = np.vstack([
-                np.cross(edges_i, edges_j),
-                np.cross(closing_i, closing_j).reshape(1, 3),
-            ])
-            area_xyz_mm2 = 0.5 * float(np.sum(np.linalg.norm(cross_vecs, axis=1)))
-
-            peak_uv_arr = np.array(boundary.peak_uv, dtype=np.float64).reshape(1, 2)
-            peak_xyz = uv_points_to_xyz(
-                peak_uv_arr, forearm_uv, forearm_faces, forearm_V,
-            )[0]
-
-            data_dict[f'boundary_contour_xyz_{gtype}'] = contour_xyz.astype(np.float64)
-            data_dict[f'boundary_centroid_xyz_{gtype}'] = centroid_xyz.astype(np.float64)
-            data_dict[f'boundary_peak_xyz_{gtype}'] = peak_xyz.astype(np.float64)
-            data_dict[f'boundary_perimeter_xyz_mm_{gtype}'] = np.float64(perimeter_xyz_mm)
-            data_dict[f'boundary_area_xyz_mm2_{gtype}'] = np.float64(area_xyz_mm2)
+    # ---- Gradient ridge boundary ----
+    if gesture_gradient_boundaries:
+        for gtype in results.keys():
+            grad_boundary = gesture_gradient_boundaries.get(gtype)
+            if inflection_sigma is not None and f'smoothed_{gtype}' in data_dict:
+                nan_mask = np.isnan(per_gesture_grids[gtype][2])
+                grad_mag = compute_gradient_magnitude(data_dict[f'smoothed_{gtype}'], nan_mask)
+                data_dict[f'gradient_mag_{gtype}'] = grad_mag.astype(np.float64)
+            if grad_boundary is not None:
+                _save_boundary_fields(data_dict, 'gradient', gtype, grad_boundary,
+                                      forearm_uv, forearm_faces, forearm_V)
 
     data_dict['alignment_center_uv'] = alignment_center.astype(np.float64)
     data_dict['alignment_rotation_matrix'] = alignment_rotation_matrix.astype(np.float64)
