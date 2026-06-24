@@ -141,7 +141,7 @@ def _compute_masked_laplacian(
     )
 
 
-def _find_peak_location(grid_z: np.ndarray) -> tuple[int, int] | None:
+def find_peak_location(grid_z: np.ndarray) -> tuple[int, int] | None:
     """Return (row, col) of the global maximum ignoring NaN.
 
     Returns None if grid_z is all NaN.
@@ -211,7 +211,7 @@ def _select_peak_basin_contour(
     return selected, component_mask
 
 
-def _contour_pixels_to_uv(
+def contour_pixels_to_uv(
     contour_rc: np.ndarray,
     grid_u: np.ndarray,
     grid_v: np.ndarray,
@@ -242,14 +242,14 @@ def _contour_pixels_to_uv(
 # ---------------------------------------------------------------------------
 
 
-def _compute_polygon_area(contour_uv: np.ndarray) -> float:
+def compute_polygon_area(contour_uv: np.ndarray) -> float:
     """Shoelace formula polygon area in UV space."""
     u = contour_uv[:, 0]
     v = contour_uv[:, 1]
     return abs(float(np.dot(u, np.roll(v, 1)) - np.dot(v, np.roll(u, 1)))) * 0.5
 
 
-def _compute_polygon_perimeter(contour_uv: np.ndarray) -> float:
+def compute_polygon_perimeter(contour_uv: np.ndarray) -> float:
     """Polygon perimeter: sum of Euclidean segment lengths including closing segment."""
     diffs = np.diff(contour_uv, axis=0)
     segment_lengths = float(np.sum(np.linalg.norm(diffs, axis=1)))
@@ -257,7 +257,7 @@ def _compute_polygon_perimeter(contour_uv: np.ndarray) -> float:
     return segment_lengths + closing
 
 
-def _compute_polygon_centroid(contour_uv: np.ndarray) -> tuple[float, float]:
+def compute_polygon_centroid(contour_uv: np.ndarray) -> tuple[float, float]:
     """Polygon centroid via the shoelace-based area centroid formula."""
     u = contour_uv[:, 0]
     v = contour_uv[:, 1]
@@ -275,7 +275,7 @@ def _compute_polygon_centroid(contour_uv: np.ndarray) -> tuple[float, float]:
     return cu, cv
 
 
-def _compute_contour_pca(
+def compute_contour_pca(
     contour_uv: np.ndarray,
 ) -> tuple[float, float, float]:
     """Unweighted PCA of contour vertices.
@@ -304,7 +304,7 @@ def _compute_contour_pca(
 # ---------------------------------------------------------------------------
 
 
-def _sample_grid_at_uv_point(
+def sample_grid_at_uv_point(
     grid_z: np.ndarray,
     grid_u: np.ndarray,
     grid_v: np.ndarray,
@@ -313,7 +313,7 @@ def _sample_grid_at_uv_point(
     """Bilinear interpolation of grid_z at a single UV-space point.
 
     Converts the UV coordinate to grid (row, col) using the inverse of
-    ``_contour_pixels_to_uv``, then delegates to ``_sample_grid_along_contour``.
+    ``contour_pixels_to_uv``, then delegates to ``sample_grid_along_contour``.
     """
     n_rows, n_cols = grid_u.shape
     u_min, u_max = float(grid_u[0, 0]), float(grid_u[-1, 0])
@@ -323,10 +323,10 @@ def _sample_grid_at_uv_point(
     col = (uv_point[1] - v_min) / (v_max - v_min) * (n_cols - 1)
 
     point_rc = np.array([[row, col]])
-    return _sample_grid_along_contour(grid_z, point_rc)
+    return sample_grid_along_contour(grid_z, point_rc)
 
 
-def _sample_grid_along_contour(
+def sample_grid_along_contour(
     grid_z: np.ndarray,
     contour_rc: np.ndarray,
 ) -> float:
@@ -627,9 +627,9 @@ def compute_inflection_boundary(
         logger.debug("inflection_boundary: all-NaN grid, shape=%s", grid_z.shape)
         return None
 
-    peak_rc = _find_peak_location(grid_z)
+    peak_rc = find_peak_location(grid_z)
     if peak_rc is None:
-        logger.warning("inflection_boundary: _find_peak_location returned None")
+        logger.warning("inflection_boundary: find_peak_location returned None")
         return None
 
     n_rows, n_cols = grid_z.shape
@@ -686,23 +686,23 @@ def compute_inflection_boundary(
             )
         return None
 
-    contour_uv = _contour_pixels_to_uv(selected, grid_u, grid_v)
+    contour_uv = contour_pixels_to_uv(selected, grid_u, grid_v)
 
-    area_uv = _compute_polygon_area(contour_uv)
-    perimeter_uv = _compute_polygon_perimeter(contour_uv)
+    area_uv = compute_polygon_area(contour_uv)
+    perimeter_uv = compute_polygon_perimeter(contour_uv)
 
     if perimeter_uv > 0:
         circularity = 4.0 * math.pi * area_uv / (perimeter_uv ** 2)
     else:
         circularity = float("nan")
 
-    centroid_uv = _compute_polygon_centroid(contour_uv)
+    centroid_uv = compute_polygon_centroid(contour_uv)
     peak_rc_arr = np.array([[peak_rc[0], peak_rc[1]]], dtype=float)
-    peak_uv_arr = _contour_pixels_to_uv(peak_rc_arr, grid_u, grid_v)
+    peak_uv_arr = contour_pixels_to_uv(peak_rc_arr, grid_u, grid_v)
     peak_uv = (float(peak_uv_arr[0, 0]), float(peak_uv_arr[0, 1]))
-    pca_major, pca_minor, pca_orientation_deg = _compute_contour_pca(contour_uv)
-    mean_iff = _sample_grid_along_contour(grid_z, selected)
-    iff_at_centroid = _sample_grid_at_uv_point(grid_z, grid_u, grid_v, centroid_uv)
+    pca_major, pca_minor, pca_orientation_deg = compute_contour_pca(contour_uv)
+    mean_iff = sample_grid_along_contour(grid_z, selected)
+    iff_at_centroid = sample_grid_at_uv_point(grid_z, grid_u, grid_v, centroid_uv)
 
     logger.info(
         "inflection_boundary: SUCCESS — contour_pts=%d, area_uv=%.4f, "

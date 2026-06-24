@@ -36,8 +36,19 @@ def render_center_axis_profile(
     xlabel: str,
     ylabel: str = "IFF (Hz)",
     contour_color: str = "red",
+    gradient_crossings: np.ndarray | None = None,
+    gradient_color: str = "#2ca02c",
 ) -> None:
-    """Render a 1D line plot of IFF along one axis at a given center point."""
+    """Render a 1D line plot of IFF along one axis at a given center point.
+
+    Parameters
+    ----------
+    gradient_crossings:
+        Optional second set of boundary crossings from the gradient ridge
+        boundary.  Rendered as diamond markers in *gradient_color*.
+    gradient_color:
+        Color for gradient boundary markers (default matplotlib green).
+    """
     fig, ax = plt.subplots(figsize=(8, 4))
     fig.patch.set_facecolor(_BG)
     _style_ax(ax)
@@ -66,6 +77,12 @@ def render_center_axis_profile(
             y0, y1 = yc - half * slope, yc + half * slope
             ax.plot([x0, x1], [y0, y1], color=contour_color, linewidth=1.2,
                     alpha=0.9, zorder=4)
+
+        if gradient_crossings is not None:
+            for xc in gradient_crossings:
+                yc = float(np.interp(xc, c_valid, v_valid))
+                ax.plot(xc, yc, 'D', color=gradient_color, markersize=5,
+                        zorder=5, markeredgecolor='black', markeredgewidth=0.5)
 
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
@@ -222,6 +239,54 @@ def render_laplacian_profile(
 
     ax.set_xlabel(xlabel)
     ax.set_ylabel("Laplacian")
+    ax.set_title(title, color='black')
+
+    fig.savefig(output_path, dpi=150, bbox_inches='tight', facecolor=fig.get_facecolor())
+    svg_path = output_path.with_suffix('.svg')
+    fig.savefig(svg_path, bbox_inches='tight', facecolor=fig.get_facecolor())
+    plt.close(fig)
+
+
+def render_gradient_profile(
+    coords: np.ndarray,
+    grad_values: np.ndarray,
+    gradient_crossings: np.ndarray,
+    output_path: Path,
+    title: str,
+    xlabel: str,
+    gradient_color: str = "#2ca02c",
+) -> None:
+    """Render a 1D gradient magnitude profile with peak markers.
+
+    Shows |dIFF/dx| along the profile axis.  The gradient ridge boundary
+    corresponds to the peaks of this curve on either side of the RF centre.
+    """
+    fig, ax = plt.subplots(figsize=(8, 4))
+    fig.patch.set_facecolor(_BG)
+    _style_ax(ax)
+
+    if np.all(np.isnan(grad_values)):
+        ax.text(
+            0.5, 0.5, "No valid data",
+            transform=ax.transAxes, ha='center', va='center', color='black',
+        )
+    else:
+        valid = ~np.isnan(grad_values)
+        c_valid = coords[valid]
+        v_valid = grad_values[valid]
+
+        ax.fill_between(c_valid, v_valid, 0, alpha=0.2, color=gradient_color)
+        ax.plot(coords, grad_values, color='#333333', linewidth=1.2)
+
+        for xc in gradient_crossings:
+            yc = float(np.interp(xc, c_valid, v_valid))
+            ax.plot(xc, yc, 'D', color=gradient_color, markersize=6,
+                    zorder=5, markeredgecolor='black', markeredgewidth=0.5)
+            ax.axvline(xc, color=gradient_color, linewidth=0.6,
+                       linestyle=':', alpha=0.6, zorder=4)
+
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel("|∇IFF| (Hz/mm)")
     ax.set_title(title, color='black')
 
     fig.savefig(output_path, dpi=150, bbox_inches='tight', facecolor=fig.get_facecolor())

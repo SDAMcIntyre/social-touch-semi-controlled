@@ -83,6 +83,7 @@ def render_boundary_contour_overlay_circular(
     gesture_type: str,
     output_path: Path,
     radius_uv: float,
+    circular_crop_margin: float = 0.0,
 ) -> None:
     """Circular-cropped version of the contour overlay, centered on the mean centroid."""
     from matplotlib.patches import Circle
@@ -126,7 +127,7 @@ def render_boundary_contour_overlay_circular(
     for artist in list(ax.lines):
         artist.set_clip_path(clip_circle)
 
-    margin = radius_uv * 0.05
+    margin = radius_uv * circular_crop_margin
     ax.set_xlim(center[0] - radius_uv - margin, center[0] + radius_uv + margin)
     ax.set_ylim(center[1] - radius_uv - margin, center[1] + radius_uv + margin)
 
