@@ -457,6 +457,8 @@ def spatial_extract_boundaries_flow(
     cmap: str = "inferno",
     flip_u: bool = False,
     contour_color: str = "red",
+    circular_crop_margin: float = 0.0,
+    boundary_method: str = "gradient",
 ) -> None:
     """Render per-session 2D population RF heatmap PNGs projected via SLIM UV.
 
@@ -485,6 +487,8 @@ def spatial_extract_boundaries_flow(
             iff_metric=metric,
             flip_u=flip_u,
             contour_color=contour_color,
+            circular_crop_margin=circular_crop_margin,
+            boundary_method=boundary_method,
         )
 
 
@@ -495,7 +499,9 @@ def spatial_compare_boundaries_flow(
     iff_metric: str = "mean",
     heatmap_space: str = "linear",
     cmap: str = "inferno",
+    contour_color: str = "red",
     neuron_summary_xlsx: Optional[str] = None,
+    circular_crop_margin: float = 0.0,
 ) -> None:
     """Aggregate RF boundary metrics across sessions and render comparison visuals.
 
@@ -519,7 +525,9 @@ def spatial_compare_boundaries_flow(
             iff_metric=metric,
             heatmap_space=heatmap_space,
             cmap=cmap,
+            contour_color=contour_color,
             neuron_summary_xlsx=xlsx_path,
+            circular_crop_margin=circular_crop_margin,
         )
 
 
@@ -532,6 +540,7 @@ def spatial_compare_proximal_distal_flow(
     iff_metric: str = "mean",
     contour_color: str = "red",
     neuron_summary_xlsx: Optional[str] = None,
+    circular_crop_margin: float = 0.0,
 ) -> None:
     """Compare RF properties between proximal and distal strokes across sessions.
 
@@ -557,6 +566,7 @@ def spatial_compare_proximal_distal_flow(
             iff_metric=metric,
             contour_color=contour_color,
             neuron_summary_xlsx=xlsx_path,
+            circular_crop_margin=circular_crop_margin,
         )
 
 
@@ -569,6 +579,7 @@ def spatial_compare_tap_stroke_flow(
     iff_metric: str = "mean",
     contour_color: str = "red",
     neuron_summary_xlsx: Optional[str] = None,
+    circular_crop_margin: float = 0.0,
 ) -> None:
     """Compare RF properties between tap and stroke gestures across sessions.
 
@@ -594,6 +605,7 @@ def spatial_compare_tap_stroke_flow(
             iff_metric=metric,
             contour_color=contour_color,
             neuron_summary_xlsx=xlsx_path,
+            circular_crop_margin=circular_crop_margin,
         )
 
 
@@ -1133,6 +1145,7 @@ def spatial_tuning_rf_metrics_flow(
     dot_alpha: float = 0.7,
     iff_metric: str = "mean",
     neuron_summary_xlsx: Optional[str] = None,
+    boundary_method: str = "gradient",
 ) -> None:
     """RF spatial tuning curves: RF boundary metrics vs binned stimulus parameters.
 
@@ -1162,6 +1175,7 @@ def spatial_tuning_rf_metrics_flow(
             "dot_alpha": dot_alpha,
             "iff_metric": iff_metric,
             "neuron_summary_xlsx": neuron_summary_xlsx,
+            "boundary_method": boundary_method,
         },
         output_base_dir=output_dir,
     )
@@ -1642,6 +1656,7 @@ def _build_pipeline_stages(dag_handler: DagConfigHandler, items_to_process) -> l
                     if dag_handler.get_task_options("spatial_extract_boundaries").get("inflection_sigma") is not None
                     else {}
                 ),
+                "boundary_method": dag_handler.get_task_options("spatial_extract_boundaries").get("boundary_method", "gradient"),
             },
         },
         {
@@ -1651,6 +1666,7 @@ def _build_pipeline_stages(dag_handler: DagConfigHandler, items_to_process) -> l
                 "iff_metric": dag_handler.get_task_options("spatial_compare_boundaries").get("iff_metric", "mean"),
                 "heatmap_space": dag_handler.get_task_options("spatial_compare_boundaries").get("heatmap_space", "linear"),
                 "cmap": dag_handler.get_task_options("spatial_compare_boundaries").get("cmap", "inferno"),
+                "contour_color": dag_handler.get_task_options("spatial_compare_boundaries").get("contour_color", "red"),
                 "neuron_summary_xlsx": dag_handler.get_parameter("neuron_summary_xlsx") or None,
             },
         },
@@ -1756,6 +1772,7 @@ def _build_pipeline_stages(dag_handler: DagConfigHandler, items_to_process) -> l
                 "dot_alpha": float(dag_handler.get_task_options("spatial_tuning_rf_metrics").get("dot_alpha", 0.7)),
                 "iff_metric": str(dag_handler.get_task_options("spatial_tuning_rf_metrics").get("iff_metric", "mean")),
                 "neuron_summary_xlsx": dag_handler.get_parameter("neuron_summary_xlsx") or None,
+                "boundary_method": dag_handler.get_task_options("spatial_tuning_rf_metrics").get("boundary_method", "gradient"),
             },
         },
         {
