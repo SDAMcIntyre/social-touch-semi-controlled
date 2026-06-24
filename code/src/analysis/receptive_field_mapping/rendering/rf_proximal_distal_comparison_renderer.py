@@ -19,6 +19,68 @@ from analysis.receptive_field_mapping.rendering.rf_population_map_renderer impor
 logger = logging.getLogger(__name__)
 
 
+def _fmt_p(p: float) -> str:
+    """Format a p-value for figure annotation; 'n/a' when undefined."""
+    return f"{p:.3f}" if np.isfinite(p) else "n/a"
+
+
+def _compute_axis_significance(values: list[float]) -> dict:
+    """Wilcoxon signed-rank + exact sign test for a 1D sample against zero.
+
+    Returns NaN p-values when fewer than 5 finite observations are available
+    (matching the population-strip gating) or when a test is undefined. No
+    silent fallback — undefined tests stay NaN and the figure omits them.
+    """
+    finite = [v for v in values if np.isfinite(v)]
+    n = len(finite)
+    result = {'n': n, 'wilcoxon_p': float('nan'), 'sign_p': float('nan')}
+    if n < 5:
+        return result
+    from scipy.stats import binomtest, wilcoxon
+    try:
+        _stat, result['wilcoxon_p'] = wilcoxon(finite)
+    except ValueError:
+        pass  # wilcoxon raises when all values are zero or only one unique value
+    n_positive = sum(1 for v in finite if v > 0)
+    n_nonzero = sum(1 for v in finite if v != 0)
+    if n_nonzero > 0:
+        result['sign_p'] = float(binomtest(n_positive, n_nonzero, 0.5).pvalue)
+    return result
+
+
+def _compute_hotelling_t2(along: list[float], across: list[float]) -> dict:
+    """One-sample Hotelling's T² test that the mean 2D shift vector is the origin.
+
+    Tests H0: E[(ΔU, ΔV)] = (0, 0) for the population of per-session shift
+    vectors. Returns NaN statistics when there are too few sessions (N <= 2)
+    or the covariance is singular — no silent fallback, the figure simply
+    omits the 2D annotation in that case.
+    """
+    pts = np.array(
+        [(u, v) for u, v in zip(along, across) if np.isfinite(u) and np.isfinite(v)],
+        dtype=np.float64,
+    )
+    p = 2
+    n = int(pts.shape[0]) if pts.ndim == 2 else 0
+    result = {'n': n, 'T2': float('nan'), 'F': float('nan'), 'p': float('nan')}
+    if n <= p:
+        return result
+    mean = pts.mean(axis=0)
+    cov = np.cov(pts, rowvar=False)
+    try:
+        inv = np.linalg.inv(cov)
+    except np.linalg.LinAlgError:
+        logger.warning("Hotelling T²: singular covariance (N=%d) — skipping 2D test.", n)
+        return result
+    t2 = float(n * mean @ inv @ mean)
+    f_stat = (n - p) / (p * (n - 1)) * t2
+    from scipy.stats import f as f_dist
+    result['T2'] = t2
+    result['F'] = float(f_stat)
+    result['p'] = float(f_dist.sf(f_stat, p, n - p))
+    return result
+
+
 def render_center_marked_heatmap(
     u_grid: np.ndarray,
     v_grid: np.ndarray,
@@ -768,6 +830,130 @@ def render_proximal_distal_population_strips(
     plt.close(fig)
 
 
+def render_paired_metric_violins(
+    df: pd.DataFrame,
+    metric_pairs: list[tuple[str, str, str]],
+    condition_labels: tuple[str, str],
+    output_path: Path,
+    session_colors: dict[str, str] | None = None,
+    neuron_type_legend: dict[str, str] | None = None,
+) -> None:
+    """Violin + paired-dot distribution figure for paired-condition metrics.
+
+    Produces a 1xN subplot figure (N = len(metric_pairs)). Each subplot draws a
+    violin for condition A at x=0 and condition B at x=1 (alpha-filled bodies),
+    overlays one paired dot per session at each x connected by a thin line
+    (colored by ``session_colors``), and annotates above the subplot with the
+    Wilcoxon signed-rank / sign-test p-values and a consistency count with
+    Clopper-Pearson CI computed on the paired deltas ``(col_a - col_b)``.
+
+    Sessions with NaN in either condition for a given metric are dropped from
+    that subplot (paired values must be finite for both columns). Statistical
+    annotations show "n/a" when fewer than 5 valid paired sessions remain
+    (matching the population-strip gating via ``_compute_axis_significance``).
+    """
+    if not metric_pairs:
+        raise ValueError("render_paired_metric_violins: metric_pairs is empty")
+    if 'session_id' not in df.columns:
+        raise ValueError("render_paired_metric_violins: df missing 'session_id' column")
+
+    label_a, label_b = condition_labels
+
+    n_metrics = len(metric_pairs)
+    fig, axes = plt.subplots(1, n_metrics, figsize=(3.2 * n_metrics, 5), facecolor='white')
+    if n_metrics == 1:
+        axes = [axes]
+
+    from scipy.stats import beta as beta_dist
+
+    for col_idx, (col_a, col_b, label) in enumerate(metric_pairs):
+        ax = axes[col_idx]
+        ax.set_facecolor('white')
+        ax.set_title(label, fontsize=9, wrap=True)
+
+        if col_a not in df.columns or col_b not in df.columns:
+            ax.set_xticks([0, 1])
+            ax.set_xticklabels([label_a, label_b], fontsize=8)
+            continue
+
+        # Paired rows: drop any session with NaN in either condition.
+        paired = df[['session_id', col_a, col_b]].dropna(subset=[col_a, col_b])
+        session_ids = paired['session_id'].tolist()
+        values_a = paired[col_a].to_numpy(dtype=float)
+        values_b = paired[col_b].to_numpy(dtype=float)
+        deltas = (values_a - values_b).tolist()
+
+        if len(session_ids) > 0:
+            parts = ax.violinplot(
+                [values_a, values_b],
+                positions=[0, 1],
+                showmeans=False,
+                showextrema=False,
+                showmedians=False,
+            )
+            for body in parts['bodies']:
+                body.set_facecolor('lightgray')
+                body.set_edgecolor('gray')
+                body.set_alpha(0.4)
+
+            # Per-session paired dots connected by a thin line.
+            for sid, va, vb in zip(session_ids, values_a, values_b):
+                color = session_colors[sid] if session_colors and sid in session_colors else 'steelblue'
+                ax.plot([0, 1], [va, vb], color=color, lw=0.8, alpha=0.6, zorder=2)
+                ax.plot(0, va, 'o', color=color, alpha=0.8, markersize=5, zorder=3)
+                ax.plot(1, vb, 'o', color=color, alpha=0.8, markersize=5, zorder=3)
+
+        # Statistical annotation on paired deltas (col_a - col_b).
+        axis_sig = _compute_axis_significance(deltas)
+        annotations = [
+            f"W p={_fmt_p(axis_sig['wilcoxon_p'])}",
+            f"S p={_fmt_p(axis_sig['sign_p'])}",
+        ]
+        finite_deltas = [d for d in deltas if np.isfinite(d)]
+        if len(finite_deltas) >= 5:
+            n_positive = sum(1 for d in finite_deltas if d > 0)
+            n_nonzero = sum(1 for d in finite_deltas if d != 0)
+            if n_nonzero > 0:
+                n_negative = n_nonzero - n_positive
+                majority = n_positive if n_positive >= n_negative else n_negative
+                ci_lo = beta_dist.ppf(0.025, majority, n_nonzero - majority + 1) if majority > 0 else 0.0
+                ci_hi = beta_dist.ppf(0.975, majority + 1, n_nonzero - majority) if majority < n_nonzero else 1.0
+                annotations.append(f"{majority}/{n_nonzero} [{ci_lo:.0%}-{ci_hi:.0%}]")
+        else:
+            annotations.append("n/a")
+
+        for i, txt in enumerate(annotations):
+            ax.text(0.5, 1.0 + i * 0.06, txt, transform=ax.get_xaxis_transform(),
+                    ha='center', va='bottom', fontsize=7)
+
+        ax.set_xlim(-0.5, 1.5)
+        ax.set_xticks([0, 1])
+        ax.set_xticklabels([label_a, label_b], fontsize=8)
+        ax.tick_params(axis='y', labelsize=7)
+
+    # Neuron-type legend at the figure bottom.
+    if neuron_type_legend:
+        legend_handles = [
+            matplotlib.patches.Patch(facecolor=color, label=ntype)
+            for ntype, color in neuron_type_legend.items()
+        ]
+        fig.legend(
+            handles=legend_handles,
+            loc='lower center',
+            ncol=min(len(neuron_type_legend), 5),
+            fontsize=8,
+            title='Neuron type',
+            bbox_to_anchor=(0.5, 0.0),
+        )
+
+    fig.tight_layout(rect=[0, 0.08 if neuron_type_legend else 0, 1, 1])
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(str(output_path), dpi=120)
+    fig.savefig(output_path.with_suffix('.svg'), bbox_inches='tight')
+    logger.info("Saved paired metric violins: %s", output_path)
+    plt.close(fig)
+
+
 def render_shift_decomposition(
     df: pd.DataFrame,
     output_path: Path,
@@ -776,8 +962,23 @@ def render_shift_decomposition(
     title: str,
     session_colors: dict[str, str] | None = None,
     neuron_type_legend: dict[str, str] | None = None,
-) -> None:
-    """Arrow/quiver plot showing per-session shift vectors for a given center type."""
+) -> dict:
+    """Arrow/quiver plot showing per-session shift vectors for a given center type.
+
+    Annotates the figure with a one-sample Hotelling's T² test (is the mean 2D
+    shift vector different from the origin?) plus per-axis Wilcoxon signed-rank
+    and exact sign tests on the along-arm (ΔU) and across-arm (ΔV) components.
+
+    Returns a stats row (center type, N, mean shift, all p-values) so the caller
+    can persist a per-comparison significance table.
+    """
+    center_type = along_col.replace('_shift_along_arm_mm', '')
+    along_vals = df[along_col].tolist() if along_col in df.columns else []
+    across_vals = df[across_col].tolist() if across_col in df.columns else []
+    axis_along = _compute_axis_significance(along_vals)
+    axis_across = _compute_axis_significance(across_vals)
+    hotelling = _compute_hotelling_t2(along_vals, across_vals)
+
     try:
         cmap_tab20 = matplotlib.colormaps['tab20']
     except AttributeError:
@@ -819,6 +1020,27 @@ def render_shift_decomposition(
     ax.set_title(title)
     ax.set_aspect('equal')
 
+    # Significance annotation: 2D Hotelling T² + per-axis Wilcoxon/sign tests
+    stat_lines = [f"N = {hotelling['n']}"]
+    if np.isfinite(hotelling['p']):
+        stat_lines.append(f"Hotelling T²: p = {hotelling['p']:.3f}")
+    else:
+        stat_lines.append("Hotelling T²: n/a")
+    stat_lines.append(
+        f"ΔU along: W p={_fmt_p(axis_along['wilcoxon_p'])}, "
+        f"sign p={_fmt_p(axis_along['sign_p'])}"
+    )
+    stat_lines.append(
+        f"ΔV across: W p={_fmt_p(axis_across['wilcoxon_p'])}, "
+        f"sign p={_fmt_p(axis_across['sign_p'])}"
+    )
+    ax.text(
+        0.02, 0.98, "\n".join(stat_lines),
+        transform=ax.transAxes, ha='left', va='top', fontsize=8,
+        bbox=dict(boxstyle='round', facecolor='white', edgecolor='gray', alpha=0.85),
+        zorder=5,
+    )
+
     if neuron_type_legend:
         legend_handles = [
             matplotlib.patches.Patch(facecolor=color, label=ntype)
@@ -837,3 +1059,21 @@ def render_shift_decomposition(
     fig.savefig(output_path.with_suffix('.svg'), bbox_inches='tight')
     logger.info("Saved centroid shift decomposition: %s", output_path)
     plt.close(fig)
+
+    def _nanmean(vals: list[float]) -> float:
+        finite = [v for v in vals if np.isfinite(v)]
+        return float(np.mean(finite)) if finite else float('nan')
+
+    return {
+        'center_type': center_type,
+        'n': hotelling['n'],
+        'mean_along_mm': _nanmean(along_vals),
+        'mean_across_mm': _nanmean(across_vals),
+        'hotelling_T2': hotelling['T2'],
+        'hotelling_F': hotelling['F'],
+        'hotelling_p': hotelling['p'],
+        'along_wilcoxon_p': axis_along['wilcoxon_p'],
+        'along_sign_p': axis_along['sign_p'],
+        'across_wilcoxon_p': axis_across['wilcoxon_p'],
+        'across_sign_p': axis_across['sign_p'],
+    }
