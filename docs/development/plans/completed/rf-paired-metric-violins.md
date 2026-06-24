@@ -2,7 +2,8 @@
 
 **Date:** 2026-06-23
 **Author:** Basil Duvernoy
-**Status:** In Progress
+**Status:** Completed
+**Completed:** 2026-06-24 12:13
 **Base Branch:** `feature/rf-boundary-method-config-switch`
 **Branch:** `feature/rf-paired-metric-violins`
 
