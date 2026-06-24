@@ -194,6 +194,8 @@ tasks:
       cmap: inferno
       flip_u: true
       contour_color: red
+      circular_crop_margin: 0.0
+      boundary_method: gradient
     depends_on: [spatial_map_single_touch, spatial_precompute_slim_uv]
 
   # Aggregate inflection boundary metrics across sessions and render comparison visuals.
@@ -208,6 +210,8 @@ tasks:
       iff_metric: both
       heatmap_space: linear
       cmap: inferno
+      contour_color: red
+      circular_crop_margin: 0.0
     depends_on: [spatial_extract_boundaries]
 
   # Proximal-distal RF comparison: comprehensive paired contrast of RF properties between stroke directions.
@@ -224,6 +228,24 @@ tasks:
       heatmap_space: linear
       cmap: inferno
       contour_color: red
+      circular_crop_margin: 0.0
+    depends_on: [spatial_extract_boundaries]
+
+  # Tap-vs-stroke RF comparison: comprehensive paired contrast of RF properties between tap and stroke gestures.
+  # Reads per-session NPZ files from spatial_extract_boundaries; computes boundary metric deltas,
+  # contour overlap (IoU/Dice), heatmap correlation, and shift decomposition.
+  # Produces contour overlays, heatmap triptychs, metric delta bar charts, population strip charts,
+  # and shift decomposition figures. Output: 4_analysed/spatial_compare_tap_stroke/
+  spatial_compare_tap_stroke:
+    category: spatial_sensitivity
+    enabled: true
+    options:
+      force_processing: true
+      iff_metric: both
+      heatmap_space: linear
+      cmap: inferno
+      contour_color: red
+      circular_crop_margin: 0.0
     depends_on: [spatial_extract_boundaries]
 
   # Extract 1D cross-section profiles from interpolated RF heatmap grids.
@@ -384,6 +406,7 @@ tasks:
       fit_models: "all"                     # named fit models (overrides fit_degrees); "all" or list, e.g. ["poly1", "power", "log"]; available: poly1-9, power, log, naka_rushton, sigmoid, exp_sat
       vertex_threshold: 0.05  # fraction of touches that must contact a vertex
       inflection_sigma: 4.0   # Gaussian sigma for Laplacian boundary detection
+      boundary_method: gradient
       clip_percentile: 1.0
       dot_alpha: 0.7
       iff_metric: mean

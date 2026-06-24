@@ -15,7 +15,6 @@ from scipy.ndimage import generic_filter
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components
 
-from analysis.receptive_field_mapping.metrics.rf_inflection_boundary import InflectionBoundary
 
 logger = logging.getLogger(__name__)
 
@@ -212,7 +211,7 @@ def _draw_forearm_mesh_background(
     ax.add_collection(mesh_coll)
 
 
-def _draw_inflection_boundary(
+def _draw_boundary(
     ax,
     contour_uv: np.ndarray,
     centroid_uv: tuple[float, float],
@@ -237,7 +236,7 @@ def render_population_rf_map(
     output_path: Path,
     median_filter_size: int | None = None,
     precomputed_grid: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None,
-    inflection_boundary: InflectionBoundary | None = None,
+    boundary=None,
     heatmap_space: str = "linear",
     cmap: str = "inferno",
     vertex_colors: np.ndarray | None = None,
@@ -264,8 +263,8 @@ def render_population_rf_map(
     precomputed_grid:
         If provided, skip internal grid computation and use (grid_u, grid_v, grid_z)
         directly. Must be the output of ``compute_interpolated_grid()``.
-    inflection_boundary:
-        If provided, draw the inflection contour on the interpolated heatmap panel.
+    boundary:
+        If provided, draw the boundary contour on the interpolated heatmap panel.
     vertex_colors:
         (V, 4) float64 RGBA per-vertex skin colors. Passed to
         ``_draw_forearm_mesh_background()`` for both panels. When None, panels
@@ -339,8 +338,8 @@ def render_population_rf_map(
         cmap=cmap, norm=norm, shading='auto',
     )
 
-    if inflection_boundary is not None:
-        _draw_inflection_boundary(ax_hm, inflection_boundary.contour_uv, inflection_boundary.centroid_uv, contour_color=contour_color)
+    if boundary is not None:
+        _draw_boundary(ax_hm, boundary.contour_uv, boundary.centroid_uv, contour_color=contour_color)
     cbar2 = plt.colorbar(im, ax=ax_hm, label='Mean IFF / spike', shrink=0.8)
     cbar2.ax.yaxis.set_tick_params(color='white')
     cbar2.ax.yaxis.label.set_color('white')
@@ -603,46 +602,34 @@ def compute_uv_to_mm_scale(
     return float(np.median(len_3d[valid] / len_uv[valid]))
 
 
-def compute_highest_contour_peak(
+def compute_highest_contour_center(
     u_grid: np.ndarray,
     v_grid: np.ndarray,
     interp_grid: np.ndarray,
     n_levels: int = 6,
 ) -> np.ndarray | None:
-    """Return the peak intensity location inside the highest valid contour level.
+    """Return the mean position of all pixels at or above the highest contour level.
 
-    Returns (2,) UV coordinate array, or None if no valid contour exists.
+    Uses the same level formula as the contour rendering (linspace from min to
+    max, excluding endpoints).  Starting from the highest level, selects all
+    finite grid pixels whose value meets or exceeds the threshold and returns
+    their unweighted centroid.  Falls back to lower levels only when no pixels
+    qualify.
+
+    Returns (2,) UV coordinate array, or None if no valid level exists.
     """
-    from matplotlib.path import Path as MplPath
-
-    finite_vals = interp_grid[np.isfinite(interp_grid)]
+    finite_mask = np.isfinite(interp_grid)
+    finite_vals = interp_grid[finite_mask]
     if finite_vals.size == 0 or finite_vals.min() == finite_vals.max():
         return None
 
     levels = np.linspace(finite_vals.min(), finite_vals.max(), n_levels + 2)[1:-1]
 
-    matplotlib.use('Agg')
-    fig = plt.figure()
-    ax = fig.add_subplot(111)
-    cs = ax.contour(u_grid, v_grid, interp_grid, levels=levels)
-    plt.close(fig)
-
-    grid_points = np.column_stack([u_grid.ravel(), v_grid.ravel()])
-
-    for level_idx in range(len(levels) - 1, -1, -1):
-        segments = cs.allsegs[level_idx]
-        if not segments:
+    for level in reversed(levels):
+        above = finite_mask & (interp_grid >= level)
+        if not np.any(above):
             continue
-        longest = max(segments, key=lambda s: len(s))
-        if len(longest) < 3:
-            continue
-        inside = MplPath(longest).contains_points(grid_points).reshape(u_grid.shape)
-        masked = np.where(inside & np.isfinite(interp_grid), interp_grid, np.nan)
-        if np.all(np.isnan(masked)):
-            continue
-        peak_idx = np.nanargmax(masked)
-        row, col = np.unravel_index(peak_idx, masked.shape)
-        return np.array([float(u_grid[row, col]), float(v_grid[row, col])])
+        return np.array([float(u_grid[above].mean()), float(v_grid[above].mean())])
 
     return None
 
@@ -668,8 +655,11 @@ def render_population_rf_circular_crop(
     contour_alpha: float = 0.7,
     centroid_uv: np.ndarray | None = None,
     centroid_color: str = "red",
+    boundary_contour_uv: np.ndarray | None = None,
+    boundary_color: str = "red",
     xlim: tuple[float, float] | None = None,
     ylim: tuple[float, float] | None = None,
+    circular_crop_margin: float = 0.0,
 ) -> None:
     """Render a transparent circular crop of a population RF heatmap and save as PNG.
 
@@ -723,6 +713,12 @@ def render_population_rf_circular_crop(
         (2,) UV coordinate for a centroid ``+`` marker. None disables the marker.
     centroid_color:
         Centroid marker color (default ``"red"``).
+    boundary_contour_uv:
+        (M, 2) UV coordinates of the receptive-field boundary. When provided,
+        the closed boundary is drawn as a line overlay (clipped to the circle).
+        None disables the boundary overlay.
+    boundary_color:
+        Boundary line color (default ``"red"``).
     xlim:
         Fixed (xmin, xmax) axis limits in UV space. If None, computed from
         ``center_uv ± radius_uv``.
@@ -743,7 +739,22 @@ def render_population_rf_circular_crop(
     face_mask = np.any(vertex_mask[forearm_faces], axis=1)
     selected_faces = forearm_faces[face_mask]
 
-    fig, ax = plt.subplots(1, 1)
+    use_fixed_viewport = xlim is not None and ylim is not None
+
+    if use_fixed_viewport:
+        data_width = xlim[1] - xlim[0]
+        data_height = ylim[1] - ylim[0]
+        if data_width <= 0 or data_height <= 0:
+            raise ValueError(
+                f"render_population_rf_circular_crop: xlim/ylim define a non-positive "
+                f"extent — xlim={xlim}, ylim={ylim}"
+            )
+        fig_height = 6.0
+        fig_width = fig_height * data_width / data_height
+        fig, ax = plt.subplots(1, 1, figsize=(fig_width, fig_height))
+    else:
+        fig, ax = plt.subplots(1, 1)
+
     fig.patch.set_alpha(0.0)
     ax.patch.set_alpha(0.0)
     ax.set_aspect('equal')
@@ -768,6 +779,13 @@ def render_population_rf_circular_crop(
                 linewidths=0.8, zorder=2,
             )
 
+    if boundary_contour_uv is not None:
+        closed = np.vstack([boundary_contour_uv, boundary_contour_uv[0]])
+        ax.plot(
+            closed[:, 0], closed[:, 1],
+            color=boundary_color, linewidth=1.5, zorder=6,
+        )
+
     if centroid_uv is not None:
         ax.plot(
             centroid_uv[0], centroid_uv[1],
@@ -779,16 +797,20 @@ def render_population_rf_circular_crop(
     for artist in list(ax.collections) + list(ax.lines):
         artist.set_clip_path(clip_circle)
 
-    if xlim is not None and ylim is not None:
+    if use_fixed_viewport:
         ax.set_xlim(*xlim)
         ax.set_ylim(*ylim)
+        fig.subplots_adjust(left=0, right=1, top=1, bottom=0)
     else:
-        margin = radius_uv * 0.05
+        margin = radius_uv * circular_crop_margin
         ax.set_xlim(center_uv[0] - radius_uv - margin, center_uv[0] + radius_uv + margin)
         ax.set_ylim(center_uv[1] - radius_uv - margin, center_uv[1] + radius_uv + margin)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output_path, dpi=dpi, bbox_inches='tight', transparent=True)
+    if use_fixed_viewport:
+        fig.savefig(output_path, dpi=dpi, pad_inches=0, transparent=True)
+    else:
+        fig.savefig(output_path, dpi=dpi, bbox_inches='tight', transparent=True)
     logger.info("Saved circular RF crop: %s", output_path)
     plt.close(fig)
 
@@ -811,7 +833,7 @@ def render_population_rf_composite(
     uv_ylim: tuple[float, float],
     median_filter_size: int | None = None,
     precomputed_grids: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]] | None = None,
-    inflection_boundaries: dict[str, InflectionBoundary | None] | None = None,
+    boundaries: dict | None = None,
     heatmap_space: str = "linear",
     cmap: str = "inferno",
     vertex_colors: np.ndarray | None = None,
@@ -847,8 +869,8 @@ def render_population_rf_composite(
     precomputed_grids:
         If provided, maps gesture type to (grid_u, grid_v, grid_z) — skips
         internal grid computation for those gesture types.
-    inflection_boundaries:
-        If provided, maps gesture type to an ``InflectionBoundary`` (or ``None``).
+    boundaries:
+        If provided, maps gesture type to a boundary object (or ``None``).
         Boundaries are drawn on the interpolated panel only.
     cmap:
         Matplotlib colormap name (default ``"inferno"``).
@@ -928,14 +950,14 @@ def render_population_rf_composite(
                 cmap=cmap, norm=norm, shading='auto',
             )
             if (
-                inflection_boundaries is not None
-                and gtype in inflection_boundaries
-                and inflection_boundaries[gtype] is not None
+                boundaries is not None
+                and gtype in boundaries
+                and boundaries[gtype] is not None
             ):
-                _draw_inflection_boundary(
+                _draw_boundary(
                     ax,
-                    inflection_boundaries[gtype].contour_uv,
-                    inflection_boundaries[gtype].centroid_uv,
+                    boundaries[gtype].contour_uv,
+                    boundaries[gtype].centroid_uv,
                     contour_color=contour_color,
                 )
 
