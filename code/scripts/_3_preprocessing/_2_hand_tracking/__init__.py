@@ -5,3 +5,4 @@ from .track_hands_on_video import track_hands_on_video
 from .curate_hamer_hand_models import curate_hamer_hand_models
 from .assign_stickers_location import assign_stickers_location
 from .define_hand_mask import define_hand_mask
+from .define_hand_tracking_roi import define_hand_tracking_roi

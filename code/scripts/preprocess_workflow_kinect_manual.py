@@ -20,7 +20,8 @@ from _3_preprocessing._1_sticker_tracking import (
 from _3_preprocessing._2_hand_tracking import (
     assign_stickers_location,
     define_hand_mask,
-    curate_hamer_hand_models
+    curate_hamer_hand_models,
+    define_hand_tracking_roi,
 )
 
 from _3_preprocessing._5_led_tracking import (
@@ -46,6 +47,24 @@ def prepare_led_tracking(
     roi_metadata_path = output_dir / (name_baseline + "_roi_metadata.json")
     define_led_roi(rgb_video_path, roi_metadata_path, force_processing=force_processing)
     return True
+
+
+@flow(name="Manual: Define Hand Tracking ROI")
+def define_hand_tracking_roi_flow(
+    rgb_video_path: Path,
+    output_dir: Path,
+    *,
+    force_processing: bool = False,
+    roi_mode: str = "manual",
+):
+    """Define a static ROI crop region used by the auto pipeline's hand tracking step."""
+    print(f"[{output_dir.name}] Defining hand tracking ROI...")
+    define_hand_tracking_roi(
+        rgb_video_path=rgb_video_path,
+        output_dir=output_dir,
+        force_processing=force_processing,
+        roi_mode=roi_mode,
+    )
 
 
 @flow(name="Manual: Prepare Hand Model")
@@ -218,10 +237,11 @@ def run_curate_hamer_hand_models(
 @flow(name="Manual: Review Single Touches")
 def review_single_touches_flow(
     rgb_video_path: Path,
-    sticker_dir: Path, 
+    sticker_dir: Path,
     output_dir: Path,
     *,
-    force_processing: bool = False
+    force_processing: bool = False,
+    keep_stale: bool = False
 ) -> Path:
     """Manually review and correct automatically detected single touches."""
     print(f"[{rgb_video_path.name}] Reviewing single touches...")
@@ -237,12 +257,13 @@ def review_single_touches_flow(
     
     review_single_touches(
         rgb_video_path=rgb_video_path,
-        stickers_xyz_path=stickers_xyz_path, 
+        stickers_xyz_path=stickers_xyz_path,
         stimuli_metadata_path=stimuli_metadata_path,
         trial_data_path=trial_ids_path,
         input_touches_path=auto_touches_path,
         output_path=output_path,
-        force_processing=force_processing
+        force_processing=force_processing,
+        keep_stale=keep_stale
     )
     return auto_touches_path
 
@@ -268,6 +289,20 @@ def run_single_session_pipeline(
         temp_seg_dir = config.video_processed_output_dir / "temporal_segmentation"
         kin_dir = config.video_processed_output_dir/ "kinematics_analysis"
         
+        # 0. Hand Tracking ROI (optional — improves HaMeR detection in cluttered scenes)
+        if dag_handler.can_run('define_hand_tracking_roi'):
+            print(f"[{block_name}] ==> Running task: define_hand_tracking_roi")
+            _opts = dag_handler.get_task_options('define_hand_tracking_roi')
+            force = _opts.get('force_processing', False)
+            roi_mode = _opts.get('roi_mode', 'manual')
+            define_hand_tracking_roi_flow(
+                rgb_video_path=rgb_video_path,
+                output_dir=kin_dir,
+                force_processing=force,
+                roi_mode=roi_mode,
+            )
+            dag_handler.mark_completed('define_hand_tracking_roi')
+
         # 1. LED Tracking
         if dag_handler.can_run('prepare_led_tracking'):
             print(f"[{block_name}] ==> Running task: prepare_led_tracking")
@@ -354,12 +389,15 @@ def run_single_session_pipeline(
         # 8. Review Single Touches
         if dag_handler.can_run('review_single_touches'):
             print(f"[{block_name}] ==> Running task: review_single_touches")
-            force = dag_handler.get_task_options('review_single_touches').get('force_processing', False)
+            _opts = dag_handler.get_task_options('review_single_touches')
+            force = _opts.get('force_processing', False)
+            keep_stale = _opts.get('keep_stale', False)
             review_single_touches_flow(
                 rgb_video_path=rgb_video_path,
                 sticker_dir=sticker_dir,
                 output_dir=temp_seg_dir,
-                force_processing=force
+                force_processing=force,
+                keep_stale=keep_stale
             )
             dag_handler.mark_completed('review_single_touches')
 

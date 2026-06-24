@@ -19,7 +19,10 @@ class PointCloudModel:
         radius: float = 0.1,
         hybrid_tree: bool = False,
         align_with_viewpoint: bool = False,
-        viewpoint: np.ndarray = np.array([0.0, 0.0, 0.0])
+        viewpoint: np.ndarray = np.array([0.0, 0.0, 0.0]),
+        is_centered: bool = False,
+        scale_factor: float = 1.0,
+        normals_flipped: bool = False,
     ):
         # Processing parameters
         self.k_neighbors = k_neighbors
@@ -27,11 +30,11 @@ class PointCloudModel:
         self.hybrid_tree = hybrid_tree
         self.align_with_viewpoint = align_with_viewpoint
         self.viewpoint = viewpoint
-        
+
         # Transformation parameters
-        self.is_centered: bool = False
-        self.scale_factor: float = 1.0
-        self.normals_flipped: bool = False
+        self.is_centered: bool = is_centered
+        self.scale_factor: float = scale_factor
+        self.normals_flipped: bool = normals_flipped
 
         # --- Core Data ---
         # The original point cloud is kept untouched as a reference.

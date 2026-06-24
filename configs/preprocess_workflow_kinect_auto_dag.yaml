@@ -7,14 +7,8 @@
 
 parameters:
   parallel_execution: false
-  kinect_configs: [
-      valid_configs_ST18-02_ST18-04/kinect_config_2022-06-22_ST18-04_semicontrolled_block-order01.yaml,
-    valid_configs_ST18-02_ST18-04/kinect_config_2022-06-22_ST18-04_semicontrolled_block-order02.yaml,
-    valid_configs_ST18-02_ST18-04/kinect_config_2022-06-22_ST18-04_semicontrolled_block-order03.yaml,
-    valid_configs_ST18-02_ST18-04/kinect_config_2022-06-22_ST18-04_semicontrolled_block-order05.yaml,
-    valid_configs_ST18-02_ST18-04/kinect_config_2022-06-22_ST18-04_semicontrolled_block-order06.yaml,
-    valid_configs_ST18-02_ST18-04/kinect_config_2022-06-22_ST18-04_semicontrolled_block-order07.yaml,
-    valid_configs_ST18-02_ST18-04/kinect_config_2022-06-22_ST18-04_semicontrolled_block-order08.yaml]
+  kinect_configs: [valid_configs_ST14-01, valid_configs_ST14-02, 
+      valid_configs_ST14-04]
   #kinect_configs: "valid_configs_all"
 tasks:
   # ---------------------------------------------------------------------------
@@ -56,6 +50,27 @@ tasks:
       force_processing: false
     depends_on: [refine_sticker_features]
 
+  correct_xyz_stickers_motion:
+    enabled: true
+    options:
+      force_processing: false
+      mode: "correct"                    # "compare" or "correct"
+      filter_method: "butterworth"       # "butterworth" or "savgol"
+      filter_params:
+        butterworth:
+          order: 2
+          cutoff_hz: 6.0
+        savgol:
+          window_length: 7
+          polyorder: 5
+      outlier_detection:
+        enable_hard_threshold: true
+        max_velocity_mm_per_s: 2000.0
+        max_acceleration_mm_per_s2: 50000.0
+        enable_statistical: true
+        mad_multiplier: 8.0
+    depends_on: [generate_xyz_stickers]
+
   # ---------------------------------------------------------------------------
   # STAGE 3: Trial Definition & Analysis
   # Grouped: Trial ID generation and metadata synthesis. Depends on initial tracking.
@@ -81,15 +96,29 @@ tasks:
     enabled: true
     options:
       force_processing: false
+      keep_stale: true
     depends_on: []
 
   # --- 3D Kinematics (Depends on Hand Tracking) ---
   generate_3d_hand_in_motion:
     enabled: true
     options:
-      force_processing: false
+      force_processing: true
     # Requires base tracking (stickers XYZ), trial context (trial ID), and tracked hands
-    depends_on: [generate_xyz_stickers, define_trial_id, track_hands_model]
+    depends_on: [generate_xyz_stickers, correct_xyz_stickers_motion, 
+        define_trial_id, track_hands_model]
+
+  stabilise_hand_motion:
+    enabled: true
+    options:
+      force_processing: true
+      filter_method: butterworth
+      smooth_anchor: false
+      filter_params:
+        butterworth:
+          order: 2
+          cutoff_hz: 5.0
+    depends_on: [generate_3d_hand_in_motion]
 
   validate_hand_extraction:
     enabled: true
@@ -98,7 +127,7 @@ tasks:
   compute_somatosensory_characteristics:
     enabled: true
     options:
-      force_processing: true
+      force_processing: false
       monitor: false
     # Requires forearm validation and 3D hand data
     depends_on: [validate_forearm_extraction, generate_3d_hand_in_motion]

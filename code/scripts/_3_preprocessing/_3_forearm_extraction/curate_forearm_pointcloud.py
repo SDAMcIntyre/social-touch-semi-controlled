@@ -5,7 +5,7 @@ from typing import Union
 import open3d as o3d
 from PyQt5.QtWidgets import QApplication
 
-from utils.should_process_task import should_process_task
+from utils.should_process_task import should_process_task, refresh_output_mtimes
 from preprocessing.forearm_extraction.curation import (
     CurationMetadataFileHandler,
     ForearmCurationGUI,
@@ -50,6 +50,8 @@ def curate_forearm_pointcloud(
     ):
         return
 
+    outputs_existed = output_path.exists() and meta_path.exists()
+
     pcd = o3d.io.read_point_cloud(str(input_path))
 
     if not pcd.has_points():
@@ -79,6 +81,8 @@ def curate_forearm_pointcloud(
 
     if not validated[0]:
         print("Warning: curation GUI closed without validation — outputs not saved.")
+        if outputs_existed:
+            refresh_output_mtimes([output_path, meta_path])
         return
 
     total_original = len(pcd.points)

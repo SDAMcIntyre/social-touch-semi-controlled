@@ -163,3 +163,6 @@ reports/
 
 # temporary files and videos
 temp_videos/
+/test2
+*.mp4
+*.layout.json

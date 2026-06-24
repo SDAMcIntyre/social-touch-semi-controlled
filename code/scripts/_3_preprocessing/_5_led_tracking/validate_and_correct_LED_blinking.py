@@ -11,7 +11,7 @@ from pathlib import Path
 # Setup a basic logger
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-from utils.should_process_task import should_process_task
+from utils.should_process_task import should_process_task, clean_task_outputs
 
 
 from preprocessing.led_analysis import (
@@ -215,12 +215,12 @@ def validate_and_correct_led_timing_from_stimuli(
     """
     file_name = csv_led_path.name
     if not should_process_task(
-         input_paths=[csv_led_path, stimulus_metadata_path], 
+         input_paths=[csv_led_path, stimulus_metadata_path],
          output_paths=[output_path],
          force=force_processing):
         logging.info(f"Output file already exists. Skipping ROI definition for '{file_name}'.")
         return True
-
+    clean_task_outputs(output_path)
     print(f"INFO: Processing file: {file_name}")
 
     # --- Load, Process, Validate, Save ---

@@ -1,10 +1,10 @@
 """Postprocessing step 4: Project contact points onto PCA-calibrated forearm surface.
 
 For each session CSV produced by stage 2 (PCA-calibrated), snaps every contact
-point to the nearest vertex on the session's PCA-calibrated forearm PLY using a
-KD-tree.  This guarantees that all output contact points lie exactly on the
-reference surface, eliminating small spatial discrepancies caused by mesh
-resolution, penetration-depth variation, and registration artifacts.
+point to the nearest vertex (by XY distance only) on the session's
+PCA-calibrated forearm PLY using a KD-tree built from (x, y) coordinates.
+This guarantees that all output contact points lie exactly on the reference
+surface at the correct lateral position, regardless of depth offset.
 
 ``contact_location_x/y/z`` is recomputed as the mean of the projected points.
 Rows with empty contact_points pass through unchanged.
@@ -22,7 +22,7 @@ from preprocessing.forearm_extraction.registration.csv_spatial_transformer impor
     parse_contact_points,
     serialize_contact_points,
 )
-from utils.should_process_task import should_process_task
+from utils.should_process_task import should_process_task, clean_task_outputs
 
 logger = logging.getLogger(__name__)
 
@@ -50,18 +50,25 @@ def _project_single_csv(
     """Project the contact points in one CSV onto the forearm surface.
 
     For every non-empty ``contact_points`` cell, each (x, y, z) point is
-    replaced by the nearest forearm vertex.  ``contact_location_x/y/z`` is
-    updated to the mean of the projected points.  Rows with no contact points
-    are written through unchanged.
+    independently snapped to its nearest forearm vertex by XY distance only
+    via a KD-tree query on (x, y) coordinates.  The projected point receives
+    the full (x, y, z) of the matched vertex.
+    ``contact_location_x/y/z`` is updated to the mean of the projected points.
+    Rows with no contact points are written through unchanged.
+
+    All M contact points in each row are guaranteed to appear in the output —
+    no uniqueness constraint is enforced, so two nearby points may snap to the
+    same vertex.  The ``assert`` below documents that guarantee and will raise
+    immediately if it is ever violated (fail-fast).
 
     Args:
-        input_csv: Source CSV (PCA-calibrated session data).
+        input_csv: Source CSV (session data to be projected).
         output_csv: Destination CSV.
-        kdtree: KD-tree built from the forearm PLY vertices.
+        kdtree: KD-tree built from the forearm PLY vertices (XY only).
         vertices: The ``(N, 3)`` vertex array used to build *kdtree*.
 
     Returns:
-        Flat array of per-point projection distances (one entry per contact
+        Flat array of per-point 3D projection distances (one entry per contact
         point across all rows).  Empty if no contact points were present.
     """
     df = pd.read_csv(input_csv)
@@ -81,12 +88,17 @@ def _project_single_csv(
             location_z.append(row.get("contact_location_z"))
             continue
 
-        # Query nearest vertex for each contact point
-        query = np.array(points, dtype=np.float64)
-        distances, indices = kdtree.query(query)
-        projected = vertices[indices]  # shape (M, 3)
+        query = np.array(points, dtype=np.float64)  # (M, 3)
+        M = len(points)
+        _, indices = kdtree.query(query[:, :2])
+        projected = vertices[indices]
+        assert len(projected) == M, (
+            f"Projection dropped {M - len(projected)} of {M} contact points — "
+            "impossible with per-point NN."
+        )
 
-        all_distances.append(np.asarray(distances, dtype=np.float64).ravel())
+        displacements_3d = np.linalg.norm(query - projected, axis=1)
+        all_distances.append(displacements_3d)
 
         projected_tuples = [(float(p[0]), float(p[1]), float(p[2])) for p in projected]
         projected_contact_points.append(serialize_contact_points(projected_tuples))
@@ -151,7 +163,7 @@ def project_contacts_onto_forearm(
         )
         return []
 
-    kdtree = KDTree(vertices)
+    kdtree = KDTree(vertices[:, :2])
     output_paths: List[Path] = []
     stats_rows: List[dict] = []
 
@@ -166,7 +178,7 @@ def project_contacts_onto_forearm(
             logger.info("Contact projection up-to-date. Skipping: %s", output_csv.name)
             output_paths.append(output_csv)
             continue
-
+        clean_task_outputs(output_csv)
         distances = _project_single_csv(input_csv, output_csv, kdtree, vertices)
         logger.info("Projected contact points: %s", output_csv.name)
         output_paths.append(output_csv)

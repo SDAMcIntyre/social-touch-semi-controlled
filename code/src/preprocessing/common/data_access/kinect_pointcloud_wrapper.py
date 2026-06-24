@@ -13,18 +13,22 @@ class KinectPointCloudView:
     """
     A wrapper around the KinectMKV class to provide direct access to
     a data object with .color and .points attributes for each frame.
-    
+
     This simplifies access patterns, allowing for intuitive, object-like retrieval.
+
+    Note: ``.points`` is already parallax-corrected (sourced from
+    ``KinectFrame.transformed_depth_point_cloud``, which applies the
+    ``(dv=-1, du=+10)`` px median shift by default via ``KinectMKV``).
 
     Example:
         with KinectMKV("video.mkv") as mkv:
             wrapper = KinectPointCloudView(mkv)
-            
+
             # Directly get a PointCloudData object for frame 5
             frame_data = wrapper[5]
             color_image = frame_data.color
             point_cloud = frame_data.points
-            
+
             # Iterate through all frames, getting the PointCloudData object on each iteration
             for frame in wrapper:
                 # process frame.color and frame.points

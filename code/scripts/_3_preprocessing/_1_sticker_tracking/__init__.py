@@ -21,6 +21,7 @@ from .adjust_ellipse_centers_to_global_frame import adjust_ellipse_centers_to_gl
 from .consolidate_2d_tracking_data import consolidate_2d_tracking_data
 # - XYZ stickers location process
 from .extract_stickers_xyz_positions import extract_stickers_xyz_positions
+from .correct_xyz_stickers_motion import correct_xyz_stickers_motion
 
 # user review or tasks
 from .review_tracked_handstickers_roi import review_tracked_objects_in_video
@@ -28,4 +29,5 @@ from .view_xyz_stickers_with_depth_data import view_xyz_stickers_on_depth_data
 from .view_summary_stickers_on_rgb_data import view_summary_stickers_on_rgb_data
 from .view_ellipse_tracking import view_ellipse_tracking
 from .view_ellipse_tracking_adjusted import view_ellipse_tracking_adjusted
+from .view_xyz_depth_aggregation import view_xyz_depth_aggregation
 

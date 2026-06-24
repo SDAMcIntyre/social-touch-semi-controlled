@@ -14,7 +14,10 @@ from .matrix_generation import (
 from .session_summary import (
     generate_session_summary
 )
-from .unified_pipeline import run_unified_touch_analysis
+from .preparation_pipeline import run_preparation
+from .extraction_pipeline import run_feature_extraction
+from .clustering_pipeline import run_clustering
+from .comparing_pipeline import run_comparing
 
 # Define the public API of the package
 __all__ = [
@@ -23,5 +26,8 @@ __all__ = [
     "generate_touch_summary_matrix",
     "generate_ap_efficacy_matrix",
     "generate_session_summary",
-    "run_unified_touch_analysis",
+    "run_preparation",
+    "run_feature_extraction",
+    "run_clustering",
+    "run_comparing",
 ]

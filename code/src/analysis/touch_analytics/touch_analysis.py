@@ -4,9 +4,12 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
+from .preparation.gesture_type import classify_gesture_type
+from .representation.series_level.kinematics import compute_velocity, compute_acceleration
 
 # Architectural Import
-from utils.should_process_task import should_process_task
+from utils.should_process_task import should_process_task, clean_task_outputs
+from analysis.pipeline.shared_constants import NERVE_SPIKE_COL
 
 def generate_unified_summary(
         input_path: Path,
@@ -22,13 +25,13 @@ def generate_unified_summary(
     """
     # 1. Idempotency Check
     if not should_process_task(
-        input_paths=[input_path], 
-        output_paths=[output_path], 
+        input_paths=[input_path],
+        output_paths=[output_path],
         force=force
     ):
         logging.info(f"Skipping Unified Summary for {input_path.name} (Up-to-date).")
         return output_path
-
+    clean_task_outputs(output_path)
     logging.info(f"Analyzing (Unified): {input_path.name}")
     return _process_touch_analysis(input_path, output_path, show)
 
@@ -43,15 +46,16 @@ def _process_touch_analysis(input_path: Path, output_path: Path, show: bool) -> 
         logging.error(f"Failed to load CSV: {e}")
         raise
 
-    if 'source_block_file' in df.columns:
-        df['block_order_id'] = df['source_block_file'].astype(str).str.extract(r'_block-order-(\d+)_', expand=False)
-    else:
-        df['block_order_id'] = None
+    if 'block_order_id' not in df.columns:
+        if 'source_block_file' in df.columns:
+            df['block_order_id'] = df['source_block_file'].astype(str).str.extract(r'_block-order-(\d+)_', expand=False)
+        else:
+            df['block_order_id'] = None
 
     # Check for Nerve_spike column presence
-    has_nerve_data = 'Nerve_spike' in df.columns
+    has_nerve_data = NERVE_SPIKE_COL in df.columns
     if not has_nerve_data:
-        logging.warning(f"'Nerve_spike' column missing in {input_path.name}. 'spike_elicited' will be 0.")
+        logging.warning(f"'{NERVE_SPIKE_COL}' column missing in {input_path.name}. 'spike_elicited' will be 0.")
 
     results = []
 
@@ -66,24 +70,12 @@ def _process_touch_analysis(input_path: Path, output_path: Path, show: bool) -> 
         touch_type = group['type_metadata'].iloc[0] if 'type_metadata' in group.columns else "unknown"
         block_order_id = group['block_order_id'].iloc[0]
 
-        # Velocity
-        velocity_vectors = group[['sticker_blue_position_x', 'sticker_blue_position_y', 'sticker_blue_position_z']].diff().fillna(0)
-        velocity_magnitudes = np.sqrt(velocity_vectors.pow(2).sum(axis=1))
-        max_velocity = velocity_magnitudes.max()
+        vel_df = compute_velocity(group)
+        accel_df = compute_acceleration(vel_df)
+        max_velocity = np.sqrt(vel_df.pow(2).sum(axis=1)).max()
+        max_acceleration = np.sqrt(accel_df.pow(2).sum(axis=1)).max()
 
-        # Acceleration
-        acceleration_vectors = velocity_vectors.diff().fillna(0)
-        acceleration_magnitudes = np.sqrt(acceleration_vectors.pow(2).sum(axis=1))
-        max_acceleration = acceleration_magnitudes.max()
-
-        # Direction
-        direction = None
-        if touch_type == "stroke":
-            start_y = group['sticker_blue_position_y'].iloc[0]
-            end_y = group['sticker_blue_position_y'].iloc[-1]
-            direction = "proximal" if end_y > start_y else "distal"
-        else:
-            direction = "static" 
+        gesture_type = classify_gesture_type(group)
 
         # --- Contact Location (mean per touch) ---
         mean_contact_x = group['contact_location_x'].mean() if 'contact_location_x' in group.columns else None
@@ -93,7 +85,7 @@ def _process_touch_analysis(input_path: Path, output_path: Path, show: bool) -> 
         # --- Efficacy Logic (Always Run) ---
         # Check if ANY frame in this touch had a spike (1)
         if has_nerve_data:
-            spike_elicited = 1 if group['Nerve_spike'].max() == 1 else 0
+            spike_elicited = 1 if group[NERVE_SPIKE_COL].max() == 1 else 0
         else:
             spike_elicited = 0
 
@@ -102,11 +94,11 @@ def _process_touch_analysis(input_path: Path, output_path: Path, show: bool) -> 
             'single_touch_id': touch_id,
             'block_order_id': block_order_id,
             'type_metadata': touch_type,
-            'direction': direction,
-            'max_depth': max_depth,
-            'max_contact_area': max_contact_area,
-            'max_velocity': max_velocity,
-            'max_acceleration': max_acceleration,
+            'gesture_type': gesture_type,
+            'depth_max': max_depth,
+            'area_max': max_contact_area,
+            'velocity_max': max_velocity,
+            'acceleration_max': max_acceleration,
             'mean_contact_x': mean_contact_x,
             'mean_contact_y': mean_contact_y,
             'mean_contact_z': mean_contact_z,
@@ -138,14 +130,14 @@ def _generate_summary_plot(summary_df, name):
     fig, axs = plt.subplots(2, 2, figsize=(12, 10))
     fig.suptitle(f'Analysis Summary: {name}', fontsize=16)
 
-    axs[0, 0].scatter(summary_df['max_depth'], summary_df['max_velocity'], alpha=0.6, c='blue')
+    axs[0, 0].scatter(summary_df['depth_max'], summary_df['velocity_max'], alpha=0.6, c='blue')
     axs[0, 0].set_title('Max Velocity vs Max Depth')
     
     type_counts = summary_df['type_metadata'].value_counts()
     type_counts.plot(kind='bar', ax=axs[0, 1], color='orange', alpha=0.7)
     axs[0, 1].set_title('Distribution of Touch Types')
 
-    axs[1, 0].hist(summary_df['max_acceleration'], bins=20, color='green', alpha=0.7)
+    axs[1, 0].hist(summary_df['acceleration_max'], bins=20, color='green', alpha=0.7)
     axs[1, 0].set_title('Max Acceleration Distribution')
 
     # Add spike info to the plot if available
@@ -155,7 +147,7 @@ def _generate_summary_plot(summary_df, name):
                        ha='center', va='center', fontsize=20, transform=axs[1, 1].transAxes)
         axs[1, 1].set_title('Efficacy Summary')
     else:
-        axs[1, 1].hist(summary_df['max_contact_area'], bins=20, color='purple', alpha=0.7)
+        axs[1, 1].hist(summary_df['area_max'], bins=20, color='purple', alpha=0.7)
         axs[1, 1].set_title('Max Contact Area Distribution')
 
     plt.tight_layout(rect=[0, 0.03, 1, 0.95])

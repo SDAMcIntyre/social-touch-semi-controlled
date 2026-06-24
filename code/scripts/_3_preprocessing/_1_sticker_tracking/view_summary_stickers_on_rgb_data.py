@@ -1,42 +1,14 @@
 # main_script.py
 
 from pathlib import Path
-from typing import Iterable
 
 # Assuming all files are in a 'preprocessing/common' structure
-from preprocessing.common import VideoMP4Manager
+from preprocessing.common import define_custom_colors, VideoMP4Manager
 from preprocessing.stickers_analysis import (
     ConsolidatedTracksFileHandler,
     ConsolidatedTracksManager,
     ConsolidatedTracksReviewGUI
 )
-
-
-def define_custom_colors(string_list: Iterable[str]) -> dict[str, str]:
-    """
-    Assigns a standard color keyword based on substrings in a list of names.
-
-    Args:
-        string_list: An iterable (e.g., list) of object names.
-
-    Returns:
-        A dictionary mapping each object name to a found color string.
-    """
-    STANDARD_COLORS = {
-        "red", "green", "blue", "yellow", "orange", "purple", "pink",
-        "black", "white", "brown", "gray", "grey", "cyan", "magenta", "violet"
-    }
-    
-    found_colors = {}
-    
-    for item in string_list:
-        item_lower = item.lower()
-        for color in STANDARD_COLORS:
-            if color in item_lower:
-                found_colors[item] = color
-                break # Assign the first color found and move to the next item
-    
-    return found_colors
 
 
 def view_summary_stickers_on_rgb_data(

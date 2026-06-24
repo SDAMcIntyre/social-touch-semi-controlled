@@ -1,14 +1,13 @@
 # clustering/dbscan_clusterer.py
 import logging
-from typing import Tuple
+from typing import ClassVar, Literal, Tuple
 
 import numpy as np
 import pandas as pd
 from sklearn.cluster import DBSCAN
 from sklearn.neighbors import NearestNeighbors
-from sklearn.preprocessing import StandardScaler
 
-from .base import TouchClusterer
+from .base import ClusteringContext, TouchClusterer
 
 _DEFAULT_MIN_PER_CLUSTER = 30
 
@@ -17,21 +16,26 @@ class DBSCANClusterer(TouchClusterer):
     """
     DBSCAN with optional automatic eps selection via the k-distance knee method.
 
+    Data is expected to be already scaled by the orchestrator (ReductionPipeline)
+    before being passed here.
+
     config keys:
       eps                  : float | 'auto'  (default 'auto')
       min_touches_per_cluster : int           (default 30, used as min_samples)
     """
 
+    PATH: ClassVar[Literal["A", "B"]] = "B"
+
     def fit_predict(
         self,
         feature_df: pd.DataFrame,
         config: dict,
+        context: ClusteringContext,
     ) -> Tuple[np.ndarray, dict]:
         min_samples = config.get('min_touches_per_cluster', _DEFAULT_MIN_PER_CLUSTER)
         eps_config = config.get('eps', 'auto')
 
-        scaler = StandardScaler()
-        X = scaler.fit_transform(feature_df.values)
+        X = feature_df.values
 
         if eps_config == 'auto':
             eps = _auto_eps(X, min_samples)

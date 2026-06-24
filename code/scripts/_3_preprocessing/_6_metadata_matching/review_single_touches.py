@@ -29,6 +29,7 @@ def review_single_touches(
     input_touches_path: Path,
     output_path: Path,
     force_processing: bool = False,
+    keep_stale: bool = False,
     xyz_cols: List[str] = ["sticker_blue_x_mm", "sticker_blue_y_mm", "sticker_blue_z_mm"]
 ):
     """
@@ -47,7 +48,8 @@ def review_single_touches(
     if not should_process_task(
         input_paths=[trial_data_path, input_touches_path, stickers_xyz_path, stimuli_metadata_path],
         output_paths=[output_path],
-        force=force_processing
+        force=force_processing,
+        keep_stale=keep_stale
     ):
         return
 

@@ -22,7 +22,7 @@ from preprocessing.stickers_analysis import (
     ColorSpaceManager,
     ColorSpaceStatus,
 )
-from utils.should_process_task import should_process_task
+from utils.should_process_task import should_process_task, clean_task_outputs
 
 
 # --------------------------------------------------------------------------- #
@@ -203,7 +203,7 @@ def create_color_correlation_videos(
         if not (is_to_be_processed or needs_processing):
             print(f"Skipping '{name}' (Status: '{current_colorspace.status}', files up-to-date).")
             continue
-
+        clean_task_outputs(output_video_path)
         print(f"\nProcessing '{name}'...")
         if discarded_samples_list:
             print(f"   -> Using {len(discarded_samples_list)} negative sample sets to improve accuracy.")

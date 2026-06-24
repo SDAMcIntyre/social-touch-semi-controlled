@@ -8,7 +8,7 @@ metrics computed from Kinect point-cloud data.
 |-------|-------|
 | Scope | `objects_interaction_processor.py`, `touch_analysis.py`, `sticker_velocity_compass.py` |
 | Upstream source | Azure Kinect SDK (`k4a_transformation_depth_image_to_point_cloud`) via pyk4a |
-| Capture FPS | 30 Hz |
+| Capture FPS | 30 Hz (Kinect); 1 kHz after Stage 1 preparation |
 
 ---
 
@@ -38,22 +38,25 @@ sticker XYZ extraction, and tactile quantification.
 
 | Property | Value |
 |----------|-------|
-| Unit | **mm/frame** (displayed as `mm/f`) |
-| To convert to mm/s | multiply by 30 (at 30 fps) |
+| Unit | **mm/s** |
 
-**Calculation** — `touch_analysis.py:153–155`:
+**Calculation** — `kinematics.py: compute_velocity_magnitudes()`:
 
 ```python
-velocity_vectors = group[['sticker_blue_position_x',
-                          'sticker_blue_position_y',
-                          'sticker_blue_position_z']].diff().fillna(0)
-velocity_magnitudes = np.sqrt(velocity_vectors.pow(2).sum(axis=1))
+velocity_magnitudes = compute_velocity_magnitudes(group, fps=fps)
 ```
 
-Frame-to-frame Euclidean displacement of the blue sticker. No division by
-time is applied — the unit is purely spatial displacement per frame.
+Frame-to-frame Euclidean displacement of the blue sticker multiplied by the
+capture frame rate (fps, default 1000). The result is a physical velocity in
+mm/s.
 
-**Quick conversion:** 1 mm/f = 30 mm/s = 3 cm/s (at 30 fps).
+**Stage 1 preparation (1 kHz pipeline):** The analysis pipeline includes a
+`touch_data_preparation` stage that interpolates touch columns (contact_depth,
+contact_area, sticker positions) from their native 30 Hz sample rate to a
+continuous 1 kHz signal. After preparation, all `fps` defaults are `1000.0`.
+Velocity is computed as `displacement * 1000` (mm/s) rather than
+`displacement * 30`, producing a smooth continuous profile instead of
+spike-at-boundary artifacts.
 
 ---
 
@@ -106,7 +109,54 @@ Since vertex coordinates are in mm, the cross product yields mm² and the
 
 ---
 
-## 5. Known labeling bug
+## 5. Geometric pressure (depth/area)
+
+| Property | Value |
+|----------|-------|
+| Unit | **mm⁻¹** (= mm / mm²) |
+
+**Calculation** — `representation/series_level/pressure.py`:
+
+```python
+pressure = contact_depth / contact_area
+```
+
+This is a **geometric proxy for physical pressure**, not a direct measurement
+in Pascals. The relationship to real physical pressure becomes clear when
+modeling the forearm tissue as a **linear elastic medium** (Winkler foundation):
+
+```
+Force ≈ K × depth          (K = effective tissue stiffness, N/mm)
+P_physical = Force / Area = K × (depth / area) = K × P_geometric
+```
+
+Therefore: **P_physical = K × P_geometric**, where K is the tissue stiffness
+constant (subject-dependent, not measured in this setup).
+
+**Implications for analysis:**
+
+- The **relative ordering** of pressures is preserved — higher geometric
+  pressure always means higher real pressure within a session.
+- The **absolute magnitude** in Pascals is unknown without calibrating K per
+  subject (via force sensor or material testing).
+- The proportionality holds well for the gentle-to-moderate touch range
+  typical of this dataset. At large deformations, skin nonlinearity
+  (strain-stiffening) causes the linear model to underestimate real pressure
+  differences.
+- For cross-subject comparisons, the geometric pressure remains a valid
+  ordinal proxy but not a calibrated interval scale.
+
+**Axis label convention:** `"Pressure (depth/area, mm⁻¹)"` — makes the
+geometric definition explicit at a glance while maintaining brevity.
+
+**Axis scale:** Both pressure and velocity axes in the RF Explorer 2D scatter
+plot should use logarithmic scale. The data spans several orders of magnitude
+and clusters are more separable in log-space — linear axes compress the
+majority of points into a small region while stretching the sparse tail.
+
+---
+
+## 6. Known labeling bug
 
 `compute_somatosensory_characteristics.py:150` labels the contact-area
 plot axis as `'Area (cm^2)'`. Based on the data pipeline (no unit
@@ -115,13 +165,13 @@ labeling error.
 
 ---
 
-## 6. Reusable pattern
+## 7. Reusable pattern
 
 When adding new metrics derived from Kinect point-cloud geometry:
 
 - **Positions** are in mm (inherited from the SDK).
-- **Per-frame differences** (velocity, displacement) are in mm/frame.
-  Divide by frame interval (1/30 s) to get mm/s.
+- **Velocity** is in mm/s. Use `compute_velocity_magnitudes(group, fps=fps)`
+  from `kinematics.py` — it handles the fps multiplication internally.
 - **Areas** computed from mesh triangles are in mm².
 - **Volumes** (if ever needed) would be in mm³.
 - Always verify there is no hidden unit conversion by tracing the data path
@@ -129,7 +179,7 @@ When adding new metrics derived from Kinect point-cloud geometry:
 
 ---
 
-## 7. References
+## 8. References
 
 - Azure Kinect SDK — [depth_image_to_point_cloud](https://microsoft.github.io/Azure-Kinect-Sensor-SDK/master/group___functions_ga7385eb4beb9d8892e8a88cf4feb3be70.html)
 - Azure Kinect SDK — [image transformations guide](https://learn.microsoft.com/en-us/azure/kinect-dk/use-image-transformation)

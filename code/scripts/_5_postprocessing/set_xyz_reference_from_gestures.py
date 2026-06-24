@@ -3,16 +3,18 @@ import logging
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import open3d as o3d
 from pathlib import Path
 from typing import List, Tuple, Dict, Optional
 from dataclasses import dataclass, field
 from sklearn.decomposition import PCA
 
 # Import the idempotency check utility
-from utils.should_process_task import should_process_task
+from utils.should_process_task import should_process_task, clean_task_outputs
 
 from postprocessing.xyz_reference_from_gestures import (
     PCACalibrationEngine,
+    CalibrationResult,
     CalibrationVisualizer,
     Trajectory3DVisualizer
 )
@@ -46,7 +48,7 @@ class CalibrationConfig:
 
 class GestureDataLoader:
     """Handles file I/O and initial data segmentation."""
-    
+
     def __init__(self, config: CalibrationConfig):
         self.config = config
 
@@ -58,7 +60,7 @@ class GestureDataLoader:
         if not file_path.exists():
             logger.warning(f"Input file not found: {file_path}")
             return None
-            
+
         try:
             # dynamically build columns for all target colors + metadata
             data_cols = []
@@ -84,7 +86,7 @@ class GestureDataLoader:
             if df_clean.empty:
                 return None
             return df_clean
-            
+
         except ValueError as ve:
             logger.debug(f"Skipping {file_path.name}: {ve}")
             return None
@@ -133,45 +135,65 @@ def _extract_touch_data(
 
 # --- 5. Orchestrator ---
 
-def set_xyz_reference_from_gestures(
-    input_files: List[Path], 
+def calibrate_pca_xyz(
+    input_files: List[Path],
     output_dir: Path,
+    forearm_ply_path: Path,
+    forearm_output_dir: Path,
     *,
     force_processing: bool = False,
     monitor: bool = False,
-    monitor_segment: bool = False
-) -> Tuple[List[Path], Path]:
+    monitor_segment: bool = False,
+) -> Tuple[List[Path], Path, Path]:
     """
-    Orchestrates the global PCA analysis pipeline.
+    Orchestrates the global PCA analysis pipeline and applies the resulting
+    transform to the forearm PLY.
+
+    Args:
+        input_files: CSV block files to transform.
+        output_dir: Destination for transformed CSVs and calibration JSON.
+        forearm_ply_path: Source forearm PLY (from forearm_source/).
+        forearm_output_dir: Destination for the PCA-calibrated forearm PLY.
+        force_processing: Re-run even if all outputs are up-to-date.
+        monitor: Display global aggregate visualisation after calibration.
+        monitor_segment: Display per-segment visualisation during calibration.
+
+    Returns:
+        A 3-tuple: (generated_csv_files, output_dir, forearm_output_ply_path).
     """
     logger.info(f"[{output_dir.name}] Starting Global PCA pipeline on {len(input_files)} files.")
-    
+
     config = CalibrationConfig()
-    
+
     # Prepare expected outputs for idempotency
     json_output_path = output_dir / config.output_json_name
     expected_output_files = [output_dir / f"{p.stem}{config.output_csv_suffix}" for p in input_files]
-    
-    all_check_outputs = expected_output_files + [json_output_path]
-    
+
+    # session_id is encoded in the forearm PLY stem: "{session_id}_forearm"
+    forearm_stem = forearm_ply_path.stem  # e.g. "ST13-03_forearm"
+    forearm_output_path = forearm_output_dir / f"{forearm_stem}.ply"
+
+    all_check_outputs = expected_output_files + [json_output_path, forearm_output_path]
+
     if not should_process_task(
-        input_paths=input_files,
+        input_paths=input_files + [forearm_ply_path],
         output_paths=all_check_outputs,
         force=force_processing
     ):
         logger.info(f"[{output_dir.name}] Task up-to-date. Skipping.")
-        return expected_output_files, output_dir
-
+        return expected_output_files, output_dir, forearm_output_path
+    clean_task_outputs(all_check_outputs)
     output_dir.mkdir(parents=True, exist_ok=True)
-    
+    forearm_output_dir.mkdir(parents=True, exist_ok=True)
+
     # Initialize Components
     loader = GestureDataLoader(config)
-    
+
     # 1. Load Data (into memory map)
     loaded_data: Dict[Path, pd.DataFrame] = {}
-    
+
     logger.info("Phase 1: Ingesting data...")
-    
+
     tapping_segments = []
     stroking_segments = []
 
@@ -179,7 +201,7 @@ def set_xyz_reference_from_gestures(
         df = loader.load_and_segment(input_path)
         if df is not None:
             loaded_data[input_path] = df
-            
+
             df_tap = df[df[config.col_type] == config.val_tapping]
             df_stroke = df[df[config.col_type] == config.val_stroking]
 
@@ -192,23 +214,22 @@ def set_xyz_reference_from_gestures(
                 data = _extract_touch_data(group, config)
                 if data is not None:
                     stroking_segments.append(data)
-            
 
     if not tapping_segments or not stroking_segments:
         logger.error("Insufficient data for calibration (missing tap or stroke segments).")
-        return [], output_dir
+        return [], output_dir, forearm_output_path
 
     # 2. Compute Calibration
     logger.info("Computing PCA Matrices...")
     all_tapping = np.vstack(tapping_segments)
     all_stroking = np.vstack(stroking_segments)
-    
+
     calib_result = PCACalibrationEngine.compute_calibration(all_tapping, all_stroking)
-    
+
     # 3. Save Calibration
     with open(json_output_path, 'w') as f:
         json.dump(calib_result.to_dict(), f, indent=4)
-    
+
     # 4. Monitor
     if monitor_segment:
         try:
@@ -245,10 +266,10 @@ def set_xyz_reference_from_gestures(
     # 5. Apply Transformation to loaded data and Save
     logger.info("Phase 2: Applying transformation to [Blue, Yellow, Green] and saving files...")
     generated_files = []
-    
+
     for input_path, df in loaded_data.items():
         output_path = output_dir / f"{input_path.stem}{config.output_csv_suffix}"
-        
+
         try:
             # 1. Read the full original file to preserve original structure (and NaNs)
             df_out = pd.read_csv(input_path)
@@ -304,8 +325,33 @@ def set_xyz_reference_from_gestures(
 
             df_out.to_csv(output_path, index=False)
             generated_files.append(output_path)
-            
+
         except Exception as e:
             logger.error(f"Failed to save processed file {input_path.name}: {e}")
 
-    return generated_files, output_dir
+    # 6. Apply PCA transform to forearm PLY
+    logger.info(f"Phase 3: Applying PCA transform to forearm PLY: {forearm_ply_path.name}")
+
+    pcd = o3d.io.read_point_cloud(str(forearm_ply_path))
+    vertices = np.asarray(pcd.points)
+    if len(vertices) == 0:
+        raise ValueError(
+            f"Forearm PLY has no points: {forearm_ply_path}. "
+            "Cannot apply PCA transform to an empty point cloud."
+        )
+
+    transformed = PCACalibrationEngine.apply_full_transform(vertices.copy(), calib_result)
+
+    out_pcd = o3d.geometry.PointCloud()
+    out_pcd.points = o3d.utility.Vector3dVector(np.round(transformed, 1))
+    if pcd.has_colors():
+        out_pcd.colors = pcd.colors
+    o3d.io.write_point_cloud(str(forearm_output_path), out_pcd)
+
+    logger.info(f"[{output_dir.name}] Wrote PCA-calibrated forearm PLY: {forearm_output_path.name}")
+
+    return generated_files, output_dir, forearm_output_path
+
+
+# Backward-compatibility alias (used during transition; callers should migrate to calibrate_pca_xyz)
+set_xyz_reference_from_gestures = calibrate_pca_xyz

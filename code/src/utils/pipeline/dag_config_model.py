@@ -6,11 +6,12 @@ loading, modifying, and saving DAG workflow YAML files.
 
 from __future__ import annotations
 
+import tempfile
 from pathlib import Path
 from typing import Any
 
 from ruamel.yaml import YAML
-from ruamel.yaml.comments import CommentedSeq
+from ruamel.yaml.comments import CommentedMap, CommentedSeq
 
 
 class DagConfigModel:
@@ -28,6 +29,10 @@ class DagConfigModel:
         self._yaml.preserve_quotes = True
         with open(config_path, "r") as fh:
             self._data = self._yaml.load(fh)
+        if self._data is None:
+            raise ValueError(
+                f"DAG config file is empty or invalid: {config_path}"
+            )
         self._dirty = False
 
     # ------------------------------------------------------------------
@@ -159,21 +164,65 @@ class DagConfigModel:
         return bool(profile.get("enabled", True))
 
     def set_profile_enabled(self, task_name: str, option_key: str, profile_name: str, enabled: bool) -> None:
-        """Set or remove the ``enabled`` key on a profile dict.
-
-        When *enabled* is False, writes ``enabled: false``.
-        When *enabled* is True, removes the key so the YAML stays clean.
-        """
+        """Set the ``enabled`` key on a profile dict."""
         task = self._get_task(task_name)
         opts = task.get("options") or {}
         container = opts.get(option_key) or {}
         profile = container.get(profile_name)
         if profile is None:
             return
-        if enabled:
-            profile.pop("enabled", None)
-        else:
-            profile["enabled"] = False
+        profile["enabled"] = enabled
+        self._dirty = True
+
+    # ------------------------------------------------------------------
+    # Combinations — CRUD for dict-of-dicts option entries
+    # ------------------------------------------------------------------
+
+    def add_combination(
+        self, task_name: str, option_key: str, combo_name: str, combo_config: dict
+    ) -> None:
+        """Insert a new combination entry into a dict-of-dicts option."""
+        task = self._get_task(task_name)
+        opts = task.get("options") or {}
+        container = opts.get(option_key)
+        if not isinstance(container, dict):
+            return
+        container[combo_name] = combo_config
+        self._dirty = True
+
+    def remove_combination(self, task_name: str, option_key: str, combo_name: str) -> None:
+        """Delete a combination entry from a dict-of-dicts option."""
+        task = self._get_task(task_name)
+        opts = task.get("options") or {}
+        container = opts.get(option_key)
+        if not isinstance(container, dict):
+            return
+        container.pop(combo_name, None)
+        self._dirty = True
+
+    def get_combination_features(
+        self, task_name: str, option_key: str, combo_name: str
+    ) -> list[str]:
+        """Return the features list for a combination entry."""
+        opts = self._get_task(task_name).get("options", {}) or {}
+        container = opts.get(option_key, {}) or {}
+        combo = container.get(combo_name, {}) or {}
+        features = combo.get("features", [])
+        return list(features) if features else []
+
+    def set_combination_features(
+        self, task_name: str, option_key: str, combo_name: str, features: list[str]
+    ) -> None:
+        """Write a flow-style features list into a combination entry."""
+        task = self._get_task(task_name)
+        opts = task.get("options") or {}
+        container = opts.get(option_key) or {}
+        combo = container.get(combo_name)
+        if combo is None:
+            return
+        seq = CommentedSeq(features)
+        seq.fa.set_flow_style()
+        combo["features"] = seq
         self._dirty = True
 
     def get_task_dependencies(self, task_name: str) -> list[str]:
@@ -182,6 +231,214 @@ class DagConfigModel:
 
     def get_task_description(self, task_name: str) -> str | None:
         return self._get_task(task_name).get("description")
+
+    # ------------------------------------------------------------------
+    # Cluster groups — CRUD for stimulus_cluster_touches groups and downstream refs
+    # ------------------------------------------------------------------
+    #
+    # get_cluster_group_names / set_profile_enabled reuse existing profile helpers
+    # with option_key="cluster_groups".
+
+    def get_cluster_group_spec(self, task_name: str, group_name: str) -> dict:
+        """Return a copy of the full spec dict for *group_name* in *task_name*."""
+        opts = self._get_task(task_name).get("options", {}) or {}
+        groups = opts.get("cluster_groups", {}) or {}
+        spec = groups.get(group_name)
+        if spec is None:
+            raise KeyError(f"Cluster group '{group_name}' not found in task '{task_name}'")
+        return dict(spec)
+
+    def set_cluster_group_spec(self, task_name: str, group_name: str, spec: dict) -> None:
+        """Write (or overwrite) the full spec dict for *group_name* in *task_name*."""
+        task = self._get_task(task_name)
+        opts = task.get("options")
+        if opts is None:
+            task["options"] = {}
+            opts = task["options"]
+        if "cluster_groups" not in opts or opts["cluster_groups"] is None:
+            opts["cluster_groups"] = {}
+        opts["cluster_groups"][group_name] = spec
+        self._dirty = True
+
+    def get_downstream_cluster_group_names(self, task_name: str) -> list[str]:
+        """Return the list of group names referenced by a downstream task.
+
+        Reads the flow-style ``cluster_groups: [name, ...]`` value.
+        Returns an empty list if the option is absent or not a sequence.
+        """
+        opts = self._get_task(task_name).get("options", {}) or {}
+        val = opts.get("cluster_groups")
+        if isinstance(val, (list, CommentedSeq)):
+            return list(val)
+        return []
+
+    def set_downstream_cluster_group_names(
+        self, task_name: str, names: list[str]
+    ) -> None:
+        """Write *names* as a flow-style ``cluster_groups: [...]`` list."""
+        task = self._get_task(task_name)
+        opts = task.get("options")
+        if opts is None:
+            task["options"] = {}
+            opts = task["options"]
+        seq = CommentedSeq(names)
+        seq.fa.set_flow_style()
+        opts["cluster_groups"] = seq
+        self._dirty = True
+
+    def get_group_clustering_methods(self, task_name: str, group_name: str) -> dict:
+        """Return the clustering_methods dict for *group_name* in *task_name*."""
+        spec = self.get_cluster_group_spec(task_name, group_name)
+        methods = spec.get("clustering_methods", {})
+        return dict(methods) if isinstance(methods, dict) else {}
+
+    def set_group_clustering_profile_enabled(
+        self,
+        task_name: str,
+        group_name: str,
+        profile_name: str,
+        enabled: bool,
+    ) -> None:
+        """Enable or disable a clustering profile inside a cluster group."""
+        task = self._get_task(task_name)
+        opts = task.get("options", {}) or {}
+        groups = opts.get("cluster_groups", {}) or {}
+        group = groups.get(group_name)
+        if group is None:
+            raise KeyError(f"Cluster group '{group_name}' not found in task '{task_name}'")
+        methods = group.get("clustering_methods", {}) or {}
+        profile = methods.get(profile_name)
+        if profile is None:
+            raise KeyError(
+                f"Clustering profile '{profile_name}' not found in group '{group_name}'"
+            )
+        if enabled:
+            profile.pop("enabled", None)
+        else:
+            profile["enabled"] = False
+        self._dirty = True
+
+    def set_group_clustering_profile_spec(
+        self,
+        task_name: str,
+        group_name: str,
+        profile_name: str,
+        spec: dict,
+    ) -> None:
+        """Write (or overwrite) a clustering profile spec inside a cluster group."""
+        task = self._get_task(task_name)
+        opts = task.get("options")
+        if opts is None:
+            task["options"] = {}
+            opts = task["options"]
+        if "cluster_groups" not in opts or opts["cluster_groups"] is None:
+            opts["cluster_groups"] = {}
+        group = opts["cluster_groups"].get(group_name)
+        if group is None:
+            raise KeyError(f"Cluster group '{group_name}' not found in task '{task_name}'")
+        if "clustering_methods" not in group or group["clustering_methods"] is None:
+            group["clustering_methods"] = {}
+        group["clustering_methods"][profile_name] = spec
+        self._dirty = True
+
+    # ------------------------------------------------------------------
+    # Radar groups — CRUD for stimulus_render_radar radar_groups entries
+    # ------------------------------------------------------------------
+
+    def get_radar_group_spec(self, task_name: str, group_name: str) -> dict:
+        """Return a copy of the full spec dict for *group_name* in *task_name*.
+
+        Raises ``ValueError`` if ``radar_groups`` is absent in the task options,
+        or ``KeyError`` if the named group does not exist.
+        """
+        opts = self._get_task(task_name).get("options", {}) or {}
+        groups = opts.get("radar_groups")
+        if groups is None:
+            raise ValueError(
+                f"Task '{task_name}' has no 'radar_groups' key in its options"
+            )
+        spec = groups.get(group_name)
+        if spec is None:
+            raise KeyError(
+                f"Radar group '{group_name}' not found in task '{task_name}'"
+            )
+        return dict(spec)
+
+    def set_radar_group_spec(self, task_name: str, group_name: str, spec: dict) -> None:
+        """Write (or overwrite) the full spec dict for *group_name* in *task_name*.
+
+        Raises ``ValueError`` if ``radar_groups`` is absent in the task options.
+        """
+        task = self._get_task(task_name)
+        opts = task.get("options")
+        if opts is None:
+            task["options"] = {}
+            opts = task["options"]
+        if "radar_groups" not in opts or opts["radar_groups"] is None:
+            raise ValueError(
+                f"Task '{task_name}' has no 'radar_groups' key in its options"
+            )
+        opts["radar_groups"][group_name] = spec
+        self._dirty = True
+
+    # ------------------------------------------------------------------
+    # Grid groups — CRUD for cross_map_feature_grid grid_groups entries
+    # ------------------------------------------------------------------
+
+    def get_grid_group_spec(self, task_name: str, opt_key: str, name: str) -> dict:
+        """Return a plain-dict copy of the named entry in *task_name*.options[*opt_key*].
+
+        Raises ``KeyError`` if *task_name*, *opt_key*, or *name* is absent.
+        """
+        task = self._get_task(task_name)
+        opts = task.get("options", {}) or {}
+        container = opts.get(opt_key)
+        if container is None:
+            raise KeyError(f"Option key '{opt_key}' not found in task '{task_name}'")
+        spec = container.get(name)
+        if spec is None:
+            raise KeyError(
+                f"Grid group '{name}' not found under '{opt_key}' in task '{task_name}'"
+            )
+        return dict(spec)
+
+    def set_grid_group_spec(
+        self, task_name: str, opt_key: str, name: str, spec: dict
+    ) -> None:
+        """Write (or overwrite) the named entry in *task_name*.options[*opt_key*].
+
+        *spec* is a plain dict with keys ``enabled``, ``neuron_mode``,
+        ``per_gesture_type``, ``vertex_threshold_ratio``, ``compute_baseline``,
+        and ``features``.  Each value in ``spec["features"]`` must be a dict
+        with ``min``, ``max``, ``step``, ``span`` keys; it is written as a
+        flow-style ``CommentedMap`` so the YAML renders on one line.
+
+        Existing entries in the container that are not *name* are left intact.
+        """
+        task = self._get_task(task_name)
+        opts = task.get("options")
+        if opts is None:
+            task["options"] = {}
+            opts = task["options"]
+        if opt_key not in opts or opts[opt_key] is None:
+            opts[opt_key] = {}
+        container = opts[opt_key]
+
+        entry = CommentedMap()
+        for key in ("enabled", "neuron_mode", "per_gesture_type",
+                    "vertex_threshold_ratio", "compute_baseline"):
+            if key in spec:
+                entry[key] = spec[key]
+
+        features_map = CommentedMap()
+        for feat_name, bounds in spec.get("features", {}).items():
+            bounds_cm = CommentedMap(bounds)
+            bounds_cm.fa.set_flow_style()
+            features_map[feat_name] = bounds_cm
+        entry["features"] = features_map
+
+        container[name] = entry
+        self._dirty = True
 
     # ------------------------------------------------------------------
     # Persistence
@@ -193,9 +450,21 @@ class DagConfigModel:
         self._dirty = False
 
     def save_as(self, path: Path) -> None:
-        """Write the current state to *path*."""
-        with open(path, "w") as fh:
-            self._yaml.dump(self._data, fh)
+        """Write the current state to *path* atomically.
+
+        Writes to a temporary file first, then replaces the target.  This
+        prevents file corruption if the process crashes mid-write.
+        """
+        tmp_fd, tmp_path = tempfile.mkstemp(
+            suffix=".yaml", dir=str(path.parent)
+        )
+        try:
+            with open(tmp_fd, "w") as fh:
+                self._yaml.dump(self._data, fh)
+            Path(tmp_path).replace(path)
+        except BaseException:
+            Path(tmp_path).unlink(missing_ok=True)
+            raise
         if path == self._path:
             self._dirty = False
 

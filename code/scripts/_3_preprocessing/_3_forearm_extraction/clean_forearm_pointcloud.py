@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 from typing import Optional, Union
 
-from utils.should_process_task import should_process_task
+from utils.should_process_task import should_process_task, refresh_output_mtimes
 from utils.gui.visualize_point_cloud_comparison import visualize_point_cloud_comparison
 
 # --- Main Processing Function ---
@@ -37,11 +37,16 @@ def clean_forearm_pointcloud(
     output_paths = [output_path]
     if output_metadata_path:
         output_paths.append(Path(output_metadata_path))
+    outputs_existed = all(p.exists() for p in output_paths)
     if not should_process_task(
         output_paths=output_paths,
         input_paths=[input_path],
         force=force_processing,
     ):
+        return
+    if outputs_existed:
+        print("Outputs up-to-date, skipping reprocessing (mtimes refreshed)")
+        refresh_output_mtimes(output_paths)
         return
 
     # 1. Load the Point Cloud

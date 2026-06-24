@@ -1,13 +1,12 @@
 # clustering/kmeans_clusterer.py
 import logging
-from typing import Tuple
+from typing import ClassVar, Literal, Tuple
 
 import numpy as np
 import pandas as pd
 from sklearn.cluster import KMeans
-from sklearn.preprocessing import StandardScaler
 
-from .base import TouchClusterer
+from .base import ClusteringContext, TouchClusterer
 
 _DEFAULT_MIN_PER_CLUSTER = 30
 
@@ -16,13 +15,17 @@ class KMeansClusterer(TouchClusterer):
     """
     Adaptive K-means: starts at k_max = total_touches // min_touches_per_cluster,
     then decrements k until every cluster has >= min_touches_per_cluster touches.
-    Floor is k=2.  Features are z-scored with StandardScaler before clustering.
+    Floor is k=2.  Data is expected to be already scaled by the orchestrator
+    (ReductionPipeline) before being passed here.
     """
+
+    PATH: ClassVar[Literal["A", "B"]] = "B"
 
     def fit_predict(
         self,
         feature_df: pd.DataFrame,
         config: dict,
+        context: ClusteringContext,
     ) -> Tuple[np.ndarray, dict]:
         min_per_cluster = config.get('min_touches_per_cluster', _DEFAULT_MIN_PER_CLUSTER)
         n = len(feature_df)
@@ -35,8 +38,7 @@ class KMeansClusterer(TouchClusterer):
             labels = np.zeros(n, dtype=int)
             return labels, _build_metadata('kmeans', config, k=1, labels=labels)
 
-        scaler = StandardScaler()
-        X = scaler.fit_transform(feature_df.values)
+        X = feature_df.values
 
         k_max = max(2, n // min_per_cluster)
         k = k_max

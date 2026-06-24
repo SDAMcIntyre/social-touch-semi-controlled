@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import List, TypeVar
+from typing import List, Optional, TypeVar
 
 # ----------------------------------------------------------------------------
 # 1. Data Storage Classes
@@ -15,10 +15,23 @@ class Point:
 
 @dataclass
 class RegionOfInterest:
-    """Defines a rectangular region using two corner points (axis-aligned bounding box) and an optional rotation angle."""
+    """Defines a rectangular region using two corner points (axis-aligned bounding box) and an optional rotation angle.
+
+    The AABB fields (``top_left_corner``, ``bottom_right_corner``) are the authoritative
+    source for all downstream extraction code (e.g. ``get_3d_cuboid_from_roi``).
+
+    The optional centre-based fields (``center_x``, ``center_y``, ``width``, ``height``)
+    store the original rotated rectangle drawn by the user.  They are populated by the
+    annotation script and used exclusively to pre-fill the ROI GUI on reprocessing.
+    When absent (``None``) the GUI falls back to the AABB-based pre-fill.
+    """
     top_left_corner: Point
     bottom_right_corner: Point
     angle_deg: float = 0.0
+    center_x: Optional[float] = None
+    center_y: Optional[float] = None
+    width: Optional[float] = None
+    height: Optional[float] = None
 
 @dataclass
 class ForearmParameters:

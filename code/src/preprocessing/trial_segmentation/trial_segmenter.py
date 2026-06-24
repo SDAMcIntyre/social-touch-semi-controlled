@@ -90,7 +90,6 @@ class TrialSegmenterGUI:
         self.current_frame_label = None
         self.scale_var = None
         self.play_button = None
-        self.flip_ellipse_var = None  # New State Variable
 
     def _compute_rle_segments(self, mask: np.ndarray) -> List[Tuple[int, int]]:
         """
@@ -117,9 +116,6 @@ class TrialSegmenterGUI:
         self.root.title(self.title)
 
         self.scale_var = tk.IntVar(value=0)
-        
-        # Initialize Flip State (Default True per request)
-        self.flip_ellipse_var = tk.BooleanVar(value=True)
 
         # --- Window Positioning ---
         if self.windowState.upper() == 'NORMAL':
@@ -193,17 +189,6 @@ class TrialSegmenterGUI:
         # Right Side: Deletion Management & Settings
         right_controls = ttk.Frame(controls_container)
         right_controls.grid(row=0, column=2, sticky="e")
-        
-        # --- NEW: Flip Ellipse Toggle ---
-        # Placed at the top of the right control panel
-        flip_check = ttk.Checkbutton(
-            right_controls, 
-            text="Flip Ellipse Angle", 
-            variable=self.flip_ellipse_var,
-            command=lambda: self.seek_to_frame(self.scale_var.get()) # Immediate Refresh
-        )
-        flip_check.pack(side=tk.TOP, anchor="w", pady=(0, 10))
-        # --------------------------------
 
         ttk.Label(right_controls, text="Recorded Chunks:").pack(side=tk.TOP, anchor="w")
         
@@ -514,14 +499,9 @@ class TrialSegmenterGUI:
                                         data['axes_major'], data['axes_minor'], data['angle']]
                             if not any(np.isnan(v) for v in ell_vals if isinstance(v, (int, float))):
                                 center = (int(data['ellipse_center_x']), int(data['ellipse_center_y']))
-                                axes = (int(data['axes_major'] / 2), int(data['axes_minor'] / 2))
-                                
-                                # FIX: Conditional Flip logic
-                                raw_angle = int(data['angle'])
-                                # If checkbox is Checked (True), we negate the angle to flip Y.
-                                # If unchecked (False), we use raw angle.
-                                angle = -raw_angle if self.flip_ellipse_var.get() else raw_angle
-                                
+                                # axes_minor is the axis rotated by `angle` (cv2.fitEllipse convention).
+                                axes = (int(data['axes_minor'] / 2), int(data['axes_major'] / 2))
+                                angle = int(data['angle'])
                                 cv2.ellipse(frame_bgr, center, axes, angle, 0, 360, color, 2)
 
                     except (ValueError, OverflowError):

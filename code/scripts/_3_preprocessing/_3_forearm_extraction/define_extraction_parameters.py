@@ -163,8 +163,17 @@ def _find_existing_roi_for_group(
     Searches a list of saved ForearmParameters for a previously defined ROI
     that matches the given video and representative frame.
 
-    Returns a ``predefined_roi`` dict compatible with FrameROIRotatable, or None
-    if no match is found.
+    Returns a ``predefined_roi`` dict compatible with ``FrameROIRotatable``:
+
+    - **Centre format** (``{cx, cy, width, height, angle_deg}``) when the
+      original rotated rectangle was stored (new-format metadata).  The GUI
+      routes this through its ``'cx' in predefined_roi`` branch, reproducing
+      the exact rectangle the user drew.
+    - **AABB format** (``{x, y, width, height, angle_deg}``) as a fallback for
+      legacy metadata files that lack the centre-based fields.  This was the
+      only behaviour before this change.
+
+    Returns ``None`` if no matching entry is found in ``parameters_list``.
     """
     matching = _find_existing_params_for_group(
         parameters_list, video_filename, representative_frame_id
@@ -173,6 +182,18 @@ def _find_existing_roi_for_group(
         return None
 
     roi = matching.region_of_interest
+
+    if roi.center_x is not None and roi.center_y is not None \
+            and roi.width is not None and roi.height is not None:
+        return {
+            "cx": roi.center_x,
+            "cy": roi.center_y,
+            "width": roi.width,
+            "height": roi.height,
+            "angle_deg": roi.angle_deg,
+        }
+
+    # Legacy fallback: reconstruct approximate pre-fill from the stored AABB.
     return {
         "x": roi.top_left_corner.x,
         "y": roi.top_left_corner.y,
@@ -261,6 +282,10 @@ def _build_forearm_parameters(
         top_left_corner=Point(x=x1, y=y1),
         bottom_right_corner=Point(x=x2, y=y2),
         angle_deg=angle,
+        center_x=float(cx),
+        center_y=float(cy),
+        width=float(w),
+        height=float(h),
     )
     return ForearmParameters(
         video_filename=video_filename,

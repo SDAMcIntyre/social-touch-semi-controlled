@@ -10,8 +10,7 @@
 # ==============================================================================
 
 parameters:
-  kinect_configs: 
-    valid_configs_ST13-02/kinect_config_2022-06-14_ST13-02_semicontrolled_block-order04.yaml
+  kinect_configs: valid_configs_ST16-05
   #kinect_configs: "valid_configs_ST16-05"
 
 tasks:
@@ -29,7 +28,7 @@ tasks:
       3d model of hand."
     depends_on: []
     options:
-      force_processing: false
+      force_processing: true
 
   review_2d_stickers:
     enabled: true
@@ -60,6 +59,15 @@ tasks:
     options:
       force_processing: false
 
+  define_hand_tracking_roi:
+    enabled: true
+    description: "Define a static ROI crop region for hand tracking (optional, improves
+      detection in cluttered scenes)."
+    depends_on: []
+    options:
+      force_processing: false
+      roi_mode: manual
+
   curate_hamer_hand_models:
     enabled: true
     description: "Validate and curate Hamer hand model tracking using GUI."
@@ -73,3 +81,4 @@ tasks:
     depends_on: [define_trial_chunks]
     options:
       force_processing: false
+      keep_stale: true

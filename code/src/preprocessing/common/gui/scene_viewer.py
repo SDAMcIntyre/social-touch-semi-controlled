@@ -2,7 +2,8 @@
 import bisect
 import sys
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Dict, Optional
+from pathlib import Path
+from typing import Any, Callable, Dict, Iterable, Optional, Union
 
 # Third-party imports
 import numpy as np
@@ -11,9 +12,37 @@ import pyvista as pv
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (QApplication, QCheckBox, QGroupBox,
                              QHBoxLayout, QLabel, QMainWindow,
-                             QPushButton, QSlider, QVBoxLayout, QWidget
+                             QPushButton, QScrollArea, QSlider,
+                             QVBoxLayout, QWidget
 )
 from pyvistaqt import QtInteractor
+
+def define_custom_colors(string_list: Iterable[str]) -> Dict[str, str]:
+    """
+    Searches an iterable of strings for standard color keywords.
+
+    Returns a dict mapping each input string that contains a color keyword to
+    the matched color name (lowercase).  If multiple keywords match, the last
+    one wins.
+
+    Args:
+        string_list: An iterable (e.g., list, dict_keys) of strings to search.
+
+    Returns:
+        A dict ``{item: color_name}`` for items that contain a color keyword.
+    """
+    STANDARD_COLORS = {
+        "red", "green", "blue", "yellow", "orange", "purple", "pink",
+        "black", "white", "brown", "gray", "grey", "cyan", "magenta", "violet",
+    }
+    found_colors: Dict[str, str] = {}
+    for item in string_list:
+        item_lower = item.lower()
+        for color in STANDARD_COLORS:
+            if color in item_lower:
+                found_colors[item] = color
+    return found_colors
+
 
 class PointCloudData:
     """
@@ -69,6 +98,16 @@ class SceneObject(ABC):
         """Creates a QWidget containing controls for this object's parameters."""
         self.update_callback = update_callback
         return None
+
+    def close(self) -> None:
+        """Release any resources held by this object (e.g. open file handles).
+
+        The default is a no-op.  Subclasses that open external resources
+        (MKV files, sockets, …) must override this method and release them
+        here.  Called by ``SceneViewer.clear_objects()`` before the object is
+        removed from the scene.
+        """
+        pass
 
 # --- REFACTORED HIERARCHY START ---
 
@@ -150,22 +189,101 @@ class PointCloudSequence(FrameSequenceObject):
 class LazyPointCloudSequence(PointCloudSequence):
     """
     A scene object for point clouds that loads frame data on-demand.
+
+    Accepts either a pre-opened *data_source* (any object supporting ``[]``
+    and ``len()``) **or** a *mkv_path* (``Path``) from which it opens its own
+    ``KinectMKV`` / ``KinectPointCloudView`` on first access and closes them
+    via ``close()``.
+
+    When *mkv_path* is supplied the MKV is opened lazily (on the first frame
+    access) so that constructing many ``LazyPointCloudSequence`` objects up
+    front does not consume file handles unnecessarily.
+
+    Parameters
+    ----------
+    name:
+        Scene-object name (must be unique within a viewer).
+    mkv_path:
+        Path to a ``.mkv`` Kinect recording.  Mutually exclusive with
+        *data_source*; exactly one must be provided.
+    data_source:
+        Pre-opened object supporting ``data_source[idx]`` and ``len()``.
+        Mutually exclusive with *mkv_path*.
     """
-    def __init__(self, name: str, data_source: Any, **kwargs):
+
+    def __init__(
+        self,
+        name: str,
+        mkv_path: Optional[Path] = None,
+        data_source: Optional[Any] = None,
+        **kwargs,
+    ):
         super().__init__(name, frame_data={}, **kwargs)
-        self.data_source = data_source
-        if not (hasattr(data_source, '__getitem__') and hasattr(data_source, '__len__')):
-            raise TypeError("The 'data_source' must support indexing `[]` and `len()`.")
+
+        if mkv_path is None and data_source is None:
+            raise ValueError(
+                "LazyPointCloudSequence requires either 'mkv_path' or 'data_source'."
+            )
+        if mkv_path is not None and data_source is not None:
+            raise ValueError(
+                "LazyPointCloudSequence accepts 'mkv_path' OR 'data_source', not both."
+            )
+
+        if data_source is not None:
+            if not (hasattr(data_source, '__getitem__') and hasattr(data_source, '__len__')):
+                raise TypeError("The 'data_source' must support indexing `[]` and `len()`.")
+
+        self._mkv_path: Optional[Path] = mkv_path
+        self._mkv = None          # opened lazily
+        self._data_source = data_source  # None when mkv_path is given
+
+    # ------------------------------------------------------------------
+    # Lazy-open helper
+    # ------------------------------------------------------------------
+
+    def _ensure_open(self) -> Any:
+        """Open the MKV on first call; return the ``KinectPointCloudView``."""
+        if self._data_source is not None:
+            return self._data_source
+
+        if self._mkv is None:
+            # Import here to avoid circular / heavyweight import at module level.
+            from preprocessing.common.data_access.kinect_mkv_manager import KinectMKV
+            from preprocessing.common.data_access.kinect_pointcloud_wrapper import KinectPointCloudView
+            self._mkv = KinectMKV(self._mkv_path).__enter__()
+            self._data_source = KinectPointCloudView(self._mkv)
+
+        return self._data_source
+
+    # ------------------------------------------------------------------
+    # SceneObject.close() — release the MKV handle
+    # ------------------------------------------------------------------
+
+    def close(self) -> None:
+        """Close the internally-managed MKV (no-op when *data_source* was supplied)."""
+        if self._mkv is not None:
+            try:
+                self._mkv.__exit__(None, None, None)
+            except Exception:
+                pass
+            self._mkv = None
+            self._data_source = None
+
+    # ------------------------------------------------------------------
+    # FrameSequenceObject overrides
+    # ------------------------------------------------------------------
 
     def get_max_frame(self) -> int:
         """Returns the max frame index based on the length of the data source."""
-        num_frames = len(self.data_source)
+        source = self._ensure_open()
+        num_frames = len(source)
         return num_frames - 1 if num_frames > 0 else -1
 
     def _get_frame_data(self, frame_index: int) -> Optional[PointCloudData]:
         """Retrieves data on-demand from the data source."""
+        source = self._ensure_open()
         try:
-            return self.data_source[frame_index]
+            return source[frame_index]
         except IndexError:
             return None
 
@@ -274,6 +392,41 @@ class PersistentOpen3DTriangleMeshSequence(Open3DTriangleMeshSequence):
         key_to_use = self._sorted_keys[insertion_point - 1]
         return self.frame_data.get(key_to_use)
 
+class ContactPointsSequence(PointCloudSequence):
+    """Contact-point cloud indexed by kinect frame number.
+
+    Non-persistent: renders nothing for frames that have no contact data,
+    matching the NeuralKinectViewer behaviour (no hold-last-frame bleed-over).
+    """
+
+    def __init__(
+        self,
+        name: str,
+        frame_data: Dict[int, Optional[np.ndarray]],
+        color: str = 'red',
+        **kwargs,
+    ):
+        self.color = color
+        kwargs.setdefault('render_points_as_spheres', True)
+        kwargs.setdefault('point_size', 15.0)
+        pc_frame_data: Dict[int, PointCloudData] = {
+            idx: PointCloudData(points=pts.astype(np.float32))
+            for idx, pts in frame_data.items()
+            if pts is not None and len(pts) > 0
+        }
+        super().__init__(name, pc_frame_data, **kwargs)
+
+    def add_to_plotter(self, plotter: pv.Plotter, frame_index: int) -> None:
+        if not self.visible:
+            return
+        pc_data = self._get_frame_data(frame_index)
+        if pc_data is None or pc_data.points is None or pc_data.points.shape[0] == 0:
+            return
+        cloud = pv.PolyData(pc_data.points)
+        render_color = self.override_color if self.color_override_active else self.color
+        plotter.add_mesh(cloud, color=render_color, name=self.name, **self.actor_settings)
+
+
 class Trajectory(SceneObject):
     """A scene object representing a moving point (sphere) over time."""
     def __init__(self, name: str, frame_data: Dict[int, np.ndarray], color: Any = 'gray', radius: float = 2.0, **kwargs):
@@ -331,31 +484,58 @@ class Trajectory(SceneObject):
 class SceneViewer(QMainWindow):
     """
     The main viewer window.
+
+    Layout (matches NeuralKinectViewer._build_ui):
+
+        QVBoxLayout (outer)
+        ├── top_widget   (QHBoxLayout, stretch=4)
+        │   ├── plotter_widget (stretch=4)
+        │   │   └── QtInteractor
+        │   └── QScrollArea (fixed 220 px, stretch=1)
+        │       └── _right_panel (QVBoxLayout: object groupboxes)
+        ├── frame_controls_widget  (returned by _setup_frame_controls)
+        └── time_series_panel      (optional, added via set_time_series_panel)
     """
     def __init__(self, parent=None):
         super().__init__(parent)
         self.scene_objects: Dict[str, SceneObject] = {}
         self.current_index = 0
-        
+        self.time_series_panel: Optional[QWidget] = None
+
         self.setWindowTitle("3D Scene Navigator")
         self.setGeometry(100, 100, 1200, 800)
-        
+
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
-        
-        main_layout = QHBoxLayout(central_widget)
 
-        plotter_container = QWidget()
-        plotter_layout = QVBoxLayout(plotter_container)
+        # --- Outer vertical layout ---
+        self._outer_layout = QVBoxLayout(central_widget)
+
+        # --- Top row: plotter + scrollable right panel ---
+        top_widget = QWidget()
+        top_layout = QHBoxLayout(top_widget)
+
+        plotter_widget = QWidget()
+        plotter_layout = QVBoxLayout(plotter_widget)
         self.plotter = QtInteractor(self)
-        self.plotter.set_background('midnightblue')
+        self.plotter.set_background('black')
         plotter_layout.addWidget(self.plotter.interactor)
-        self._setup_frame_controls(plotter_layout)
-        
-        self.object_controls_layout = self._setup_object_controls_panel()
-        
-        main_layout.addWidget(plotter_container, 4)
-        main_layout.addLayout(self.object_controls_layout, 1)
+        top_layout.addWidget(plotter_widget, stretch=4)
+
+        # Right panel (scrollable, fixed 220 px)
+        self._right_panel = QWidget()
+        self._right_panel_layout = QVBoxLayout(self._right_panel)
+        self._right_panel_layout.addStretch()
+        scroll = QScrollArea()
+        scroll.setWidget(self._right_panel)
+        scroll.setWidgetResizable(True)
+        scroll.setFixedWidth(220)
+        top_layout.addWidget(scroll, stretch=1)
+
+        self._outer_layout.addWidget(top_widget, stretch=4)
+
+        # --- Middle row: frame controls ---
+        self._outer_layout.addWidget(self._setup_frame_controls())
 
         self._update_plot()
 
@@ -398,8 +578,21 @@ class SceneViewer(QMainWindow):
         if custom_controls:
             object_groupbox_layout.addWidget(custom_controls)
 
-        self.object_controls_layout.insertWidget(self.object_controls_layout.count() - 1, object_groupbox)
+        # Insert before the trailing stretch item
+        self._right_panel_layout.insertWidget(self._right_panel_layout.count() - 1, object_groupbox)
         
+        self._update_slider_range()
+        self._update_plot()
+
+    def clear_objects(self) -> None:
+        """Call close() on each object, then remove all scene objects and their right-panel controls."""
+        for obj in self.scene_objects.values():
+            obj.close()
+        self.scene_objects.clear()
+        while self._right_panel_layout.count() > 1:
+            item = self._right_panel_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
         self._update_slider_range()
         self._update_plot()
 
@@ -417,37 +610,54 @@ class SceneViewer(QMainWindow):
             self.scene_objects[name].color_override_active = is_active
             self._update_plot()
 
-    def _setup_object_controls_panel(self) -> QVBoxLayout:
-        controls_layout = QVBoxLayout()
-        controls_layout.addStretch()
-        return controls_layout
-        
+    def set_time_series_panel(self, panel: QWidget) -> None:
+        """
+        Attach an optional time series panel below the frame controls.
+
+        The panel must expose an ``update_cursor(frame_idx: int)`` method so
+        that the frame slider can keep the cursor synchronised.  Calling this
+        method more than once replaces the previously attached panel.
+
+        Args:
+            panel: A ``QWidget`` (typically a ``TimeSeriesPanel``) to append
+                to the outer vertical layout.
+        """
+        if self.time_series_panel is not None:
+            # Remove the old panel from the layout and schedule it for deletion
+            self._outer_layout.removeWidget(self.time_series_panel)
+            self.time_series_panel.setParent(None)
+
+        self.time_series_panel = panel
+        self._outer_layout.addWidget(panel)
+
     def _update_slider_range(self):
         max_frames = self.num_frames
         self.slider.setMaximum(max_frames - 1 if max_frames > 0 else 0)
         self._update_label()
 
-    def _setup_frame_controls(self, parent_layout: QVBoxLayout):
-        frame_controls_layout = QHBoxLayout()
+    def _setup_frame_controls(self) -> QWidget:
+        """Build and return the frame-controls row widget."""
+        row = QWidget()
+        frame_controls_layout = QHBoxLayout(row)
         self.recenter_button = QPushButton("Recenter View")
         self.recenter_button.clicked.connect(self._recenter_view)
-        
+
         self.slider = QSlider(Qt.Horizontal)
         self.slider.setMinimum(0)
         self.slider.setMaximum(0)
         self.slider.setValue(self.current_index)
         self.slider.valueChanged.connect(self._on_slider_change)
-        
+
         self.label = QLabel()
         self.label.setFixedWidth(150)
-        
+
         frame_controls_layout.addWidget(QLabel("Frame:"))
         frame_controls_layout.addWidget(self.slider)
         frame_controls_layout.addWidget(self.label)
         frame_controls_layout.addWidget(self.recenter_button)
-        parent_layout.addLayout(frame_controls_layout)
-        
+
         self._update_label()
+        return row
 
     def _recenter_view(self):
         if not self.scene_objects:
@@ -476,6 +686,8 @@ class SceneViewer(QMainWindow):
         self.current_index = value
         self._update_plot()
         self._update_label()
+        if self.time_series_panel is not None:
+            self.time_series_panel.update_cursor(value)
 
     def _update_label(self):
         total_frames = self.num_frames

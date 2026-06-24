@@ -35,9 +35,14 @@ def _stub_package(dotted: str) -> None:
     sys.modules[dotted] = mod
 
 
-# Stub the one heavyweight package root whose __init__.py pulls in
+# Stub heavyweight package roots whose __init__.py pull in
 # pyk4a / open3d / PyQt5 and other SDK dependencies.
 _stub_package("preprocessing.stickers_analysis")
+
+# forearm_extraction/__init__.py imports open3d (normals_estimation),
+# PyQt5 (curation GUI), and pyk4a transitively.  Stub the root so the
+# model and data-access sub-packages can still be imported directly.
+_stub_package("preprocessing.forearm_extraction")
 
 # utils/__init__.py eagerly imports PipelineMonitor, DagConfigHandler,
 # TaskExecutor, and signal-processing helpers that pull in openpyxl,
@@ -46,3 +51,10 @@ _stub_package("preprocessing.stickers_analysis")
 _stub_package("utils")
 _stub_package("utils.pipeline")
 _stub_package("utils.pipeline.monitoring")
+
+# analysis/pipeline/__init__.py imports session_discovery (requires
+# primary_processing / KinectConfig) and stage_runner (requires utils).
+# Neither is available in the unit-test environment.  Stub the package so
+# individual modules (e.g. analysis.pipeline.shared_constants) can still
+# be imported directly without running the heavyweight __init__.
+_stub_package("analysis.pipeline")

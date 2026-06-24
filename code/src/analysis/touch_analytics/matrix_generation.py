@@ -6,9 +6,9 @@ from pathlib import Path
 from typing import List, Dict, Optional
 
 # Import local modules
-from .touch_config import DISCRETIZATION_CONFIG
+from .touch_config import DISCRETIZATION_CONFIG, get_discretization_config, KINEMATIC_SIGNALS
 from .reporting import VisualReportingStrategy
-from utils.should_process_task import should_process_task
+from utils.should_process_task import should_process_task, clean_task_outputs
 
 def generate_touch_summary_matrix(
     input_files: List[Path], 
@@ -29,7 +29,7 @@ def generate_touch_summary_matrix(
     ):
         logging.info(f"Skipping Touch Summary Matrix (up-to-date): {output_file.name}")
         return output_file
-
+    clean_task_outputs(output_file)
     return _generate_matrix_internal(
         input_files, output_file, config, show, log_scale, log_axis, mode="count"
     )
@@ -52,15 +52,29 @@ def generate_ap_efficacy_matrix(
     ):
         logging.info(f"Skipping AP Efficacy Matrix (up-to-date): {output_file.name}")
         return output_file
-
+    clean_task_outputs(output_file)
     # Note: Log scale is False for efficacy (ratios 0-1 don't work well with log colors)
     return _generate_matrix_internal(
         input_files, output_file, config, show, log_scale=False, log_axis=True, mode="efficacy"
     )
 
+def _detect_kinematic_aggregations(columns: List[str]) -> List[str]:
+    """Return sorted aggregation suffixes found in columns matching {signal}_{agg}."""
+    col_set = set(columns)
+    found: set[str] = set()
+    for col in col_set:
+        for sig in KINEMATIC_SIGNALS:
+            prefix = f'{sig}_'
+            if col.startswith(prefix):
+                agg = col[len(prefix):]
+                if agg:
+                    found.add(agg)
+    return sorted(found)
+
+
 def _generate_matrix_internal(
-    input_files: List[Path], 
-    output_file: Path, 
+    input_files: List[Path],
+    output_file: Path,
     config: Optional[Dict],
     show: bool,
     log_scale: bool,
@@ -69,35 +83,31 @@ def _generate_matrix_internal(
 ) -> Path:
     """
     Internal shared logic for matrix generation.
+
+    Detects kinematic aggregations present in the data and generates one full
+    set of outputs (matrix CSV + heatmaps) per aggregation.  When a single
+    aggregation is present the output path is unchanged (backward compatible).
+    Multiple aggregations produce files named ``{stem}_{agg}{suffix}``.
     """
     if not input_files:
         logging.warning(f"No input files provided for {mode} matrix generation.")
         return output_file
 
-    if config is None:
-        config = DISCRETIZATION_CONFIG
-
     logging.info(f"Generating {mode} matrix for {len(input_files)} files...")
-    
-    all_data = []
 
     # 1. Load and Tag Data
+    all_data = []
     for file_path in input_files:
         try:
             df = pd.read_csv(file_path)
             if df.empty:
                 continue
-            
-            # Validation for efficacy mode
             if mode == "efficacy" and 'spike_elicited' not in df.columns:
                 continue
-
-            # Extract ST ID
             match = re.search(r'(ST\d+-\d+)', file_path.name)
             file_id = match.group(1) if match else file_path.stem
             df['source_file_id'] = file_id
             all_data.append(df)
-            
         except Exception as e:
             logging.error(f"Error loading {file_path.name}: {e}")
 
@@ -107,114 +117,129 @@ def _generate_matrix_internal(
 
     full_df = pd.concat(all_data, ignore_index=True)
 
-    # --- VISUALIZATION ---
-    # Modified: Visualizations now run for both "count" and "efficacy" modes
-    if show and not full_df.empty:
-        _run_advanced_visualizations(full_df, output_file.parent, log_scale, log_axis, mode)
-    # ---------------------
+    # 2. Detect aggregations; fall back to [None] when no kinematic columns present
+    aggregations = _detect_kinematic_aggregations(list(full_df.columns))
+    agg_list: List[Optional[str]] = aggregations if aggregations else [None]
+    multi = len(agg_list) > 1
 
-    # 2. Variable Encoding
-    legend_data = []
-    hierarchy_order = ['type_metadata', 'max_velocity', 'max_depth', 'max_contact_area']
-    
-    # Process Continuous Vars
-    for col, params in config['continuous_vars'].items():
-        if col not in full_df.columns: continue
-        new_col_name = f"{col}_code"
-        try:
-            if params['method'] == 'qcut':
-                cat_series = pd.qcut(full_df[col], q=params['q'], duplicates='drop')
-            elif params['method'] == 'cut':
-                cat_series = pd.cut(full_df[col], bins=params['bins'], duplicates='drop')
-            else: continue
+    # 3. Per-aggregation: visualizations + matrix
+    for agg in agg_list:
+        agg_output_file = (
+            output_file.parent / f"{output_file.stem}_{agg}{output_file.suffix}"
+            if multi else output_file
+        )
 
-            full_df[new_col_name] = cat_series.cat.codes
-            for idx, interval in enumerate(cat_series.cat.categories):
-                legend_data.append({"Dimension": col, "Code": idx, "Value/Range": str(interval)})
-        except Exception:
-            full_df[new_col_name] = -1
+        # Resolve config for this aggregation
+        if config is not None:
+            agg_config = config
+        elif agg is not None:
+            agg_config = get_discretization_config(agg)
+        else:
+            agg_config = {'continuous_vars': {}, 'categorical_vars': ['type_metadata', 'direction']}
 
-    # Process Categorical Vars
-    for col in config['categorical_vars']:
-        if col in full_df.columns:
+        # Visualizations (skipped when no kinematic aggregation is available)
+        if show and not full_df.empty and agg is not None:
+            viz_dir = output_file.parent / agg if multi else output_file.parent
+            _run_advanced_visualizations(full_df, viz_dir, log_scale, log_axis, mode, agg)
+
+        # Variable Encoding
+        legend_data = []
+        hierarchy_order = ['type_metadata']
+        if agg is not None:
+            hierarchy_order += [f'velocity_magnitude_{agg}', f'contact_depth_{agg}', f'contact_area_{agg}']
+
+        for col, params in agg_config['continuous_vars'].items():
+            if col not in full_df.columns:
+                continue
             new_col_name = f"{col}_code"
-            cat_series = full_df[col].fillna('unknown').astype('category')
-            full_df[new_col_name] = cat_series.cat.codes
-            for idx, label in enumerate(cat_series.cat.categories):
-                legend_data.append({"Dimension": col, "Code": idx, "Value/Range": str(label)})
+            try:
+                if params['method'] == 'qcut':
+                    cat_series = pd.qcut(full_df[col], q=params['q'], duplicates='drop')
+                elif params['method'] == 'cut':
+                    cat_series = pd.cut(full_df[col], bins=params['bins'], duplicates='drop')
+                else:
+                    continue
+                full_df[new_col_name] = cat_series.cat.codes
+                for idx, interval in enumerate(cat_series.cat.categories):
+                    legend_data.append({"Dimension": col, "Code": idx, "Value/Range": str(interval)})
+            except Exception:
+                full_df[new_col_name] = -1
 
-    # 3. Create Hierarchical Matrix
-    pivot_cols = []
-    for col in hierarchy_order:
-        code_col = f"{col}_code"
-        if code_col in full_df.columns:
-            pivot_cols.append(full_df[code_col])
+        for col in agg_config['categorical_vars']:
+            if col in full_df.columns:
+                new_col_name = f"{col}_code"
+                cat_series = full_df[col].fillna('unknown').astype('category')
+                full_df[new_col_name] = cat_series.cat.codes
+                for idx, label in enumerate(cat_series.cat.categories):
+                    legend_data.append({"Dimension": col, "Code": idx, "Value/Range": str(label)})
 
-    if not pivot_cols:
-        return output_file
+        # Hierarchical Matrix
+        pivot_cols = [
+            full_df[f"{col}_code"]
+            for col in hierarchy_order
+            if f"{col}_code" in full_df.columns
+        ]
+        if not pivot_cols:
+            continue
 
-    if mode == "count":
-        # Crosstab counts occurrences
-        matrix_df = pd.crosstab(
-            index=full_df['source_file_id'], 
-            columns=pivot_cols,
-            rownames=['source_file_id'],
-            colnames=hierarchy_order
+        if mode == "count":
+            matrix_df = pd.crosstab(
+                index=full_df['source_file_id'],
+                columns=pivot_cols,
+                rownames=['source_file_id'],
+                colnames=hierarchy_order,
+            )
+        else:  # efficacy
+            matrix_df = pd.pivot_table(
+                full_df,
+                values='spike_elicited',
+                index='source_file_id',
+                columns=pivot_cols,
+                aggfunc='mean',
+                fill_value=0,
+            )
+
+        agg_output_file.parent.mkdir(parents=True, exist_ok=True)
+        matrix_df.to_csv(agg_output_file)
+        pd.DataFrame(legend_data).to_csv(
+            agg_output_file.parent / f"{agg_output_file.stem}_legend.csv", index=False
         )
-    elif mode == "efficacy":
-        # Pivot Table averages the boolean outcome (Ratio)
-        matrix_df = pd.pivot_table(
-            full_df,
-            values='spike_elicited',
-            index='source_file_id',
-            columns=pivot_cols,
-            aggfunc='mean',
-            fill_value=0
-        )
-
-    # 4. Save Outputs
-    output_file.parent.mkdir(parents=True, exist_ok=True)
-    matrix_df.to_csv(output_file)
-    pd.DataFrame(legend_data).to_csv(output_file.parent / f"{output_file.stem}_legend.csv", index=False)
-    
-    logging.info(f"Saved {mode} matrix to {output_file}")
+        logging.info(f"Saved {mode} matrix to {agg_output_file}")
 
     return output_file
 
-def _run_advanced_visualizations(full_df, output_dir, log_scale, log_axis, mode):
+def _run_advanced_visualizations(full_df, output_dir, log_scale, log_axis, mode, aggregation: str):
     """
-    Runs heatmap generation. Now supports both count and efficacy modes.
+    Runs heatmap generation for a given kinematic *aggregation* suffix.
+    Supports both count and efficacy modes. Skips silently if the required
+    columns are not present in *full_df*.
     """
-    logging.info(f"Generating advanced visualizations (Mode: {mode})...")
-    heat_x = 'max_velocity'
-    heat_y1 = 'max_depth'
-    heat_y2 = 'max_contact_area'
+    logging.info(f"Generating advanced visualizations (Mode: {mode}, Agg: {aggregation})...")
+    heat_x = f'velocity_magnitude_{aggregation}'
+    heat_y1 = f'contact_depth_{aggregation}'
+    heat_y2 = f'contact_area_{aggregation}'
     facet_type = 'type_metadata'
     pop_col = 'source_file_id'
-    
-    # Define value column for aggregation based on mode
+
     value_col = None
     if mode == "efficacy":
         value_col = "spike_elicited"
-    
-    # Check for necessary columns
+
     required_cols = [heat_x, heat_y1, heat_y2, facet_type]
     if value_col:
         required_cols.append(value_col)
 
-    cols_exist = all(c in full_df.columns for c in required_cols)
-    
-    if cols_exist:
+    if all(c in full_df.columns for c in required_cols):
         viz_strategy = VisualReportingStrategy(output_dir=output_dir)
         viz_strategy.generate_population_heatmaps(
-            full_df, 
-            x_col=heat_x, 
-            y_col_1=heat_y1, 
+            full_df,
+            x_col=heat_x,
+            y_col_1=heat_y1,
             y_col_2=heat_y2,
-            pop_col=pop_col, 
-            type_col=facet_type, 
-            log_scale=log_scale, 
+            pop_col=pop_col,
+            type_col=facet_type,
+            log_scale=log_scale,
             log_axis=log_axis,
             mode=mode,
-            value_col=value_col
+            value_col=value_col,
         )

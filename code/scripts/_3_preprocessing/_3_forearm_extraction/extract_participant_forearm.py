@@ -5,7 +5,7 @@ import numpy as np
 import yaml
 from pathlib import Path
 
-from utils.should_process_task import should_process_task
+from utils.should_process_task import should_process_task, refresh_output_mtimes
 from preprocessing.common import (
     KinectMKV,
     KinectFrame,
@@ -77,125 +77,6 @@ def show_annotated_frames(
     cv2.destroyAllWindows()
 
 
-def _resize_with_padding(image: np.ndarray, target_dims: tuple) -> np.ndarray:
-    """
-    Resizes an image to a target dimension while preserving the aspect ratio
-    by padding the background with black.
-    """
-    target_w, target_h = target_dims
-    if image.shape[0] == 0 or image.shape[1] == 0:
-        if len(image.shape) == 3:
-            return np.zeros((target_h, target_w, image.shape[2]), dtype=image.dtype)
-        else:
-            return np.zeros((target_h, target_w), dtype=image.dtype)
-
-    src_h, src_w = image.shape[:2]
-    src_ratio = src_w / src_h
-    target_ratio = target_w / target_h
-
-    if src_ratio > target_ratio:
-        new_w = target_w
-        new_h = int(new_w / src_ratio)
-    else:
-        new_h = target_h
-        new_w = int(new_h * src_ratio)
-
-    resized_image = cv2.resize(image, (new_w, new_h))
-
-    if len(image.shape) == 3:
-        padded_image = np.zeros((target_h, target_w, image.shape[2]), dtype=image.dtype)
-    else:
-        padded_image = np.zeros((target_h, target_w), dtype=image.dtype)
-        
-    y_offset = (target_h - new_h) // 2
-    x_offset = (target_w - new_w) // 2
-
-    padded_image[y_offset:y_offset + new_h, x_offset:x_offset + new_w] = resized_image
-    return padded_image
-
-def _create_monitoring_frame(frame_index: int,
-                             depth_image: np.ndarray,
-                             target_dims: tuple = (1080, 1920),
-                             display_dims: tuple = (1080, 1920)) -> np.ndarray:
-    """
-    Creates a monitoring visualization frame but does not display it.
-    This function generates the canvas, draws images, overlays, and text, then returns the final image.
-    """
-    # --- 0. Setup Dimensions ---
-    display_h, display_w = display_dims
-    panel_width = 450
-    images_total_width = display_w - panel_width
-    if images_total_width <= 0:
-        raise ValueError("Display width is too small for the text panel.")
-
-    # --- 1. Prepare Visualizations and Draw Overlays ---
-    target_h, target_w = target_dims
-    depth_present = depth_image is not None
-
-    # Use a black image as a placeholder if the source is missing
-    
-    if depth_present and depth_image.shape[:2] == target_dims:
-        depth_normalized = cv2.normalize(depth_image, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
-        depth_vis = cv2.applyColorMap(depth_normalized, cv2.COLORMAP_JET)
-    else:
-        depth_vis = np.zeros((target_h, target_w, 3), dtype=np.uint8)
-
-
-    # --- 2. Create Final Canvas and Assemble Components ---
-    final_canvas = np.zeros((display_h, display_w, 3), dtype=np.uint8)
-
-    image_target_box = (images_total_width, display_h)
-    resized_depth = _resize_with_padding(depth_vis, image_target_box)
-    final_canvas[0:display_h, 0:images_total_width] = resized_depth
-
-    # --- 3. Draw Text on the Right Panel ---
-    text_x_start = images_total_width + 15
-    text_y = 30
-    cv2.putText(final_canvas, f"Frame: {frame_index}", (text_x_start, text_y),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-    text_y += 40
-    return final_canvas
-
-
-
-def _display_frame(frame: np.ndarray) -> bool:
-    """
-    Displays a given frame in a window and handles user input.
-    Returns True if the user presses 'q', False otherwise.
-    """
-    cv2.imshow("XYZ Monitoring", frame)
-    key = cv2.waitKey(1) & 0xFF
-    return key == ord('q')
-
-def show_video(source_video, frame_index = 542):
-    from pyk4a import PyK4APlayback
-    from datetime import timedelta
-
-    display_dims = (1080, 1920)
-
-    playback = PyK4APlayback(source_video)
-    playback.open()
-    print(f"Successfully opened MKV: {source_video}")
-
-    timestamp_td = timedelta(seconds=frame_index / 30)
-    timestamp_usec = int(timestamp_td.total_seconds() * 1_000_000)
-    playback.seek(timestamp_usec)
-
-    while True:
-        capture = playback.get_next_capture()
-        if capture is None: break
-
-        visual_frame = _create_monitoring_frame(
-            frame_index=frame_index,
-            depth_image=capture.transformed_depth, 
-            display_dims=display_dims
-        )
-        
-        _display_frame(visual_frame)
-
-        frame_index += 1
-    
-
 # -----------------------------------------------------------------
 # 4. Main Orchestrator (uses Dependency Injection)
 # -----------------------------------------------------------------
@@ -252,6 +133,13 @@ def extract_forearm(
             else:
                 point_cloud = frame.generate_o3d_point_cloud()
 
+            # Record whether outputs already exist before running the segmenter.
+            # Used below to skip re-saving when the operator closes the GUI
+            # without applying any changes (interactive mode only).
+            outputs_existed = all(
+                os.path.exists(p) for p in [output_ply_path, output_params_path]
+            )
+
             segmenter = ArmSegmentation(segmentation_params, interactive=interactive)
 
             cuboid_oppposed_corners = get_3d_cuboid_from_roi(frame, video_config.region_of_interest)
@@ -260,18 +148,24 @@ def extract_forearm(
                 cuboid_oppposed_corners,
                 monitor #  config['visualization']['show_intermediate_steps']
             )
-            
+
             pcd = segmenter.extract_arm(
                 pcd,
                 monitor #  config['visualization']['show_intermediate_steps']
             )
-            
+
             # 4. Finalize
             if monitor: #  config['visualization']['show_intermediate_steps']
                 show_annotated_frames(video_config.region_of_interest, frame)
-            PointCloudDataHandler.save(pcd, output_path=output_ply_path)
-            # save the parameters
-            ForearmSegmentationParamsFileHandler.save(segmenter.params, output_params_path)
+
+            if outputs_existed and not segmenter.was_modified:
+                # The operator closed the GUI without editing — outputs are still
+                # valid. Touch their mtimes so the pipeline considers them fresh.
+                refresh_output_mtimes([output_ply_path, output_params_path])
+            else:
+                PointCloudDataHandler.save(pcd, output_path=output_ply_path)
+                # save the parameters
+                ForearmSegmentationParamsFileHandler.save(segmenter.params, output_params_path)
             
         return output_ply_path
 
@@ -281,4 +175,68 @@ def extract_forearm(
     except Exception as e:
         print(f"❌ ERROR: An unexpected error occurred: {e}", file=sys.stderr)
         sys.exit(1)
+
+
+
+
+if __name__ == "__main__":
+    from preprocessing.forearm_extraction.models.forearm_parameters import Point
+
+    database_path  = r"F:/liu-onedrive-nospecial-carac/_Teams/Social touch Kinect MNG/02_data/semi-controlled/"
+    video_block = "kinect/2022-06-17_ST16-05/"
+
+    # ── Configuration ────────────────────────────────────────────
+    # Option A: Load from an existing metadata JSON (recommended)
+    metadata_json = Path(database_path + "2_processed/" + video_block + "forearm_pointclouds/2022-06-17_ST16-05_arm_roi_metadata.json")
+    # Option B: Set to None to use manual parameters below
+    # metadata_json = None
+
+    session_primary_dir = Path(database_path + "1_primary/" + video_block + "block-order-01")
+    output_dir = Path(database_path + "2_processed/" + video_block + "forearm_pointclouds/")
+
+    # ── Resolve video_config ─────────────────────────────────────
+    if metadata_json is not None and metadata_json.exists():
+        all_params = ForearmFrameParametersFileHandler.load(str(metadata_json))
+        if not all_params:
+            raise RuntimeError(f"No parameters found in {metadata_json}")
+        video_config = all_params[0]  # pick the first entry (change index to debug others)
+        print(f"Loaded config: {video_config.video_filename}, frame {video_config.frame_id}")
+    else:
+        # Manual fallback — fill in real values for your session
+        video_config = ForearmParameters(
+            video_filename="depth_video.mp4",
+            frame_ids=[542],
+            representative_frame_id=542,
+            region_of_interest=RegionOfInterest(
+                top_left_corner=Point(x=400, y=300),
+                bottom_right_corner=Point(x=1200, y=900),
+                angle_deg=0.0,
+            ),
+            frame_width=1920,
+            frame_height=1080,
+            fps=30.0,
+            nframes=6000,
+            fourcc_str="mp4v",
+        )
+
+    # ── Resolve paths ────────────────────────────────────────────
+    video_path = session_primary_dir / video_config.video_filename.replace(".mp4", ".mkv")
+    output_stem = video_config.build_output_stem(video_path.stem)
+    output_ply_path = output_dir / f"{output_stem}.ply"
+    output_params_path = output_dir / f"{output_stem}_extraction_params.json"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"Video:  {video_path}")
+    print(f"Output: {output_ply_path}")
+
+    # ── Run ──────────────────────────────────────────────────────
+    extract_forearm(
+        video_path=str(video_path),
+        video_config=video_config,
+        output_ply_path=str(output_ply_path),
+        output_params_path=str(output_params_path),
+        monitor=True,
+        interactive=True,
+        force_processing=True,
+    )
 

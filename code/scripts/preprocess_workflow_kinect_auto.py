@@ -42,7 +42,8 @@ from _3_preprocessing._1_sticker_tracking import (
     adjust_ellipse_centers_to_global_frame,
     consolidate_2d_tracking_data,
     
-    extract_stickers_xyz_positions
+    extract_stickers_xyz_positions,
+    correct_xyz_stickers_motion
 )
 
 from _3_preprocessing._2_hand_tracking import (
@@ -50,6 +51,7 @@ from _3_preprocessing._2_hand_tracking import (
     is_hand_model_valid,
     generate_3d_hand_in_motion
 )
+from _3_preprocessing._2_hand_tracking.stabilise_hand_motion import stabilise_hand_motion
 
 from _3_preprocessing._3_forearm_extraction import (
     is_forearm_valid,
@@ -235,20 +237,61 @@ def generate_xyz_stickers(
     )
     return result_csv_path
 
+@flow(name="6c. Correct XYZ Sticker Motion")
+def correct_xyz_stickers_motion_flow(
+    stickers_xyz_path: Path,
+    output_dir: Path,
+    *,
+    mode: str = "correct",
+    filter_method: str = "butterworth",
+    filter_params: dict | None = None,
+    outlier_detection: dict | None = None,
+    force_processing: bool = False,
+) -> Path:
+    print(f"[{output_dir.name}] Correcting XYZ sticker motion (mode='{mode}')...")
+    name_baseline = stickers_xyz_path.stem.replace("_xyz_tracked", "")
+    corrected_csv_path = output_dir / (name_baseline + "_xyz_corrected.csv")
+    diagnostics_dir = output_dir / "xyz_correction_diagnostics"
+
+    correct_xyz_stickers_motion(
+        input_csv_path=stickers_xyz_path,
+        output_csv_path=corrected_csv_path,
+        diagnostics_dir=diagnostics_dir,
+        mode=mode,
+        filter_method=filter_method,
+        filter_params=filter_params,
+        outlier_detection=outlier_detection,
+        force_processing=force_processing,
+    )
+
+    if mode == "correct":
+        return corrected_csv_path
+    # Compare mode: no corrected CSV — downstream still uses the raw path
+    return stickers_xyz_path
+
+
 # --- REFACTORED: Track Hands Model Flow ---
 @flow(name="7a. Track Hands Model")
 def track_hands_model_flow(
     rgb_video_path: Path,
     output_dir: Path,
     *,
-    force_processing: bool = False
+    force_processing: bool = False,
+    keep_stale: bool = False,
 ) -> Path:
     print(f"[{output_dir.name}] Tracking Hands Model...")
     name_baseline = rgb_video_path.stem + "_handmodel"
     tracked_hands_path = output_dir / (name_baseline + "_tracked_hands.pkl")
-    
-    track_hands_on_video(rgb_video_path, tracked_hands_path, force_processing=force_processing)
-    
+    roi_path = output_dir / (name_baseline + "_roi.json")
+
+    track_hands_on_video(
+        rgb_video_path,
+        tracked_hands_path,
+        force_processing=force_processing,
+        roi_path=roi_path,
+        keep_stale=keep_stale,
+    )
+
     return tracked_hands_path
 
 # --- REFACTORED: Generate 3D Hand Motion Flow ---
@@ -288,6 +331,35 @@ def generate_3d_hand_in_motion_flow(
         force_processing=force_processing)
 
     return out_motion_npz_path, metadata_path
+
+@flow(name="7c. Stabilise Hand Motion")
+def stabilise_hand_motion_flow(
+    hand_motion_npz_path: Path,
+    output_dir: Path,
+    *,
+    filter_method: str = "butterworth",
+    filter_params: dict | None = None,
+    smooth_anchor: bool = True,
+    anchor_filter_method: str = "one_euro",
+    anchor_filter_params: dict | None = None,
+    force_processing: bool = False,
+) -> Path:
+    print(f"[{output_dir.name}] Stabilising hand-mesh pose stream...")
+    name_baseline = hand_motion_npz_path.stem.replace("_motion", "")
+    out_stabilised_npz_path = output_dir / (name_baseline + "_motion_stabilised.npz")
+
+    stabilise_hand_motion(
+        input_npz_path=hand_motion_npz_path,
+        output_npz_path=out_stabilised_npz_path,
+        filter_method=filter_method,
+        filter_params=filter_params,
+        smooth_anchor=smooth_anchor,
+        anchor_filter_method=anchor_filter_method,
+        anchor_filter_params=anchor_filter_params,
+        force_processing=force_processing,
+    )
+
+    return out_stabilised_npz_path
 
 @flow(name="8. Generate Somatosensory Characteristics")
 def compute_somatosensory_characteristics_flow(
@@ -436,11 +508,21 @@ def run_single_session_pipeline(
                             "stickers_roi_csv_path": context.get("raw_stickers_roi_csv")}, 
          "outputs": ["sticker_2d_tracking_path", None]},
          
-        {"name": "generate_xyz_stickers", 
-         "func": generate_xyz_stickers, 
-         "params": lambda: {"stickers_2d_path": context.get("sticker_2d_tracking_path"), 
-                            "source_video": config.source_video, 
-                            "output_dir": config.video_processed_output_dir / "handstickers"}, 
+        {"name": "generate_xyz_stickers",
+         "func": generate_xyz_stickers,
+         "params": lambda: {"stickers_2d_path": context.get("sticker_2d_tracking_path"),
+                            "source_video": config.source_video,
+                            "output_dir": config.video_processed_output_dir / "handstickers"},
+         "outputs": ["sticker_3d_tracking_path"]},
+
+        {"name": "correct_xyz_stickers_motion",
+         "func": correct_xyz_stickers_motion_flow,
+         "params": lambda: {"stickers_xyz_path": context.get("sticker_3d_tracking_path"),
+                            "output_dir": config.video_processed_output_dir / "handstickers",
+                            "mode": dag_handler.get_task_options("correct_xyz_stickers_motion").get("mode", "correct"),
+                            "filter_method": dag_handler.get_task_options("correct_xyz_stickers_motion").get("filter_method", "butterworth"),
+                            "filter_params": dag_handler.get_task_options("correct_xyz_stickers_motion").get("filter_params"),
+                            "outlier_detection": dag_handler.get_task_options("correct_xyz_stickers_motion").get("outlier_detection")},
          "outputs": ["sticker_3d_tracking_path"]},
 
         # --- Stage 3: Trial Definition & Analysis ---
@@ -463,7 +545,8 @@ def run_single_session_pipeline(
         {"name": "track_hands_model",
          "func": track_hands_model_flow,
          "params": lambda: {"rgb_video_path": context.get("rgb_video_path"),
-                            "output_dir": config.video_processed_output_dir / "kinematics_analysis"},
+                            "output_dir": config.video_processed_output_dir / "kinematics_analysis",
+                            "keep_stale": dag_handler.get_task_options("track_hands_model").get("keep_stale", False)},
          "outputs": ["tracked_hands_path"]},
 
         # --- REFACTORED: Generate 3D Motion (Consumes Hand Model) ---
@@ -475,11 +558,22 @@ def run_single_session_pipeline(
                             "output_dir": config.video_processed_output_dir / "kinematics_analysis"}, 
          "outputs": ["hand_motion_npz_path", "hand_metadata_path"]},
          
-        {"name": "validate_hand_extraction", 
-         "func": validate_hand_extraction, 
-         "params": lambda: {"rgb_video_path": context.get("rgb_video_path"), 
+        {"name": "stabilise_hand_motion",
+         "func": stabilise_hand_motion_flow,
+         "params": lambda: {"hand_motion_npz_path": context.get("hand_motion_npz_path"),
+                            "output_dir": config.video_processed_output_dir / "kinematics_analysis",
+                            "filter_method": dag_handler.get_task_options("stabilise_hand_motion").get("filter_method", "butterworth"),
+                            "filter_params": dag_handler.get_task_options("stabilise_hand_motion").get("filter_params"),
+                            "smooth_anchor": dag_handler.get_task_options("stabilise_hand_motion").get("smooth_anchor", True),
+                            "anchor_filter_method": dag_handler.get_task_options("stabilise_hand_motion").get("anchor_filter_method", "one_euro"),
+                            "anchor_filter_params": dag_handler.get_task_options("stabilise_hand_motion").get("anchor_filter_params")},
+         "outputs": ["hand_motion_stabilised_npz_path"]},
+
+        {"name": "validate_hand_extraction",
+         "func": validate_hand_extraction,
+         "params": lambda: {"rgb_video_path": context.get("rgb_video_path"),
                             "hand_models_dir": config.hand_models_dir,
-                            "expected_labels": config.objects_to_track, 
+                            "expected_labels": config.objects_to_track,
                             "output_dir": config.video_processed_output_dir / "kinematics_analysis"},
          "outputs": []},
 
@@ -517,7 +611,7 @@ def run_single_session_pipeline(
     for stage_idx, stage in enumerate(pipeline_stages):
         task_name = stage["name"]
     
-        executor = TaskExecutor(task_name, block_name, dag_handler, monitor)
+        executor = TaskExecutor(task_name, block_name, dag_handler, monitor, session_name=block_name)
         with executor:
             if not executor.can_run:
                 continue
@@ -584,13 +678,17 @@ def run_batch_processing(
             )
             submitted_runs.append(run)
         else:
-            run_single_session_pipeline(
-                config=validated_config,
-                dag_handler=dag_handler_instance,
-                monitor_queue=monitor_queue,
-                report_file_path=report_file_path
-            )
-            logging.info(f"--- Completed session: {block_file.stem} ---")
+            try:
+                run_single_session_pipeline(
+                    config=validated_config,
+                    dag_handler=dag_handler_instance,
+                    monitor_queue=monitor_queue,
+                    report_file_path=report_file_path
+                )
+                logging.info(f"--- Completed session: {block_file.stem} ---")
+            except Exception as e:
+                logging.error(f"Failed to process session {block_file.stem}. Error: {e}")
+                continue
 
     if parallel:
         logging.info("All flows submitted. Waiting for parallel runs to complete...")

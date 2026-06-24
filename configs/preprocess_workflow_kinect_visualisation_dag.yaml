@@ -10,32 +10,51 @@
 # ==============================================================================
 
 parameters:
-  kinect_configs: "valid_configs_ST13-03"
+  kinect_configs: [valid_configs_ST16-05, valid_configs_ST18-01, 
+      valid_configs_ST18-04]
 
 tasks:
   # PHASE 3: VISUALIZATION & VERIFICATION
   view_ellipse_tracking:
-    enabled: False
+    enabled: false
     description: "Manually view the ellipses fit of the stickers on the hand."
     depends_on: []
 
   view_ellipse_tracking_adjusted:
-    enabled: False
+    enabled: false
     description: "Manually view the adjusted ellipses fit."
     depends_on: []
 
   view_consolidated_2d_tracking_data:
-    enabled: False
+    enabled: false
     description: "Manually view the XY estimation of the stickers on the hand."
     depends_on: []
 
   view_xyz_stickers:
-    enabled: False
+    enabled: false
     description: "Manually view the XYZ estimation of the stickers on the hand."
+    depends_on: []
+
+  view_xyz_depth_aggregation:
+    enabled: false
+    description: "Interactively inspect the depth-weighted XYZ aggregation pipeline
+      (mask, samples, depth histogram, weights, weighted-vs-plain scatter)."
     depends_on: []
 
   # PHASE 4: COMPLEX ASSESSMENTS
   view_somatosensory_assessement:
-    enabled: True
+    enabled: true
     description: "Manually view the somatosensory assessment results."
+    depends_on: []
+
+  view_hand_mesh_comparison:
+    enabled: false
+    description: "Compare raw and stabilised hand meshes side by side in the 3D viewer
+      (cyan = raw, yellow = stabilised)."
+    depends_on: []
+
+  view_hand_model_overlay:
+    enabled: false
+    description: "Open a GUI to select a session/block and export an MP4 with the
+      MANO hand mesh overlaid on the RGB video."
     depends_on: []

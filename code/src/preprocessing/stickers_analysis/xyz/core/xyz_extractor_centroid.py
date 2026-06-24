@@ -74,7 +74,8 @@ class XYZExtractionVisualizer:
 
             ax_maj = int(tracked_obj_row.get('axes_major', 0))
             ax_min = int(tracked_obj_row.get('axes_minor', 0))
-            axes = (ax_maj, ax_min)
+            # axes_minor is the axis rotated by `angle`; cv2.ellipse expects semi-axes.
+            axes = (max(1, ax_min // 2), max(1, ax_maj // 2))
 
             angle = tracked_obj_row.get('angle', 0.0)
 
@@ -245,9 +246,9 @@ class XYZExtractionVisualizer:
             ex, ey = int(tracked_obj_row['ellipse_center_x']), int(tracked_obj_row['ellipse_center_y'])
             maj, min_ax = int(tracked_obj_row['axes_major'] / 2), int(tracked_obj_row['axes_minor'] / 2)
             angle = tracked_obj_row['angle']
-            
-            # Generate Ellipse Polygon (List of points)
-            ellipse_pts = cv2.ellipse2Poly((ex, ey), (maj, min_ax), int(angle), 0, 360, 5)
+
+            # axes_minor is the axis rotated by `angle` (cv2.fitEllipse convention).
+            ellipse_pts = cv2.ellipse2Poly((ex, ey), (min_ax, maj), int(angle), 0, 360, 5)
             
             if ellipse_pts is not None and len(ellipse_pts) > 0:
                 el_X, el_Y, el_Z = XYZExtractionVisualizer._get_3d_trace_from_2d_pixels(point_cloud, ellipse_pts)

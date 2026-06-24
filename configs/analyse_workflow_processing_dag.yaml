@@ -1,0 +1,756 @@
+# Dependency-aware configuration for the Analysis Workflow — Processing tasks only.
+# Specifies input directories and task toggle states for processing (unattended) tasks.
+# See analyse_workflow_dag.yaml for the combined reference config.
+
+parameters:
+  # List of directories containing Kinect session config files to scan.
+  # Paths are relative to configs/kinect_configs/.
+  kinect_configs: [valid_configs_ST13-01, valid_configs_ST13-02, 
+      valid_configs_ST13-03, valid_configs_ST14-01, valid_configs_ST14-02, 
+      valid_configs_ST14-04, valid_configs_ST16-02, valid_configs_ST16-03, 
+      valid_configs_ST16-05, valid_configs_ST18-01, valid_configs_ST18-04]
+  # Path to MNG-DataSummary.xlsx (neuron type metadata). Absolute, or relative
+  # to the database root (e.g. "03_metadata/MNG-DataSummary.xlsx").
+  # Used by stimulus_response_tuning and stimulus_response_instruction_tuning.
+  neuron_summary_xlsx: "F:/liu-onedrive-nospecial-carac/_Teams/Social touch Kinect
+    MNG/03_metadata/MNG-DataSummary.xlsx"
+
+tasks:
+  # ============================================================
+  # Processing Tasks — produce files, run unattended
+  # ============================================================
+
+  # Block/trial structure summary. No dependencies.
+  touch_summarize_blocks:
+    category: foundation
+    enabled: true
+    options:
+      force_processing: false
+    depends_on: []
+
+  # Stage 1 (Preparation): Per-session block-ID synthesis and NaN-gap interpolation.
+  # Produces a cleaned CSV with no NaN gaps in touch columns within each touch group.
+  # Output: 4_analysed/preparation/<session>_prepared.csv
+  touch_prepare_sessions:
+    category: foundation
+    enabled: true
+    options:
+      force_processing: false
+      preparation:
+        interpolation:
+          method: cubic
+    depends_on: []
+
+  # Per-touch RF mapping: accumulate per-vertex neuron values for every single touch.
+  # Reads the prepared CSV produced by touch_prepare_sessions and saves sparse vertex-value
+  # pairs per touch as an .npz file.
+  # Output: 4_analysed/single_touch_rf_maps/<session_id>/single_touch_rf_maps.npz
+  spatial_map_single_touch:
+    category: spatial_sensitivity
+    enabled: true
+    options:
+      force_processing: false
+      neuron_mode: iff
+    depends_on: [touch_prepare_sessions]
+
+  # Stage 2a (Series Transforms): Per-session kinematics, pressure, and MoS computation.
+  # Adds hand_velocity_x/y/z, hand_acceleration_x/y/z, pressure, and (when enabled) MoS
+  # columns to each session CSV.
+  # Output: 4_analysed/series_transforms/<session>_series_augmented.csv
+  touch_compute_series:
+    category: foundation
+    enabled: true
+    options:
+      force_processing: false
+      transforms:
+        hand_position:
+          enabled: true
+          drop_used_inputs: true
+        hand_velocity:
+          enabled: true
+          drop_used_inputs: false
+        hand_acceleration:
+          enabled: true
+          drop_used_inputs: false
+        pressure:
+          enabled: true
+          drop_used_inputs: false
+        mechanics_of_solids:
+          enabled: true
+          drop_used_inputs: false
+          youngs_modulus_kpa: 100.0
+          poissons_ratio: 0.45
+          skin_thickness_mm: 1.5
+        hand_velocity_amplitude:
+          enabled: true
+          drop_used_inputs: false
+        hand_velocity_signed:
+          enabled: true
+          drop_used_inputs: false
+    depends_on: [touch_prepare_sessions]
+
+  # RF Camera Settings: interactively set camera orientation per session.
+  # Required before running cross_render_cluster_rf,
+  # cross_extract_grid_metrics, and any other downstream RF projection task.
+  # Saves to 4_analysed/rf_camera_settings/rf_camera_settings.json.
+  # Output: interactive GUI + rf_camera_settings.json
+  spatial_set_camera:
+    category: viewer_required
+    enabled: true
+    options:
+      force_processing: false
+    depends_on: [touch_compute_series]
+
+  # Simple RF mapping: raw spike-position CSV + forearm heatmap per session.
+  # No dependency on clustering or extraction, but requires camera settings
+  # for rendering (load_rf_camera_rotation raises if absent).
+  # Output: 4_analysed/receptive_field_maps_simple/<session_id>/
+  spatial_map_baseline:
+    category: spatial_sensitivity
+    enabled: true
+    options:
+      force_processing: false
+      # Debugging toggle: when true, opens an interactive matplotlib window mid-run.
+      # Must be false for unattended / batch processing.
+      show_interactive: false
+      projection_method: cylindrical_unwrap
+    depends_on: [spatial_set_camera]
+
+  # Per-session SLIM UV config GUI: opens an interactive PyQt5/PyVista viewer
+  # per session that lets the researcher pick mesh_method, clean_steps,
+  # n_iter, and max_edge_mm, preview the result, and save a per-session
+  # slim_uv_config.yaml consumed by spatial_precompute_slim_uv below.
+  # Saves to 4_analysed/forearm_slim_uv/<session_id>/slim_uv_config.yaml.
+  spatial_configure_slim_uv:
+    category: viewer_required
+    enabled: true
+    options:
+      # When false (default), sessions that already have slim_uv_config.yaml
+      # are skipped; the GUI only opens for sessions missing a config.
+      # Set true to re-open the GUI for every session.
+      force_processing: false
+      # DAG-level defaults applied to sessions that have no per-session YAML.
+      mesh_method: bpa
+      max_edge_mm: 0.0  # 0.0 means auto (3.0 × mean nearest-neighbour distance)
+      n_iter: 40
+      save_diagnostics: true
+      clean_steps:
+        remove_non_manifold: true
+        repair_pinch_vertices: true
+        remove_slivers: true
+        stitch_boundary_gaps: true
+        fill_interior_holes: true
+    depends_on: [spatial_map_single_touch]
+
+  # Precompute SLIM UV map per session. Caches the UV next to the forearm PLY.
+  # Requires spatial_map_single_touch output (single_touch_rf_maps.npz) to compute the
+  # IFF-weighted centroid used as the UV origin (center_vid).
+  # Enable when using projection_method: slim in downstream RF tasks.
+  spatial_precompute_slim_uv:
+    category: spatial_sensitivity
+    enabled: true
+    options:
+      force_processing: false
+      n_iter: 40
+      save_diagnostics: true
+      # When true, open a step-by-step PyQt5/PyVista viewer per session
+      # after the SLIM precompute. Useful for diagnosing stitching/cleaning
+      # issues. Blocks the pipeline until the window is closed.
+      interactive: false
+      # Toggle individual mesh cleaning steps (all default to true).
+      # Steps 1-3 (largest component, fix winding, remove orphans) always run.
+      clean_steps:
+        remove_non_manifold: true
+        repair_pinch_vertices: false
+        remove_slivers: false
+        stitch_boundary_gaps: false
+        fill_interior_holes: true
+      # Mesh construction method: "bpa" (Ball Pivoting Algorithm, default) or
+      # "delaunay" (2.5D Delaunay triangulation — manifold, no non-manifold cleanup needed).
+      # Switching this value triggers automatic recompute (staleness detection).
+      mesh_method: delaunay
+      # Maximum edge length in mm for Delaunay mesh filtering (delaunay only).
+      # When absent, defaults to 3.0 × mean nearest-neighbour distance (auto).
+      # max_edge_mm: 12.0
+    depends_on:
+    - spatial_map_single_touch
+    - spatial_configure_slim_uv
+
+  # Render per-session 2D population RF heatmap PNGs projected via SLIM UV.
+  # Produces one PNG per gesture subset (all, tap, stroke_proximal, stroke_distal)
+  # with a session-wide consistent colour scale.
+  # Output: 4_analysed/population_response_fields/<session_id>/
+  spatial_extract_boundaries:
+    category: spatial_sensitivity
+    enabled: true
+    options:
+      force_processing: false
+      neuron_mode: iff
+      iff_metric: both
+      min_overlap_pct: 25
+      median_filter_size: 5
+      inflection_sigma: 5.0
+      heatmap_space: linear
+      cmap: inferno
+      flip_u: true
+      contour_color: red
+      circular_crop_margin: 0.0
+      boundary_method: gradient
+    depends_on: [spatial_map_single_touch, spatial_precompute_slim_uv]
+
+  # Aggregate inflection boundary metrics across sessions and render comparison visuals.
+  # Reads per-session NPZ files from spatial_extract_boundaries.
+  # Produces: session_rf_boundary_summary.csv, contour overlay PNGs, metric panel PNGs,
+  # session-x-gesture heatmap PNGs under 4_analysed/session_rf_boundary_comparison/
+  spatial_compare_boundaries:
+    category: spatial_sensitivity
+    enabled: true
+    options:
+      force_processing: true
+      iff_metric: both
+      heatmap_space: linear
+      cmap: inferno
+      contour_color: red
+      circular_crop_margin: 0.0
+    depends_on: [spatial_extract_boundaries]
+
+  # Proximal-distal RF comparison: comprehensive paired contrast of RF properties between stroke directions.
+  # Reads per-session NPZ files from spatial_extract_boundaries; computes boundary metric deltas,
+  # contour overlap (IoU/Dice), heatmap correlation, and centroid shift decomposition.
+  # Produces contour overlays, heatmap triptychs, metric delta bar charts, population strip charts,
+  # and centroid shift decomposition figures. Output: 4_analysed/spatial_compare_proximal_distal/
+  spatial_compare_proximal_distal:
+    category: spatial_sensitivity
+    enabled: true
+    options:
+      force_processing: true
+      iff_metric: both
+      heatmap_space: linear
+      cmap: inferno
+      contour_color: red
+      circular_crop_margin: 0.0
+    depends_on: [spatial_extract_boundaries]
+
+  # Tap-vs-stroke RF comparison: comprehensive paired contrast of RF properties between tap and stroke gestures.
+  # Reads per-session NPZ files from spatial_extract_boundaries; computes boundary metric deltas,
+  # contour overlap (IoU/Dice), heatmap correlation, and shift decomposition.
+  # Produces contour overlays, heatmap triptychs, metric delta bar charts, population strip charts,
+  # and shift decomposition figures. Output: 4_analysed/spatial_compare_tap_stroke/
+  spatial_compare_tap_stroke:
+    category: spatial_sensitivity
+    enabled: true
+    options:
+      force_processing: true
+      iff_metric: both
+      heatmap_space: linear
+      cmap: inferno
+      contour_color: red
+      circular_crop_margin: 0.0
+    depends_on: [spatial_extract_boundaries]
+
+  # Extract 1D cross-section profiles from interpolated RF heatmap grids.
+  # Reads per-session NPZ files from spatial_extract_boundaries.
+  # Produces per-gesture CSVs and two PNG figure types (profile strip + representative profiles).
+  # Output: 4_analysed/spatial_extract_rf_profiles/iff_<iff_metric>/<session_id>/
+  spatial_extract_rf_profiles:
+    category: spatial_sensitivity
+    enabled: true
+    options:
+      force_processing: false
+      iff_metric: both
+    depends_on: [spatial_extract_boundaries]
+
+  # Stage 2b (Feature Extraction): Per-session feature extraction. Each enabled feature extracts to its own folder.
+  # Output: 4_analysed/touch_features/<feature>/<session>_touch_summary.csv
+  stimulus_extract_features:
+    category: stimulus_sensitivity
+    enabled: true
+    options:
+      force_processing: false
+      # Each key is an aggregation family. StatisticalExtractor auto-discovers all numeric
+      # columns from the series-augmented CSV and applies the requested aggregation.
+      features:
+        max:
+          enabled: true
+        mean:
+          enabled: true
+        min:
+          enabled: true
+        median:
+          enabled: true
+        std:
+          enabled: true
+        range:
+          enabled: true
+        skewness:
+          enabled: true
+        # Mean of numeric columns over frames where Nerve_freq > 0 (fallback: contact_detected == 1)
+        mean_during_iff:
+          enabled: true
+        # Mean of numeric columns over the window before the first IFF-active frame
+        mean_before_iff:
+          enabled: true
+          pre_iff_window_ms: 250
+        spike_count:
+          enabled: true
+    depends_on: [touch_compute_series]
+
+  stimulus_render_radar:
+    category: stimulus_sensitivity
+    enabled: true
+    options:
+      force_processing: false
+      radar_groups:
+        canonical_iff:
+          enabled: true
+          features:
+            contact_area:
+            - mean_during_iff
+            contact_depth:
+            - mean_during_iff
+            hand_velocity_amplitude:
+            - mean_during_iff
+    depends_on: [stimulus_extract_features]
+
+  stimulus_compare_sessions:
+    category: stimulus_sensitivity
+    enabled: true
+    options:
+      force_processing: false
+      plot_type: box_strip
+      neuron_summary_xlsx:
+      comparison_groups:
+        canonical_iff:
+          enabled: true
+          features:
+            contact_area:
+            - mean_during_iff
+            contact_depth:
+            - mean_during_iff
+            hand_velocity_amplitude:
+            - mean_during_iff
+            pressure:
+            - mean_during_iff
+    depends_on: [stimulus_extract_features]
+
+  stimulus_response_tuning:
+    category: stimulus_sensitivity
+    enabled: true
+    options:
+      force_processing: false
+      response_metric: all
+      tuning_features:
+      - contact_area_mean
+      - pressure_mean
+      - hand_velocity_amplitude_mean
+      - contact_depth_mean
+      n_bins: 25
+      clip_percentile: 1.0
+      smoothing_sigma: 1.5
+      overlap_ratio: 0.25                  # 0.0 to 0.5; sliding-window bin overlap
+      binning_strategy: "raw_dots"         # sliding_window | raw_dots
+      # fit_degree: 4                      # legacy polynomial degree — int or list[int], e.g. [1, 2, 3, 4]
+      fit_models: "all"                     # named fit models (overrides fit_degree); "all" or list, e.g. ["poly4", "power", "log"]; available: poly1-9, power, log, naka_rushton, sigmoid, exp_sat
+      dot_alpha: 0.35                      # raw_dots: per-session scatter opacity
+      show_fit_ci: true                    # raw_dots: degree-1 CI band on fit line
+      metadata_dir: touch_prepare_sessions # under <database>/4_analysed/
+      metadata_filename: '{session_id}_prepared.csv'
+      count_category_by:  # tuning_feature -> designed-metadata column
+        contact_area_mean: contact_area_metadata
+        hand_velocity_amplitude_mean: speed_metadata
+        pressure_mean: force_metadata
+        contact_depth_mean: force_metadata
+      normalize_per_neuron: false          # raw_dots: extra normalized output images (Y in [0, 1])
+      secondary_color_by:  # raw_dots only: primary feature -> secondary feature for dot coloring
+        hand_velocity_amplitude_mean: contact_depth_mean
+        contact_depth_mean: hand_velocity_amplitude_mean
+    depends_on: [stimulus_extract_features]
+  stimulus_response_instruction_tuning:
+    category: stimulus_sensitivity
+    enabled: true
+    options:
+      force_processing: false
+      iff_metric: both
+      clip_percentile: 1.0
+      tuning_categories:
+      - contact_area_metadata
+      - speed_metadata
+      - force_metadata
+      - gesture_broad_type
+      - gesture_type
+      metadata_dir: touch_prepare_sessions
+      metadata_filename: '{session_id}_prepared.csv'
+    depends_on:
+    - stimulus_extract_features
+
+  # RF spatial tuning: RF boundary metrics (area, circularity, PCA) vs binned stimulus parameters.
+  # Bins touches by velocity / depth / contact_area, computes a population RF heatmap per bin,
+  # extracts the inflection boundary, and renders scatter + polynomial fit figures.
+  # Also produces the area dismissal figure (contact_area → RF area, Spearman annotation).
+  # Output: 4_analysed/spatial_tuning_rf_metrics/{feature}/{gesture_subset}/
+  spatial_tuning_rf_metrics:
+    category: spatial_sensitivity
+    enabled: false
+    options:
+      force_processing: false
+      gesture_subsets: [all, tap, stroke, stroke_proximal, stroke_distal]
+      tuning_features:
+      - hand_velocity_amplitude_mean
+      - contact_depth_mean
+      - contact_area_mean
+      n_bins: 20
+      min_touches_per_bin: 5
+      compute_per_touch_std: true           # per-touch boundary STD error bars; disable for ~10× speedup
+      max_workers: 4                        # parallel session computation threads (1 = sequential)
+      # fit_degrees: [1, 2]                # legacy polynomial degrees — int or list[int]
+      fit_models: "all"                     # named fit models (overrides fit_degrees); "all" or list, e.g. ["poly1", "power", "log"]; available: poly1-9, power, log, naka_rushton, sigmoid, exp_sat
+      vertex_threshold: 0.05  # fraction of touches that must contact a vertex
+      inflection_sigma: 4.0   # Gaussian sigma for Laplacian boundary detection
+      boundary_method: gradient
+      clip_percentile: 1.0
+      dot_alpha: 0.7
+      iff_metric: mean
+    depends_on: [spatial_extract_boundaries, stimulus_extract_features]
+
+  # Population RF grid: sweep N-D feature space, average single-touch RFs per cell.
+  # Depends on: spatial_map_single_touch (RF maps), stimulus_extract_features (feature CSVs).
+  # Output: 4_analysed/population_rf_grid/<session_id>/
+  cross_map_feature_grid:
+    category: cross_domain
+    enabled: false
+    options:
+      force_processing: false
+      iff_metric: mean
+      grid_groups:
+        velocity_pressure_2d:
+          enabled: false
+          neuron_mode: iff
+          per_gesture_type: true
+          vertex_threshold_ratio: 0.25
+          compute_baseline: true
+          features:
+            hand_velocity_amplitude_mean_during_iff:
+              min: 0
+              max: 500
+              step: 5
+              span: 10
+            pressure_mean_during_iff:
+              min: 0.002
+              max: 0.22
+              step: 0.02
+              span: 0.04
+        velocity_depth_2d:
+          enabled: true
+          neuron_mode: iff
+          per_gesture_type: true
+          vertex_threshold_ratio: 0.25
+          compute_baseline: true
+          features:
+            contact_depth_mean: {min: 0.0, max: 10.0, step: 0.1, span: 0.2}
+            hand_velocity_amplitude_mean: {min: 0.0, max: 500.0, step: 5.0, span: 
+                10.0}
+    depends_on: [spatial_map_single_touch, stimulus_extract_features]
+
+  # Reduces per-gesture-type population RF grid NPZ files to scalar metric CSVs.
+  # Output: 4_analysed/population_rf_grid_metrics/<session_id>/
+  cross_extract_grid_metrics:
+    category: cross_domain
+    enabled: false
+    options:
+      force_processing: false
+      projection_method: tangent_plane
+    depends_on: [cross_map_feature_grid, spatial_set_camera]
+
+  # Renders per-IFF-metric heatmap PNGs from population RF grid metrics CSVs.
+  # Output: 4_analysed/population_rf_grid_metrics_heatmaps/<metric>/
+  cross_render_grid_metrics:
+    category: cross_domain
+    enabled: true
+    options:
+      force_processing: false
+      extracted_features:
+      - touch_count
+      - mean_iff
+      - perimeter_mm
+      - hotspot_area_mm2
+      - threshold_area_mm2
+      - convex_hull_area_mm2
+    depends_on: [cross_extract_grid_metrics]
+
+  # Cross-session comparison heatmap: 1D population RF grid + per-gesture heatmap PNGs.
+  # Renders one PNG per gesture type with sessions on Y-axis, velocity bins on X-axis,
+  # and color encoding a configurable RF metric (default: mean_iff).
+  # Output: 4_analysed/session_comparison/session_comparison_heatmaps/<metric>/
+  cross_render_sessions:
+    category: cross_domain
+    enabled: true
+    options:
+      force_processing: false
+      neuron_mode: iff
+      iff_metric: mean
+      vertex_threshold_ratio: 0.25
+      metric_name: mean_iff
+      projection_method: tangent_plane
+      features:
+        hand_velocity_amplitude_mean_during_iff:
+          min: 0
+          max: 500
+          step: 25
+          span: 50
+    depends_on: [spatial_map_single_touch, stimulus_extract_features, 
+        spatial_set_camera]
+
+  # Stages 3–5 (Reduction + Clustering + Evaluation): Global clustering on pooled feature CSVs.
+  # Each cluster_group defines which data types / aggregations to use and its own clustering_methods.
+  # Output: 4_analysed/touch_clusters/<group_name>/<clusterer>/
+  stimulus_cluster_touches:
+    category: stimulus_sensitivity
+    enabled: false
+    options:
+      force_processing: false
+      cluster_groups:
+        kinematics_simple_mean:
+          enabled: false
+          features:
+            contact_depth: [mean]
+            contact_area: [mean]
+            hand_velocity: [mean]
+            location: [mean]
+          clustering_methods:
+            binning:
+              method: binning
+              n_bins: 20
+              bin_method: equal_width
+              enabled: true
+            type_stratified:
+              method: type_stratified
+              base_method: binning
+              n_bins: 20
+              bin_method: equal_width
+              enabled: true
+            cartesian_binning:
+              method: cartesian_binning
+              n_bins: 5
+              n_bins_per_feature: {}
+              bin_method: equal_width
+              enabled: false
+        kinematics_max:
+          enabled: false
+          features:
+            contact_depth: [max]
+            contact_area: [max]
+            hand_velocity: [max]
+            hand_acceleration: [max]
+          clustering_methods:
+            binning:
+              method: binning
+              n_bins: 20
+              bin_method: equal_width
+              enabled: true
+        pressure_velocity_mean:
+          enabled: false
+          features:
+            hand_velocity:
+            - mean
+            pressure:
+            - mean
+          visualization:
+            x_feature: pressure_mean
+            y_feature: hand_velocity_y_mean
+          clustering_methods:
+            binning:
+              method: binning
+              n_bins: 20
+              bin_method: equal_width
+              enabled: false
+            kmeans:
+              method: kmeans
+              n_clusters: 8
+              enabled: false
+            dbscan:
+              method: dbscan
+              eps: 0.5
+              min_samples: 5
+              enabled: false
+            hierarchical:
+              method: hierarchical
+              n_clusters: 8
+              linkage: ward
+              enabled: false
+            type_stratified:
+              method: type_stratified
+              base_method: binning
+              n_bins: 20
+              bin_method: equal_width
+              enabled: false
+            gmm:
+              method: gmm
+              max_components: 15
+              covariance_type: full
+              n_init: 10
+              min_touches_per_component: 30
+        kinematics_with_category:
+          enabled: false
+          features:
+            contact_depth: [mean]
+            contact_area: [mean]
+            hand_velocity: [mean]
+            hand_acceleration: [mean]
+            location: [mean]
+          clustering_methods:
+            binning:
+              method: binning
+              n_bins: 20
+              bin_method: equal_width
+              enabled: true
+        all_touch_features_mean:
+          enabled: false
+          features:
+            contact_depth: [mean]
+            contact_area: [mean]
+            hand_velocity: [mean]
+            hand_acceleration: [mean]
+            pressure: [mean]
+            hand_position: [mean]
+            mechanics_of_solids: [mean]
+            location: [mean]
+          clustering_methods:
+            binning:
+              method: binning
+              n_bins: 20
+              bin_method: equal_width
+              enabled: true
+            type_stratified:
+              method: type_stratified
+              base_method: binning
+              n_bins: 20
+              bin_method: equal_width
+              enabled: true
+        pressure_velocity_mean_cartesian_binning:
+          enabled: true
+          per_type_clustering: true
+          features:
+            hand_velocity_amplitude:
+            - mean
+            pressure:
+            - mean
+          clustering_methods:
+            binning:
+              method: binning
+              n_bins: 20
+              bin_method: equal_width
+              enabled: false
+            kmeans:
+              method: kmeans
+              n_clusters: 8
+              enabled: false
+            dbscan:
+              method: dbscan
+              eps: 0.5
+              min_samples: 5
+              enabled: false
+            hierarchical:
+              method: hierarchical
+              n_clusters: 8
+              linkage: ward
+              enabled: false
+            type_stratified:
+              method: type_stratified
+              enabled: false
+            gmm:
+              method: gmm
+              max_components: 15
+              covariance_type: full
+              n_init: 10
+              min_touches_per_component: 30
+              enabled: false
+            cartesian_binning:
+              method: cartesian_binning
+              n_bins: 7
+              bin_method: equal_frequency
+              outlier_method: iqr
+      reduction:
+        scaler: standard
+        variance_filter:
+        decomposition:
+      evaluation:
+        internal_metrics: [silhouette, davies_bouldin, calinski_harabasz]
+        stability:
+          method: bootstrap
+          n_rounds: 20
+          subsample_fraction: 0.8
+          score: adjusted_rand_index
+    depends_on: [stimulus_extract_features]
+
+  # Post-pipeline analysis: Statistical comparison of sensor measurements across strata.
+  # Discovers clustered CSVs on disk — references cluster_groups by name from stimulus_cluster_touches.
+  # Output: 4_analysed/touch_comparisons/<group_name>/<clusterer>/
+  stimulus_compare_clusters:
+    category: stimulus_sensitivity
+    enabled: false
+    options:
+      force_processing: false
+      cluster_groups: [pressure_velocity_mean_cartesian_binning]
+      comparing_profiles:
+        bias:
+          method: bias
+          measurement_col: spike_elicited
+          sensor_col: session_id
+          alpha: 0.05
+        precision:
+          method: precision
+          measurement_col: spike_elicited
+          sensor_col: session_id
+        distribution:
+          method: distribution
+          measurement_col: spike_elicited
+          sensor_col: session_id
+      min_instances_per_sensor: 5
+      min_sensor_types: 2
+    depends_on: [stimulus_cluster_touches]
+
+  # Consumes output from stimulus_extract_features
+  stimulus_analyse_efficacy:
+    category: stimulus_sensitivity
+    enabled: false
+    options:
+      force_processing: false
+    depends_on: [stimulus_extract_features]
+
+  # Step 1 of split pipeline: CSV parsing, spike counting, artifact writing.
+  # Idempotent against clustered CSV mtime; does not re-run on vis-param changes.
+  cross_extract_cluster_rf:
+    category: cross_domain
+    enabled: false
+    options:
+      force_processing: false
+      cluster_groups: [pressure_velocity_mean_cartesian_binning]
+    depends_on: [stimulus_cluster_touches]
+
+  # Step 2a of split pipeline: RF metrics computation (centroid, hull area, Gaussian fit).
+  # Re-runs only when projection_method changes or force=true. Independent of rendering params.
+  cross_compute_cluster_metrics:
+    category: cross_domain
+    enabled: false
+    options:
+      force_processing: false
+      cluster_groups: [pressure_velocity_mean_cartesian_binning]
+      projection_method: cylindrical_unwrap
+    depends_on: [cross_extract_cluster_rf, spatial_set_camera]
+
+  # Step 2b of split pipeline: 2D heatmap rendering.
+  # Re-runs only when disjoint_mask_distance_mm changes or force=true. Independent of metrics params.
+  cross_render_cluster_rf:
+    category: cross_domain
+    enabled: false
+    options:
+      force_processing: false
+      cluster_groups: [pressure_velocity_mean_cartesian_binning]
+      projection_method: cylindrical_unwrap
+      disjoint_mask_distance_mm: 8.0
+      gallery_viewer: false
+      # enabled: true → face-on tangent-plane camera computed automatically.
+      # enabled: false → skip camera assignment.
+      camera_angle_mode:
+        enabled: false
+    depends_on: [cross_extract_cluster_rf, spatial_set_camera]

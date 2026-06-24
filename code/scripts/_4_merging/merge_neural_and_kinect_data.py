@@ -10,7 +10,7 @@ from scipy import signal
 import warnings
 from pathlib import Path
 
-from utils.should_process_task import should_process_task
+from utils.should_process_task import should_process_task, clean_task_outputs
 
 def get_correlation(sig1, sig2, downsampling=0.1, show=False):
     # This helper function remains unchanged from the original script.
@@ -126,12 +126,12 @@ def align_and_merge_neural_and_kinect(
         return None
 
     if not should_process_task(
-        input_paths=[contact_filename, nerve_filename], 
-        output_paths=output_filename, 
+        input_paths=[contact_filename, nerve_filename],
+        output_paths=output_filename,
         force=force_processing):
         print(f"✅ Output file '{output_filename}' already exists. Use force_processing to overwrite.")
         return
-    
+    clean_task_outputs(output_filename)
     print(f"\nProcessing: {os.path.basename(contact_filename)}")
 
     # --- 2. Load and Prepare Data ---
@@ -152,6 +152,12 @@ def align_and_merge_neural_and_kinect(
             kinect_scaled["led_on"] = kinect_scaled["led_on"].ffill()
         else:
             kinect_scaled = kinect_scaled.ffill()
+
+    # contact_detected and led_on are binary state flags that must be integer.
+    # ffill() over NaN-sparse upsampled rows coerces int columns to float64;
+    # cast them back explicitly, filling any leading NaNs (before first sample) with 0.
+    kinect_scaled["contact_detected"] = kinect_scaled["contact_detected"].ffill().fillna(0).astype(int)
+    kinect_scaled["led_on"] = kinect_scaled["led_on"].ffill().fillna(0).astype(int)
 
     # --- 3. Synchronize Signals (Correlation) ---
     TTL_kinect = kinect_scaled["led_on"].values

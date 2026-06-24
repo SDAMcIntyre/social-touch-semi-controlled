@@ -5,7 +5,7 @@ import pandas as pd
 from pathlib import Path
 from typing import List
 
-from utils.should_process_task import should_process_task
+from utils.should_process_task import should_process_task, clean_task_outputs
 
 _BLOCK_ORDER_RE = re.compile(r'_block-order-(\d+)_')
 
@@ -35,7 +35,7 @@ def generate_session_summary(
     ):
         logging.info(f"Skipping Session Block Summary (up-to-date): {output_path.name}")
         return output_path
-
+    clean_task_outputs(output_path)
     logging.info(f"Generating session block summary from {len(input_paths)} file(s)...")
 
     rows = []
@@ -49,7 +49,9 @@ def generate_session_summary(
             logging.warning(f"Skipping {csv_path.name}: failed to read — {exc}")
             continue
 
-        if 'source_block_file' not in df.columns:
+        if 'block_order_id' in df.columns:
+            df['_block_id'] = df['block_order_id'].fillna('unknown')
+        elif 'source_block_file' not in df.columns:
             logging.warning(f"{csv_path.name}: 'source_block_file' column missing — using 'unknown' block ID.")
             df['_block_id'] = 'unknown'
         else:

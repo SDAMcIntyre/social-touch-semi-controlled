@@ -1,25 +1,27 @@
 # touch_config.py
-from typing import Dict, List, Any
+from typing import Dict, Any
 
-# Configuration for variable discretization
-DISCRETIZATION_CONFIG: Dict[str, Any] = {
-    'continuous_vars': {
-        'max_depth': {
-            'method': 'qcut', 
-            'q': 3
+KINEMATIC_SIGNALS = (
+    'depth',
+    'area',
+    'velocity',
+    'acceleration',
+    'contact_location_x',
+    'contact_location_y',
+    'contact_location_z',
+)
+
+
+def get_discretization_config(aggregation: str) -> Dict[str, Any]:
+    """Return discretization config for a given kinematic aggregation suffix."""
+    return {
+        'continuous_vars': {
+            f'{sig}_{aggregation}': {'method': 'qcut', 'q': 3}
+            for sig in KINEMATIC_SIGNALS
         },
-        'max_contact_area': {
-            'method': 'qcut', 
-            'q': 3
-        },
-        'max_velocity': {
-            'method': 'qcut', 
-            'q': 3
-        },
-        'max_acceleration': {
-            'method': 'qcut', 
-            'q': 3
-        }
-    },
-    'categorical_vars': ['type_metadata', 'direction']
-}
+        'categorical_vars': ['type_metadata', 'direction'],
+    }
+
+
+# Backward-compat alias — identical to get_discretization_config('max')
+DISCRETIZATION_CONFIG: Dict[str, Any] = get_discretization_config('max')

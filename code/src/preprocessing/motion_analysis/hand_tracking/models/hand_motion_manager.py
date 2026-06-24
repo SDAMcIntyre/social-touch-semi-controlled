@@ -1,5 +1,6 @@
 import numpy as np
 import os
+import logging
 import trimesh
 import open3d as o3d
 from typing import Optional, List, Tuple, Union
@@ -30,6 +31,7 @@ class HandMotionManager:
         self.timestamps: List[float] = []
         
         self.fps = fps
+        self._sticker_vertex_indices: Optional[List[int]] = None
 
     # -------------------------------------------------------------------------
     # Public API: Data Generation (Write Mode)
@@ -68,7 +70,11 @@ class HandMotionManager:
                 self.faces = mesh_faces.reshape(-1, 3)
             else:
                 self.faces = mesh_faces
-        
+
+        # Store sticker vertex indices on first call — constant across frames (same MANO topology)
+        if self._sticker_vertex_indices is None:
+            self._sticker_vertex_indices = list(sticker_vertex_indices)
+
         # Store Vertices (Morph Target source)
         clean_verts = np.nan_to_num(mesh_vertices).astype(np.float32)
         self.vertices_sequence.append(clean_verts)
@@ -130,13 +136,20 @@ class HandMotionManager:
         scale_arr = np.array(self.scales, dtype=np.float32)
         time_arr = np.array(self.timestamps, dtype=np.float64)
         
+        if self._sticker_vertex_indices is None:
+            raise ValueError(
+                "Cannot save: sticker_vertex_indices have not been set. "
+                "Call process_frame() at least once before saving."
+            )
+
         save_dict = {
             "vertices": vertices_arr,
             "translations": trans_arr,
             "rotations": rot_arr,
             "scales": scale_arr,
             "timestamps": time_arr,
-            "fps": self.fps
+            "fps": self.fps,
+            "sticker_vertex_indices": np.array(self._sticker_vertex_indices, dtype=np.int64),
         }
 
         if self.faces is not None:
@@ -177,9 +190,16 @@ class HandMotionManager:
                     self.scales = [s for s in data["scales"]]
                 else:
                     self.scales = [1.0] * len(self.timestamps)
-                
+
                 if "fps" in data:
                     self.fps = float(data["fps"])
+
+                if "sticker_vertex_indices" not in data:
+                    raise KeyError(
+                        f"NPZ file '{input_path}' is missing the 'sticker_vertex_indices' key. "
+                        "Re-run 'generate_3d_hand_in_motion' to regenerate the NPZ with this key."
+                    )
+                self._sticker_vertex_indices = list(data["sticker_vertex_indices"])
 
             # Validation
             n_verts = len(self.vertices_sequence)
@@ -196,6 +216,8 @@ class HandMotionManager:
 
             print(f"✅ Successfully loaded {len(self.timestamps)} frames.")
 
+        except (KeyError, FileNotFoundError):
+            raise
         except Exception as e:
             raise RuntimeError(f"Failed to load HandMotionManager data: {e}")
 
@@ -311,9 +333,27 @@ class HandMotionManager:
         
         numerator = np.sum(P_rotated * Q)
         denominator = np.sum(P * P)
-        
+
         scale = numerator / (denominator + 1e-8)
-        
+
+        _SCALE_MIN, _SCALE_MAX = 0.3, 5.0
+        if scale <= 0:
+            logging.warning(
+                "Procrustes produced non-positive scale=%.4f at frame %d; "
+                "using previous frame scale.", scale, len(self.scales)
+            )
+            scale = self.scales[-1] if self.scales else None
+            if scale is None:
+                raise ValueError(
+                    "First frame has non-positive scale from procrustes alignment. "
+                    "Check sticker coordinates."
+                )
+        elif not (_SCALE_MIN <= scale <= _SCALE_MAX):
+            logging.warning(
+                "Procrustes scale=%.4f out of plausible range [%.1f, %.1f] "
+                "at frame %d.", scale, _SCALE_MIN, _SCALE_MAX, len(self.scales)
+            )
+
         # 4. Compute Translation
         # t = T0 - s * R * S0
         translation_vec = t0 - (scale * (R @ s0))

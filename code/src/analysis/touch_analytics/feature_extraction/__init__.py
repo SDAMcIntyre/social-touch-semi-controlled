@@ -1,41 +1,29 @@
 # feature_extraction/__init__.py
-from .base import FeatureExtractor
-from .max_extractor import MaxExtractor
-from .statistical_extractor import StatisticalExtractor
-from .temporal_extractor import TemporalExtractor
-from .mos_extractor import MechanicsOfSolidsExtractor
-
-EXTRACTOR_REGISTRY: dict[str, type[FeatureExtractor]] = {
-    'max': MaxExtractor,
-    'statistical': StatisticalExtractor,
-    'temporal': TemporalExtractor,
-    'mechanics_of_solids': MechanicsOfSolidsExtractor,
-}
-
-
-def get_extractor(method: str) -> FeatureExtractor:
-    """
-    Return a fresh extractor instance for *method*.
-
-    Raises
-    ------
-    KeyError
-        If *method* is not in EXTRACTOR_REGISTRY.
-    """
-    if method not in EXTRACTOR_REGISTRY:
-        raise KeyError(
-            f"Unknown extraction method '{method}'. "
-            f"Available: {sorted(EXTRACTOR_REGISTRY)}"
-        )
-    return EXTRACTOR_REGISTRY[method]()
-
+# Shim module — re-exports everything from the canonical location so that
+# existing callers (e.g. feature_combination_dialog.py:19) continue to work:
+#
+#   from analysis.touch_analytics.feature_extraction import AGGREGATION_NAMES, EXTRACTOR_REGISTRY
+#
+# The authoritative implementations now live under:
+#   representation/feature_characterization/
+from ..representation.feature_characterization import (
+    FeatureExtractor,
+    StatisticalExtractor,
+    MeanDuringIffExtractor,
+    MeanBeforeIffExtractor,
+    AGGREGATION_NAMES,
+    EXTRACTOR_REGISTRY,
+    get_feature_extractor,
+    get_extractor,
+)
 
 __all__ = [
     'FeatureExtractor',
-    'MaxExtractor',
     'StatisticalExtractor',
-    'TemporalExtractor',
-    'MechanicsOfSolidsExtractor',
+    'MeanDuringIffExtractor',
+    'MeanBeforeIffExtractor',
+    'AGGREGATION_NAMES',
     'EXTRACTOR_REGISTRY',
+    'get_feature_extractor',
     'get_extractor',
 ]
