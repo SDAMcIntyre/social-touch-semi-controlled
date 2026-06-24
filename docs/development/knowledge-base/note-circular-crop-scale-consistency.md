@@ -1,7 +1,9 @@
 # Note: Circular Crop Image Scale Consistency Across Sessions
 
-**Date:** 2026-06-11
-**Context:** `spatial_extract_boundaries` task — `*_rf_population_all_circular_*.png` outputs
+**Date:** 2026-06-11 (updated 2026-06-23)
+**Context:** `spatial_extract_boundaries` task — `*_rf_population_all_circular_*.png` outputs;
+comparison pipelines — `spatial_compare_proximal_distal`, `spatial_compare_tap_stroke`,
+`spatial_compare_boundaries`
 
 ## Summary
 
@@ -9,37 +11,49 @@ The circular crop PNGs produced by `render_population_rf_circular_crop()` have
 a **consistent pixel-to-mm scale across all sessions**. N pixels in session A
 represents the same physical distance as N pixels in session B.
 
-## Mechanism
+## Two rendering modes
 
-The conversion chain from mm to UV space introduces a session-dependent scale
-factor, but the figure-sizing pipeline cancels it out exactly:
+### Per-image viewport (no shared limits)
+
+Used when `xlim`/`ylim` are not provided. Each image is centered on its own
+`center_uv ± radius_uv`, and `bbox_inches='tight'` crops to the circle content.
 
 ```
 radius_mm = 50.0                          # constant (hardcoded in pipeline)
 scale     = compute_uv_to_mm_scale(...)   # varies per session mesh
 radius_uv = radius_mm / scale             # varies inversely with scale
 
-extent_uv = 2 * radius_uv * 1.05         # varies (includes 5% margin)
-extent_mm = extent_uv * scale             # cancels out → always 105 mm
+extent_uv = 2 * radius_uv                # varies
+extent_mm = extent_uv * scale             # cancels out → always 100 mm
 ```
 
 The figure dimensions are fixed (matplotlib default 6.4 x 4.8 in, `dpi=300`,
 `set_aspect('equal')`, `bbox_inches='tight'`), so the output pixel count is
 constant across sessions.
 
-## Code references
+### Fixed viewport (shared limits)
 
-| What | File | Line(s) |
-|------|------|---------|
-| `radius_mm=50.0` call sites | `pipelines/rf_population_response_field_pipeline.py` | 628, 654 |
-| `compute_uv_to_mm_scale()` | `rendering/rf_population_map_renderer.py` | 515-559 |
-| `render_population_rf_circular_crop()` | `rendering/rf_population_map_renderer.py` | 562-668 |
-| `radius_uv = radius_mm / scale` | `rendering/rf_population_map_renderer.py` | 627 |
-| `fig, ax = plt.subplots(1, 1)` (no figsize) | `rendering/rf_population_map_renderer.py` | 635 |
-| xlim/ylim set from `radius_uv` | `rendering/rf_population_map_renderer.py` | 662-663 |
-| `savefig(dpi=dpi, bbox_inches='tight')` | `rendering/rf_population_map_renderer.py` | 666 |
+Used when `xlim`/`ylim` are provided (all comparison pipelines). The figure
+is sized to match the viewport aspect ratio, the axes fill the entire figure
+(`subplots_adjust(left=0, right=1, top=1, bottom=0)`), and the image is
+saved with `pad_inches=0` **without** `bbox_inches='tight'`.
 
-All paths relative to `code/src/analysis/receptive_field_mapping/`.
+This guarantees all images within a session share the exact same viewport:
+forearm landmarks stay at the same pixel position across gesture types.
+`bbox_inches='tight'` must not be used here — it would crop each image to
+its circle's bounding box, defeating the shared viewport.
+
+Within each session, the **circle center is fixed** from the `'all'` gesture
+type (centroid, peak, or contour_center depending on the crop category). The
+heatmap data varies per gesture type, but the spatial window is identical.
+
+## Margin parameter
+
+`circular_crop_margin` (default `0.0`) adds padding around the circle as a
+fraction of `radius_uv`. It is set in the DAG config options and passed
+through the workflow scripts to the pipeline functions. A value of `0.0`
+means the circle edge coincides with the viewport edge (for per-image mode)
+or contributes no extra padding to the shared limits (for fixed-viewport mode).
 
 ## Caveat: Local UV Distortion
 
