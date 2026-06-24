@@ -30,7 +30,7 @@ class ProcessingConfig:
     max_retries: int = 10
     retry_delay_base: int = 2
     max_workers: int = 8  # For parallel frame processing
-    person_selector: str = "second"
+    person_selector: str = "right"  # giver = rightmost person (receiver is leftmost); server ignores ordinals like "second" over HTTP
     hand_side: str = "right"
 
     @property
@@ -67,7 +67,9 @@ def retry_operation(max_retries: int, delay_base: int):
 class HandTrackingPipeline:
     def __init__(self, config: ProcessingConfig):
         self.config = config
-        self.client = HamerClientAPI(self.config.base_url)
+        # video_timeout raised to 10h: batch (whole-video) mode processes every frame
+        # in a single request, which at ~5-6s/frame exceeds the default 1h read timeout.
+        self.client = HamerClientAPI(self.config.base_url, video_timeout=(10, 36000))
 
     @retry_operation(max_retries=10, delay_base=2)
     def _upload_video_safe(self, path: str):

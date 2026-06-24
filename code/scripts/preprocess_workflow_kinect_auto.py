@@ -255,7 +255,7 @@ def track_hands_model_flow(
     name_baseline = rgb_video_path.stem + "_handmodel"
     tracked_hands_path = output_dir / (name_baseline + "_tracked_hands.pkl")
     
-    track_hands_on_video(rgb_video_path, tracked_hands_path, force_processing=force_processing, use_video_api=False)
+    track_hands_on_video(rgb_video_path, tracked_hands_path, force_processing=force_processing, use_video_api=True)
     
     return tracked_hands_path
 
