@@ -53,10 +53,10 @@ _stub("analysis.receptive_field_mapping")
 
 from analysis.receptive_field_mapping.metrics.rf_inflection_boundary import (  # noqa: E402
     InflectionBoundary,
-    _compute_contour_pca,
-    _compute_polygon_area,
-    _compute_polygon_centroid,
-    _compute_polygon_perimeter,
+    compute_contour_pca,
+    compute_polygon_area,
+    compute_polygon_centroid,
+    compute_polygon_perimeter,
     compute_inflection_boundary,
     inflection_boundary_to_dict,
 )
@@ -328,27 +328,27 @@ class TestSerialization:
 
 
 class TestPolygonMetrics:
-    """Unit tests for _compute_polygon_area, _compute_polygon_perimeter,
-    _compute_polygon_centroid."""
+    """Unit tests for compute_polygon_area, compute_polygon_perimeter,
+    compute_polygon_centroid."""
 
     def test_square_area(self) -> None:
         square = np.array([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]])
-        assert _compute_polygon_area(square) == pytest.approx(1.0)
+        assert compute_polygon_area(square) == pytest.approx(1.0)
 
     def test_square_perimeter(self) -> None:
         square = np.array([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]])
-        assert _compute_polygon_perimeter(square) == pytest.approx(4.0)
+        assert compute_polygon_perimeter(square) == pytest.approx(4.0)
 
     def test_square_centroid(self) -> None:
         square = np.array([[0.0, 0.0], [2.0, 0.0], [2.0, 2.0], [0.0, 2.0]])
-        cu, cv = _compute_polygon_centroid(square)
+        cu, cv = compute_polygon_centroid(square)
         assert cu == pytest.approx(1.0, abs=1e-9)
         assert cv == pytest.approx(1.0, abs=1e-9)
 
     def test_pca_circle_major_approx_minor(self) -> None:
         theta = np.linspace(0, 2 * np.pi, 360, endpoint=False)
         contour = np.column_stack([np.cos(theta), np.sin(theta)])
-        major, minor, _ = _compute_contour_pca(contour)
+        major, minor, _ = compute_contour_pca(contour)
         assert abs(major - minor) / major < 0.05
 
 

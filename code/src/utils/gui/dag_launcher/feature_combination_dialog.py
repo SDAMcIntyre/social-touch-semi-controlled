@@ -16,7 +16,11 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from analysis.touch_analytics.feature_extraction import AGGREGATION_NAMES, EXTRACTOR_REGISTRY
+try:
+    from analysis.touch_analytics.feature_extraction import AGGREGATION_NAMES, EXTRACTOR_REGISTRY
+except ImportError:
+    AGGREGATION_NAMES = frozenset()
+    EXTRACTOR_REGISTRY = {}
 
 
 # Ordered feature list: sorted aggregation names first, then named extractors.
