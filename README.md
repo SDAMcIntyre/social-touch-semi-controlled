@@ -64,13 +64,20 @@ For the merged ST13-01 blocks, use `--max-gap 50` (the single-frame gap is 33 **
 so 33 is slightly too strict). Larger gaps mean an intervening kinect frame was empty.
 
 Options: `--column` (default `contact_points`), `--max-gap` (default `33`), `-k` (default
-`10`), `--precision` (default `1` decimal; `-1` for full precision).
+`10`), `--precision` (default `1` decimal; `-1` for full precision), `--time-col` (default
+`time_nerve`; `none` to omit).
 
 ## Output
 
-One CSV per input block, `<input-stem>_contact-interpolated.csv`, containing a **single
-column** `contact_points_interpolated` — same row count and same cell format as the input
-(`[[x y z] [x y z] ...]`, or `[]`).
+One CSV per input block, `<input-stem>_contact-interpolated.csv`, with two columns:
+
+| column | |
+|---|---|
+| `time_nerve` | the dense neural-rate timestamp for each row (for easy alignment with the nerve signal) |
+| `contact_points_interpolated` | same row count and cell format as the input (`[[x y z] ...]` or `[]`) |
+
+Same row count as the input; the time column is copied straight from the merged CSV so the
+output lines up row-for-row with the neural data. Use `--time-col none` for contacts only.
 
 - **Anchor rows** (kinect frames that carry a measurement) keep the **original measured
   contacts** (only rounded), unchanged.

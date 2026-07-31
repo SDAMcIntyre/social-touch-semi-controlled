@@ -51,6 +51,7 @@ CONTACT_COL = "contact_points"
 DEFAULT_MAX_GAP = 33  # kinect->neural upsampling factor
 DEFAULT_K = 10
 DEFAULT_PRECISION = 1  # decimals; matches the input's ~0.1 mm precision
+DEFAULT_TIME_COL = "time_nerve"  # dense (neural-rate) time column carried into the output
 _NO_PATH = -9999
 
 Point = Tuple[float, float, float]
@@ -256,8 +257,9 @@ def interpolate_contact_column(
     column: str = CONTACT_COL,
     max_gap: int = DEFAULT_MAX_GAP,
     precision: Optional[int] = DEFAULT_PRECISION,
+    time_col: Optional[str] = DEFAULT_TIME_COL,
 ) -> pd.DataFrame:
-    """Return a single-column frame of aligned, interpolated contact points."""
+    """Return an aligned frame: a dense time column plus the interpolated contacts."""
     frame = pd.read_csv(csv_path, low_memory=False)
     if column not in frame.columns:
         raise KeyError(f"'{column}' not found in {csv_path.name}. Columns: {list(frame.columns)}")
@@ -293,7 +295,18 @@ def interpolate_contact_column(
         "%s: %d anchors, %d rows interpolated, %d spans skipped (empty endpoint)",
         csv_path.name, len(anchors), n_filled, n_skipped,
     )
-    return pd.DataFrame({f"{column}_interpolated": output})
+
+    columns = {}
+    if time_col is not None:
+        if time_col in frame.columns:
+            columns[time_col] = frame[time_col].to_numpy()  # dense timestamp per row
+        else:
+            logger.warning(
+                "Time column '%s' not in %s; output will have no time column.",
+                time_col, csv_path.name,
+            )
+    columns[f"{column}_interpolated"] = output
+    return pd.DataFrame(columns)
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -309,8 +322,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("-k", type=int, default=DEFAULT_K, help=f"kNN neighbours (default: {DEFAULT_K})")
     parser.add_argument("--precision", type=int, default=DEFAULT_PRECISION,
                         help=f"Decimals to round output coords (default: {DEFAULT_PRECISION}; -1 = full precision)")
+    parser.add_argument("--time-col", default=DEFAULT_TIME_COL,
+                        help=f"Dense time column to include as the first output column "
+                             f"(default: {DEFAULT_TIME_COL}; 'none' to omit)")
     args = parser.parse_args(argv)
     precision = None if args.precision is not None and args.precision < 0 else args.precision
+    time_col = None if args.time_col.lower() == "none" else args.time_col
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
 
@@ -324,6 +341,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         result = interpolate_contact_column(
             csv_path, vertices, geo_dist, geo_pred, tree,
             column=args.column, max_gap=args.max_gap, precision=precision,
+            time_col=time_col,
         )
         destination = args.outdir / f"{csv_path.stem}_contact-interpolated.csv"
         result.to_csv(destination, index=False)
