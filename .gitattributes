@@ -1,0 +1,7 @@
+# Binary data — never apply line-ending conversion (would corrupt point clouds)
+*.ply binary
+*.obj binary
+*.pkl binary
+*.mp4 binary
+*.png binary
+*.jpg binary

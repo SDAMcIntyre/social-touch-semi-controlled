@@ -1,0 +1,33 @@
+{
+    "down_sampling": {
+        "enabled": false,
+        "leaf_size": 5.0
+    },
+    "box_filter": {
+        "enabled": true,
+        "min_z": -Infinity,
+        "max_z": Infinity
+    },
+    "color_skin_filter": {
+        "enabled": 1.0,
+        "hsv_lower_bound": [
+            0.0,
+            0.0,
+            0.0
+        ],
+        "hsv_upper_bound": [
+            360.0,
+            1.0,
+            1.0
+        ]
+    },
+    "region_growing": {
+        "dbscan_eps": 10.0,
+        "min_cluster_size": 500.0,
+        "k_search_normals": 50.0,
+        "num_neighbours": 30.0,
+        "max_cluster_size": 1000000.0,
+        "smoothness_threshold": 9.0,
+        "curvature_threshold": 1.0
+    }
+}

@@ -1,0 +1,7 @@
+{
+    "input_file": "2022-06-14_ST13-01_semicontrolled_block-order01_kinect_frames_1567-1570_avg_N4_curated.ply",
+    "initial_points": 5831,
+    "final_points": 3718,
+    "points_removed": 2113,
+    "reduction_percentage": 36.24
+}

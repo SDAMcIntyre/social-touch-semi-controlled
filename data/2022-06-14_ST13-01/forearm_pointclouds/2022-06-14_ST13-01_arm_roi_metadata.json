@@ -1,0 +1,128 @@
+[
+    {
+        "video_filename": "2022-06-14_ST13-01_semicontrolled_block-order01_kinect.mp4",
+        "frame_ids": [
+            386,
+            387,
+            389,
+            390,
+            391
+        ],
+        "representative_frame_id": 389,
+        "region_of_interest": {
+            "top_left_corner": {
+                "x": 844,
+                "y": 784
+            },
+            "bottom_right_corner": {
+                "x": 934,
+                "y": 943
+            },
+            "angle_deg": -3.2924288360815694,
+            "center_x": 889.5,
+            "center_y": 864.0,
+            "width": 81.0,
+            "height": 154.0
+        },
+        "frame_width": 1920,
+        "frame_height": 1080,
+        "fps": 30.0,
+        "nframes": 3186,
+        "fourcc_str": "fmp4"
+    },
+    {
+        "video_filename": "2022-06-14_ST13-01_semicontrolled_block-order01_kinect.mp4",
+        "frame_ids": [
+            1567,
+            1568,
+            1569,
+            1570
+        ],
+        "representative_frame_id": 1567,
+        "region_of_interest": {
+            "top_left_corner": {
+                "x": 824,
+                "y": 781
+            },
+            "bottom_right_corner": {
+                "x": 959,
+                "y": 954
+            },
+            "angle_deg": -6.497629578213775,
+            "center_x": 892.0,
+            "center_y": 868.0,
+            "width": 118.0,
+            "height": 160.0
+        },
+        "frame_width": 1920,
+        "frame_height": 1080,
+        "fps": 30.0,
+        "nframes": 3186,
+        "fourcc_str": "fmp4"
+    },
+    {
+        "video_filename": "2022-06-14_ST13-01_semicontrolled_block-order01_kinect.mp4",
+        "frame_ids": [
+            2403,
+            2404,
+            2405,
+            2406,
+            2407,
+            2408
+        ],
+        "representative_frame_id": 2404,
+        "region_of_interest": {
+            "top_left_corner": {
+                "x": 784,
+                "y": 746
+            },
+            "bottom_right_corner": {
+                "x": 1012,
+                "y": 994
+            },
+            "angle_deg": -11.600579278920407,
+            "center_x": 898.5,
+            "center_y": 870.5,
+            "width": 189.0,
+            "height": 215.0
+        },
+        "frame_width": 1920,
+        "frame_height": 1080,
+        "fps": 30.0,
+        "nframes": 3186,
+        "fourcc_str": "fmp4"
+    },
+    {
+        "video_filename": "2022-06-14_ST13-01_semicontrolled_block-order03_kinect.mp4",
+        "frame_ids": [
+            2986,
+            2987,
+            2988,
+            2989,
+            2990,
+            2991,
+            2992
+        ],
+        "representative_frame_id": 2992,
+        "region_of_interest": {
+            "top_left_corner": {
+                "x": 832,
+                "y": 782
+            },
+            "bottom_right_corner": {
+                "x": 967,
+                "y": 963
+            },
+            "angle_deg": -9.945561814254688,
+            "center_x": 900.0,
+            "center_y": 873.0,
+            "width": 108.0,
+            "height": 164.0
+        },
+        "frame_width": 1920,
+        "frame_height": 1080,
+        "fps": 30.0,
+        "nframes": 2993,
+        "fourcc_str": "fmp4"
+    }
+]

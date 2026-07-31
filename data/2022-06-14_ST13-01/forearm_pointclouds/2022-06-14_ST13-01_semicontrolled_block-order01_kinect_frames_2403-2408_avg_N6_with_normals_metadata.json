@@ -1,0 +1,24 @@
+{
+    "output_file": "F:\\liu-onedrive-nospecial-carac\\_Teams\\Social touch Kinect MNG\\02_data\\semi-controlled\\2_processed\\kinect\\2022-06-14_ST13-01\\forearm_pointclouds\\2022-06-14_ST13-01_semicontrolled_block-order01_kinect_frames_2403-2408_avg_N6_with_normals.ply",
+    "processing_parameters": {
+        "k_neighbors_for_normals": 100,
+        "radius_for_hybrid": 0.1,
+        "used_hybrid_tree": false,
+        "aligned_with_viewpoint": false,
+        "viewpoint_vector": [
+            0.0,
+            0.0,
+            0.0
+        ]
+    },
+    "final_transformations": {
+        "is_centered": false,
+        "cloud_center_vector": [
+            -43.79159978598181,
+            209.51948457285488,
+            604.4829231317992
+        ],
+        "scale_factor": 1.0,
+        "normals_flipped": false
+    }
+}
