@@ -50,6 +50,7 @@ logger = logging.getLogger(__name__)
 CONTACT_COL = "contact_points"
 DEFAULT_MAX_GAP = 33  # kinect->neural upsampling factor
 DEFAULT_K = 10
+DEFAULT_PRECISION = 1  # decimals; matches the input's ~0.1 mm precision
 _NO_PATH = -9999
 
 Point = Tuple[float, float, float]
@@ -78,11 +79,21 @@ def parse_contact_points(cell) -> List[Point]:
     return points
 
 
-def serialize_contact_points(points: Sequence[Point]) -> str:
-    """Re-serialise (x, y, z) tuples back into the pipeline's cell format."""
+def serialize_contact_points(points: Sequence[Point], precision: Optional[int] = None) -> str:
+    """Re-serialise (x, y, z) tuples back into the pipeline's cell format.
+
+    If ``precision`` is given, coordinates are rounded to that many decimals —
+    keeps the output small and matches the input's ~0.1 mm precision.
+    """
     if len(points) == 0:
         return "[]"
-    inner = " ".join(f"[{x} {y} {z}]" for x, y, z in points)
+    if precision is None:
+        inner = " ".join(f"[{x} {y} {z}]" for x, y, z in points)
+    else:
+        inner = " ".join(
+            f"[{round(x, precision)} {round(y, precision)} {round(z, precision)}]"
+            for x, y, z in points
+        )
     return f"[{inner}]"
 
 
@@ -114,6 +125,19 @@ def build_surface_graph(vertices: np.ndarray, k: int = DEFAULT_K) -> csr_matrix:
 
     graph = csr_matrix((weights, (rows, cols)), shape=(n_points, n_points))
     return graph.maximum(graph.T)  # undirected
+
+
+def precompute_geodesics(graph: csr_matrix) -> Tuple[np.ndarray, np.ndarray]:
+    """All-pairs geodesic distances + predecessors over S, computed once.
+
+    For an N-vertex cloud this is an N x N float64 distance matrix and an N x N
+    predecessor matrix (~165 MB at N=3718). Doing it once is far cheaper than a
+    fresh Dijkstra per frame-pair, since contact patches carry tens-to-hundreds
+    of source vertices each.
+    """
+    distances, predecessors = dijkstra(graph, directed=False, return_predecessors=True)
+    logger.info("Precomputed all-pairs geodesics over %d vertices.", graph.shape[0])
+    return distances, predecessors
 
 
 def snap_to_surface(points: Sequence[Point], tree: cKDTree) -> np.ndarray:
@@ -184,35 +208,39 @@ def _match_contacts(cost: np.ndarray) -> List[Tuple[int, int]]:
 
 def interpolate_between(
     vertices: np.ndarray,
-    graph: csr_matrix,
+    geo_dist: np.ndarray,
+    geo_pred: np.ndarray,
     tree: cKDTree,
     start_points: Sequence[Point],
     end_points: Sequence[Point],
     n_inner: int,
 ) -> List[List[Point]]:
-    """Morph ``start_points`` into ``end_points`` over ``n_inner`` rows."""
+    """Morph ``start_points`` into ``end_points`` over ``n_inner`` rows.
+
+    ``geo_dist`` / ``geo_pred`` are the precomputed all-pairs geodesic distance
+    and predecessor matrices from :func:`precompute_geodesics`.
+    """
     if n_inner <= 0:
         return []
 
-    sources = snap_to_surface(start_points, tree)
-    targets = snap_to_surface(end_points, tree)
+    # A contact patch is a *set* of surface vertices — dedupe before matching.
+    sources = np.unique(snap_to_surface(start_points, tree))
+    targets = np.unique(snap_to_surface(end_points, tree))
     if len(sources) == 0 or len(targets) == 0:
         return [[] for _ in range(n_inner)]
 
-    distances, predecessors = dijkstra(
-        graph, directed=False, indices=sources, return_predecessors=True
-    )
-    pairs = _match_contacts(distances[:, targets])
+    pairs = _match_contacts(geo_dist[np.ix_(sources, targets)])
 
     paths: List[List[int]] = []
     for i, j in pairs:
-        path = _reconstruct_path(predecessors[i], int(sources[i]), int(targets[j]))
-        paths.append(path if path is not None else [int(sources[i])])
+        s, t = int(sources[i]), int(targets[j])
+        path = _reconstruct_path(geo_pred[s], s, t)
+        paths.append(path if path is not None else [s])
 
     frames: List[List[Point]] = []
     for step in range(1, n_inner + 1):
-        t = step / (n_inner + 1)
-        reached = {_walk_fraction(path, vertices, t) for path in paths}
+        fraction = step / (n_inner + 1)
+        reached = {_walk_fraction(path, vertices, fraction) for path in paths}
         frames.append([tuple(vertices[i]) for i in sorted(reached)])
     return frames
 
@@ -222,24 +250,27 @@ def interpolate_between(
 def interpolate_contact_column(
     csv_path: Path,
     vertices: np.ndarray,
-    graph: csr_matrix,
+    geo_dist: np.ndarray,
+    geo_pred: np.ndarray,
     tree: cKDTree,
     column: str = CONTACT_COL,
     max_gap: int = DEFAULT_MAX_GAP,
+    precision: Optional[int] = DEFAULT_PRECISION,
 ) -> pd.DataFrame:
     """Return a single-column frame of aligned, interpolated contact points."""
-    frame = pd.read_csv(csv_path)
+    frame = pd.read_csv(csv_path, low_memory=False)
     if column not in frame.columns:
         raise KeyError(f"'{column}' not found in {csv_path.name}. Columns: {list(frame.columns)}")
 
     parsed = [parse_contact_points(cell) for cell in frame[column]]
     output = ["[]"] * len(parsed)
 
-    # Anchors are the rows that actually carry a kinect measurement.
+    # Anchors are the rows that actually carry a kinect measurement. Keep the
+    # measured contacts as-is (only reformatted / rounded) — do NOT snap them;
+    # snapping is applied only to the interpolated in-between rows.
     anchors = [i for i, points in enumerate(parsed) if points]
     for i in anchors:
-        snapped = sorted(set(snap_to_surface(parsed[i], tree).tolist()))
-        output[i] = serialize_contact_points([tuple(vertices[v]) for v in snapped])
+        output[i] = serialize_contact_points(parsed[i], precision=precision)
 
     n_filled = n_skipped = 0
     for start, end in zip(anchors, anchors[1:]):
@@ -252,10 +283,10 @@ def interpolate_contact_column(
             continue
 
         for offset, points in enumerate(
-            interpolate_between(vertices, graph, tree, parsed[start], parsed[end], n_inner),
+            interpolate_between(vertices, geo_dist, geo_pred, tree, parsed[start], parsed[end], n_inner),
             start=1,
         ):
-            output[start + offset] = serialize_contact_points(points)
+            output[start + offset] = serialize_contact_points(points, precision=precision)
         n_filled += n_inner
 
     logger.info(
@@ -276,18 +307,23 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--max-gap", type=int, default=DEFAULT_MAX_GAP,
                         help=f"Max row distance between consecutive kinect samples (default: {DEFAULT_MAX_GAP})")
     parser.add_argument("-k", type=int, default=DEFAULT_K, help=f"kNN neighbours (default: {DEFAULT_K})")
+    parser.add_argument("--precision", type=int, default=DEFAULT_PRECISION,
+                        help=f"Decimals to round output coords (default: {DEFAULT_PRECISION}; -1 = full precision)")
     args = parser.parse_args(argv)
+    precision = None if args.precision is not None and args.precision < 0 else args.precision
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
 
     vertices = load_forearm_vertices(args.ply)
     graph = build_surface_graph(vertices, k=args.k)
+    geo_dist, geo_pred = precompute_geodesics(graph)
     tree = cKDTree(vertices)
 
     args.outdir.mkdir(parents=True, exist_ok=True)
     for csv_path in args.contacts:
         result = interpolate_contact_column(
-            csv_path, vertices, graph, tree, column=args.column, max_gap=args.max_gap
+            csv_path, vertices, geo_dist, geo_pred, tree,
+            column=args.column, max_gap=args.max_gap, precision=precision,
         )
         destination = args.outdir / f"{csv_path.stem}_contact-interpolated.csv"
         result.to_csv(destination, index=False)
