@@ -279,17 +279,66 @@ Derived from a full relevance sweep of `docs/development/knowledge-base/`:
 ### Phase 1: Relocate RF clustering into postprocessing
 **Goal:** `center_on_receptive_field` runs with no `analysis` import.
 
-- [ ] Task 1.1 — Create `code/src/postprocessing/receptive_field/rf_clustering.py`; move
+**Started:** 2026-08-06 · **Completed:** 2026-08-06
+
+- [x] Task 1.1 — Create `code/src/postprocessing/receptive_field/rf_clustering.py`; move
       `SelectivityDBSCANConfig`, `RFCluster`, `RFMapResult`, `GroupedSpatialData` (from
       `analysis/receptive_field_mapping/config.py`) and `RFMappingEngine` (from
       `.../engine.py`) verbatim. Do not move `RFMappingColumnConfig` or `RFMappingConfig`.
-- [ ] Task 1.2 — Add `code/src/postprocessing/receptive_field/__init__.py` re-exporting
+
+      **Done.** 210 lines (37 of them the module docstring). Bodies and per-symbol
+      docstrings are byte-identical to the originals; only the module docstring is new, and
+      it describes the code's actual behaviour rather than
+      `note-spatial-alignment-pipeline.md`'s drifted "selectivity-weighted centroid" wording
+      — the module computes no centroid at all, and it records that `dbscan_eps = 5.0` is a
+      5 mm radius. `Optional` was dropped from the `typing` import (it was unused in
+      `config.py`). Imports are exactly stdlib + `numpy` + `sklearn.cluster.DBSCAN`; no
+      analysis-side constant is inlined.
+- [x] Task 1.2 — Add `code/src/postprocessing/receptive_field/__init__.py` re-exporting
       the five symbols.
-- [ ] Task 1.3 — Repoint `center_on_receptive_field.py` lines 22–26 to the new module.
-- [ ] Task 1.4 — Capture a baseline run of the DAG task on one session **before** the
+- [x] Task 1.3 — Repoint `center_on_receptive_field.py` lines 22–26 to the new module.
+
+      **Done.** Two import statements collapsed into one; nothing else in the file touched.
+- [x] Task 1.4 — Capture a baseline run of the DAG task on one session **before** the
       change, to diff outputs against afterwards.
-- [ ] Task 1.5 — Verify the new module's import closure excludes pyvista/open3d/igl/
+
+      **Done — two sessions, both C5 branches, byte-identical.** `center_on_receptive_field()`
+      was driven directly with `force_processing=True` on `2022-06-14_ST13-03` (recorded
+      status `ok` → the translation path) and `2022-06-15_ST14-04` (recorded status
+      `no_cluster_found` → the pass-through path), writing into a scratch tree. All 17
+      produced files (15 `blocks_rf_centered/*.csv`, 2 `forearm_rf_centered/*.ply`,
+      2 `rf_center_origin.json`) have identical SHA-256 before and after. ST13-03's RF center
+      is `[-377.075, 388.775, 482.6375]` mm from cluster 1 (30 points, mean selectivity
+      0.4983) in both runs; ST14-04 records `status: "no_cluster_found"` in both, confirming
+      the pass-through contract survived the move.
+
+      A second, synthetic oracle covers the algorithm in isolation and the C5 edge cases
+      (`_compute_rf_center` on fabricated block CSVs): known-answer selectivity 4/10 = 0.4
+      exactly; two blobs 50 mm apart at `eps = 5.0` → exactly 2 clusters of 8 and 6 points
+      with a 3-point micro-cluster discarded; nothing-above-threshold, `no_contact_points`,
+      missing-file and missing-column paths. All outputs identical before and after.
+
+      Note: the resolved input directory is `blocks_pca_calibrated/`, not
+      `blocks_contact_projected/` as the C5 docstrings and the knowledge-base note claim.
+      Left alone — out of Phase 1 scope, but worth a follow-up.
+- [x] Task 1.5 — Verify the new module's import closure excludes pyvista/open3d/igl/
       trimesh/seaborn.
+
+      **Done.** A fresh interpreter importing `postprocessing.receptive_field.rf_clustering`
+      adds 1574 `sys.modules` entries in 1.72 s, with zero `analysis.*` modules and none of
+      pyvista/open3d/igl/trimesh/seaborn. Importing `center_on_receptive_field.py` itself
+      went from 4070 modules / 4.80 s to 3137 modules / 3.60 s, and from 121 `analysis.*`
+      modules to 0; igl, trimesh and seaborn are gone. open3d and pyvista remain, but they
+      now arrive through the script's own `import open3d` and the `preprocessing.*` import
+      chain, not through `analysis` — removing them is not in this plan's scope.
+
+**Verification:** `pytest -q` → 437 passed, 31 failed, 1 collection error. Every failure is
+pre-existing and unrelated: stashing the Phase 1 changes and re-running the same files at
+`2e82642` reproduces the identical 31 failures (`test_dag_config_model.py`,
+`test_rf_grid_cell_metrics.py`, `test_rf_tap_stroke_comparison.py`) plus the same
+`test_gmm_clusterer.py` collection error. None of those files references `postprocessing`
+or the relocated module. `grep -rn "from analysis\|import analysis"` over
+`code/scripts/_5_postprocessing/` and `code/src/postprocessing/` returns zero hits.
 
 **Files Modified:**
 - `code/src/postprocessing/receptive_field/rf_clustering.py` — new, ~164 lines
