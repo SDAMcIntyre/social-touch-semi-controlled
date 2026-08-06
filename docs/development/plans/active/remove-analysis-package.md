@@ -544,18 +544,83 @@ on disk, and `sys.modules` contains zero `analysis*` entries.
 ### Phase 4: Documentation and metadata
 **Goal:** The repo describes itself accurately.
 
-- [ ] Task 4.1 — Root `CLAUDE.md`: remove the `analysis/` row from the package table and
+**Started:** 2026-08-06 · **Completed:** 2026-08-06
+
+> **Plan correction — the root `CLAUDE.md` is gitignored.** This phase as written routes
+> most of its output through the root `CLAUDE.md`, but `.gitignore:147` ignores every
+> `CLAUDE.md`, so that file is untracked and its edits **cannot be committed**. They are
+> still worth making — the file loads into every Claude Code session in this repo — but
+> they will never reach a collaborator. The same discovery was already recorded in Task
+> 3.1 for `code/src/analysis/CLAUDE.md`. Consequence: **Task 4.5's changelog is the only
+> tracked record of the split**, and it was written to carry the full weight accordingly
+> rather than as a one-line pointer. No `git add -f` was used. The same caveat applies to
+> Phase 5, whose entire output is a `CLAUDE.md` section.
+
+- [x] Task 4.1 — Root `CLAUDE.md`: remove the `analysis/` row from the package table and
       the closing paragraph pointing at `code/src/analysis/CLAUDE.md`.
-- [ ] Task 4.2 — Root `CLAUDE.md`: update the "Data flow" diagram so it terminates at
+
+      **Done.** The `analysis/` row is gone and the `postprocessing/` row was widened from
+      "XYZ reference refinement from manual gesture data" to also name ICP registration,
+      contact projection and RF centring — it now terminates the pipeline and its old
+      one-clause description covered one of six DAG tasks. The dangling pointer paragraph
+      was replaced by a two-line statement that the repo ends at postprocessing, naming the
+      analysis repo and linking the new changelog. The "six categories … Analysis" sentence
+      under Pipeline execution was corrected to five (not in the task text, but it was the
+      same stale fact).
+
+      **Scope toggle section removed entirely.** It described
+      `.claude/settings.local.json` restricting `Read`/`Glob` to "analysis-pipeline files
+      only" and told the reader to check `permissions.deny`. That file currently has **no**
+      `deny` key at all (only `permissions.allow`), and the directory the toggle existed to
+      isolate no longer exists — so the section was doubly inoperative. Rewording was not
+      possible: there is no surviving mechanism to describe.
+- [x] Task 4.2 — Root `CLAUDE.md`: update the "Data flow" diagram so it terminates at
       postprocessing.
-- [ ] Task 4.3 — Root `CLAUDE.md`: update the Test-environment paragraph, which names
+
+      **Done.** `→ Merged CSV → Analysis (preparation → … → RF mapping)` became
+      `→ Merged CSV → Postprocessing (reference forearm, ICP registration, contact
+      projection, PCA calibration, RF centring) → Aggregated session`. The stage names were
+      read off the seven tasks in `configs/postprocess_workflow_kinect_auto_dag.yaml`, not
+      invented.
+- [x] Task 4.3 — Root `CLAUDE.md`: update the Test-environment paragraph, which names
       `analysis.pipeline` as a stubbed package root.
-- [ ] Task 4.4 — `pyproject.toml`: the description reads "A package for motion
+
+      **Done, and the list was wrong in a second way.** Reading `code/tests/conftest.py`
+      shows five surviving `_stub_package` calls: `preprocessing.stickers_analysis`,
+      `preprocessing.forearm_extraction`, `utils`, `utils.pipeline` and
+      `utils.pipeline.monitoring`. The paragraph named only the first three plus
+      `analysis.pipeline`, so dropping the dead entry alone would have left the list
+      incomplete. All five are now listed.
+- [x] Task 4.4 — `pyproject.toml`: the description reads "A package for motion
       preprocessing and analysis" — narrow it.
-- [ ] Task 4.5 — Add a changelog entry recording the split and naming the analysis repo
+
+      **Done.** → `"Acquisition-to-postprocessing pipeline for semi-controlled social touch
+      recordings."` Nothing else in the file was touched.
+- [x] Task 4.5 — Add a changelog entry recording the split and naming the analysis repo
       as the new home, so the provenance is discoverable from this repo.
 
-**Files Modified:** `CLAUDE.md`, `pyproject.toml`, `docs/changelogs/`
+      **Done.** `docs/changelogs/remove-analysis-package.md` (new directory). Written as
+      the *primary* artifact of this phase, per the gitignore finding above: it records the
+      commit range, the removal counts, the analysis repo's identity (373 commits, full
+      history, self-contained via `src/_vendor/`), why `rf_clustering.py` was kept, the
+      untouched-docs decision with measured counts (13 of 44 knowledge-base notes and 17 of
+      26 pending plans name a now-absent path), the five recorded-not-fixed discrepancies,
+      the test-baseline reconciliation, and the grep audit. The stale-note section tells a
+      reader explicitly that a note pointing at missing code means the code moved, not that
+      the note rotted.
+
+**Verification:** `grep -rniE "analysis|analyse"` over `CLAUDE.md`, `README.md` and
+`pyproject.toml` → the only surviving hits are ordinary English about the analysis repo or
+unrelated prose (`README.md:101`, "removed for analysis" re: the IR track). Zero references
+to the deleted package, scripts or configs remain in any of the three.
+`python -c "import tomllib; tomllib.load(...)"` parses `pyproject.toml`.
+`pytest -q --continue-on-collection-errors` → **195 passed, 2 skipped, 0 failed, 0
+collection errors** — unchanged from Phase 3.
+
+**Files Modified:**
+- `CLAUDE.md` — **local-only, gitignored, not committable**
+- `pyproject.toml` — description line only
+- `docs/changelogs/remove-analysis-package.md` — new
 
 **Dependencies:** Phase 3
 
@@ -612,13 +677,14 @@ on disk, and `sys.modules` contains zero `analysis*` entries.
 
 ## Documentation Plan
 
-- [ ] Update root `CLAUDE.md`: package table, data-flow diagram, test-environment
-      paragraph, new stage-boundary section
-- [ ] Update `configs/README.md`: remove the two `analyse_workflow_*` rows
-- [ ] Update `pyproject.toml` description
-- [ ] Add changelog entry: `docs/changelogs/remove-analysis-package.md`
-- [ ] **No changes to `docs/development/knowledge-base/` or `docs/development/plans/`** —
-      explicitly out of scope by decision
+- [x] Update root `CLAUDE.md`: package table, data-flow diagram, test-environment
+      paragraph (Phase 4; the stage-boundary section is Phase 5, still open). **These edits
+      are local-only — `CLAUDE.md` is gitignored.**
+- [x] Update `configs/README.md`: remove the two `analyse_workflow_*` rows (done in Phase 3)
+- [x] Update `pyproject.toml` description
+- [x] Add changelog entry: `docs/changelogs/remove-analysis-package.md`
+- [x] **No changes to `docs/development/knowledge-base/` or `docs/development/plans/`** —
+      explicitly out of scope by decision (upheld; only this plan document was edited)
 
 ---
 
