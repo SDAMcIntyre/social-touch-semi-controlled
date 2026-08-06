@@ -350,11 +350,27 @@ or the relocated module. `grep -rn "from analysis\|import analysis"` over
 ### Phase 2: Sever the GUI coupling
 **Goal:** `utils` no longer references `analysis`; the launcher still starts.
 
-- [ ] Task 2.1 — Delete `code/src/utils/gui/dag_launcher/feature_combination_dialog.py`.
-- [ ] Task 2.2 — Remove the import at `task_detail_panel.py:30` and the two call sites at
+**Started:** 2026-08-06 · **Completed:** 2026-08-06
+
+- [x] Task 2.1 — Delete `code/src/utils/gui/dag_launcher/feature_combination_dialog.py`.
+
+      **Done.** 137 lines removed, including the `try/except ImportError` +
+      `frozenset()` / `{}` fallback that was the repo's only `analysis.` import outside
+      the package.
+- [x] Task 2.2 — Remove the import at `task_detail_panel.py:30` and the two call sites at
       `:1060` (edit mode) and `:1096` (create mode), preserving surrounding `blockSignals`
       bracketing.
-- [ ] Task 2.3 — Remove `_is_feature_combinations_dict` (`task_detail_panel.py:148`), its
+
+      **Done.** The two call sites were the whole bodies of
+      `_make_combination_edit_handler` and `_make_combination_add_handler`, so both
+      methods were removed; `_make_combination_context_handler` (right-click delete) went
+      with them, since `_make_combination_section` was its only caller. `task_detail_panel.py`
+      contains no `blockSignals` call at all — the documented Qt recursion guard lives in
+      `task_panel.py::_on_item_changed`, which this phase does not touch, so no bracketing
+      was disturbed. Removing the context handler orphaned the `QMenu` and `QCursor`
+      imports; both were dropped. `QMessageBox` is still used by four surviving handlers
+      and stays.
+- [x] Task 2.3 — Remove `_is_feature_combinations_dict` (`task_detail_panel.py:148`), its
       dispatch branch at `:345`, and `_make_combination_section`. **Resolved by inspection:**
       the only `features:` option keys in `configs/` are in the two `analyse_*_dag.yaml`
       files deleted in Phase 3 (the `preprocess_workflow_kinect_auto_dag.yaml` match is the
@@ -365,14 +381,48 @@ or the relocated module. `grep -rn "from analysis\|import analysis"` over
       Leave the sibling predicates (`_is_feature_dict`, `_is_cluster_groups_dict`,
       `_is_radar_groups_dict`, `_is_grid_groups_dict`, `_is_profile_dict`) alone — verify
       each still has a live config key before touching it.
-- [ ] Task 2.4 — Remove the stale Sphinx cross-reference to
+
+      **Done, and the decision was re-checked empirically rather than trusted.** Replaying
+      the removed predicate over all 14 `configs/*_dag.yaml` files shows it matched five
+      task options, every one of them in an `analyse_*` config deleted by Phase 3, and four
+      of the five (`cluster_groups` ×2, `grid_groups`, `radar_groups`) were already claimed
+      by an earlier dispatch branch and never reached `:345`. The single option that did
+      reach it — `stimulus_compare_sessions / comparison_groups` in
+      `analyse_workflow_processing_dag.yaml` — now falls through to `_make_scalar_section`
+      and renders as a clickable YAML-editor label. No surviving config is affected. The
+      five sibling predicates were left untouched.
+- [x] Task 2.4 — Remove the stale Sphinx cross-reference to
       `analysis.receptive_field_mapping...PopulationRFGridConfig` in the
       `grid_group_dialog.py:8` docstring (prose only; that module imports no analysis).
+
+      **Done.** Reworded to say the spec is written back into the `grid_groups` DAG option
+      and consumed by the downstream population-grid workflow, without naming a module
+      that will not exist in this repo.
+
+**Verification:** `grep -rn "FeatureCombinationDialog\|_is_feature_combinations_dict\|_make_combination_section" code/` → zero hits.
+`grep -rn "from analysis\|import analysis" code/src/utils/` → zero hits. With
+`QT_QPA_PLATFORM=offscreen`, a fresh interpreter imports `task_detail_panel` and
+`launcher_window` with zero `analysis.*` entries in `sys.modules`, constructs a
+`QApplication`, and renders `TaskDetailPanel.show_task()` for all 114 tasks across all 14
+`configs/*_dag.yaml` files (the three `analyse_*` configs included) with no exception.
+`pytest -q --continue-on-collection-errors` → 437 passed, 31 failed, 1 collection error —
+byte-for-byte the same pre-existing failure set recorded for Phase 1
+(`test_dag_config_model.py`, `test_rf_grid_cell_metrics.py`, `test_rf_tap_stroke_comparison.py`,
+plus the `test_gmm_clusterer.py` collection error). Zero new failures. Note that plain
+`pytest` aborts on the collection error; `--continue-on-collection-errors` is required to
+see the full result.
 
 **Files Modified:**
 - `code/src/utils/gui/dag_launcher/feature_combination_dialog.py` — deleted
 - `code/src/utils/gui/dag_launcher/task_detail_panel.py` — 3 references removed
 - `code/src/utils/gui/dag_launcher/grid_group_dialog.py` — docstring only
+
+**Follow-up (not done, out of Phase 2 scope):** `DagConfigModel.get_combination_features`
+and `set_combination_features` now have zero callers — the combination section was their
+only consumer. `add_combination` and `remove_combination` are still live (the cluster-,
+radar- and grid-group handlers use them). `dag_config_model.py` is not in this phase's file
+list and `test_dag_config_model.py` exercises the model API, so the two dead methods were
+left in place.
 
 **Dependencies:** Phase 1
 

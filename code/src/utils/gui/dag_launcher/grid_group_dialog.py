@@ -4,8 +4,9 @@ The dialog composes fully-qualified feature names of the form
 ``<data_type>_<aggregation_or_extractor>`` and edits the four per-feature
 bounds (``min``, ``max``, ``step``, ``span``) plus the group-level scalars.
 
-The spec produced by :meth:`GridGroupDialog.get_group_spec` is consumed directly
-by :class:`~analysis.receptive_field_mapping.rf_population_grid_pipeline.PopulationRFGridConfig`.
+The spec produced by :meth:`GridGroupDialog.get_group_spec` is written back into
+the ``grid_groups`` option of the DAG config and consumed by the downstream
+population-grid workflow.
 """
 
 from __future__ import annotations
