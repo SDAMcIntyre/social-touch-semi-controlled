@@ -4,3 +4,4 @@ out/
 output/
 *.egg-info/
 .ipynb_checkpoints/
+plot/videos/

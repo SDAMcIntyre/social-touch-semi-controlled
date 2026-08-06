@@ -102,10 +102,21 @@ python code/interpolate_test.py            # uses data/, output/, writes to plot
 The interpolated panel should sit in the same footprint as the original (on-surface), be
 denser, and show a continuous time sweep. Committed examples are in `plot/`.
 
-> Rendering uses Pillow, not matplotlib: matplotlib's rasteriser segfaults in this conda
-> env (a machine-level native DLL conflict, unrelated to this code). viridis colours come
-> from matplotlib's colormap data when available, with a built-in fallback.
+`code/interpolate_video.py` additionally writes small 3D **videos** — for each block it
+picks 5 random touches and, per touch, two mp4s (`_1_original`, `_2_interpolated`) showing
+the contact patch evolving inside a fixed 3D grid box, with an accumulating trail. The
+original stair-steps between the few kinect frames; the interpolated glides continuously.
+
+```bash
+python code/interpolate_video.py           # writes plot/videos/*.mp4 (git-ignored)
+```
+
+> Both scripts avoid matplotlib and numpy `@`/`dot`: in this conda env both the matplotlib
+> rasteriser **and** numpy's BLAS matmul segfault (a machine-level native DLL conflict,
+> unrelated to this code). Plots render via Pillow, videos via OpenCV (mp4v), and all 3D
+> projection is done with element-wise math. The interpolation tool itself is unaffected
+> (it uses no matmul). Videos are regenerable, so they are git-ignored.
 
 ## Requirements
 
-`numpy`, `pandas`, `scipy`, `open3d` (tool); `numpy`, `pandas`, `Pillow` (verification plots)
+`numpy`, `pandas`, `scipy`, `open3d` (tool); plus `Pillow` (plots) and `opencv-python` (videos)
