@@ -51,10 +51,3 @@ _stub_package("preprocessing.forearm_extraction")
 _stub_package("utils")
 _stub_package("utils.pipeline")
 _stub_package("utils.pipeline.monitoring")
-
-# analysis/pipeline/__init__.py imports session_discovery (requires
-# primary_processing / KinectConfig) and stage_runner (requires utils).
-# Neither is available in the unit-test environment.  Stub the package so
-# individual modules (e.g. analysis.pipeline.shared_constants) can still
-# be imported directly without running the heavyweight __init__.
-_stub_package("analysis.pipeline")

@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QColor, QCursor, QFont
+from PyQt5.QtGui import QColor, QFont
 from PyQt5.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -15,7 +15,6 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QMenu,
     QMessageBox,
     QPushButton,
     QScrollArea,
@@ -27,7 +26,6 @@ from PyQt5.QtWidgets import (
 from ruamel.yaml.comments import CommentedSeq
 
 from utils.gui.dag_launcher.cluster_group_dialog import ClusterGroupDialog, ClusterGroupReadOnlyDialog
-from utils.gui.dag_launcher.feature_combination_dialog import FeatureCombinationDialog
 from utils.gui.dag_launcher.grid_group_dialog import GridGroupDialog, GridGroupReadOnlyDialog
 from utils.gui.dag_launcher.radar_group_dialog import RadarGroupDialog
 from utils.gui.dag_launcher.yaml_edit_dialog import YamlEditDialog
@@ -145,13 +143,6 @@ def _is_feature_dict(val: Any) -> bool:
     )
 
 
-def _is_feature_combinations_dict(val: Any) -> bool:
-    """Return True if *val* is a non-empty dict of sub-dicts that each have a 'features' key."""
-    if not isinstance(val, dict) or not val:
-        return False
-    return all(isinstance(v, dict) and "features" in v for v in val.values())
-
-
 def _is_cluster_groups_dict(val: Any) -> bool:
     """Return True if *val* is a non-empty dict of sub-dicts that each have both 'features' and 'clustering_methods' keys."""
     if not isinstance(val, dict) or not val:
@@ -165,8 +156,8 @@ def _is_cluster_groups_dict(val: Any) -> bool:
 def _is_radar_groups_dict(key: str, val: Any) -> bool:
     """Return True if *key* is ``'radar_groups'`` and *val* is a dict.
 
-    Key-based check to avoid ambiguity with ``_is_cluster_groups_dict`` and
-    ``_is_feature_combinations_dict``, which both use structural inspection.
+    Key-based check to avoid ambiguity with ``_is_cluster_groups_dict``, which
+    uses structural inspection.
     """
     return key == "radar_groups" and isinstance(val, dict)
 
@@ -342,8 +333,6 @@ class TaskDetailPanel(QWidget):
                 widget = self._make_grid_groups_section(key, val)
             elif _is_profile_dict(val):
                 widget = self._make_profile_section(key, val)
-            elif _is_feature_combinations_dict(val):
-                widget = self._make_combination_section(key, val)
             elif _is_feature_dict(val):
                 cols = 1 if len(val) <= 6 else 3
                 widget = self._make_feature_section(key, val, cols=cols)
@@ -559,59 +548,6 @@ class TaskDetailPanel(QWidget):
 
             row_layout.addStretch()
             layout.addWidget(row)
-
-        return box
-
-    def _make_combination_section(self, key: str, val: dict) -> QWidget:
-        """Checkbox + feature preview per combination, plus '+' add button."""
-        box = QGroupBox(_option_header(key))
-        layout = QVBoxLayout(box)
-        layout.setContentsMargins(6, 4, 6, 4)
-        layout.setSpacing(4)
-
-        for combo_name in val:
-            is_enabled = self._model.get_profile_enabled(self._task_name, key, combo_name)
-            features = self._model.get_combination_features(self._task_name, key, combo_name)
-
-            row = QWidget()
-            row.setContextMenuPolicy(Qt.CustomContextMenu)
-            row_layout = QHBoxLayout(row)
-            row_layout.setContentsMargins(0, 0, 0, 0)
-            row_layout.setSpacing(4)
-
-            cb = QCheckBox(combo_name.replace("_", " ").title())
-            cb.setChecked(is_enabled)
-            cb.stateChanged.connect(self._make_profile_handler(key, combo_name, cb))
-            row_layout.addWidget(cb)
-
-            preview = QLabel(f"[{', '.join(features)}]")
-            preview.setStyleSheet(f"color: {_COMPLEX_FG.name()};")
-            preview.setCursor(Qt.PointingHandCursor)
-            preview.setToolTip("Click to edit features")
-            preview.mousePressEvent = self._make_combination_edit_handler(key, combo_name, preview)
-            row_layout.addWidget(preview)
-
-            row_layout.addStretch()
-
-            for _w in (row, cb, preview):
-                _w.setContextMenuPolicy(Qt.CustomContextMenu)
-                _w.customContextMenuRequested.connect(
-                    self._make_combination_context_handler(key, combo_name)
-                )
-
-            layout.addWidget(row)
-
-        # "+" add button
-        add_row = QWidget()
-        add_layout = QHBoxLayout(add_row)
-        add_layout.setContentsMargins(0, 0, 0, 0)
-        add_btn = QPushButton("+")
-        add_btn.setFixedSize(24, 20)
-        add_btn.setToolTip("Add new feature combination")
-        add_btn.clicked.connect(self._make_combination_add_handler(key))
-        add_layout.addWidget(add_btn)
-        add_layout.addStretch()
-        layout.addWidget(add_row)
 
         return box
 
@@ -1046,89 +982,6 @@ class TaskDetailPanel(QWidget):
                         profile.pop(k, None)
                 self._model._dirty = True
                 self.task_changed.emit()
-        return _handler
-
-    def _make_combination_edit_handler(self, opt_key: str, combo_name: str, preview_label: QLabel):
-        def _handler(_event) -> None:
-            if self._model is None or self._task_name is None:
-                return
-            current_features = self._model.get_combination_features(
-                self._task_name, opt_key, combo_name
-            )
-            opts = self._model.get_task_option(self._task_name, opt_key) or {}
-            existing = list(opts.keys())
-            dlg = FeatureCombinationDialog(
-                self._task_name,
-                existing_names=[n for n in existing if n != combo_name],
-                combo_name=combo_name,
-                selected_features=current_features,
-                parent=self,
-            )
-            if dlg.exec_() == QDialog.Accepted:
-                new_combo_name = dlg.get_combo_name()
-                original_combo_name = dlg.get_original_combo_name()
-                new_features = dlg.get_selected_features()
-
-                # Handle rename: remove old, add new
-                if new_combo_name != original_combo_name:
-                    self._model.remove_combination(self._task_name, opt_key, original_combo_name)
-                    seq = CommentedSeq(new_features)
-                    seq.fa.set_flow_style()
-                    self._model.add_combination(
-                        self._task_name, opt_key, new_combo_name, {"enabled": True, "features": seq}
-                    )
-                    self.task_changed.emit()
-                    self.show_task(self._model, self._task_name)
-                else:
-                    self._model.set_combination_features(
-                        self._task_name, opt_key, combo_name, new_features
-                    )
-                    preview_label.setText(f"[{', '.join(new_features)}]")
-                    self.task_changed.emit()
-        return _handler
-
-    def _make_combination_add_handler(self, opt_key: str):
-        def _handler(_checked: bool = False) -> None:
-            if self._model is None or self._task_name is None:
-                return
-            opts = self._model.get_task_option(self._task_name, opt_key) or {}
-            existing = list(opts.keys())
-            dlg = FeatureCombinationDialog(
-                self._task_name,
-                existing_names=existing,
-                parent=self,
-            )
-            if dlg.exec_() == QDialog.Accepted:
-                combo_name = dlg.get_combo_name()
-                features = dlg.get_selected_features()
-                seq = CommentedSeq(features)
-                seq.fa.set_flow_style()
-                self._model.add_combination(
-                    self._task_name, opt_key, combo_name, {"enabled": True, "features": seq}
-                )
-                self.task_changed.emit()
-                self.show_task(self._model, self._task_name)
-        return _handler
-
-    def _make_combination_context_handler(self, opt_key: str, combo_name: str):
-        def _handler(_pos) -> None:
-            if self._model is None or self._task_name is None:
-                return
-            menu = QMenu(self)
-            delete_action = menu.addAction(f"Delete '{combo_name}'")
-            action = menu.exec_(QCursor.pos())
-            if action == delete_action:
-                reply = QMessageBox.question(
-                    self,
-                    "Delete Combination",
-                    f"Delete combination '{combo_name}' from '{self._task_name}'?",
-                    QMessageBox.Yes | QMessageBox.No,
-                    QMessageBox.No,
-                )
-                if reply == QMessageBox.Yes:
-                    self._model.remove_combination(self._task_name, opt_key, combo_name)
-                    self.task_changed.emit()
-                    self.show_task(self._model, self._task_name)
         return _handler
 
     def _make_cluster_group_enabled_handler(
