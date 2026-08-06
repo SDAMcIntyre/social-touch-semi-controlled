@@ -17,8 +17,6 @@ DAG config in `configs/`:
 | `preprocess_handmesh_find_scale_factor.py` | Stage 3 (standalone): compute hand mesh scale factor |
 | `postprocess_workflow_kinect_auto.py` | Stage 5: postprocessing (receptive fields, XYZ references) |
 | `merging_pipeline_neuron_to_kinect_auto.py` | Stage 4: merge neural and Kinect data |
-| `analysis_workflow_processing.py` | Analysis (processing): RF mapping, clustering, feature extraction |
-| `analysis_workflow_viewers.py` | Analysis (viewers): interactive explorer launchers |
 | `view_merged_neural_kinect.py` | Viewer: 3D visualisation of merged neural + Kinect recordings |
 
 ## Numbered subdirectory convention

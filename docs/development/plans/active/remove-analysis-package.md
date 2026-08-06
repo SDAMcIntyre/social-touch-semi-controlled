@@ -429,28 +429,115 @@ left in place.
 ### Phase 3: Delete the package and its assets
 **Goal:** Analysis-stage code and configuration are gone.
 
-- [ ] Task 3.1 — `git rm -r code/src/analysis/` (140 files, incl. `code/src/analysis/CLAUDE.md`).
-- [ ] Task 3.2 — Delete the 12 test files: `test_rf_session_comparison_renderer.py`,
+**Started:** 2026-08-06 · **Completed:** 2026-08-06
+
+- [x] Task 3.1 — `git rm -r code/src/analysis/` (140 files, incl. `code/src/analysis/CLAUDE.md`).
+
+      **Done, with one correction to the task text.** 140 *tracked* files staged as deleted.
+      `code/src/analysis/CLAUDE.md` is **not** among them — `.gitignore:147` ignores every
+      `CLAUDE.md`, so it was never tracked. Nine files under `code/src/analysis/` were
+      untracked-because-ignored (that `CLAUDE.md` plus the eight modules in
+      `receptive_field_mapping/data/`, ignored by `.gitignore:117 data/`) and therefore
+      survived `git rm` on disk. They had to go too: they are importable as implicit
+      namespace packages and they contain `from analysis...` imports, so leaving them would
+      have broken the plan's primary grep criterion. The eight `data/` modules were first
+      confirmed tracked in the analysis repo at
+      `src/analysis/receptive_field_mapping/data/` (no loss). The 116-line
+      `code/src/analysis/CLAUDE.md` is **not** reproduced there — the analysis repo's root
+      `CLAUDE.md` is a different, generic 61-line document — so it was copied to the session
+      scratchpad before `rm -rf code/src/analysis`. **Follow-up for the user:** decide
+      whether that guide should be carried into the analysis repo; it is otherwise gone.
+- [x] Task 3.2 — Delete the 12 test files: `test_rf_session_comparison_renderer.py`,
       `test_rf_tap_stroke_comparison.py`, `test_rf_population_heatmap.py`,
       `test_rf_inflection_boundary.py`, `test_rf_population_grid_pipeline.py`,
       `test_rf_extraction_io.py`, `test_rf_grid_cell_metrics.py`, `test_iff_windowed_mean.py`,
       `test_forearm_slim_uv.py`, `test_gmm_clusterer.py`, `test_feature_space_renderer.py`,
       `test_fit_models.py`.
-- [ ] Task 3.3 — Remove the `analysis.pipeline` stub from `code/tests/conftest.py`.
-- [ ] Task 3.4 — Delete the 2 entry scripts (`analysis_workflow_processing.py`,
+
+      **Done.** Each was checked before deletion: every non-stdlib, non-numeric import in all
+      twelve resolves to `analysis.*` (the only other third-party imports are `igl`,
+      `trimesh` and `matplotlib.path`, all used solely to exercise analysis surface code).
+      None covers any surviving package.
+- [x] Task 3.3 — Remove the `analysis.pipeline` stub from `code/tests/conftest.py`.
+
+      **Done.** Only that stub and its comment block were removed. The
+      `preprocessing.stickers_analysis`, `preprocessing.forearm_extraction` and `utils`
+      stubs are untouched — `stickers_analysis` merely contains the substring "analysis"
+      and is unrelated.
+- [x] Task 3.4 — Delete the 2 entry scripts (`analysis_workflow_processing.py`,
       `analysis_workflow_viewers.py`) and the 8 sandbox/diagnostic scripts
       (`sandbox_gradient_ridge_boundary.py`, `migrate_output_dirs.py`,
       `inspect_touch_feature_ranges.py`, `diagnose_stroke_direction.py`,
       `flatten_forearm_sandbox.py`, `diagnose_contact_points.py`,
       `diagnose_rf_explorer_distance.py`, `compare_flattening_methods.py`).
-- [ ] Task 3.5 — Delete `configs/analyse_workflow_dag.yaml`,
+
+      **Done.** A pre-deletion grep for all ten script names across `code/`, `configs/` and
+      `pyproject.toml` found references only in files also being removed
+      (`analysis/pipeline/__init__.py` prose) or edited in this phase
+      (`configs/launcher.yaml`), plus two rows in `code/scripts/README.md` — see Task 3.7.
+      No surviving `__init__.py`, console-script entry point or workflow references any of
+      them.
+- [x] Task 3.5 — Delete `configs/analyse_workflow_dag.yaml`,
       `configs/analyse_workflow_processing_dag.yaml` + `.layout.json`,
       `configs/analyse_workflow_viewers_dag.yaml` + `.layout.json`.
-- [ ] Task 3.6 — Remove the Analysis category from `configs/launcher.yaml` (lines 70–77)
-      using `ruamel.yaml` round-trip mode, **not** PyYAML.
-- [ ] Task 3.7 — Remove the two `analyse_workflow_*` rows from `configs/README.md` (lines 29–30).
 
-**Files Modified:** as enumerated above (~165 deletions, 3 edits)
+      **Done.** The three `.yaml` files were tracked and are staged as deleted. The two
+      `.layout.json` files are **untracked** — `.gitignore:168` ignores `*.layout.json`
+      repo-wide (they are per-workstation GUI node-layout state) — so they were removed from
+      disk directly; they cannot appear in the commit.
+- [x] Task 3.6 — Remove the Analysis category from `configs/launcher.yaml` (lines 70–77)
+      using `ruamel.yaml` round-trip mode, **not** PyYAML.
+
+      **Done, but ruamel's defaults were not safe here and had to be constrained.** A plain
+      `YAML(typ='rt')` load/dump rewrote the whole file: it re-indented every block sequence
+      (`sequence=2, offset=0` instead of the file's `sequence=4, offset=2`) and, dumping to a
+      `Path`, encoded with the Windows locale codec, corrupting the two em dashes in the
+      header comment into `?`. That first attempt was reverted with `git checkout --`. The
+      final script pins `yaml.indent(mapping=2, sequence=4, offset=2)` and `yaml.width=4096`,
+      loads from a UTF-8-decoded `StringIO`, and writes through
+      `open(..., encoding='utf-8', newline='\n')` to preserve the file's UTF-8/LF form. It
+      also fails fast if the category list is not exactly the six expected names or the
+      Analysis block does not hold exactly the two expected workflows. The resulting
+      `git diff` is a pure 9-line deletion with no other hunk — comments, key order and
+      indentation are byte-identical elsewhere.
+- [x] Task 3.7 — Remove the two `analyse_workflow_*` rows from `configs/README.md` (lines 29–30).
+
+      **Done.** The surrounding prose ("They map directly to the top-level workflow scripts
+      in `code/scripts/`") remains accurate and was left as-is.
+
+      **Plan gap closed:** `code/scripts/README.md:20-21` carried the same two rows for
+      `analysis_workflow_processing.py` / `analysis_workflow_viewers.py`. That file appears
+      in no phase of this plan, so the rows would have been left advertising scripts deleted
+      by Task 3.4. They were removed on the same rationale as this task. The other two
+      "analysis" matches in that file (line 32 "tracking and analysis substages", line 51
+      "LED ROI analysis") are ordinary English about preprocessing and were left alone.
+
+**Verification:** `grep -rn "from analysis\|import analysis" code/` → **zero hits** (the
+plan's primary success criterion). `git ls-files code/src/analysis` → 0. `pytest -q
+--continue-on-collection-errors` → **195 passed, 2 skipped, 0 failed, 0 collection errors**,
+down from the 437/31/1 baseline at `2c4f936`. The delta was reconciled exactly against a
+throwaway `git worktree` at `2c4f936` (with the gitignored `data/` modules restored), which
+reproduced 437/31/1 precisely: the 12 deleted test files accounted for 232 passed + 30 failed
++ the `test_gmm_clusterer.py` collection error; deleting the 3 `analyse_*_dag.yaml` configs
+removed 9 more passing tests, because `test_dag_config_model.py:14` builds
+`DAG_FILES = sorted(CONFIGS_DIR.glob("*_dag.yaml"))` and parametrises three tests over it
+(3 configs × 3 tests); and the 2 new skips are the two `test_dag_config_model.py` tests that
+name the deleted configs behind pre-existing `pytest.skip("config not found")` guards. One of
+those two was the single remaining baseline failure, so `test_dag_config_model.py` now
+reports **0** failures — not because anything was fixed, but because the test skips.
+
+**Follow-up (not fixed — `test_dag_config_model.py` is out of this plan's scope):**
+`test_get_config_entries_multi` existed to assert that a DAG config can declare more than one
+config entry, and `analyse_workflow_dag.yaml` was the only root config that did. It now skips
+unconditionally and asserts nothing. It needs either a surviving multi-entry fixture or
+deletion; leaving a permanently-skipped test is a silent coverage hole.
+
+With `QT_QPA_PLATFORM=offscreen`, `parse_launcher_config` + `LauncherWindow(...).show()`
+succeed on 11 workflow entries across exactly five categories in declaration order —
+Setup, Primary, Preprocess, Merging, Postprocess — every `dag_config` path resolves to a file
+on disk, and `sys.modules` contains zero `analysis*` entries.
+
+**Files Modified:** as enumerated above (~165 deletions, 4 edits)
 
 **Dependencies:** Phase 2
 

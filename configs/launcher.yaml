@@ -66,12 +66,3 @@ categories:
       - name: Kinect [Visualisation]
         script: code/scripts/postprocess_visualization.py
         dag_config: configs/postprocess_visualization_dag.yaml
-
-  - name: Analysis
-    workflows:
-      - name: Analysis [Processing]
-        script: code/scripts/analysis_workflow_processing.py
-        dag_config: configs/analyse_workflow_processing_dag.yaml
-      - name: Analysis [Viewers]
-        script: code/scripts/analysis_workflow_viewers.py
-        dag_config: configs/analyse_workflow_viewers_dag.yaml
