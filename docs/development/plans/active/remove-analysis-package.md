@@ -73,19 +73,26 @@ differs, including a bug fix this repo never received. Keeping a stale duplicate
 
 ## Success Criteria
 
-- [ ] `grep -rn "from analysis\|import analysis" code/` returns **zero** hits.
-- [ ] `code/src/analysis/` does not exist; `git ls-tree -r HEAD -- code/src/analysis` is empty.
-- [ ] `python code/scripts/launch_pipeline_gui.py` starts, and the launcher lists five
+- [x] `grep -rn "from analysis\|import analysis" code/` returns **zero** hits.
+- [x] `code/src/analysis/` does not exist; `git ls-tree -r HEAD -- code/src/analysis` is empty.
+- [x] `python code/scripts/launch_pipeline_gui.py` starts, and the launcher lists five
       categories (Setup, Primary, Preprocess, Merging, Postprocess) with no Analysis entry.
-- [ ] Opening a task's detail panel for every remaining DAG config raises no exception
-      and shows no orphaned feature-combination control.
-- [ ] `pytest` passes with zero collection errors.
+      *(Verified headlessly — `QT_QPA_PLATFORM=offscreen`, `parse_launcher_config` +
+      `LauncherWindow(...).show()`; not a windowed desktop launch.)*
+- [x] Opening a task's detail panel for every remaining DAG config raises no exception
+      and shows no orphaned feature-combination control. *(62 tasks × 11 configs rendered
+      offscreen; `FeatureCombinationDialog` / `_is_feature_combinations_dict` /
+      `_make_combination_section` grep to zero hits.)*
+- [x] `pytest` passes with zero collection errors.
 - [ ] The `center_on_receptive_field` DAG task runs end-to-end on one session and produces
       byte-identical `blocks_rf_centered/*.csv`, `forearm_rf_centered/*.ply`, and
       `rf_center_origin.json` compared to a pre-change run on the same input.
-- [ ] `python -c "import postprocessing.receptive_field.rf_clustering"` completes without
+      **Left unticked deliberately:** verified in Phase 1 Task 1.4 (two sessions, both C5
+      branches, 17 files SHA-256-identical), but not re-verified in Phase 5 — it needs the
+      real session data and a pre-change baseline that no longer exists on this branch.
+- [x] `python -c "import postprocessing.receptive_field.rf_clustering"` completes without
       importing pyvista, open3d, igl, trimesh or seaborn (verify via `sys.modules`).
-- [ ] Root `CLAUDE.md` has no `analysis/` row and no dangling pointer to
+- [x] Root `CLAUDE.md` has no `analysis/` row and no dangling pointer to
       `code/src/analysis/CLAUDE.md`.
 
 ## Definitions
@@ -627,13 +634,55 @@ collection errors** — unchanged from Phase 3.
 ### Phase 5: Enforce the boundary
 **Goal:** The separation does not silently regress.
 
-- [ ] Task 5.1 — Add a short "Stage boundary" section to root `CLAUDE.md` stating that
+**Started:** 2026-08-06 · **Completed:** 2026-08-06
+
+> **Scope adjustment — `README.md` added as the tracked home of the rule.** This phase as
+> written routes its entire output through the root `CLAUDE.md`, which `.gitignore:147`
+> ignores (the same finding already recorded in Task 3.1 and the Phase 4 correction). A
+> rule written only there is uncommittable and never reaches a collaborator, which defeats
+> the phase's stated goal. The section was therefore written **twice**: into `CLAUDE.md`
+> (local-only, but loaded into every Claude Code session in this repo) and into
+> `README.md` (tracked, contributor-facing — the durable home). No `git add -f` was used.
+
+- [x] Task 5.1 — Add a short "Stage boundary" section to root `CLAUDE.md` stating that
       this repo ends at postprocessing, naming the analysis repo, and giving the audit
       command `grep -rn "from analysis\|import analysis" code/` (expected: zero hits) —
       following the `note-kinect-depth-access-single-path` precedent of rule + documented
       grep rather than an unenforced convention.
 
-**Files Modified:** `CLAUDE.md`
+      **Done, in both files.** In `CLAUDE.md` the section is
+      `### Stage boundary — this repo ends at postprocessing`, placed under
+      `## Project Conventions` immediately after `### Kinect depth access — single path` —
+      the rule it is modelled on, so the two convention-enforced boundaries sit together.
+      In `README.md` it is `## 🧭 Repository Scope`, placed after `## ✨ Features` and
+      before `## 📋 Prerequisites`, matching that file's emoji-heading and `-----` rule
+      conventions; a contributor meets it while still reading what the repo is, before
+      installation. Both carry the rule, the verbatim audit command, the
+      stages-not-concepts nuance naming `postprocessing/receptive_field/rf_clustering.py`
+      explicitly so it is not "cleaned up", and a relative link to
+      `docs/changelogs/remove-analysis-package.md`. The narrative is not duplicated — both
+      sections point at the changelog for it.
+
+      Per the knowledge-base precedent, no allowlist is defined: unlike the `pyk4a` rule,
+      this boundary has **zero** sanctioned exceptions, so the rule + grep + review-check
+      form is complete without one.
+
+**Verification:** `grep -rn "from analysis\|import analysis" code/` → **zero hits**.
+`pytest -q --continue-on-collection-errors` → **195 passed, 2 skipped, 0 failed, 0
+collection errors** — unchanged from Phases 3 and 4. `docs/changelogs/remove-analysis-package.md`
+exists at the linked relative path from the repo root, so both links resolve.
+A fresh interpreter importing `postprocessing.receptive_field.rf_clustering` loads 1644
+modules with zero `analysis.*` entries and none of pyvista/open3d/igl/trimesh/seaborn.
+With `QT_QPA_PLATFORM=offscreen`, `parse_launcher_config` yields 11 entries across exactly
+five categories in declaration order (Setup, Primary, Preprocess, Merging, Postprocess),
+every `dag_config` resolves to a file on disk, `LauncherWindow(...).show()` succeeds, and
+`TaskDetailPanel.show_task()` renders all 62 tasks across the 11 surviving
+`configs/*_dag.yaml` files without exception and with zero `analysis*` entries in
+`sys.modules`.
+
+**Files Modified:**
+- `README.md` — new `## 🧭 Repository Scope` section (**tracked** — the durable home)
+- `CLAUDE.md` — new `### Stage boundary` section (**local-only, gitignored, not committable**)
 
 **Dependencies:** Phase 4
 
@@ -678,8 +727,10 @@ collection errors** — unchanged from Phase 3.
 ## Documentation Plan
 
 - [x] Update root `CLAUDE.md`: package table, data-flow diagram, test-environment
-      paragraph (Phase 4; the stage-boundary section is Phase 5, still open). **These edits
-      are local-only — `CLAUDE.md` is gitignored.**
+      paragraph (Phase 4) and the stage-boundary section (Phase 5). **These edits are
+      local-only — `CLAUDE.md` is gitignored.**
+- [x] Add the stage-boundary rule to `README.md` (Phase 5 scope adjustment) — the
+      **tracked**, contributor-facing home of the rule
 - [x] Update `configs/README.md`: remove the two `analyse_workflow_*` rows (done in Phase 3)
 - [x] Update `pyproject.toml` description
 - [x] Add changelog entry: `docs/changelogs/remove-analysis-package.md`

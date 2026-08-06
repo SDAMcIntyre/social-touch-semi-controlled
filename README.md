@@ -15,6 +15,22 @@ A Python application to run semi-controlled social touch experiments for microne
 
 -----
 
+## 🧭 Repository Scope
+
+**This repository ends at the postprocessing stage.** Nothing under `code/` may import from an analysis-stage package. Downstream analysis — touch analytics and receptive-field mapping — lives in the separate repository `social-touch-semi-controlled-analysis`.
+
+Audit the boundary before opening a pull request:
+
+```bash
+grep -rn "from analysis\|import analysis" code/    # expected: zero hits
+```
+
+> **Note**: The rule is about analysis **stages**, not receptive-field **concepts**. `code/src/postprocessing/receptive_field/rf_clustering.py` is deliberate, not a leftover — the postprocessing task `center_on_receptive_field` computes a receptive-field center to define its output coordinate origin. Do not remove it in the name of this rule.
+
+See [docs/changelogs/remove-analysis-package.md](docs/changelogs/remove-analysis-package.md) for the full story.
+
+-----
+
 ## 📋 Prerequisites
 
 Before you begin, ensure you have the following installed on your system:
