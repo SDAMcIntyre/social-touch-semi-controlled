@@ -26,6 +26,36 @@ under `src/_vendor/`. Clone it and it runs.
 If you are looking for a stage, a script or a config that used to be here, look
 there first — the name almost certainly survived the move unchanged.
 
+## Recovering the pre-removal state from this repo
+
+The annotated tag **`v1.1.0-analysis-handoff`** (commit `0ffd9f7`, 24 Jun 2026,
+pushed to `origin`) marks the last state in which the analysis pipeline was still
+part of this repository:
+
+```bash
+git checkout v1.1.0-analysis-handoff -- code/src/analysis
+```
+
+The tag's analysis tree is byte-identical to the state that existed immediately
+before the deletion — `git diff v1.1.0-analysis-handoff^{} e990c47 -- code/src/analysis`
+is empty, and `e990c47` (the `dev` tip this work branched from) is an ancestor of
+the tag. Both of the final analysis-touching commits on `dev` are included.
+
+**The tag is not a complete snapshot, and this is the trap.** It captures the 140
+*tracked* files only. The 9 gitignored files under `code/src/analysis/` were never
+committed at any point in this repository's history, so they are absent from the
+tag exactly as they are absent from every other commit:
+
+- the 8 modules under `receptive_field_mapping/data/` — these exist in the analysis
+  repo, so nothing is lost;
+- `code/src/analysis/CLAUDE.md` (116 lines) — this is **not** reproduced in the
+  analysis repo (that repo's root `CLAUDE.md` is a different, generic document).
+  If you need it, it is not recoverable from git here.
+
+Prefer the analysis repo over the tag for anything you intend to *run*: the tag is
+the stale copy, ahead-of-which the analysis repo has since moved on. Use the tag to
+answer "what did this repo look like before", not as a source of working code.
+
 ## What was removed here
 
 | Thing | Count | Notes |
