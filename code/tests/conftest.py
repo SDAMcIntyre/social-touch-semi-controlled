@@ -44,6 +44,13 @@ _stub_package("preprocessing.stickers_analysis")
 # model and data-access sub-packages can still be imported directly.
 _stub_package("preprocessing.forearm_extraction")
 
+# motion_analysis/__init__.py is a facade that eagerly imports the hand-tracking
+# managers, the tactile-quantification controller and the GUI layer (PyQt5,
+# open3d.visualization, the HaMeR client).  Stub the root so leaf modules such as
+# tactile_quantification.model.contact_depth_field — which depend on nothing but
+# numpy and open3d geometry — can be imported on their own.
+_stub_package("preprocessing.motion_analysis")
+
 # utils/__init__.py eagerly imports PipelineMonitor, DagConfigHandler,
 # TaskExecutor, and signal-processing helpers that pull in openpyxl,
 # PyYAML, and other optional deps.  Stub the root so individual modules
