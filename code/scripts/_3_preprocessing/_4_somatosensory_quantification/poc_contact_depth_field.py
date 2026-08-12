@@ -49,6 +49,7 @@ garbage depths.
 from __future__ import annotations
 
 import logging
+import sys
 from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
@@ -686,26 +687,117 @@ def format_recording_report(
 # =============================================================================
 
 
+#: How each frame outcome is named and coloured on screen.  The mapping lives
+#: here, on the side that owns the semantics: ``NO_CONTACT`` and
+#: ``POSE_ABSENT`` are different facts, and the viewer is deliberately
+#: incapable of merging them because it never sees the enum at all — only the
+#: label and colour chosen here.
+_STATUS_PRESENTATION: Dict[FrameStatus, Tuple[str, str]] = {
+    FrameStatus.CONTACT: ("CONTACT", "white"),
+    FrameStatus.NO_CONTACT: ("NO CONTACT (hand tracked, not touching)", "deepskyblue"),
+    FrameStatus.POSE_ABSENT: ("POSE ABSENT (no hand pose — not zero contact)", "orange"),
+}
+
+
 def launch_viewer(
     geometry: RecordingGeometry,
     series: ContactDepthFieldSeries,
 ) -> None:
     """Open the interactive viewer on a precomputed field series.
 
-    The viewer is Phase 3 of the plan and does not exist yet.  This is the only
-    seam between the compute half and the render half: when
-    ``ContactDepthFieldViewer`` lands, its import and construction replace the
-    body of this function and nothing else in this module changes.  The import
-    must stay inside the function so that the compute path never pulls in Qt or
-    PyVista.
+    This is the only seam between the compute half and the render half.  Both
+    the Qt/PyVista imports and every Open3D-to-PyVista conversion happen inside
+    this function: the compute path above never pulls in a renderer, and the
+    viewer never sees an Open3D object.
+
+    Nothing here derives a statistic.  ``clim`` comes from ``series``, the
+    per-frame maximum comes from each ``ContactDepthFrame``, and the sign flip
+    from signed depth to penetration depth is the convention documented in
+    ``contact_depth_field.py`` — applied once, here, so the viewer performs no
+    arithmetic on the field it draws.
+
+    Args:
+        geometry: The loaded recording, used only for context geometry.
+        series: The precomputed field series.
+
+    Raises:
+        ValueError: If the series does not cover every frame of the recording.
     """
-    raise NotImplementedError(
-        "ContactDepthFieldViewer is not implemented yet (plan phase 3). The field "
-        f"series is complete: {len(series.outcomes)} frames, "
-        f"{series.count(FrameStatus.CONTACT)} with contact, clim="
-        f"{series.clim_penetration_mm}, context geometry available from "
-        f"{type(geometry).__name__}."
+    # Imports are function-local by design; see the module docstring.
+    from PyQt5.QtWidgets import QApplication
+
+    from preprocessing.motion_analysis.tactile_quantification.gui.contact_depth_field_viewer import (
+        ContactDepthFieldViewer,
+        ContactDepthFrameView,
+        polydata_from_triangle_arrays,
     )
+
+    if len(series.outcomes) != len(geometry):
+        raise ValueError(
+            f"The series covers {len(series.outcomes)} frames but the recording has "
+            f"{len(geometry)}; the viewer would scrub past the end of one of them."
+        )
+
+    def _to_polydata(mesh: o3d.geometry.TriangleMesh):
+        return polydata_from_triangle_arrays(
+            np.asarray(mesh.vertices), np.asarray(mesh.triangles)
+        )
+
+    forearm_meshes = {
+        frame_id: _to_polydata(mesh)
+        for frame_id, mesh in geometry.forearm_meshes_by_frame.items()
+    }
+
+    # One-frame memo: scrubbing and playback both revisit the current frame
+    # (visibility toggles, debounce ticks) and rebuilding the hand each time is
+    # pure waste.  Never a cache of the whole recording — that was the 110 MB
+    # this design exists to avoid.
+    cache: Dict[int, object] = {}
+
+    def _hand_mesh_provider(frame_index: int):
+        if series.outcomes[frame_index].status is FrameStatus.POSE_ABSENT:
+            return None  # Hiding the hand is how an absent pose reads on screen.
+        if frame_index not in cache:
+            cache.clear()
+            cache[frame_index] = _to_polydata(geometry.hand_mesh(frame_index))
+        return cache[frame_index]
+
+    frames = []
+    for outcome in series.outcomes:
+        label, color = _STATUS_PRESENTATION[outcome.status]
+        field = outcome.field
+        frames.append(
+            ContactDepthFrameView(
+                frame_index=outcome.frame_index,
+                time_s=outcome.time_s,
+                status_label=label,
+                status_color=color,
+                points=None if field is None else field.points,
+                # Penetration depth is -signed_depth_mm: positive, deeper = larger.
+                penetration_depth_mm=None if field is None else -field.signed_depth_mm,
+                max_penetration_depth_mm=(
+                    None if field is None else field.max_penetration_depth_mm
+                ),
+            )
+        )
+
+    app = QApplication.instance()
+    owns_app = app is None
+    if owns_app:
+        app = QApplication(sys.argv)
+
+    window = ContactDepthFieldViewer(
+        frames=frames,
+        forearm_meshes_by_frame=forearm_meshes,
+        hand_mesh_provider=_hand_mesh_provider,
+        clim_penetration_mm=series.clim_penetration_mm,
+        recording_label=geometry.current_video_filename,
+        window_title=f"Contact depth field — {geometry.current_video_filename}",
+    )
+    window.show()
+
+    if owns_app:
+        app.exec_()
 
 
 # =============================================================================
@@ -763,7 +855,7 @@ if __name__ == "__main__":
     # choice is recorded in the run report.
     motion_npz_suffix = "_handmodel_motion.npz"
 
-    SHOW_VIEWER = False  # Phase 3; raises NotImplementedError until it lands.
+    SHOW_VIEWER = True  # Opens the interactive viewer once the field is computed.
     # ---------------------------------------------------------------------
 
     session_processed_dir = Path(dataset_path) / "2_processed" / "kinect" / session_id

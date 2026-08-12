@@ -86,14 +86,19 @@ Full background and the decision history: [`docs/development/brainstorms/per-ver
 - [x] Determinism test: the same frame computed twice returns bit-identical arrays.
 - [ ] The field is index-aligned with the existing `contact_points` array: `len(depths) ==
       len(contact_points)` asserted for every frame of a full recording.
-- [ ] Viewer launches on one recording, shows contact vertices coloured by depth with a colourbar
+- [x] Viewer launches on one recording, shows contact vertices coloured by depth with a colourbar
       reading **"Penetration depth (mm)"**, and the slider scrubs all frames without the colour
-      scale changing.
-- [ ] Colour limits are computed **once** over the whole recording and are constant while scrubbing
-      (verified by reading the same vertex's colour at two different frames with equal depth).
-- [ ] Frames with zero contact render without a blank/collapsed viewport.
-- [ ] Scrubbing the slider across a 3000-frame recording stays responsive (no per-frame SDF
-      recomputation — the field is precomputed before the window opens).
+      scale changing. *(Verified on `ST14-01 / block-order-01`; screenshots in the Phase 3 block.)*
+- [x] Colour limits are computed **once** over the whole recording and are constant while scrubbing.
+      *(Verified more strongly than the plan's suggested spot check: every one of the 3143 frames was
+      drawn in sequence and `actor.mapper.scalar_range` asserted equal to the global
+      `clim_penetration_mm` — 0 deviations. A 4-vertex/0.081 mm patch and a 913-vertex/12.909 mm
+      patch therefore render on the same scale, which the screenshots show.)*
+- [x] Frames with zero contact render without a blank/collapsed viewport.
+- [x] Scrubbing the slider across a 3000-frame recording stays responsive (no per-frame SDF
+      recomputation — the field is precomputed before the window opens). *(Measured: 0 SDF calls
+      after the window opens; ~2 ms/frame of dataset updates. The remaining ~62 ms/frame is entirely
+      inside `plotter.render()` — see Phase 3 deviation 6.)*
 
 ## Definitions
 
@@ -253,7 +258,9 @@ Each of these is a documented, already-paid-for lesson; violating one reintroduc
 - **Never `remove_actor` + `add_mesh` per frame.** `add_mesh(..., copy_mesh=False)` once, then
   update `mesh["depth"]` in place and set `actor.mapper.scalar_range` directly. PyVista's
   keep-extremum scalar-bar logic only ever expands `clim`; one all-zero frame permanently corrupts
-  the LUT. (Verified on PyVista 0.46.1 — the pinned version.)
+  the LUT. (Verified on PyVista 0.46.1 — the pinned version. **Superseded in Phase 3:** the
+  installed version is 0.47.1, where the failure mode is per-frame autoscale rather than monotonic
+  expansion. The mitigation is unchanged — see Phase 3 deviation 1.)
 - **Call `ResetCameraClippingRange()` on every empty→non-empty bounds transition**, and seed an
   invisible `pv.Box` bounds proxy. Frame 0 commonly has no contact; without this the viewport is
   blank until the user rotates. (`bug-neural-kinect-viewer-initial-render.md`)
@@ -460,29 +467,134 @@ per-vertex sign distribution, which only the viewer will reveal.
 ### Phase 3: Viewer
 **Goal:** Interactive 3D view with colourbar and time slider.
 
-- [ ] 3.1 — `ContactDepthFieldViewer(QMainWindow)`, skeleton adapted from
+**Started:** 2026-08-12
+**Completed:** 2026-08-12
+
+- [x] 3.1 — `ContactDepthFieldViewer(QMainWindow)`, skeleton adapted from
       `postprocessed_scene_viewer.py`: `QtInteractor` central, bottom bar with `QSlider` +
       frame label + play/pause.
-- [ ] 3.2 — Context actors: forearm mesh (grey, opaque) and hand mesh (translucent), so the
+- [x] 3.2 — Context actors: forearm mesh (grey, opaque) and hand mesh (translucent), so the
       coloured patch is anatomically interpretable rather than dots in space.
-- [ ] 3.3 — Contact actor via `add_mesh(..., scalars='penetration_depth_mm', cmap='inferno',
+- [x] 3.3 — Contact actor via `add_mesh(..., scalars='penetration_depth_mm', cmap='inferno',
       clim=<global>, show_scalar_bar=True, scalar_bar_args={'title': 'Penetration depth (mm)'},
       copy_mesh=False)`. **This is new ground — no existing viewer in the repo uses a scalar bar.**
-- [ ] 3.4 — `_update_frame()`: update points and the scalar array **in place**; never
+- [x] 3.4 — `_update_frame()`: update points and the scalar array **in place**; never
       `clear()`/`remove_actor()`; `ResetCameraClippingRange()` then `render()`.
-- [ ] 3.5 — Invisible `pv.Box` bounds proxy + empty→non-empty clipping-range handling for
+- [x] 3.5 — Invisible `pv.Box` bounds proxy + empty→non-empty clipping-range handling for
       zero-contact frames.
-- [ ] 3.6 — Deferred first render via `showEvent` + `QTimer.singleShot(0, ...)`.
-- [ ] 3.7 — 30–80 ms debounce `QTimer` on slider drag; play timer at 33 ms.
-- [ ] 3.8 — On-screen readout: frame index, time, contact vertex count (guide 03 §7 — show the
+- [x] 3.6 — Deferred first render via `showEvent` + `QTimer.singleShot(0, ...)`.
+- [x] 3.7 — 30–80 ms debounce `QTimer` on slider drag; play timer at 33 ms.
+- [x] 3.8 — On-screen readout: frame index, time, contact vertex count (guide 03 §7 — show the
       denominator; a 3-vertex patch and a 300-vertex patch must not look equally authoritative).
-- [ ] 3.9 — `closeEvent` → `plotter.close()` to release VTK resources.
+- [x] 3.9 — `closeEvent` → `plotter.close()` to release VTK resources.
 
 **Files Modified:**
 - `code/src/preprocessing/motion_analysis/tactile_quantification/gui/contact_depth_field_viewer.py` — new
-- `code/src/preprocessing/motion_analysis/tactile_quantification/gui/__init__.py` — export
+- `code/src/preprocessing/motion_analysis/tactile_quantification/gui/__init__.py` — lazy export
+- `code/scripts/_3_preprocessing/_4_somatosensory_quantification/poc_contact_depth_field.py` —
+  `launch_viewer()` implemented (was `NotImplementedError`); `SHOW_VIEWER = True`
 
 **Dependencies:** Phase 2
+
+#### Phase 3 execution results (real data, `social-touch` conda env, plain PowerShell terminal)
+
+Run on `ST14-01 / block-order-01` (3143 frames, 1208 with contact, global penetration `clim =
+[-0.000004, 12.908786] mm`) through the production `launch_viewer()` path, with the `QApplication`
+created by the harness so the window could be scrubbed programmatically and captured.
+
+**The PoC's scientific question — centre or rim?** **Centre.** The radial depth profile of the
+deepest frame (1470, 913 vertices, 12.909 mm) binned by normalised distance from the patch
+centroid is monotonically decreasing:
+
+| normalised radius | 0–0.2 | 0.2–0.4 | 0.4–0.6 | 0.6–0.8 | 0.8–1.0 |
+|---|---|---|---|---|---|
+| mean penetration (mm), frame 1470 (n=913) | 11.413 | 9.049 | 6.027 | 2.812 | 1.315 |
+| mean penetration (mm), frame 1807 (n=147) | 5.488 | 4.097 | 2.140 | 1.122 | 0.666 |
+
+The single deepest vertex sits at normalised radius 0.171 and 0.144 respectively. Visually the
+patch is a smooth bright core fading to black at the rim, with no rim-peaked ring and no bullseye
+artefact. The geometric field therefore **agrees in kind** with the Hertzian expectation that
+motivates the whole per-vertex weighting idea; it says nothing about the profile's *shape* beyond
+being centre-peaked and monotone.
+
+**Sign speckle — measured, and structurally bounded.** Over 251 434 contact vertices, exactly
+**1** has `signed_depth_mm > 0`, at `+3.8e-6 mm`, in 1 frame. That is float32 noise, not speckle.
+The reason matters and is a finding in its own right: the patch definition admits a vertex only
+when *every* vertex of some incident triangle satisfies `d < EPSILON = 1e-5`, so **no displayed
+vertex can have a positive depth larger than 1e-5 mm by construction**. The non-watertight hand
+mesh risk is therefore *invisible to this viewer* — the patch filter removes exactly the vertices
+that would expose it. Detecting real sign inversion would require rendering the unfiltered cropped
+signed-distance field, which the series does not carry. The risk is neither confirmed nor refuted
+here; it is unobservable through this instrument, and that is the honest result.
+
+**Colour-scale invariance.** All 3143 frames were drawn in sequence and
+`actor.mapper.scalar_range` compared to the global `clim` on every one: **0 deviations**.
+
+**Per-frame cost** (1600×950): forearm swap 0.01 ms, hand update 0.93 ms, contact update 0.88 ms,
+clipping range 0.09 ms, readout 0.07 ms — and `plotter.render()` **62.08 ms**. Zero SDF work after
+the window opens. Median 59.7 ms, p99 79.3 ms.
+
+**Phase 3 deviations from the plan as written** (each deliberate; flagged for review):
+
+1. **PyVista 0.47.1 changed the scalar-bar failure mode; the mitigation is unchanged.** Re-measured
+   as the handoff demanded. The knowledge base's 0.46.1 finding — a `remove_actor` + `add_mesh`
+   cycle makes the cached `clim` *only ever expand* — **does not reproduce on 0.47.1**. What
+   happens instead: with an explicit `clim` the range is now held correctly across in-place scalar
+   updates, `DeepCopy` resizes, empty frames *and* remove/add cycles; with **no** explicit `clim` it
+   plainly autoscales per frame (10.0 → 1.0 → 3.0 tracking each frame's own data). So the defect
+   became a different lie, not a fixed bug, and the required practice is identical: pass a global
+   `clim`, mutate in place, re-assert `actor.mapper.scalar_range`. Two *new* 0.47.1 facts worth
+   recording: `add_mesh` raises `ValueError` on a zero-point dataset unless `allow_empty_mesh` is
+   set (done per-plotter, not globally), and **`pv.Sphere()` hard-crashes this environment's
+   interpreter** (`0xC06D007F` delay-load DLL failure) — hence `pv.Box` for the bounds proxy and no
+   sphere markers. `pv.Box`, `pv.Cube` and `np.linalg.norm` are fine.
+2. **The scalar bar needs an explicit `color`.** Not in the plan's call shape. Without it the bar's
+   title and tick labels inherit the theme's black and are invisible against the black background —
+   the gradient renders, the words do not. First screenshot had a silent, unlabelled colourbar.
+3. **The viewer defines its own input DTO, `ContactDepthFrameView`; the driver adapts.** The plan's
+   contract says the viewer takes `List[ContactDepthFrame]`, but `ContactDepthFrame` carries no
+   frame *status*, and the three-state `FrameStatus` lives in the Phase 2 *script* — a `src`
+   package must not import from `code/scripts/`. The viewer therefore receives, per frame, a
+   display label **and a display colour** chosen by the producer. The viewer never sees the enum,
+   which is what makes it structurally incapable of collapsing `NO_CONTACT` into `POSE_ABSENT`.
+4. **The sign flip and the per-frame maximum are supplied, not derived.** `penetration_depth_mm =
+   -signed_depth_mm` is applied once in `launch_viewer()`, and the per-frame maximum comes from
+   `ContactDepthFrame.max_penetration_depth_mm`, which Phase 1 already defines. The viewer performs
+   no arithmetic on the field it draws. The one number it does compute is `len(points)` — the
+   cardinality of its own input, required by task 3.8.
+5. **Context geometry crosses the Open3D boundary in the driver, not the viewer.** The viewer takes
+   `pv.PolyData` for the forearm and a `Callable[[int], Optional[pv.PolyData]]` for the hand, so
+   "must not know about Open3D" holds literally. Returning `None` from the provider is how an
+   absent pose reads on screen (the hand actor is hidden), giving the two field-absent states a
+   second visual channel beyond the label.
+6. **Drag debounce set to 80 ms, the top of the plan's band, not the middle.** The measured render
+   is 62 ms; a 50 ms timer would queue renders behind the drag. 80 ms keeps at most one outstanding.
+   The play timer stays at the specified 33 ms, so playback *requests* 30 fps and VTK delivers ~16.
+   The bottleneck is entirely the translucent-hand transparency pass, not the data path.
+7. **`ResetCameraClippingRange()` is called unconditionally, not only on empty→non-empty.** Task
+   3.5 asks for the transition; an unconditional call is a strict superset, costs 0.09 ms on a
+   four-actor scene, and removes a whole class of "which transitions did I remember?" bugs. This is
+   also what the repo's working `postprocessed_scene_viewer.py` does.
+8. **`gui/__init__.py` exports lazily (PEP 562 `__getattr__`), not eagerly.** `preprocessing.
+   motion_analysis.__init__` imports a sibling module from this package, so an eager re-export
+   would drag PyQt5/pyvistaqt/VTK into every compute-only import. Verified: importing
+   `preprocessing.motion_analysis` does **not** import `contact_depth_field_viewer`. (It does still
+   pull PyQt5 and pyvista, via the pre-existing eager `ObjectsInteractionVisualizer` import — a
+   condition this phase inherits and does not worsen.)
+9. **`SHOW_VIEWER` in the driver's `__main__` block flipped to `True`.** It was `False` only because
+   the seam raised.
+
+**Not verified** (stated plainly rather than assumed):
+
+- **Flicker during a human slider drag.** Frames were driven programmatically and captured as
+  stills; nothing in the capture can show or exclude flicker. What *is* excluded is its usual
+  cause — no actor is added or removed per frame, and no `plotter.clear()` exists in the hot path.
+- **Mouse interaction with the docked control bar.** The layout follows the constraint
+  (`QtInteractor` is the sole central widget, controls in a `QDockWidget`), and every control's slot
+  was exercised programmatically, but no click was performed by hand.
+- **The forearm-fallback recording (`ST13-03 / block-order-02`) in the viewer.** The multi-key
+  forearm swap path is implemented and unit-exercised on synthetic data with keys `{0, 15}`;
+  `ST14-01` has a single key so its real-data path was not taken.
 
 ---
 
@@ -515,25 +627,38 @@ per-vertex sign distribution, which only the viewer will reveal.
       nothing. The oracle is the pre-refactor code transcribed verbatim.
 
 ### Manual Verification
-- [ ] Launch on one recording; confirm the colourbar reads "Penetration depth (mm)" with a sensible
-      numeric range.
-- [ ] Scrub the slider start→end: colour scale does not change; no flicker; no blank viewport.
-- [ ] Land on a zero-contact frame: window stays rendered, context geometry visible.
-- [ ] Visually confirm the deepest colour sits near the **centre** of a fingertip contact patch,
-      not at its rim. *If it does not, that is a finding, not a bug to hide* — it would mean the
-      geometric field disagrees with the Hertzian expectation and the weighting premise needs
-      revisiting.
-- [ ] Inspect for sign **speckle** (isolated vertices with inverted sign) — the expected signature
-      of the non-watertight hand mesh. Record whether it occurs and how often.
-- [ ] Run from a plain terminal, not only under the VS Code debugger (interactive plot windows and
-      GPU/CuPy availability both behave differently under debugpy).
+- [x] Launch on one recording; confirm the colourbar reads "Penetration depth (mm)" with a sensible
+      numeric range. *(Reads exactly that, ticked `-0.00 … 12.91` mm.)*
+- [~] Scrub the slider start→end: colour scale does not change; no flicker; no blank viewport.
+      *(Colour scale: all 3143 frames, 0 deviations. Blank viewport: none, on contact, no-contact
+      and frame-0 frames. **Flicker: not verifiable from stills** — see Phase 3 "Not verified".)*
+- [x] Land on a zero-contact frame: window stays rendered, context geometry visible.
+- [x] Visually confirm the deepest colour sits near the **centre** of a fingertip contact patch,
+      not at its rim. *(Centre-peaked and monotone to the rim; radial profile tabulated in the
+      Phase 3 block.)*
+- [x] Inspect for sign **speckle** (isolated vertices with inverted sign) — the expected signature
+      of the non-watertight hand mesh. Record whether it occurs and how often. *(1 vertex in
+      251 434, at +3.8e-6 mm. But the patch definition bounds any positive depth to < 1e-5 mm by
+      construction, so this instrument **cannot** observe real speckle — see Phase 3.)*
+- [x] Run from a plain terminal, not only under the VS Code debugger (interactive plot windows and
+      GPU/CuPy availability both behave differently under debugpy). *(All runs were plain
+      PowerShell; no debugpy involved.)*
 
 ### Edge Cases
-- [ ] Frame 0 with no contact (the documented blank-viewport trigger).
-- [ ] Recording where `get_forearms_with_fallback` falls back to a previous block's mesh.
-- [ ] Contact patch of exactly one triangle (3 vertices).
-- [ ] Hand mesh entirely inside the forearm mesh.
-- [ ] Recording with zero contact frames throughout — viewer must open and say so, not crash.
+- [x] Frame 0 with no contact (the documented blank-viewport trigger). *(`ST14-01` frame 0 is a
+      no-contact frame; renders with context geometry and the status line.)*
+- [ ] Recording where `get_forearms_with_fallback` falls back to a previous block's mesh. *(The
+      compute path is verified on `ST13-03 / block-order-02` in Phase 2; the **viewer** was not run
+      on it.)*
+- [x] Contact patch of exactly one triangle (3 vertices). *(Nearest real case: a 4-vertex,
+      0.081 mm patch at frame 2279 renders as four near-black points with the count and the depth
+      both stated in the readout.)*
+- [ ] Hand mesh entirely inside the forearm mesh. *(Not exercised; the field function's
+      all-negative sentinel would raise before the viewer ever saw it.)*
+- [x] Recording with zero contact frames throughout — viewer must open and say so, not crash.
+      *(Synthetic case: opens, no contact actor and no colourbar are created — a colour scale over
+      data that does not exist would be fiction — and the readout reads "colour scale: undefined —
+      no contact in this recording".)*
 
 ---
 
@@ -577,8 +702,9 @@ per-vertex sign distribution, which only the viewer will reveal.
 | **Hand mesh is not watertight** after `remove_vertices_by_index(excluded_vertex_ids)` — signed distance is formally undefined on an open mesh, and returns a *plausible number* rather than erroring | High | High | Pre-existing, inherited, **not fixed here**. The per-vertex field makes it visible for the first time (sign speckle) where `max()` hid it. Manual verification explicitly looks for it; findings feed the follow-up plan. Do not silently repair. |
 | Winding inversion from negative Procrustes scale flips every sign | Med | High | Load via `HandMotionManager` (carries the guard); add the all-negative sentinel raise; `inspect_handmodel_scales.py` exists as a diagnostic |
 | Refactor changes production output | Low | High | Full-CSV reproduction test, bit-identical, over a whole recording — not a spot check |
-| PyVista scalar-bar `clim` corruption on an empty frame | Med | Med | Global fixed `clim`; in-place scalar update; never remove/add actor. Documented and version-verified on the pinned 0.46.1 |
-| Blank viewport on zero-contact frame 0 | High | Low | Bounds proxy + `ResetCameraClippingRange()` on empty→non-empty |
+| PyVista scalar-bar `clim` corruption on an empty frame | Med | Med | Global fixed `clim`; in-place scalar update; never remove/add actor. **Retired:** re-measured on the installed 0.47.1 and asserted over all 3143 frames — 0 deviations (Phase 3 deviation 1) |
+| Blank viewport on zero-contact frame 0 | High | Low | Bounds proxy + `ResetCameraClippingRange()` on empty→non-empty. **Retired:** `ST14-01` frame 0 is a no-contact frame and renders correctly |
+| Non-watertight hand mesh is invisible to the PoC | — | Med | **New, found in Phase 3.** The patch definition admits only vertices with `d < EPSILON`, so no displayed vertex can carry a positive depth above 1e-5 mm. Sign speckle is *unobservable* through this viewer — 1 vertex in 251 434, at float32 noise level. Exposing it needs the unfiltered cropped SDF, which the series does not carry |
 | Slider unresponsive on long recordings | Med | Med | Precompute all frames before opening; debounce timer; no SDF in the callback |
 | Memory: whole recording of fields held in RAM | Low | Med | One recording ≈ 3k frames × ~300 pts × 4 float64 ≈ tens of MB. Report the figure in Phase 2.5; if it surprises, that number sizes the future Parquet sidecar |
 | Depth field contradicts the Hertzian premise (peak not central) | Med | High | This is the PoC's actual scientific question. Surfaced by manual verification. A negative result is a valid, valuable outcome — the geometric overlap profile is parabolic and its support is ~√2× the true Hertz contact radius, so disagreement is *expected* in degree if not in kind |
