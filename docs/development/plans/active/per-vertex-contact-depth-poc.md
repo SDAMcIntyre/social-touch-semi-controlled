@@ -359,22 +359,103 @@ fatal crash in `test_hand_motion_manager.py`. Phase 1 leaves that set exactly un
 ### Phase 2: Standalone driver
 **Goal:** One recording runs end-to-end and produces an in-memory field series.
 
-- [ ] 2.1 — `poc_contact_depth_field.py` with the guarded CuPy import at module top.
-- [ ] 2.2 — Load geometry via `HandMotionManager` (**not** raw `np.load`),
+**Started:** 2026-08-12
+**Completed:** 2026-08-12
+
+- [x] 2.1 — `poc_contact_depth_field.py` with the guarded CuPy import at module top.
+- [x] 2.2 — Load geometry via `HandMotionManager` (**not** raw `np.load`),
       `HandMetadataFileHandler`, `ForearmFrameParametersFileHandler`, `ForearmCatalog`,
       `get_forearms_with_fallback(use_mesh=True)`.
-- [ ] 2.3 — Iterate frames replicating the controller's semantics: `update_reference()` when
+- [x] 2.3 — Iterate frames replicating the controller's semantics: `update_reference()` when
       `frame_id` is a key in the forearm dict; `remove_vertices_by_index(excluded_vertex_ids)`
       before contact computation.
-- [ ] 2.4 — Print which forearm mesh was used per block (surface the fallback).
-- [ ] 2.5 — Compute global `clim` over the whole recording; report frame count, contact-frame
+- [x] 2.4 — Print which forearm mesh was used per block (surface the fallback).
+- [x] 2.5 — Compute global `clim` over the whole recording; report frame count, contact-frame
       count, and the depth range.
-- [ ] 2.6 — `__main__` block with hardcoded paths following `stabilise_hand_motion.py:128-141`.
+- [x] 2.6 — `__main__` block with hardcoded paths following `stabilise_hand_motion.py:128-141`.
 
 **Files Modified:**
 - `code/scripts/_3_preprocessing/_4_somatosensory_quantification/poc_contact_depth_field.py` — new
+- `code/tests/test_contact_depth_field.py` — one-line fix to the Phase 1 regression test
+  (unplanned, see deviation 5)
 
 **Dependencies:** Phase 1
+
+**Phase 2 execution results** (real data, `social-touch` conda env, Open3D 0.19.0):
+
+| Recording | Frames | Contact | No contact | Absent pose | Signed depth range (mm) | Field RAM |
+|-----------|--------|---------|------------|-------------|--------------------------|-----------|
+| `ST14-01 / block-order-01` | 3143 | 1208 | 1935 | 0 | `[-12.908786, +0.000004]` | **7.67 MB** |
+| `ST13-03 / block-order-02` (fallback case) | 2434 | 560 | 1874 | 0 | `[-6.185465, -0.000015]` | 4.20 MB |
+
+The 7.67 MB figure answers the plan's open memory question: a whole recording of fields is
+**~8 MB of array payload**, roughly 2.5 kB/frame, so the future Parquet sidecar is small and
+whole-session batching is not memory-constrained. (Points + depths + normals only; Python object
+overhead excluded, ~200 extra bytes per frame.)
+
+The `ST13-03` run exercises the forearm fallback and a mid-recording reference switch: key `0` is
+reported as `FALLBACK — not a snapshot of this block` alongside the loader's own two log records
+naming block 1, and key `74` names the block's own `*_frames_0074-0108_avg_N35_mesh.obj`.
+
+**Regression invariant, measured (not merely written):** driven over `ST14-01 / block-order-01`
+against the committed `*_contact_and_kinematic_data.csv`, the driver reproduces
+`contact_detected` on **3143/3143** frames and `contact_depth` **bit-identically**
+(`np.array_equal`, max abs diff `0.0`) on all **1208** contact frames, and
+`len(signed_depth_mm) == len(contact_points)` holds on every one of them. The Success Criteria
+checkboxes stay unticked because the *committed test* still skips without a bundle — this was a
+driver-level measurement, not the test running.
+
+**Open finding for Phase 3 (manual verification):** no absent-pose frames and no carried-forward
+poses occurred in either recording, so the "zero vs absent" hazard is not exercised by this data.
+The sign-speckle question is untouched — `max(|d|)` is bit-identical but says nothing about the
+per-vertex sign distribution, which only the viewer will reveal.
+
+**Phase 2 deviations from the plan as written** (each deliberate; flagged for review):
+
+1. **Hand meshes are not materialised as a list.** The plan's filter `[1]` says "hand meshes";
+   `RecordingGeometry` instead exposes `hand_mesh(i)`, which builds one on demand. A 3143-frame
+   recording is ~110 MB of Open3D meshes that are each consumed exactly once, and the viewer needs
+   arbitrary single frames, not all of them at once. One accessor also means the compute stage and
+   the viewer cannot disagree about what "the hand at frame *i*" is. It returns a fresh object
+   every call, which is what makes the in-place `remove_vertices_by_index` safe.
+2. **The 4x4 pose matrix is rebuilt in the driver.** `validate_pose_transform()` must see the
+   transform, but `HandMotionManager` applies `T·R·S` inside `__getitem__` and exposes no accessor
+   for it. `RecordingGeometry.pose_matrix()` mirrors those four lines. This is genuine, knowing
+   duplication; the clean fix is a `pose_matrix(index)` accessor on `HandMotionManager`, which is
+   out of scope here.
+3. **Three-state `FrameStatus`, and a fourth diagnostic that is deliberately *not* a state.**
+   `CONTACT` / `NO_CONTACT` / `POSE_ABSENT` keep "zero" and "absent" apart as the plan requires.
+   But `HandMotionManager` has no representation for an absent pose: on sticker dropout it copies
+   the previous frame's transform, so a dropped frame is indistinguishable from a tracked one after
+   `load()`. `POSE_ABSENT` therefore fires only on genuinely detectable absence (non-finite pose or
+   vertices), and the bit-identical-pose-repeat count is reported separately as a *diagnostic*,
+   explicitly labelled as the NPZ's dropout signature and explicitly not used to classify frames.
+   Inventing a classification from a heuristic would have been worse than reporting the gap.
+4. **Frame 0 must carry a forearm reference or the driver raises.** The controller seeds its
+   processor from `next(iter(references_mesh))` — insertion order, not key 0 — which is a silent
+   fallback. `get_forearms_with_fallback` documents key `0` as guaranteed, so the driver asserts it
+   instead. Behaviourally identical on all real data; louder if the catalog ever changes shape.
+5. **One-line fix to `code/tests/test_contact_depth_field.py` (a Phase 1 file).** Its regression
+   test read the reference CSV with a bare `pd.read_csv`. pandas' default float parser perturbs
+   ~9% of the values (105/1208 frames here) by exactly one ULP, so the test's `np.array_equal`
+   bit-identity assertion would have failed spuriously the moment a real bundle was supplied —
+   against values the pipeline had written correctly. Adding `float_precision="round_trip"` is what
+   turned the measurement above from "max abs diff 1.8e-15" into "bit-identical".
+6. **`get_forearms_with_fallback` provenance is captured from the logging stream.** It returns
+   geometry only and emits the fallback's origin as `logging.info`/`logging.warning` on the root
+   logger. Task 2.4 is satisfied by attaching a temporary handler around the call and re-emitting
+   the records in the run report, rather than re-deriving the answer in parallel — a parallel
+   derivation would be a second definition of "which mesh was used" and could drift.
+7. **Environment: the conda env is `social-touch`, not `social-touch-env`** (CLAUDE.md names the
+   latter; only the former exists and carries Open3D 0.19.0). CuPy is **not installed** in it, so
+   the guarded import took its `except` branch on every run — the import-order constraint is still
+   honoured for machines that do have it. Console output needs `PYTHONIOENCODING=utf-8`: an
+   unrelated module on the import path prints an emoji that the cp1252 default codec cannot encode.
+8. **Importing the driver transitively imports PyVista (0.47.1).** The driver itself imports
+   neither PyVista nor Qt, but `preprocessing.forearm_extraction.__init__` is a facade that pulls
+   `point_cloud_visualizer`. Two consequences for Phase 3: the boundary is enforced by this file
+   only, not by the package; and the installed PyVista is **0.47.1**, not the 0.46.1 the plan's
+   scalar-bar findings were version-verified against — re-verify the `clim` behaviour there.
 
 ### Phase 3: Viewer
 **Goal:** Interactive 3D view with colourbar and time slider.
@@ -458,14 +539,17 @@ fatal crash in `test_hand_motion_manager.py`. Phase 1 leaves that set exactly un
 
 ## Documentation Plan
 
-- [ ] Module docstring in `poc_contact_depth_field.py` listing the deliberate PoC debt explicitly:
+- [x] Module docstring in `poc_contact_depth_field.py` listing the deliberate PoC debt explicitly:
       no persistence, whole recording in memory, hardcoded paths, no DAG integration.
-- [ ] Short decision record for **sign convention, units, and query direction** — the three things
-      a future maintainer will otherwise re-derive incorrectly.
+- [x] Short decision record for **sign convention, units, and query direction** — the three things
+      a future maintainer will otherwise re-derive incorrectly. *(Full record in
+      `contact_depth_field.py`; one-line restatement plus the Space-1 pairing rule in the driver.)*
 - [ ] Update `docs/development/brainstorms/per-vertex-contact-depth.md` → Status: Handed off.
 - [ ] Add changelog entry `docs/changelogs/per-vertex-contact-depth-poc.md`.
-- [ ] Record which NPZ variant was consumed (raw vs `_stabilised`) — depth magnitudes are sensitive
-      to the pose-smoothing configuration.
+- [x] Record which NPZ variant was consumed (raw vs `_stabilised`) — depth magnitudes are sensitive
+      to the pose-smoothing configuration. *(Both Phase 2 runs used the **raw**
+      `_handmodel_motion.npz`; the variant is a named constant in the `__main__` config block and
+      the file name is echoed in every run report.)*
 - [ ] **Not** updating CLAUDE.md — no architectural change lands in this PoC.
 
 ---

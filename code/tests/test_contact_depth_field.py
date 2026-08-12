@@ -725,7 +725,11 @@ def test_recording_regression_against_reference_csv():
 
     pd = pytest.importorskip("pandas")
 
-    reference = pd.read_csv(bundle["csv"])
+    # float_precision="round_trip" is mandatory, not decoration: pandas' default
+    # CSV float parser perturbs ~9% of the values in a real recording by one ULP,
+    # which would fail the bit-identity assertion below on values the pipeline
+    # actually wrote correctly. Measured on the ST14-01 block-order-01 reference.
+    reference = pd.read_csv(bundle["csv"], float_precision="round_trip")
     forearm = o3d.io.read_triangle_mesh(str(bundle["forearm"]))
     if not forearm.has_vertex_normals():
         forearm.compute_vertex_normals()
