@@ -26,9 +26,15 @@ recording overlays.  Key design invariants:
 
 Contact depth colouring
 ~~~~~~~~~~~~~~~~~~~~~~~
-When the block spec carries a ``ContactDepthFieldSeries``, the contact actor is
-driven by that field instead of the CSV's ``contact_points`` blob, and is
-coloured by penetration depth.  This viewer is a **pure sink** for that data:
+The block spec carries a ``contact_depth_field_loader`` — a zero-argument
+callable — which ``_load_block`` invokes for the block being opened and for no
+other; a batch is around a hundred blocks and loading them all up front is a
+regression the callable exists to prevent.  When that call returns a
+``ContactDepthFieldSeries``, the contact actor is driven by that field instead of
+the CSV's ``contact_points`` blob, and is coloured by penetration depth.  A
+``None`` return is an announced absence, and the "Colour by depth" checkbox is
+present but disabled for that block.  This viewer is a **pure sink** for that
+data:
 
 - The colour range arrives precomputed and **global** over the whole recording
   (``series.clim_penetration_mm``).  Per-frame autoscaling is prohibited — it
@@ -162,7 +168,7 @@ from preprocessing.motion_analysis.tactile_quantification.gui.contact_depth_fiel
 )
 from preprocessing.stickers_analysis import XYZDataFileHandler
 
-from ..contact_depth_field_series import ContactDepthFieldSeries
+from ..contact_depth_field_series import ContactDepthFieldLoader, ContactDepthFieldSeries
 from .sticker_velocity_compass import StickerVelocityCompass
 
 
@@ -200,12 +206,27 @@ class NeuralKinectBlockSpec:
     registration_transforms_by_forearm_key:
         Optional mapping ``{forearm_key: 4×4 transform}`` for registered-frame
         display.  ``None`` → identity (no registration applied).
-    contact_depth_field:
-        Optional per-vertex contact depth field, already indexed by frame and
-        carrying its own **global** colour range.  ``None`` is an explicit
-        *absent* state — the producer resolved the sidecar, did not find it, and
-        said so — not a display preference.  When present it becomes the source
-        of the contact geometry, replacing the CSV's ``contact_points`` blob.
+    contact_depth_field_loader:
+        Optional **zero-argument callable** returning this block's per-vertex
+        contact depth field — already indexed by frame and carrying its own
+        **global** colour range — or ``None`` when the sidecar is absent.
+
+        A *loader*, not a loaded series, and deliberately so.  Every spec in a
+        batch is built before the window opens; a batch is around a hundred
+        blocks and a block's field is 10^5-10^6 vertices, so a loaded series
+        here would mean minutes of parquet before the first frame renders and
+        gigabytes resident for blocks nobody looks at.  The viewer calls it
+        inside :meth:`NeuralKinectViewer._load_block`, once, for the block the
+        user actually opened.
+
+        A callable rather than a path because the viewer must not learn about
+        files, parquet or session identity: it calls what it was handed and asks
+        nothing about where the data comes from.
+
+        A ``None`` *return* is an explicit absent state — the producer resolved
+        the sidecar, did not find it, and said so at that moment — not a display
+        preference.  When a series comes back it becomes the source of the
+        contact geometry, replacing the CSV's ``contact_points`` blob.
     """
     xyz_csv_path: Path
     kinect_mkv_path: Path
@@ -216,7 +237,7 @@ class NeuralKinectBlockSpec:
     recording_name: str
     merged_csv_path: Optional[Path]
     registration_transforms_by_forearm_key: Optional[Dict[int, np.ndarray]] = field(default=None)
-    contact_depth_field: Optional[ContactDepthFieldSeries] = field(default=None)
+    contact_depth_field_loader: Optional[ContactDepthFieldLoader] = field(default=None)
 
 
 # ---------------------------------------------------------------------------
@@ -1060,12 +1081,28 @@ class NeuralKinectViewer(QMainWindow):
         # ------------------------------------------------------------------
         # 4a. Contact depth field (columnar; needs no parsing of any kind)
         #
-        # Taken verbatim from the spec.  ``None`` means the producer looked for
-        # the sidecar and did not find it; it has already reported that.  When
-        # present this series — not the CSV blob — supplies the contact
-        # geometry, so the drawn points and the drawn depths cannot disagree.
+        # The spec carries a LOADER, not a series, and this call is the moment
+        # the parquet is read — for THIS block only.  Loading every block's
+        # field while the specs were being built was a measured regression: a
+        # hundred blocks of 10^5-10^6 vertices each, all read before the window
+        # ever appeared.
+        #
+        # A ``None`` return means the producer looked for the sidecar and did
+        # not find it; it reported that as it happened.  When a series comes
+        # back it — not the CSV blob — supplies the contact geometry, so the
+        # drawn points and the drawn depths cannot disagree.
         # ------------------------------------------------------------------
-        self._depth_series: Optional[ContactDepthFieldSeries] = spec.contact_depth_field
+        self._depth_series: Optional[ContactDepthFieldSeries] = None
+        if spec.contact_depth_field_loader is not None:
+            loaded = spec.contact_depth_field_loader()
+            if loaded is not None and not isinstance(loaded, ContactDepthFieldSeries):
+                raise TypeError(
+                    "contact_depth_field_loader returned "
+                    f"{type(loaded).__name__}; it must return a "
+                    "ContactDepthFieldSeries or None. Drawing whatever this is "
+                    "would put unvalidated geometry in the scene."
+                )
+            self._depth_series = loaded
 
         # ------------------------------------------------------------------
         # 4b. Pre-extract contact points indexed by kinect frame
@@ -1374,26 +1411,45 @@ class NeuralKinectViewer(QMainWindow):
         _add_object_group("Hand Mesh",       "hand_meshes",        has_slider=False)
         if self._has_contact_source:
             # "Colour by depth" sits beside the point-size slider so flat colour
-            # stays one click away for comparison.  The checkbox is created only
-            # when a field exists: offering a control that could not do anything
-            # would suggest the data is there when it is not.
-            _contact_extras: Tuple[QWidget, ...] = ()
-            if self._depth_series is not None:
-                depth_cb = QCheckBox("Colour by depth")
-                depth_cb.setChecked(self._colour_contact_by_depth)
+            # stays one click away for comparison.
+            #
+            # The checkbox ALWAYS exists and is enabled/disabled per block; it
+            # is not created conditionally.  Under lazy loading nothing knows at
+            # widget-construction time whether any block in the batch carries a
+            # field, and a control that is absent rather than greyed out reads as
+            # "this viewer cannot do that" instead of "this block has no field".
+            # A disabled box with a tooltip saying why states the actual fact.
+            _has_field = self._depth_series is not None
+            depth_cb = QCheckBox("Colour by depth")
+            depth_cb.setEnabled(_has_field)
+            # blockSignals: seeding the widget must not be mistaken for the user
+            # clicking it.  Without this, a fieldless block would write
+            # ``False`` back over the persisted preference and the next block
+            # that does have a field would open in flat red.
+            depth_cb.blockSignals(True)
+            depth_cb.setChecked(self._colour_contact_by_depth and _has_field)
+            depth_cb.blockSignals(False)
+            if _has_field:
                 low, high = self._depth_series.clim_penetration_mm
                 depth_cb.setToolTip(
                     "Colour contact vertices by penetration depth (inferno), on a "
                     f"colour scale fixed over the whole recording: {low:.2f} to "
                     f"{high:.2f} mm. Unchecked renders them in flat red."
                 )
-                depth_cb.stateChanged.connect(self._on_contact_depth_colour_changed)
-                _contact_extras = (depth_cb,)
+            else:
+                depth_cb.setToolTip(
+                    "This block has no contact depth field sidecar, so there is "
+                    "nothing to colour by and the contact points render in flat "
+                    "red. Run the merging DAG task "
+                    "'filter_contact_depth_field_by_neural_quality' to produce "
+                    "it. Other blocks in this batch may still have one."
+                )
+            depth_cb.stateChanged.connect(self._on_contact_depth_colour_changed)
             _add_object_group(
                 "Contact Points",
                 "contact_points",
                 has_slider=True,
-                extra_widgets=_contact_extras,
+                extra_widgets=(depth_cb,),
             )
 
         for sticker_name in self._stickers_xyz_dict:

@@ -23,6 +23,16 @@ Features:
   - Contact vertices coloured by penetration depth from the per-vertex contact
     depth field sidecar, on a colour scale fixed over the whole recording.
 
+Everything here is LAZY
+-----------------------
+Building a block spec must stay cheap: it validates paths, resolves transforms
+and hands the viewer *references*.  The heavy artifacts — point clouds, meshes,
+hand motion, the merged CSV and the contact depth field — are materialised by
+``NeuralKinectViewer._load_block`` for the block currently displayed, and for no
+other.  A batch is around a hundred blocks, so a spec builder that read anything
+substantial would put the whole dataset between the user and the first pixel.
+The depth field travels as a zero-argument loader for exactly that reason.
+
 Artifacts come from ``blocks_filtered/``
 ----------------------------------------
 Both the merged CSV and the contact depth field are resolved from
@@ -72,8 +82,9 @@ from primary_processing import (
 )
 
 from merging.contact_depth_field_series import (
-    ContactDepthFieldSeries,
-    resolve_contact_depth_field,
+    BoundedContactDepthFieldCache,
+    ContactDepthFieldLoader,
+    make_contact_depth_field_loader,
 )
 from merging.gui.neural_kinect_scene_viewer import NeuralKinectViewer, NeuralKinectBlockSpec
 from preprocessing.forearm_extraction import (
@@ -221,34 +232,59 @@ def resolve_viewer_paths(config: KinectConfig) -> Dict[str, Optional[Path]]:
 # Contact depth field
 # ---------------------------------------------------------------------------
 
-def load_contact_depth_field(
+def build_contact_depth_field_loader(
     config: KinectConfig,
     paths: Dict[str, Optional[Path]],
-) -> Optional[ContactDepthFieldSeries]:
-    """Load this block's contact depth field, or report its absence out loud.
+    cache: BoundedContactDepthFieldCache,
+) -> ContactDepthFieldLoader:
+    """Return a zero-argument loader for this block's contact depth field.
 
-    The whole recording is read and the **global** colour range computed here,
-    before any frame is drawn.  That is deliberate: per-frame autoscaling would
-    make the animation lie about relative depth, so the range is a property of
-    the recording and must be fixed before the first render.
+    **Nothing is read here.**  Building the loader is a closure over a resolved
+    path and must stay free: the batch builds one of these per block — around a
+    hundred of them — before the viewer window exists.  Reading the field at
+    this point was a measured regression (99 blocks × 10^5-10^6 vertices of
+    parquet before the first pixel); the read now happens inside the viewer's
+    ``_load_block``, for the one block the user opened.
 
-    A missing sidecar is an explicit ABSENT state, not a silent fallback — the
-    message printed below is the whole point of returning ``None`` rather than
-    quietly leaving the contact points flat.  A sidecar that exists but cannot
-    be decoded raises, as it should.
+    The whole recording is still read in one go when the loader *is* called, and
+    the **global** colour range computed then — before any frame of that block
+    is drawn.  Per-frame autoscaling would make the animation lie about relative
+    depth, so the range stays a property of the recording, fixed before its
+    first render.
+
+    A missing sidecar remains an explicit ABSENT state, not a silent fallback:
+    the resolution message is printed at the moment the block is opened, which
+    is the whole point of returning ``None`` rather than quietly leaving the
+    contact points flat.  A sidecar that exists but cannot be decoded raises, as
+    it should.
+
+    Args:
+        config: The block's Kinect config, used only for the log prefix.
+        paths: Output of :func:`resolve_viewer_paths`.
+        cache: Shared bounded cache — see ``BoundedContactDepthFieldCache``.
+
+    Returns:
+        A callable returning the series, or ``None`` for an absent sidecar.
     """
     depth_path = paths["contact_depth_field_path"]
     block_name = config.source_video.name
-    if depth_path is None:
-        print(
-            f"[{block_name}] No merged output directory is configured, so no "
-            f"contact depth field can be resolved — depth colouring DISABLED."
-        )
-        return None
 
-    resolution = resolve_contact_depth_field(depth_path)
-    print(f"[{block_name}] {resolution.message}")
-    return resolution.series
+    def _report(message: str) -> None:
+        print(f"[{block_name}] {message}")
+
+    if depth_path is None:
+        def _no_merged_output_dir() -> None:
+            # Not a fallback: an announced absence.  Reported on every open
+            # because every open is a moment the user might expect depth.
+            _report(
+                "No merged output directory is configured, so no contact depth "
+                "field can be resolved — depth colouring DISABLED."
+            )
+            return None
+
+        return _no_merged_output_dir
+
+    return make_contact_depth_field_loader(depth_path, _report, cache)
 
 
 # ---------------------------------------------------------------------------
@@ -258,12 +294,15 @@ def load_contact_depth_field(
 def _build_plain_spec(
     config: KinectConfig,
     paths: Dict[str, Optional[Path]],
-    depth_series: Optional[ContactDepthFieldSeries] = None,
+    depth_field_loader: Optional[ContactDepthFieldLoader] = None,
 ) -> Optional[NeuralKinectBlockSpec]:
     """
     Validate required paths and return a ``NeuralKinectBlockSpec`` for the
     plain (non-transformed) viewer task.  Returns ``None`` when any required
     file is missing (with a printed warning).
+
+    *depth_field_loader* is passed through unchanged and **never called here** —
+    building a spec must not read a depth field.
     """
     for key in ("xyz_csv_path", "kinect_mkv_path", "forearm_metadata_path"):
         p = paths[key]
@@ -289,7 +328,7 @@ def _build_plain_spec(
         recording_name=paths["recording_name"],
         merged_csv_path=paths["merged_csv_path"],
         registration_transforms_by_forearm_key=None,
-        contact_depth_field=depth_series,
+        contact_depth_field_loader=depth_field_loader,
     )
 
 
@@ -297,7 +336,7 @@ def _build_transformed_spec(
     config: KinectConfig,
     paths: Dict[str, Optional[Path]],
     options: Dict,
-    depth_series: Optional[ContactDepthFieldSeries] = None,
+    depth_field_loader: Optional[ContactDepthFieldLoader] = None,
 ) -> Optional[NeuralKinectBlockSpec]:
     """
     Build and validate a ``NeuralKinectBlockSpec`` for the transformed-viewer
@@ -305,6 +344,9 @@ def _build_transformed_spec(
     - Any required path is missing.
     - No registration transforms file exists.
     - No applicable transform key can be resolved for this block.
+
+    *depth_field_loader* is passed through unchanged and **never called here** —
+    building a spec must not read a depth field.
     """
     block_name = config.source_video.name
 
@@ -364,12 +406,13 @@ def _build_transformed_spec(
         recording_name=paths["recording_name"],
         merged_csv_path=paths["merged_csv_path"],
         registration_transforms_by_forearm_key=transforms_by_forearm_key,
-        # The same series object is shared with the plain spec.  Registered-frame
-        # mode rotates and translates the depth *points* with the ICP matrix the
-        # cloud, hand mesh and stickers already use; the depth *values* are
-        # invariant under a rigid transform, so nothing is recomputed and no
-        # second copy of the field is needed.
-        contact_depth_field=depth_series,
+        # The same loader OBJECT is shared with the plain spec, and behind it the
+        # same bounded cache, so opening this block in both viewers reads the
+        # parquet once.  Registered-frame mode rotates and translates the depth
+        # *points* with the ICP matrix the cloud, hand mesh and stickers already
+        # use; the depth *values* are invariant under a rigid transform, so
+        # nothing is recomputed and no second copy of the field is needed.
+        contact_depth_field_loader=depth_field_loader,
     )
 
 
@@ -402,6 +445,14 @@ def run_batch_sequentially(
     plain_blocks: Dict[Tuple[str, str], NeuralKinectBlockSpec] = {}
     transformed_blocks: Dict[Tuple[str, str], NeuralKinectBlockSpec] = {}
 
+    # One cache for the whole batch, deliberately tiny.  Two entries is the
+    # smallest size that reproduces what the eager version gave *within* a
+    # block — plain and transformed specs share a loader, and stepping to the
+    # next block and back re-reads nothing — without letting a batch of ~100
+    # blocks accumulate in RAM.  An unbounded memo would re-create the very
+    # regression this loader indirection exists to fix, just more slowly.
+    depth_field_cache = BoundedContactDepthFieldCache(maxsize=2)
+
     for block_file in block_files:
         print(f"--- Loading block: {block_file.name} ---")
         try:
@@ -410,21 +461,26 @@ def run_batch_sequentially(
             paths = resolve_viewer_paths(config)
             key: Tuple[str, str] = (config.session_id, config.block_id)
 
-            # Loaded once per block and shared by both specs: the field is
-            # space-invariant under the registration transform, so the two
-            # viewers differ only in where the points are drawn, not in what
-            # they are.
-            depth_series = load_contact_depth_field(config, paths)
+            # Built once per block and shared by both specs.  This does NOT
+            # read the sidecar — the viewer calls the loader when it opens the
+            # block.  Sharing one loader object means the field is space-
+            # invariant under the registration transform, so the two viewers
+            # differ only in where the points are drawn, not in what they are,
+            # and the second viewer to ask for a still-cached block pays
+            # nothing.
+            depth_field_loader = build_contact_depth_field_loader(
+                config, paths, depth_field_cache
+            )
 
             if dag_handler_template.can_run(plain_task):
-                spec = _build_plain_spec(config, paths, depth_series)
+                spec = _build_plain_spec(config, paths, depth_field_loader)
                 if spec is not None:
                     plain_blocks[key] = spec
                     print(f"[{block_file.name}] Plain spec built for {key}.")
 
             if dag_handler_template.can_run(transformed_task):
                 spec = _build_transformed_spec(
-                    config, paths, transformed_options, depth_series
+                    config, paths, transformed_options, depth_field_loader
                 )
                 if spec is not None:
                     transformed_blocks[key] = spec

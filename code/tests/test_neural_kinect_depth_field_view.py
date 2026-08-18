@@ -11,14 +11,18 @@ The assertions that matter are the ones about *not* inventing anything:
 * ``penetration_depth_mm`` is exactly ``-signed_depth_mm``, not approximately;
 * a frame with no contact is absent, not present-and-empty;
 * a **missing** sidecar produces an explicit, announceable absent state rather
-  than a crash or a silently flat rendering.
+  than a crash or a silently flat rendering;
+* and — section 7 — building a block's *loader* reads nothing at all.  A batch
+  is around a hundred blocks; the eager version of this code read every one of
+  them before the viewer window opened, so the laziness is a guarded property,
+  not an implementation detail.
 """
 
 from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Dict, Sequence
+from typing import Dict, List, Sequence
 
 import numpy as np
 import pandas as pd
@@ -39,9 +43,11 @@ from preprocessing.motion_analysis.tactile_quantification.io.contact_depth_field
     write_contact_depth_field_table,
 )
 from merging.contact_depth_field_series import (  # noqa: E402
+    BoundedContactDepthFieldCache,
     ContactDepthFieldResolution,
     ContactDepthFieldSeries,
     load_contact_depth_field_series,
+    make_contact_depth_field_loader,
     resolve_contact_depth_field,
 )
 
@@ -405,3 +411,210 @@ def test_depths_are_untouched_by_the_registration_transform(sidecar: Path) -> No
 
     assert not np.array_equal(moved.astype(np.float32), points)
     assert series.frame(2)[1].tobytes() == before
+
+
+# ---------------------------------------------------------------------------
+# 7. Laziness — building a loader must read nothing
+#
+# This section is the regression guard for the bug it was written after: the
+# pipeline resolved every block's depth field while assembling the batch, so 99
+# blocks of 10^5-10^6 vertices were read before the viewer window appeared.  The
+# fix moved the read behind a zero-argument callable.  Without these tests that
+# regression is invisible — the eager version produced identical pictures.
+# ---------------------------------------------------------------------------
+
+
+class _CountingReporter:
+    """Collects resolution messages and counts how often it was called."""
+
+    def __init__(self) -> None:
+        self.messages: List[str] = []
+
+    def __call__(self, message: str) -> None:
+        self.messages.append(message)
+
+    @property
+    def calls(self) -> int:
+        return len(self.messages)
+
+
+def test_building_many_loaders_reads_nothing(tmp_path: Path) -> None:
+    """N loaders, zero reads. The headline invariant of the lazy contract."""
+    cache = BoundedContactDepthFieldCache(maxsize=2)
+
+    paths = [_write(tmp_path / f"block_{i:02d}.parquet", _ROWS) for i in range(20)]
+    reporter = _CountingReporter()
+    loaders = [make_contact_depth_field_loader(p, reporter, cache) for p in paths]
+
+    assert len(loaders) == 20
+    assert reporter.calls == 0, "building a loader must not resolve anything"
+    assert len(cache) == 0, "building a loader must not populate the cache"
+
+
+def test_loading_one_block_invokes_exactly_one_loader(tmp_path: Path) -> None:
+    """Opening one block reads that block and no other."""
+    cache = BoundedContactDepthFieldCache(maxsize=2)
+    reporter = _CountingReporter()
+    paths = [_write(tmp_path / f"b{i}.parquet", _ROWS) for i in range(5)]
+    loaders = [make_contact_depth_field_loader(p, reporter, cache) for p in paths]
+
+    series = loaders[2]()
+
+    assert isinstance(series, ContactDepthFieldSeries)
+    assert reporter.calls == 1
+    assert str(paths[2]) in reporter.messages[0]
+    assert len(cache) == 1
+
+
+def test_the_same_loader_serves_two_specs_with_one_read(tmp_path: Path) -> None:
+    """Plain and transformed specs share a loader object; the parquet is read once.
+
+    The two viewers differ only in where the points are drawn.  Reading the
+    field twice for one block would be pure waste.
+    """
+    cache = BoundedContactDepthFieldCache(maxsize=2)
+    reporter = _CountingReporter()
+    loader = make_contact_depth_field_loader(
+        _write(tmp_path / "shared.parquet", _ROWS), reporter, cache
+    )
+
+    plain = loader()
+    transformed = loader()
+
+    assert plain is transformed, "a cache hit must return the same object"
+    assert reporter.calls == 1, "the second call must not re-resolve"
+
+
+def test_the_cache_is_bounded_so_a_batch_cannot_accumulate(tmp_path: Path) -> None:
+    """Visiting many blocks must not leave them all resident.
+
+    An unbounded memo would reach exactly the all-blocks-in-RAM state the lazy
+    loader exists to prevent, just one block at a time.
+    """
+    cache = BoundedContactDepthFieldCache(maxsize=2)
+    reporter = _CountingReporter()
+    loaders = [
+        make_contact_depth_field_loader(
+            _write(tmp_path / f"c{i}.parquet", _ROWS), reporter, cache
+        )
+        for i in range(6)
+    ]
+
+    for loader in loaders:
+        loader()
+
+    assert len(cache) == 2
+    assert cache.maxsize == 2
+    assert reporter.calls == 6
+
+
+def test_an_evicted_block_is_re_read_and_re_reported(tmp_path: Path) -> None:
+    """Eviction costs a read; it must never quietly hand back a stale absence."""
+    cache = BoundedContactDepthFieldCache(maxsize=2)
+    reporter = _CountingReporter()
+    first = make_contact_depth_field_loader(
+        _write(tmp_path / "first.parquet", _ROWS), reporter, cache
+    )
+    second = make_contact_depth_field_loader(
+        _write(tmp_path / "second.parquet", _ROWS), reporter, cache
+    )
+    third = make_contact_depth_field_loader(
+        _write(tmp_path / "third.parquet", _ROWS), reporter, cache
+    )
+
+    first()
+    second()
+    third()          # evicts `first`
+    assert reporter.calls == 3
+
+    again = first()  # must be a genuine re-read, announced again
+    assert isinstance(again, ContactDepthFieldSeries)
+    assert reporter.calls == 4
+
+
+def test_a_recently_used_block_is_not_evicted(tmp_path: Path) -> None:
+    """The cache is LRU, not FIFO: re-opening a block keeps it resident."""
+    cache = BoundedContactDepthFieldCache(maxsize=2)
+    reporter = _CountingReporter()
+    a = make_contact_depth_field_loader(
+        _write(tmp_path / "a.parquet", _ROWS), reporter, cache
+    )
+    b = make_contact_depth_field_loader(
+        _write(tmp_path / "b.parquet", _ROWS), reporter, cache
+    )
+    c = make_contact_depth_field_loader(
+        _write(tmp_path / "c.parquet", _ROWS), reporter, cache
+    )
+
+    a()
+    b()
+    a()               # refreshes `a`, so `b` is now the least recent
+    assert reporter.calls == 2
+
+    c()               # evicts `b`, not `a`
+    assert reporter.calls == 3
+    a()               # still cached
+    assert reporter.calls == 3
+
+
+def test_a_lazily_loaded_absent_sidecar_is_reported_when_the_block_opens(
+    tmp_path: Path,
+) -> None:
+    """Absence is announced at open time — later than before, but never dropped."""
+    missing = tmp_path / "gone_contact_depth_field.parquet"
+    cache = BoundedContactDepthFieldCache(maxsize=2)
+    reporter = _CountingReporter()
+    loader = make_contact_depth_field_loader(missing, reporter, cache)
+
+    assert reporter.calls == 0          # nothing said at build time...
+    assert loader() is None
+    assert reporter.calls == 1          # ...everything said at open time
+    assert "DISABLED" in reporter.messages[0]
+    assert str(missing) in reporter.messages[0]
+
+
+def test_an_absent_sidecar_is_cached_as_absent_not_re_resolved(tmp_path: Path) -> None:
+    """``None`` is a resolved outcome, so it caches like any other."""
+    cache = BoundedContactDepthFieldCache(maxsize=2)
+    reporter = _CountingReporter()
+    loader = make_contact_depth_field_loader(
+        tmp_path / "absent.parquet", reporter, cache
+    )
+
+    assert loader() is None
+    assert loader() is None
+    assert reporter.calls == 1
+    assert len(cache) == 1
+
+
+def test_a_broken_sidecar_still_raises_through_the_loader(tmp_path: Path) -> None:
+    """Laziness delays the read; it must not soften the failure."""
+    broken = tmp_path / "broken.parquet"
+    broken.write_bytes(b"not a parquet file")
+    cache = BoundedContactDepthFieldCache(maxsize=2)
+    loader = make_contact_depth_field_loader(broken, _CountingReporter(), cache)
+
+    with pytest.raises(Exception):
+        loader()
+
+
+def test_a_cache_that_can_hold_nothing_is_rejected() -> None:
+    with pytest.raises(ValueError, match="maxsize"):
+        BoundedContactDepthFieldCache(maxsize=0)
+
+
+def test_the_loaded_series_is_identical_to_a_direct_load(tmp_path: Path) -> None:
+    """Going through the loader must not change a single number."""
+    path = _write(tmp_path / "same.parquet", _ROWS)
+    direct = load_contact_depth_field_series(path)
+    lazy = make_contact_depth_field_loader(
+        path, _CountingReporter(), BoundedContactDepthFieldCache(maxsize=2)
+    )()
+
+    assert lazy.clim_penetration_mm == direct.clim_penetration_mm
+    assert lazy.signed_depth_range_mm == direct.signed_depth_range_mm
+    assert lazy.coordinate_space == direct.coordinate_space
+    assert sorted(lazy.points_by_frame) == sorted(direct.points_by_frame)
+    for frame in direct.points_by_frame:
+        assert np.array_equal(lazy.frame(frame)[0], direct.frame(frame)[0])
+        assert lazy.frame(frame)[1].tobytes() == direct.frame(frame)[1].tobytes()

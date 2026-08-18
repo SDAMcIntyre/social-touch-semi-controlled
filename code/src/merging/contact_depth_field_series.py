@@ -42,6 +42,17 @@ about Qt, VTK/PyVista, actors, sessions, DAGs or Prefect.  Equally, nothing it
 returns carries a file path or a session identity into the viewer: the DTO is
 geometry, scalars and a colour range, and nothing else.
 
+Laziness contract
+-----------------
+A batch is around a hundred blocks and a block's field is 10^5-10^6 vertices, so
+"resolve every block up front" is not an option: it is minutes of parquet before
+the first pixel and gigabytes resident afterwards.  A block therefore travels as
+a :data:`ContactDepthFieldLoader` — a zero-argument callable built by
+:func:`make_contact_depth_field_loader` — and the read happens when the consumer
+opens that block, not when the batch is assembled.  Building loaders must stay
+free; :class:`BoundedContactDepthFieldCache` puts a hard ceiling on what stays
+resident once the reads do happen.
+
 Coordinate space
 ----------------
 Whatever the sidecar declares — in practice Kinect Space 1, millimetres.  This
@@ -52,9 +63,10 @@ invariant under a rigid transform and are never recomputed.
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Callable, Dict, Optional, Tuple
 
 import numpy as np
 
@@ -63,11 +75,21 @@ from preprocessing.motion_analysis.tactile_quantification.io.contact_depth_field
 )
 
 __all__ = [
+    "BoundedContactDepthFieldCache",
+    "ContactDepthFieldLoader",
     "ContactDepthFieldResolution",
     "ContactDepthFieldSeries",
     "load_contact_depth_field_series",
+    "make_contact_depth_field_loader",
     "resolve_contact_depth_field",
 ]
+
+#: A zero-argument handle on one block's depth field.  Calling it performs the
+#: read; ``None`` is the explicit *absent* outcome, already reported by whoever
+#: built the loader.  The consumer (the viewer) is handed one of these instead of
+#: a path so that it never learns about parquet, directories or session ids — it
+#: calls what it was given, exactly when it needs the data and not before.
+ContactDepthFieldLoader = Callable[[], Optional["ContactDepthFieldSeries"]]
 
 
 @dataclass(frozen=True)
@@ -337,3 +359,115 @@ def load_contact_depth_field_series(path: Path) -> ContactDepthFieldSeries:
         signed_depth_range_mm=(signed_min, signed_max),
         coordinate_space=coordinate_space,
     )
+
+
+# ---------------------------------------------------------------------------
+# Lazy access: a callable per block, plus a bounded cache behind it
+# ---------------------------------------------------------------------------
+
+
+class BoundedContactDepthFieldCache:
+    """At most *maxsize* resolved depth fields, keyed by sidecar path (LRU).
+
+    Why a *bounded* cache and not a plain memo
+    ------------------------------------------
+    A batch is on the order of 100 blocks and a block's field is 10^5-10^6
+    vertices.  A per-loader memo — one slot each, never evicted — would hold
+    every block a session visits, so a user who scrolls through the whole batch
+    ends up with the same all-blocks-resident footprint that eager loading had,
+    just reached more slowly.  A hard ceiling makes the worst case a property of
+    this object rather than of the user's browsing.
+
+    Two entries is the smallest size that keeps the behaviour the eager version
+    had *within* a block: the plain and transformed specs for the same block
+    share one loader, and stepping to the next block and back is one read, not
+    two.  Anything larger buys nothing that matters and costs memory.
+
+    A cache hit is silent.  A miss resolves and reports, so a message is
+    printed exactly when a read actually happens — never as a claim about a
+    read that was served from memory.
+
+    Args:
+        maxsize: Maximum number of resolved outcomes retained.
+
+    Raises:
+        ValueError: If *maxsize* is below 1.
+    """
+
+    def __init__(self, maxsize: int = 2) -> None:
+        if maxsize < 1:
+            raise ValueError(
+                f"maxsize must be at least 1, got {maxsize}. A cache that can "
+                "hold nothing is not a cache; drop the cache instead."
+            )
+        self._maxsize = int(maxsize)
+        self._entries: "OrderedDict[Path, Optional[ContactDepthFieldSeries]]" = OrderedDict()
+
+    @property
+    def maxsize(self) -> int:
+        """Maximum number of retained entries."""
+        return self._maxsize
+
+    def __len__(self) -> int:
+        return len(self._entries)
+
+    def get_or_resolve(
+        self,
+        path: Path,
+        report: Callable[[str], None],
+    ) -> Optional[ContactDepthFieldSeries]:
+        """Return the series for *path*, resolving and reporting it on a miss.
+
+        Args:
+            path: The sidecar location.
+            report: Called with :attr:`ContactDepthFieldResolution.message` when
+                a resolution actually happens.  Not called on a cache hit.
+
+        Returns:
+            The loaded series, or ``None`` when the sidecar does not exist —
+            the same explicit absent state :func:`resolve_contact_depth_field`
+            produces, already announced through *report*.
+
+        Raises:
+            ValueError: If the file exists but is not a readable depth field.
+        """
+        key = Path(path)
+        if key in self._entries:
+            self._entries.move_to_end(key)
+            return self._entries[key]
+
+        resolution = resolve_contact_depth_field(key)
+        report(resolution.message)
+
+        self._entries[key] = resolution.series
+        while len(self._entries) > self._maxsize:
+            self._entries.popitem(last=False)
+        return resolution.series
+
+
+def make_contact_depth_field_loader(
+    path: Path,
+    report: Callable[[str], None],
+    cache: BoundedContactDepthFieldCache,
+) -> ContactDepthFieldLoader:
+    """Build the zero-argument loader a block spec carries.
+
+    Nothing is read here.  Building a loader for every block of a batch must
+    stay free — that is the whole point of handing the consumer a callable
+    rather than a loaded series.
+
+    Args:
+        path: The block's sidecar location.
+        report: Where the resolution message goes when a read happens.
+        cache: Shared bounded cache; see
+            :class:`BoundedContactDepthFieldCache` for why it is bounded.
+
+    Returns:
+        A callable returning the series, or ``None`` for an absent sidecar.
+    """
+    resolved_path = Path(path)
+
+    def _load() -> Optional[ContactDepthFieldSeries]:
+        return cache.get_or_resolve(resolved_path, report)
+
+    return _load

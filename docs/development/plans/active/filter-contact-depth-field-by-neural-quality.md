@@ -118,7 +118,10 @@ exclusion is the substance of this task; relocating the file is the incidental p
       scrubbing forward or back. The fixed-range half is *measured*: over 1,200 real frames driven
       through the exact actor/mapper calls the viewer makes, the mapper reported exactly one distinct
       `scalar_range`. The rendering half is verified by code path only — the GUI was not launched
-      (see Phase 6's closing note).
+      (see Phase 6's closing note). *Updated by 6.10:* the GUI has since been launched briefly and
+      non-interactively; it opened a block with no sidecar and then one with a field, loading each
+      lazily and raising nothing. What still remains unproven is purely visual — that the rendered
+      colours look right on screen.
 - [x] The visualisation pipeline resolves both its CSV and its depth field from `blocks_filtered/`,
       so every displayed contact frame has depth data and no frame renders uncoloured by accident.
 - [x] A missing depth field leaves the viewer running with colouring disabled and an explicit
@@ -597,10 +600,12 @@ inspecting contact *alongside neural data*.
 - [x] 6.5 — "Colour by depth" checkbox added to the **Contact Points** group, below its point-size
       slider, via a new `extra_widgets` parameter on `_add_object_group`. Checked by default when the
       field is present; the preference lives on the viewer (not the block) so it survives hot-swaps
-      like the visibility flags and point sizes beside it. The checkbox is created **only** when a
-      field exists — offering a control that could do nothing would imply data that is not there. Its
-      tooltip states the fixed range in mm. No DAG option was added: 6.5 fixes the default at "on
-      when present", so an option would be a knob with one sensible setting (guide 05 §YAGNI).
+      like the visibility flags and point sizes beside it. The checkbox **always exists** and is
+      enabled/disabled per block (revised by 6.10 — it was originally created only when a field
+      existed, which lazy loading made unsafe). Its tooltip states the fixed range in mm when a field
+      is present, and why the control is dead when it is not. No DAG option was added: 6.5 fixes the
+      default at "on when present", so an option would be a knob with one sensible setting
+      (guide 05 §YAGNI).
 - [x] 6.6 — The depth points go through the same `apply_rigid_transform(..., T)` with the same
       per-forearm-key matrix `T` that section 1/2/3/4 of `_update_frame` already apply to the cloud,
       forearm, hand mesh and stickers. `penetration_depth_mm` is passed through untouched — verified
@@ -631,16 +636,69 @@ inspecting contact *alongside neural data*.
       `approx`), and `test_missing_parquet_yields_an_explicit_absent_state` /
       `test_missing_parquet_does_not_raise`.
 
+- [x] 6.10 — **Startup regression fixed: the depth field is now loaded lazily.** 6.1-6.9 shipped with
+      `load_contact_depth_field()` called inside the per-block loop of `run_batch_sequentially`, i.e.
+      *before* the viewer window opened. That violated the file's own contract — every other artifact
+      the loop touches is a path or a small piece of metadata, and the viewer materialises point
+      clouds, meshes, hand motion and the merged CSV only for the block on screen, in `_load_block`.
+      With the DAG config grown to 11 session groups (99 blocks, 77 of them carrying a sidecar) the
+      loop read ~84 M parquet rows before the first pixel and held every block's field resident.
+      Measured on the user's machine: **7.29 s** from flow start to
+      `Launching plain NeuralKinectViewer with 99 block(s)`, with 77 depth fields read up front.
+      **The fix.** `NeuralKinectBlockSpec.contact_depth_field` became
+      `contact_depth_field_loader: Optional[Callable[[], Optional[ContactDepthFieldSeries]]]`, and
+      `_load_block` calls it. A *callable* rather than a path on purpose: the viewer still knows
+      nothing about parquet, directories or session identity — it calls what it was handed, once, for
+      the block it is opening, and raises if the return is neither a `ContactDepthFieldSeries` nor
+      `None`. The pipeline builds the closure in `build_contact_depth_field_loader()` (replacing
+      `load_contact_depth_field()`), which reads nothing.
+      **The absent state is unchanged in kind, only in timing.** The `ContactDepthFieldResolution`
+      message is still printed verbatim — now when the block is first opened rather than at startup —
+      so absence stays announced, never a silent fallback.
+      **Caching.** One `BoundedContactDepthFieldCache(maxsize=2)` per batch, shared by every loader.
+      The plain and transformed specs for a block share the *same loader object*, so opening a block
+      in both viewers reads the parquet once, exactly as the eager version did; two entries also make
+      "next block and back" free. It is bounded because an unbounded memo would re-create the
+      original regression one block at a time — a user who browses the whole batch would end with all
+      99 fields resident. A cache hit is silent; only a real read reports.
+      **Checkbox edge case.** "Colour by depth" is now always constructed inside the Contact Points
+      group and `setEnabled()` per block, with `blockSignals` around the seeding `setChecked` so a
+      fieldless block cannot overwrite the persisted preference. Ordering verified:
+      `_load_block` assigns `self._depth_series` (step 4a) well before it rebuilds the right panel
+      (step 10), so the panel always sees the current block's state. The old
+      "create it only when a field exists" branch was in fact still *correct* under eager loading —
+      the panel is rebuilt on every hot-swap — but it encoded an assumption that no longer holds by
+      construction, and a greyed-out control states "this block has no field" where a missing control
+      states "this viewer cannot do that".
+      **All Phase 6 invariants preserved** — global per-block clim computed when the field is loaded,
+      no `clear()`/`add_mesh()`/`remove_actor()` in `_update_frame`, `scalar_range` re-asserted after
+      every dataset swap, scalar bar removed and re-added on hot-swap, `penetration = -signed`,
+      `inferno`.
+      **Result: 7.29 s → 0.83 s** to reach `Launching plain NeuralKinectViewer with 99 block(s)`
+      (~8.8×), with 77 eager parquet reads replaced by exactly one read for the block actually opened.
+      Confirmed on a real 35 s run: the first block (no sidecar) reported its absence *after* the
+      launch line and rendered with the checkbox disabled; switching to a block that has a field read
+      it then, loaded it, and re-enabled the control — no exception either way.
+- [x] 6.11 — Regression guard: 11 new tests in `code/tests/test_neural_kinect_depth_field_view.py`
+      §7 (38 total, up from 27). `test_building_many_loaders_reads_nothing` asserts that building 20
+      loaders resolves **zero** times and leaves the cache empty;
+      `test_loading_one_block_invokes_exactly_one_loader` asserts one open = one read. Without these
+      the regression is invisible, because the eager version produced identical pictures. Also
+      covered: the shared-loader single-read guarantee, the `maxsize=2` bound, LRU eviction and
+      re-report, absent-caches-as-absent, and that a broken sidecar still raises through the loader.
+
 **Files Modified:**
 - `code/scripts/merging_pipeline_neuron_to_kinect_visualisation.py` — repoint at `blocks_filtered/`,
-  resolve and load the depth field, print the present/absent message, pass the series to both specs
-- `code/src/merging/contact_depth_field_series.py` — **new**; the adapter layer named in 6.3.
+  build one depth-field *loader* per block (6.10) and hand the same loader object to both specs; the
+  resolution message is printed by the loader when the block is opened
+- `code/src/merging/contact_depth_field_series.py` — **new**; the adapter layer named in 6.3, plus
+  `BoundedContactDepthFieldCache` / `make_contact_depth_field_loader` (6.10).
   Deliberately a separate leaf rather than code inside the pipeline script: the script imports
   Prefect, PyQt5 and the whole viewer stack, so logic living there could not be unit-tested, and the
   architecture contract already separates "resolve and load" from "orchestrate"
 - `code/src/merging/gui/neural_kinect_scene_viewer.py` — scalars on the contact actor, colormap,
-  scalar bar, toggle, transform handling
-- `code/tests/test_neural_kinect_depth_field_view.py` — new
+  scalar bar, toggle, transform handling; spec field is a loader, called in `_load_block` (6.10)
+- `code/tests/test_neural_kinect_depth_field_view.py` — new; §7 laziness guard added by 6.11
 - `configs/merging_pipeline_neuron_to_kinect_visualisation_dag.yaml` — **not modified**; see 6.5 for
   why no option was warranted
 
