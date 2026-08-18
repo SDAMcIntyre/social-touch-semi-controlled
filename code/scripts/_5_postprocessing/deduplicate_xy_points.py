@@ -1,4 +1,5 @@
 import json
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -34,6 +35,90 @@ EPSILON_SOURCES = frozenset({
     EPSILON_SOURCE_INTERACTIVE_MONITOR,
 })
 
+#: CSV column that identifies the Kinect frame a row belongs to. Contact data is
+#: keyed by this value, never by row position: the merged CSV is upsampled to the
+#: nerve rate, so a row index means nothing outside one particular file, while
+#: ``frame_index`` is what every other stage of this pipeline aligns on.
+FRAME_INDEX_COLUMN = "frame_index"
+
+
+@dataclass(frozen=True)
+class DedupMapping:
+    """How one set of points collapsed under (x, y) deduplication.
+
+    Both arrays describe the *input* points, so a parallel per-point payload
+    (e.g. a per-vertex depth field) can be reduced by the very same mapping the
+    CSV was reduced by, instead of re-running the clustering against it — which
+    would diverge silently wherever two candidates are near-equidistant.
+
+    Attributes:
+        kept_indices: 1-D ``intp`` array, ascending, of the input rows that
+            survived. ``deduped == points[kept_indices]``.
+        labels: 1-D ``intp`` array with one entry per *input* row, giving the
+            cluster that row was assigned to. Rows sharing a label collapsed
+            into a single survivor — the one whose index is in *kept_indices*.
+            Labels are arbitrary ints, dense over ``range(n_clusters)``; there
+            is no noise label, because the clustering runs with
+            ``min_samples=1``.
+    """
+
+    kept_indices: np.ndarray
+    labels: np.ndarray
+
+    @property
+    def n_input(self) -> int:
+        """Number of points the mapping was computed from."""
+        return len(self.labels)
+
+    @property
+    def n_removed(self) -> int:
+        """Number of points that were collapsed into a survivor."""
+        return len(self.labels) - len(self.kept_indices)
+
+
+def deduplicate_xy_mapping(points: np.ndarray, epsilon: float) -> DedupMapping:
+    """Compute the (x, y) deduplication mapping for *points*, applying nothing.
+
+    Split out of :func:`deduplicate_xy` so the mapping can be reused by a
+    consumer that must reduce a second array the same way. There is exactly one
+    implementation of the clustering; :func:`deduplicate_xy` is a thin
+    application of what this returns.
+
+    Args:
+        points: Array of shape (N, 3) in mm, float64.
+        epsilon: Radius in mm. Two points within this distance in (x, y) are
+            considered in the same cluster.
+
+    Returns:
+        The :class:`DedupMapping` describing which rows survive and which rows
+        collapsed together.
+    """
+    if len(points) == 0:
+        return DedupMapping(
+            kept_indices=np.empty(0, dtype=np.intp),
+            labels=np.empty(0, dtype=np.intp),
+        )
+
+    labels = DBSCAN(eps=epsilon, min_samples=1).fit_predict(points[:, :2])
+
+    # Stable sort: primary key = z ascending; secondary key = original index ascending.
+    order = np.lexsort((np.arange(len(points)), points[:, 2]))
+
+    seen: set[int] = set()
+    kept: list[int] = []
+    for i in order:
+        lbl = int(labels[i])
+        if lbl in seen:
+            continue
+        seen.add(lbl)
+        kept.append(int(i))
+    kept.sort()  # restore input order
+
+    return DedupMapping(
+        kept_indices=np.array(kept, dtype=np.intp),
+        labels=np.asarray(labels, dtype=np.intp),
+    )
+
 
 def deduplicate_xy(
     points: np.ndarray, epsilon: float = 0.35, *, return_indices: bool = False
@@ -57,34 +142,19 @@ def deduplicate_xy(
             Tuple of (deduped_points, n_removed, kept_indices) where
             kept_indices is a 1-D int array such that
             deduped_points == points[kept_indices].
+
+    See :func:`deduplicate_xy_mapping` for the cluster membership itself, which
+    this function discards.
     """
-    if len(points) == 0:
-        if return_indices:
-            return points, 0, np.empty(0, dtype=np.intp)
-        return points, 0
+    mapping = deduplicate_xy_mapping(points, epsilon)
 
-    labels = DBSCAN(eps=epsilon, min_samples=1).fit_predict(points[:, :2])
-
-    # Stable sort: primary key = z ascending; secondary key = original index ascending.
-    order = np.lexsort((np.arange(len(points)), points[:, 2]))
-
-    seen: set[int] = set()
-    kept: list[int] = []
-    for i in order:
-        lbl = int(labels[i])
-        if lbl in seen:
-            continue
-        seen.add(lbl)
-        kept.append(int(i))
-    kept.sort()  # restore input order
-
-    deduped = points[kept]
+    deduped = points[mapping.kept_indices]
     n_removed = len(points) - len(deduped)
     assert len(deduped) + n_removed == len(points), (
         f"Deduplication invariant violated: {len(deduped)} + {n_removed} != {len(points)}"
     )
     if return_indices:
-        return deduped, n_removed, np.array(kept, dtype=np.intp)
+        return deduped, n_removed, mapping.kept_indices
     return deduped, n_removed
 
 
@@ -426,6 +496,23 @@ def deduplicate_forearm_ply(input_ply: Path, output_ply: Path, *, epsilon: float
     }
 
 
+def _frame_index_key(value, *, csv_path: Path, row_position: int) -> int:
+    """Coerce a ``frame_index`` cell to the integer key the mapping is stored under.
+
+    The column arrives as float64 because rows without a Kinect frame hold NaN,
+    so the value must be checked, not merely cast: a NaN or a fractional index
+    would otherwise become a silently wrong dict key.
+    """
+    as_float = float(value)
+    if not np.isfinite(as_float) or as_float != int(as_float):
+        raise ValueError(
+            f"Row {row_position} of {csv_path} carries contact points but its "
+            f"{FRAME_INDEX_COLUMN} is {value!r}, which is not a whole number. "
+            f"Contact rows must be anchored to a Kinect frame."
+        )
+    return int(as_float)
+
+
 def deduplicate_contact_points_csv(
     input_csv: Path, output_csv: Path, epsilon: float = 0.35
 ) -> dict:
@@ -442,20 +529,37 @@ def deduplicate_contact_points_csv(
         epsilon: Bin size in mm for (x, y) deduplication.
 
     Returns:
-        Dict with keys n_rows_processed, total_points_before, total_points_after.
+        Dict with keys n_rows_processed, total_points_before, total_points_after
+        and frame_mappings. ``frame_mappings`` maps ``frame_index`` to the
+        :class:`DedupMapping` that was applied to that frame's contact points,
+        for the frames that had any — it is what lets a per-point sidecar be
+        reduced by this CSV's own clustering rather than by a re-run of it.
+
+    Raises:
+        ValueError: If the ``frame_index`` column is absent, if a contact-bearing
+            row has a non-integral ``frame_index``, or if two contact-bearing
+            rows share one ``frame_index`` (which would make the mapping
+            ambiguous).
     """
     df = pd.read_csv(input_csv)
+
+    if FRAME_INDEX_COLUMN not in df.columns:
+        raise ValueError(
+            f"{input_csv} has no {FRAME_INDEX_COLUMN!r} column; the per-frame "
+            f"deduplication mapping cannot be keyed."
+        )
 
     n_rows_processed = 0
     total_points_before = 0
     total_points_after = 0
+    frame_mappings: dict[int, DedupMapping] = {}
 
     new_contact_points = []
     new_location_x = []
     new_location_y = []
     new_location_z = []
 
-    for _, row in df.iterrows():
+    for row_position, (_, row) in enumerate(df.iterrows()):
         raw = row.get("contact_points", None)
         points = parse_contact_points(raw) if raw is not None and str(raw).strip() else []
 
@@ -469,7 +573,20 @@ def deduplicate_contact_points_csv(
         pts_array = np.array(points, dtype=np.float64)
         total_points_before += len(pts_array)
 
-        deduped_array, _ = deduplicate_xy(pts_array, epsilon)
+        mapping = deduplicate_xy_mapping(pts_array, epsilon)
+        deduped_array = pts_array[mapping.kept_indices]
+
+        frame_index = _frame_index_key(
+            row[FRAME_INDEX_COLUMN], csv_path=input_csv, row_position=row_position
+        )
+        if frame_index in frame_mappings:
+            raise ValueError(
+                f"{input_csv} has two contact-bearing rows with "
+                f"{FRAME_INDEX_COLUMN}={frame_index} (second at row {row_position}); "
+                f"the per-frame deduplication mapping would be ambiguous."
+            )
+        frame_mappings[frame_index] = mapping
+
         total_points_after += len(deduped_array)
         n_rows_processed += 1
 
@@ -495,4 +612,5 @@ def deduplicate_contact_points_csv(
         "n_rows_processed": n_rows_processed,
         "total_points_before": total_points_before,
         "total_points_after": total_points_after,
+        "frame_mappings": frame_mappings,
     }

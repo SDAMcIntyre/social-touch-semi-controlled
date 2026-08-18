@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import pytest
 
 # Add scripts to path for imports
@@ -17,10 +18,18 @@ from deduplicate_xy_points import (
     EPSILON_SOURCE_DAG_CONFIG,
     EPSILON_SOURCE_INTERACTIVE_MONITOR,
     FOREARM_DEDUP_METADATA_SCHEMA_VERSION,
+    FRAME_INDEX_COLUMN,
+    DedupMapping,
+    deduplicate_contact_points_csv,
     deduplicate_forearm_ply,
     deduplicate_xy,
+    deduplicate_xy_mapping,
     forearm_dedup_metadata_path,
     write_forearm_dedup_metadata,
+)
+from preprocessing.forearm_extraction.registration.csv_spatial_transformer import (
+    parse_contact_points,
+    serialize_contact_points,
 )
 
 o3d = pytest.importorskip("open3d", reason="deduplicate_forearm_ply needs Open3D")
@@ -795,3 +804,224 @@ class TestDeduplicateForearmPly:
         n_written = len(np.asarray(o3d.io.read_point_cloud(str(out)).points))
         assert payload["n_vertices_deduped"] == n_written
         assert payload["n_vertices_deduped"] == len(stats["kept_indices"])
+
+
+class TestDeduplicateXyMapping:
+    """The mapping is what a parallel per-point payload must be reduced by."""
+
+    def test_labels_cover_every_input_point(self) -> None:
+        pts = np.array([
+            [0.0, 0.0, 2.0],
+            [0.0, 0.0, 0.5],
+            [5.0, 0.0, 1.0],
+        ], dtype=np.float64)
+
+        mapping = deduplicate_xy_mapping(pts, 0.1)
+
+        assert mapping.labels.shape == (len(pts),)
+        assert mapping.n_input == len(pts)
+        assert mapping.n_removed == len(pts) - len(mapping.kept_indices)
+
+    def test_exactly_one_survivor_per_cluster(self) -> None:
+        pts = np.array([
+            [0.0, 0.0, 2.0],
+            [0.0, 0.0, 0.5],
+            [5.0, 0.0, 1.0],
+            [5.05, 0.0, 3.0],
+            [10.0, 0.0, 0.0],
+        ], dtype=np.float64)
+
+        mapping = deduplicate_xy_mapping(pts, 0.1)
+
+        survivor_labels = mapping.labels[mapping.kept_indices]
+        assert len(set(survivor_labels.tolist())) == len(survivor_labels)
+        assert set(survivor_labels.tolist()) == set(mapping.labels.tolist())
+
+    def test_labels_identify_which_rows_collapsed_together(self) -> None:
+        """The group membership — not just the survivors — must be recoverable."""
+        pts = np.array([
+            [0.0, 0.0, 2.0],
+            [0.0, 0.0, 0.5],
+            [5.0, 0.0, 1.0],
+            [5.05, 0.0, 3.0],
+            [10.0, 0.0, 0.0],
+        ], dtype=np.float64)
+
+        mapping = deduplicate_xy_mapping(pts, 0.1)
+
+        np.testing.assert_array_equal(mapping.kept_indices, [1, 2, 4])
+        assert mapping.labels[0] == mapping.labels[1]
+        assert mapping.labels[2] == mapping.labels[3]
+        assert mapping.labels[4] not in (mapping.labels[0], mapping.labels[2])
+        assert mapping.labels[0] != mapping.labels[2]
+
+    def test_agrees_with_deduplicate_xy(self) -> None:
+        """deduplicate_xy is exactly the application of this mapping."""
+        rng = np.random.default_rng(20260818)
+        pts = rng.normal(size=(200, 3))
+
+        deduped, n_removed, kept = deduplicate_xy(pts, 0.2, return_indices=True)
+        mapping = deduplicate_xy_mapping(pts, 0.2)
+
+        np.testing.assert_array_equal(mapping.kept_indices, kept)
+        assert mapping.n_removed == n_removed
+        assert mapping.n_input == len(pts)
+        np.testing.assert_array_equal(pts[mapping.kept_indices], deduped)
+
+    def test_empty_input(self) -> None:
+        mapping = deduplicate_xy_mapping(np.empty((0, 3), dtype=np.float64), 0.5)
+
+        assert mapping.kept_indices.shape == (0,)
+        assert mapping.labels.shape == (0,)
+        assert mapping.kept_indices.dtype == np.intp
+        assert mapping.labels.dtype == np.intp
+        assert mapping.n_input == 0
+        assert mapping.n_removed == 0
+
+    def test_index_arrays_are_intp(self) -> None:
+        pts = np.array([[0.0, 0.0, 0.0], [0.05, 0.0, 1.0]], dtype=np.float64)
+
+        mapping = deduplicate_xy_mapping(pts, 0.5)
+
+        assert mapping.kept_indices.dtype == np.intp
+        assert mapping.labels.dtype == np.intp
+
+    def test_mapping_is_frozen(self) -> None:
+        mapping = deduplicate_xy_mapping(
+            np.array([[0.0, 0.0, 0.0]], dtype=np.float64), 0.5
+        )
+
+        with pytest.raises(AttributeError):
+            mapping.kept_indices = np.empty(0, dtype=np.intp)  # type: ignore[misc]
+
+
+def _contact_cell(points) -> str:
+    """Serialise points the way the upstream CSV writer does (%.1f)."""
+    return serialize_contact_points([(float(x), float(y), float(z)) for x, y, z in points])
+
+
+def _write_contact_csv(path: Path, rows) -> None:
+    """Write a minimal session CSV. *rows* is a list of (frame_index, cell)."""
+    pd.DataFrame({
+        "time": np.arange(len(rows), dtype=np.float64),
+        FRAME_INDEX_COLUMN: [frame for frame, _ in rows],
+        "contact_location_x": [0.0] * len(rows),
+        "contact_location_y": [0.0] * len(rows),
+        "contact_location_z": [0.0] * len(rows),
+        "contact_points": [cell for _, cell in rows],
+    }).to_csv(path, index=False)
+
+
+class TestDeduplicateContactPointsCsvMapping:
+    """The per-frame mapping the depth field will later be reduced by."""
+
+    _POINTS_A = [(0.0, 0.0, 2.0), (0.0, 0.0, 0.5), (5.0, 0.0, 1.0)]
+    _POINTS_B = [(1.0, 1.0, 3.0), (1.0, 1.0, 1.0)]
+
+    def _run(self, tmp_path: Path) -> dict:
+        src = tmp_path / "in.csv"
+        out = tmp_path / "out.csv"
+        _write_contact_csv(src, [
+            (168.0, "[]"),
+            (168.0, _contact_cell(self._POINTS_A)),
+            (169.0, "[]"),
+            (170.0, "[]"),
+            (205.0, _contact_cell(self._POINTS_B)),
+            (206.0, "[]"),
+        ])
+        stats = deduplicate_contact_points_csv(src, out, epsilon=0.1)
+        stats["_output_csv"] = out
+        return stats
+
+    def test_keyed_by_frame_index_not_row_position(self, tmp_path: Path) -> None:
+        stats = self._run(tmp_path)
+
+        assert set(stats["frame_mappings"]) == {168, 205}
+
+    def test_keys_are_plain_ints(self, tmp_path: Path) -> None:
+        stats = self._run(tmp_path)
+
+        assert all(type(key) is int for key in stats["frame_mappings"])
+
+    def test_values_are_dedup_mappings(self, tmp_path: Path) -> None:
+        stats = self._run(tmp_path)
+
+        assert all(
+            isinstance(value, DedupMapping) for value in stats["frame_mappings"].values()
+        )
+
+    def test_mapping_matches_the_written_cell(self, tmp_path: Path) -> None:
+        """Applying the mapping to the input points reproduces the output cell."""
+        stats = self._run(tmp_path)
+        df = pd.read_csv(stats["_output_csv"])
+
+        inputs = {168: self._POINTS_A, 205: self._POINTS_B}
+        for frame, mapping in stats["frame_mappings"].items():
+            cell = df.loc[df[FRAME_INDEX_COLUMN] == frame, "contact_points"].iloc[-1]
+            written = np.asarray(parse_contact_points(cell), dtype=np.float64)
+            expected = np.asarray(inputs[frame], dtype=np.float64)[mapping.kept_indices]
+
+            np.testing.assert_allclose(written, expected, atol=0.05)
+            assert mapping.n_input == len(inputs[frame])
+
+    def test_rows_without_contact_points_get_no_mapping(self, tmp_path: Path) -> None:
+        stats = self._run(tmp_path)
+
+        assert 169 not in stats["frame_mappings"]
+        assert 206 not in stats["frame_mappings"]
+
+    def test_existing_stat_keys_are_unchanged(self, tmp_path: Path) -> None:
+        stats = self._run(tmp_path)
+
+        assert stats["n_rows_processed"] == 2
+        assert stats["total_points_before"] == 5
+        assert stats["total_points_after"] == 3
+
+    def test_missing_frame_index_column_raises(self, tmp_path: Path) -> None:
+        src = tmp_path / "in.csv"
+        pd.DataFrame({
+            "contact_points": [_contact_cell(self._POINTS_A)],
+            "contact_location_x": [0.0],
+            "contact_location_y": [0.0],
+            "contact_location_z": [0.0],
+        }).to_csv(src, index=False)
+
+        with pytest.raises(ValueError, match=FRAME_INDEX_COLUMN):
+            deduplicate_contact_points_csv(src, tmp_path / "out.csv", epsilon=0.1)
+
+    def test_duplicate_frame_index_raises(self, tmp_path: Path) -> None:
+        src = tmp_path / "in.csv"
+        _write_contact_csv(src, [
+            (168.0, _contact_cell(self._POINTS_A)),
+            (168.0, _contact_cell(self._POINTS_B)),
+        ])
+
+        with pytest.raises(ValueError, match="ambiguous"):
+            deduplicate_contact_points_csv(src, tmp_path / "out.csv", epsilon=0.1)
+
+    def test_nan_frame_index_on_a_contact_row_raises(self, tmp_path: Path) -> None:
+        src = tmp_path / "in.csv"
+        _write_contact_csv(src, [(np.nan, _contact_cell(self._POINTS_A))])
+
+        with pytest.raises(ValueError, match="whole number"):
+            deduplicate_contact_points_csv(src, tmp_path / "out.csv", epsilon=0.1)
+
+    def test_fractional_frame_index_on_a_contact_row_raises(self, tmp_path: Path) -> None:
+        src = tmp_path / "in.csv"
+        _write_contact_csv(src, [(168.5, _contact_cell(self._POINTS_A))])
+
+        with pytest.raises(ValueError, match="whole number"):
+            deduplicate_contact_points_csv(src, tmp_path / "out.csv", epsilon=0.1)
+
+    def test_nan_frame_index_on_an_empty_row_is_tolerated(self, tmp_path: Path) -> None:
+        """Non-contact rows carry no mapping, so their frame_index is irrelevant."""
+        src = tmp_path / "in.csv"
+        out = tmp_path / "out.csv"
+        _write_contact_csv(src, [
+            (np.nan, "[]"),
+            (168.0, _contact_cell(self._POINTS_A)),
+        ])
+
+        stats = deduplicate_contact_points_csv(src, out, epsilon=0.1)
+
+        assert set(stats["frame_mappings"]) == {168}

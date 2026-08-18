@@ -310,22 +310,58 @@ v1 output. Its test file passes unchanged.
 
 ### Phase 3: Surface the index mappings
 **Goal:** Both index-consuming stages expose their mapping, with the CSV path byte-identical.
-**Started:** —  **Completed:** —
+**Started:** 2026-08-18 13:55  **Completed:** 2026-08-18 14:10
 
-- [ ] 3.1 — `deduplicate_contact_points_csv`: switch `:345` to `return_indices=True` and accumulate
-      per-frame `kept_indices`. `deduped_array` is the same array either way (`:57`), so the CSV is
-      unchanged.
-- [ ] 3.2 — Additionally surface the DBSCAN `labels` (local at `:42`). `kept_indices` alone supports
-      dropping but **not** the max-magnitude inheritance rule — that needs to know which rows
-      collapsed into which survivor.
-- [ ] 3.3 — `_project_single_csv`: accumulate the per-row KD-tree `indices` (already bound at `:93`)
-      alongside the existing `all_distances` accumulator and widen the return.
-- [ ] 3.4 — Assert the CSV outputs of both stages are byte-identical to a pre-change run.
-- [ ] 3.5 — Tests for both mappings against the existing algorithm tests
-      (`test_deduplicate_xy_points.py:447-504` already covers the `return_indices` contract).
+- [x] 3.1 — `deduplicate_contact_points_csv`: accumulate the per-frame `kept_indices`.
+      *Done, but by a cleaner route than a `return_indices=True` call: the clustering moved into a new
+      `deduplicate_xy_mapping(points, epsilon) -> DedupMapping`, and `deduplicate_xy` became a thin
+      application of what it returns (`points[kept_indices]`). One implementation of the clustering,
+      so the CSV is unchanged by construction rather than by argument.*
+- [x] 3.2 — Additionally surface the DBSCAN `labels`. *Done as the second field of the frozen
+      `DedupMapping` — one entry per **input** point, so the collapsed group of each survivor is
+      recoverable, which is what the max-magnitude inheritance rule needs. A second parallel flag was
+      rejected: `return_indices=True` keeps its exact 3-tuple contract (its tests are untouched) and
+      the mapping is reached through the new function instead.*
+- [x] 3.3 — `_project_single_csv`: accumulate the per-row KD-tree `indices` and widen the return.
+      *Done: it now returns a frozen `ProjectionResult(distances, vertex_indices)`. `distances` is the
+      array it used to return, unchanged; `vertex_indices` is `frame_index → (M,) intp`.*
+- [x] 3.4 — Assert the CSV outputs of both stages are byte-identical to a pre-change run. *Done —
+      evidence below.*
+- [x] 3.5 — Tests for both mappings. *Done — 35 new tests: 8 for `deduplicate_xy_mapping` (including
+      that it agrees with `deduplicate_xy` on a 200-point random cloud), 12 for the dedup CSV mapping,
+      and a new `test_project_contacts_onto_forearm.py` (15) that builds a real 12-vertex lattice and
+      checks the indices against hand-computed nearest vertices and against the coordinates the CSV
+      itself was given.*
+
+**Both mappings are keyed by `frame_index`, never by row position.** The merged CSV is upsampled to
+the nerve rate, so a row index is meaningless outside one particular file, and every other part of the
+pipeline aligns on `frame_index`. The column arrives as float64 (non-Kinect rows hold NaN), so a
+contact-bearing row with a NaN or fractional `frame_index` raises rather than becoming a wrong key,
+and two contact-bearing rows sharing a `frame_index` raise as ambiguous. Verified on real data
+(`ST13-01`, blocks 01-03): `frame_index` is unique across every contact-bearing row.
+
+**Byte-identity evidence (3.4).** `git show HEAD:<path>` extracted both pre-change stage modules to
+the scratchpad; a harness imported the old and new copies by file path in separate processes and ran
+both over the same inputs — two real truncated blocks from
+`3_merged/2022-06-14_ST13-01/` (block-order-01, 30 000 rows, 258 contact frames, 49 577 points;
+block-order-02, 40 000 rows, 568 contact frames, 277 175 points), projecting onto the session's real
+`forearm_deduped/*.ply`. All four output CSVs compare equal under `cmp` and sha256:
+
+| stage | block | sha256 (identical before and after) |
+|-------|-------|--------------------------------------|
+| dedup | 01 | `717b1332b537f1f130bd91daa7a220cb0f55a6a791968f38d882bacb11235775` |
+| projection | 01 | `a4454ef8fad1d1fd8119c70e3408eec32cb5c4064a85d4eb035c61090a027122` |
+| dedup | 02 | `f6f9aa87c30d875acd70b8d7200a5da59acc1e1b88613b94a6f8abc64bd1a7e8` |
+| projection | 02 | `931c0db7f5d5a9e8c81140f6421016328322b3312f0c51f6443efdd5112ace7f` |
+
+**Deliberate duplication:** the `frame_index` coercion helper exists in both stage scripts. Sharing it
+would mean one stage importing from the other, which the module contracts forbid; the shared version
+belongs in the Phase 4 leaf if a third stage ever needs it.
 
 **Files Modified:** `code/scripts/_5_postprocessing/deduplicate_xy_points.py`,
-`code/scripts/_5_postprocessing/project_contacts_onto_forearm.py`, their tests
+`code/scripts/_5_postprocessing/project_contacts_onto_forearm.py`,
+`code/scripts/_5_postprocessing/__init__.py`, `code/tests/test_deduplicate_xy_points.py`,
+`code/tests/test_project_contacts_onto_forearm.py` (new)
 
 **Dependencies:** None
 

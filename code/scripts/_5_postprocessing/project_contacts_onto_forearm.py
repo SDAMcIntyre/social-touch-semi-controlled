@@ -10,8 +10,9 @@ surface at the correct lateral position, regardless of depth offset.
 Rows with empty contact_points pass through unchanged.
 """
 import logging
+from dataclasses import dataclass
 from pathlib import Path
-from typing import List
+from typing import Dict, List
 
 import numpy as np
 import open3d as o3d
@@ -25,6 +26,53 @@ from preprocessing.forearm_extraction.registration.csv_spatial_transformer impor
 from utils.should_process_task import should_process_task, clean_task_outputs
 
 logger = logging.getLogger(__name__)
+
+#: CSV column that identifies the Kinect frame a row belongs to. The projection
+#: mapping is keyed by this value, never by row position: the merged CSV is
+#: upsampled to the nerve rate, so a row index means nothing outside one
+#: particular file, while ``frame_index`` is what every other stage aligns on.
+#: (Deliberately duplicated from ``deduplicate_xy_points``: stage scripts must
+#: not import from one another.)
+FRAME_INDEX_COLUMN = "frame_index"
+
+
+@dataclass(frozen=True)
+class ProjectionResult:
+    """What one CSV's projection produced beyond the CSV itself.
+
+    Attributes:
+        distances: Flat array of per-point 3D projection distances, one entry
+            per contact point across all rows, in row order. Empty if the CSV
+            had no contact points.
+        vertex_indices: ``frame_index`` → 1-D ``intp`` array of the forearm
+            vertex each of that frame's contact points snapped to, in the order
+            the points appear in the cell. These integers index the forearm PLY
+            vertex array in file order, so they are the vertex identity a
+            per-point sidecar must be re-addressed with — re-querying the
+            KD-tree against a sidecar's own coordinates would pick different
+            vertices wherever two candidates are near-equidistant, and would do
+            so silently.
+    """
+
+    distances: np.ndarray
+    vertex_indices: Dict[int, np.ndarray]
+
+
+def _frame_index_key(value, *, csv_path: Path, row_position: int) -> int:
+    """Coerce a ``frame_index`` cell to the integer key the mapping is stored under.
+
+    The column arrives as float64 because rows without a Kinect frame hold NaN,
+    so the value must be checked, not merely cast: a NaN or a fractional index
+    would otherwise become a silently wrong dict key.
+    """
+    as_float = float(value)
+    if not np.isfinite(as_float) or as_float != int(as_float):
+        raise ValueError(
+            f"Row {row_position} of {csv_path} carries contact points but its "
+            f"{FRAME_INDEX_COLUMN} is {value!r}, which is not a whole number. "
+            f"Contact rows must be anchored to a Kinect frame."
+        )
+    return int(as_float)
 
 
 def _load_forearm_vertices(ply_path: Path) -> np.ndarray:
@@ -46,7 +94,7 @@ def _project_single_csv(
     output_csv: Path,
     kdtree: KDTree,
     vertices: np.ndarray,
-) -> np.ndarray:
+) -> ProjectionResult:
     """Project the contact points in one CSV onto the forearm surface.
 
     For every non-empty ``contact_points`` cell, each (x, y, z) point is
@@ -68,16 +116,29 @@ def _project_single_csv(
         vertices: The ``(N, 3)`` vertex array used to build *kdtree*.
 
     Returns:
-        Flat array of per-point 3D projection distances (one entry per contact
-        point across all rows).  Empty if no contact points were present.
+        A :class:`ProjectionResult` carrying the per-point projection distances
+        and, per ``frame_index``, the vertex indices the points snapped to.
+
+    Raises:
+        ValueError: If the ``frame_index`` column is absent, if a contact-bearing
+            row has a non-integral ``frame_index``, or if two contact-bearing
+            rows share one ``frame_index`` (which would make the mapping
+            ambiguous).
     """
     df = pd.read_csv(input_csv)
+
+    if FRAME_INDEX_COLUMN not in df.columns:
+        raise ValueError(
+            f"{input_csv} has no {FRAME_INDEX_COLUMN!r} column; the per-frame "
+            f"projection mapping cannot be keyed."
+        )
 
     projected_contact_points = []
     location_x, location_y, location_z = [], [], []
     all_distances: List[np.ndarray] = []
+    vertex_indices: Dict[int, np.ndarray] = {}
 
-    for _, row in df.iterrows():
+    for row_position, (_, row) in enumerate(df.iterrows()):
         raw = row.get("contact_points", "[]")
         points = parse_contact_points(raw)
 
@@ -96,6 +157,17 @@ def _project_single_csv(
             f"Projection dropped {M - len(projected)} of {M} contact points — "
             "impossible with per-point NN."
         )
+
+        frame_index = _frame_index_key(
+            row[FRAME_INDEX_COLUMN], csv_path=input_csv, row_position=row_position
+        )
+        if frame_index in vertex_indices:
+            raise ValueError(
+                f"{input_csv} has two contact-bearing rows with "
+                f"{FRAME_INDEX_COLUMN}={frame_index} (second at row {row_position}); "
+                f"the per-frame projection mapping would be ambiguous."
+            )
+        vertex_indices[frame_index] = np.asarray(indices, dtype=np.intp)
 
         displacements_3d = np.linalg.norm(query - projected, axis=1)
         all_distances.append(displacements_3d)
@@ -116,7 +188,12 @@ def _project_single_csv(
     output_csv.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(output_csv, index=False)
 
-    return np.concatenate(all_distances) if all_distances else np.empty(0, dtype=np.float64)
+    return ProjectionResult(
+        distances=(
+            np.concatenate(all_distances) if all_distances else np.empty(0, dtype=np.float64)
+        ),
+        vertex_indices=vertex_indices,
+    )
 
 
 def project_contacts_onto_forearm(
@@ -179,7 +256,8 @@ def project_contacts_onto_forearm(
             output_paths.append(output_csv)
             continue
         clean_task_outputs(output_csv)
-        distances = _project_single_csv(input_csv, output_csv, kdtree, vertices)
+        projection = _project_single_csv(input_csv, output_csv, kdtree, vertices)
+        distances = projection.distances
         logger.info("Projected contact points: %s", output_csv.name)
         output_paths.append(output_csv)
 
