@@ -625,22 +625,129 @@ from the Phase 5 baseline).
 
 ### Phase 7: PCA and RF-centring (Space 2 → 3 → 4)
 **Goal:** The field reaches `blocks_rf_centered/`.
-**Started:** —  **Completed:** —
+**Started:** 2026-08-18 14:45  **Completed:** 2026-08-18 15:19
 
-- [ ] 7.1 — PCA: one vectorised `apply_full_transform` over the whole `x/y/z` block, using the same
+- [x] 7.1 — PCA: one vectorised `apply_full_transform` over the whole `x/y/z` block, using the same
       `CalibrationResult` the CSV uses. Pass a copy — it mutates in place.
-- [ ] 7.2 — Key the parquet loop off `input_files`, **not** `loaded_data`, which silently omits
-      blocks that failed gesture segmentation.
-- [ ] 7.3 — Handle the `_pca-xyz` filename fork with an explicit parquet suffix constant.
-- [ ] 7.4 — RF-centring: same translation matrix; handle the no-cluster passthrough at `:267-280`.
-- [ ] 7.5 — Restamp `pca_calibrated` then `rf_centered`.
-- [ ] 7.6 — Confirm `vertex_id` is carried through both stages untouched.
-- [ ] 7.7 — Do **not** feed the field into the PCA fit or the RF estimate.
+      *Done: `_write_calibrated_field` is handed the very `calib_result` object the CSV loop used —
+      no re-fit, no reload of the JSON just written. The private copy is made inside the Phase 4 leaf's
+      `apply_pca_calibration_to_field`, which is the single place that knows the mutation.*
+- [x] 7.2 — Key the parquet loop off `input_files`, **not** `loaded_data`, which silently omits
+      blocks that failed gesture segmentation. *Done, and the silent drop is converted into a loud
+      one: `_write_calibrated_field` raises `FileNotFoundError` naming the CSV that was never written
+      and the `loaded_data` mechanism that dropped it. Exercised on real data — a block whose
+      `single_touch_id` is 0 throughout raises instead of yielding a session with three CSVs and four
+      sidecars.*
+- [x] 7.3 — Handle the `_pca-xyz` filename fork with an explicit parquet suffix constant.
+      *Done: `CalibrationConfig.output_parquet_suffix = "_pca-xyz.parquet"`, beside
+      `output_csv_suffix`, both applied with the same `f"{p.stem}{suffix}"` shape. The two are then
+      **checked against each other**: `_assert_output_names_pair` requires the sidecar name this stage
+      produces to equal what `depth_field_path_for_csv` resolves the CSV to, because that function is
+      how the next stage finds its inputs. The leaf's pairing rule was generalised from a suffix swap
+      to a marker substitution (`_merged_data` → `_contact_depth_field`) so it survives the fork;
+      three new tests cover the forked name, a non-CSV name and an ambiguous double-marker name.*
+- [x] 7.4 — RF-centring: same translation matrix; handle the no-cluster passthrough at `:267-280`.
+      *Done: `_translate_single_field` applies the same `T` from `_build_translation_matrix`, and the
+      passthrough branch copies the sidecar beside the CSVs it copies. `shutil.copy2`, not
+      `copyfile` — matching the CSV copy two lines above it, so an unchanged re-run reproduces the
+      previous outputs exactly, mtimes included, instead of making the sidecar look newer than the CSV
+      it belongs to. Verified: the passthrough sidecars are sha256-identical to their inputs and still
+      declare `pca_calibrated`.*
+- [x] 7.5 — Restamp `pca_calibrated` then `rf_centered`. *Done, and `pipeline_stage` with them — see
+      below.*
+- [x] 7.6 — Confirm `vertex_id` is carried through both stages untouched. *Done, asserted at both
+      stage boundaries by `_assert_depth_and_vertex_preserved` (values and `int32` dtype), which also
+      raises if the column is **absent** — a field reaching these stages unprojected is a pipeline
+      error, not something to work around. Confirmed on real data, and cross-checked the other way:
+      resolving the terminal `vertex_id` against `forearm_rf_centered/*.ply` reproduces the parquet's
+      own `x/y/z` to 0.0975 mm, inside the two 0.1 mm PLY roundings that separate them.*
+- [x] 7.7 — Do **not** feed the field into the PCA fit or the RF estimate. *Done — neither
+      `compute_calibration`'s inputs (`tapping_segments` / `stroking_segments`, built only from
+      sticker columns) nor `_compute_rf_center` was touched. Proved by the byte-identity evidence
+      below: `pca-xyz_transformation-matrices.json` and `rf_center_origin.json` are sha256-identical to
+      the pre-change run, so neither coordinate system moved.*
+
+**`pipeline_stage` restamped to `"postprocessing"`.** It was carried through as `"merging"` from the
+merging-stage filter, which by `blocks_rf_centered/` is simply false. Both Phase 7 stages now set it to
+`"postprocessing"` — the coarse stage name, not the per-task one, because the artifact's task-level
+provenance is already carried by the keys that mean something (`reference_ply`, `dedup_epsilon`,
+`coordinate_space`), and a per-task value would need restamping in five places to stay honest. The
+writer validates `coordinate_space` against a closed set but treats `pipeline_stage` as free text, so
+no schema change was needed. The constant lives in the Phase 4 leaf
+(`PIPELINE_STAGE_POSTPROCESSING`) so the two stages spell it identically without importing each other.
+**Known gap:** `blocks_registered/`, `blocks_deduped/` and `blocks_projected/` still read `"merging"`
+— Phase 5 deliberately left it alone and that decision was not reversed here. The terminal artifact and
+`blocks_pca_calibrated/` are correct.
+
+**Signature changes.**
+
+- `calibrate_pca_xyz` now returns `Tuple[List[Path], Path, Path, List[Path]]` — a fourth slot,
+  `(csvs, output_dir, forearm_ply, parquets)` — and takes a keyword-only
+  `input_parquets: Optional[Sequence[Path]] = None`, derived from the CSV paths when omitted. The
+  early returns (`should_process_task` skip, insufficient gesture data) grew the fourth slot too.
+- `center_on_receptive_field` now returns `Tuple[List[Path], List[Path]]` — `(csv_paths,
+  parquet_paths)` — and takes the same keyword-only `input_parquets`. The no-input early return
+  became `([], [])`.
+- Output binding is positional and ignores extra slots, so `pca_files` / `pca_output_dir` /
+  `pca_forearm` / `rf_files` keep their meaning until Phase 8 binds the new ones; only the two flow
+  wrappers' return annotations changed.
+- `depth_field_path_for_csv` (Phase 4 leaf) now pairs by marker substitution rather than suffix
+  swap, so it resolves `*_merged_data_pca-xyz.csv` as well as `*_merged_data.csv`. New:
+  `MERGED_CSV_MARKER`, `DEPTH_FIELD_MARKER`, `PIPELINE_STAGE_POSTPROCESSING`.
+- `_5_postprocessing` additionally exports `CalibrationConfig`, `COORDINATE_SPACE_AFTER_PCA` and
+  `COORDINATE_SPACE_AFTER_RF_CENTERING`.
+
+**Byte-identity evidence.** `git show HEAD:<path>` extracted both pre-change stage modules to the
+scratchpad; a harness imported old and new by file path and ran both over the same real inputs — all
+four `blocks_projected/` CSVs of `2022-06-14_ST13-01` (106k / 105k / 100k / 44k rows; 1 030 / 1 900 /
+2 790 / 1 014 contact frames), with the schema-v2 sidecars reconstructed from each CSV's own
+`contact_points` against the session's real `forearm_deduped/*.ply` (1 807 vertices). Every output of
+both stages is sha256-identical, including the two files that define the coordinate systems:
+
+| stage | artifact | sha256 (identical before and after) |
+|-------|----------|--------------------------------------|
+| PCA | block-order-01 csv | `20fd272ba5b2d23d425076ec5d3e3ce471fa6394ee5a1223dccf0791b0e16628` |
+| PCA | block-order-02 csv | `d7ccb73c837775160dc72b8c8a608d067a0cdfe6fef4be312d0023681669765f` |
+| PCA | block-order-03 csv | `5cbf09670f23a992eed00fe22f17652ee5d73a4a3976ad69ef8ea5fd356bb46b` |
+| PCA | block-order-04 csv | `7e510e09d34e11feed898de7043eb7ab5602d066a07a56445f9c65f672265bde` |
+| PCA | `pca-xyz_transformation-matrices.json` | `48e600d402069abfcc9bde0ab100be87f1a8b7f241636194c5fa2255bdaa0418` |
+| PCA | `forearm_pca_calibrated/*.ply` | `a76a951a49c6a3f96e8779f1f555e3484de3e3d2c312ccf9869881a58dcfc5a1` |
+| RF (translating) | block-order-01 csv | `debd34e2a7eb6d06adc4b59a26caa02879ecc7d75decc27335792c7c20daf5a5` |
+| RF (translating) | block-order-02 csv | `dc198a7c3e0b8d2552a5f31678aaea33b642c9685814920c235a441c3f24f9ed` |
+| RF (translating) | block-order-03 csv | `9dc5a1526507827d2ba8da2f09e3c07aa919cb8f23b2369936e0a41c9b5bb4fc` |
+| RF (translating) | block-order-04 csv | `75aac7ad8a63365059d3b055194c08fd2a469bd339fe6b34f5566b6a077039cd` |
+| RF (translating) | `rf_center_origin.json` | `ad61830073b837fa0664fff3cf17709308c7bae975045643c031149218b9c50e` |
+| RF (translating) | `forearm_rf_centered/*.ply` | `4b819dccd45d809901f9147bc718d4de8d425e0d8439c185eb48a43cf9f39946` |
+
+ST13-01's selectivity never clears the default DBSCAN threshold, so a plain run takes the
+**passthrough** branch. Both branches were therefore exercised: the passthrough one on the default
+config (all four CSVs, `rf_center_origin.json` and the PLY sha256-identical old vs new; the sidecars
+byte-identical to their inputs and still declaring `pca_calibrated`), and the translating one with a
+permissive `SelectivityDBSCANConfig` injected identically into both modules — the table above.
+
+**Cross-checks on the terminal sidecar** (real data, all four blocks). `signed_depth_mm` is **bitwise**
+unchanged through both stages, dtype included. `vertex_id` is unchanged and still `int32`, in range
+(`[13, 1713]` against 1 807 vertices). `x/y/z` are still float32 and moved up to 890 mm. The RF
+translation is exactly `-rf_center` on every row of every block, identical to 4 decimal places across
+all axes and all 983 k rows. `coordinate_space` reads `icp_registered → pca_calibrated → rf_centered`;
+`pipeline_stage` reads `merging → postprocessing → postprocessing`; every other metadata key is
+unchanged from the input. Row-count agreement against the stage's own CSV is asserted inside both
+stages and passed on every block.
+
+**Idempotency**, measured on the real fixture: an unchanged re-run of either stage reproduces its
+outputs exactly (byte- and mtime-identical); deleting only a parquet regenerates the whole session's
+pair at both stages; both artifacts are in `input_paths`, `output_paths` and `clean_task_outputs`.
 
 **Files Modified:** `code/scripts/_5_postprocessing/set_xyz_reference_from_gestures.py`,
-`code/scripts/_5_postprocessing/center_on_receptive_field.py`
+`code/scripts/_5_postprocessing/center_on_receptive_field.py`,
+`code/scripts/_5_postprocessing/__init__.py`,
+`code/scripts/postprocess_workflow_kinect_auto.py` (flow wrapper return annotations only),
+`code/src/postprocessing/depth_field_stage_io.py`, `code/tests/test_depth_field_stage_io.py`
 
 **Dependencies:** Phase 6
+
+**Verification:** full suite **584 passed, 7 skipped** (581 + 3 new; skip count and reasons unchanged
+from the Phase 6 baseline).
 
 ### Phase 8: Wiring and idempotency
 **Goal:** The DAG produces the artifact at every stage.

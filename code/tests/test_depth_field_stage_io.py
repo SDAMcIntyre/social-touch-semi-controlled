@@ -1274,3 +1274,25 @@ class TestDepthFieldPathForCsv:
     def test_refuses_to_guess_an_unrecognised_name(self):
         with pytest.raises(ValueError, match="_merged_data.csv"):
             depth_field_path_for_csv(Path("/data/whatever.csv"))
+
+    def test_follows_the_pca_stage_filename_fork(self):
+        # calibrate_pca_xyz is the one stage that renames its outputs. Both
+        # artifacts fork together, so the pairing must survive the rename or
+        # center_on_receptive_field cannot find its own inputs.
+        csv = Path(
+            "/data/blocks_pca_calibrated/"
+            "S_semicontrolled_block-order-01_merged_data_pca-xyz.csv"
+        )
+        assert depth_field_path_for_csv(csv) == csv.with_name(
+            "S_semicontrolled_block-order-01_contact_depth_field_pca-xyz.parquet"
+        )
+
+    def test_refuses_a_name_that_is_not_a_csv(self):
+        with pytest.raises(ValueError, match="_merged_data.csv"):
+            depth_field_path_for_csv(Path("/data/S_merged_data.parquet"))
+
+    def test_refuses_an_ambiguous_name(self):
+        # Two markers give two possible substitutions; picking one would pair
+        # the CSV with a plausible-looking file that is not its own.
+        with pytest.raises(ValueError, match="_merged_data.csv"):
+            depth_field_path_for_csv(Path("/data/S_merged_data_merged_data.csv"))

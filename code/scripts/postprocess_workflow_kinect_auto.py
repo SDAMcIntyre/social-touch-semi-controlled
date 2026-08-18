@@ -91,8 +91,13 @@ def calibrate_pca_xyz_flow(
     forearm_ply_path: Path,
     forearm_output_dir: Path,
     force_processing: bool = False,
-) -> Tuple[List[Path], Path, Path]:
-    """Apply PCA calibration to block CSVs and the forearm PLY."""
+) -> Tuple[List[Path], Path, Path, List[Path]]:
+    """Apply PCA calibration to block CSVs, the forearm PLY and the depth fields.
+
+    Returns ``(pca_csvs, output_dir, pca_forearm, pca_depth_fields)``.  The
+    stage's ``outputs`` list binds positionally, so the first three slots keep
+    their meaning and Phase 8 binds the fourth.
+    """
     print(f"[{output_dir.name}] Calibrating PCA XYZ reference on {len(input_files)} files...")
     return calibrate_pca_xyz(
         input_files, output_dir, forearm_ply_path, forearm_output_dir,
@@ -302,8 +307,13 @@ def center_on_receptive_field_flow(
     forearm_output_dir: Path,
     rf_origin_path: Path,
     force_processing: bool = False,
-) -> List[Path]:
-    """Center block CSVs and forearm PLY on the receptive field origin."""
+) -> Tuple[List[Path], List[Path]]:
+    """Center block CSVs, forearm PLY and depth fields on the RF origin.
+
+    Returns ``(rf_centered_csvs, rf_centered_depth_fields)``.  The stage's
+    ``outputs`` list binds positionally, so the CSVs stay in first position and
+    ``rf_files`` keeps its meaning until Phase 8 binds the second slot.
+    """
     print(f"[{output_dir.name}] Centering spatial data on receptive field origin...")
     return center_on_receptive_field(
         input_files, forearm_ply_path, output_dir, forearm_output_dir, rf_origin_path,

@@ -89,8 +89,11 @@ from preprocessing.motion_analysis.tactile_quantification.io.contact_depth_field
 
 __all__ = [
     "CONTACT_DEPTH_COLUMN",
+    "DEPTH_FIELD_MARKER",
     "DEPTH_FIELD_SUFFIX",
+    "MERGED_CSV_MARKER",
     "MERGED_CSV_SUFFIX",
+    "PIPELINE_STAGE_POSTPROCESSING",
     "CONTACT_POINTS_COLUMN",
     "COORDINATE_COLUMNS",
     "DEPTH_COLUMN",
@@ -137,12 +140,30 @@ _DEPTH_AGREEMENT_RTOL: float = 1e-9
 _DEPTH_AGREEMENT_ATOL: float = 1e-9
 
 #: The two halves of a block's filename.  The sidecar sits beside its CSV and
-#: shares its stem up to the suffix: ``<block>_merged_data.csv`` alongside
-#: ``<block>_contact_depth_field.parquet``.  Both names are produced by
-#: ``merging_pipeline_neuron_to_kinect_auto._resolve_paths`` and every
-#: postprocessing stage writes its CSV under the input's own name.
-MERGED_CSV_SUFFIX: str = "_merged_data.csv"
-DEPTH_FIELD_SUFFIX: str = "_contact_depth_field.parquet"
+#: differs from it only in this marker and the extension:
+#: ``<block>_merged_data.csv`` alongside ``<block>_contact_depth_field.parquet``.
+#: Both names are produced by
+#: ``merging_pipeline_neuron_to_kinect_auto._resolve_paths``.
+#:
+#: Most postprocessing stages write their CSV under the input's own name, so the
+#: pairing survives them untouched.  ``calibrate_pca_xyz`` is the exception: it
+#: appends ``_pca-xyz`` to the stem, giving ``<block>_merged_data_pca-xyz.csv``.
+#: The pairing is therefore expressed as a **marker substitution** rather than a
+#: suffix swap, so a stage that has appended its own suffix still names its
+#: sidecar the same way — ``<block>_contact_depth_field_pca-xyz.parquet``.
+MERGED_CSV_MARKER: str = "_merged_data"
+DEPTH_FIELD_MARKER: str = "_contact_depth_field"
+MERGED_CSV_SUFFIX: str = f"{MERGED_CSV_MARKER}.csv"
+DEPTH_FIELD_SUFFIX: str = f"{DEPTH_FIELD_MARKER}.parquet"
+
+#: What ``pipeline_stage`` reads once a postprocessing stage has rewritten the
+#: sidecar.  The merging filter stamps ``"merging"`` and every stage before this
+#: one carries that value through; from ``calibrate_pca_xyz`` onward the file
+#: has demonstrably been through postprocessing and says so.  Free text as far
+#: as the writer is concerned — it validates ``coordinate_space``, not this —
+#: so the constant lives here to keep the two Phase-7 stages spelling it
+#: identically without importing one another.
+PIPELINE_STAGE_POSTPROCESSING: str = "postprocessing"
 
 
 #: An ordered ``[(start_frame, T_4x4), ...]`` list as
@@ -1121,30 +1142,45 @@ def depth_field_path_for_csv(csv_path: Path) -> Path:
     """Return the contact-depth-field sidecar that belongs to *csv_path*.
 
     The sidecar always sits in the same directory as the CSV it describes and
-    differs only in suffix.  Every postprocessing stage writes its CSV under the
-    input's own name, so this derivation holds at every stage.
+    differs from it only in the :data:`MERGED_CSV_MARKER` segment of its name
+    and the extension.  Most postprocessing stages write their CSV under the
+    input's own name, so the pairing passes through them unchanged;
+    ``calibrate_pca_xyz`` appends ``_pca-xyz`` to the stem, and substituting the
+    marker rather than stripping a trailing suffix is what keeps the derivation
+    valid on the far side of that fork.
 
     It lives in this leaf rather than in any one stage script because several
     stages need it and stage scripts must not import one another.
 
     Args:
-        csv_path: A block's ``*_merged_data.csv``.
+        csv_path: A stage CSV — ``*_merged_data.csv`` as merging writes it, or
+            ``*_merged_data_pca-xyz.csv`` once the PCA stage has renamed it.
 
     Returns:
-        The sibling ``*_contact_depth_field.parquet`` path.  Existence is not
-        checked here.
+        The sibling ``.parquet`` path with the same suffix chain.  Existence is
+        not checked here.
 
     Raises:
-        ValueError: If *csv_path* does not end in ``_merged_data.csv``.  The
-            name is the join between the two artifacts; guessing at an
-            unrecognised one would pair a CSV with the wrong sidecar.
+        ValueError: If *csv_path* does not end in ``.csv``, or does not carry
+            exactly one :data:`MERGED_CSV_MARKER`.  The name is the join between
+            the two artifacts; guessing at an unrecognised one would pair a CSV
+            with the wrong sidecar, and an ambiguous one would pair it with a
+            plausible-looking file that is not its own.
     """
     csv_path = Path(csv_path)
-    if not csv_path.name.endswith(MERGED_CSV_SUFFIX):
+    name = csv_path.name
+    if not name.endswith(".csv") or name.count(MERGED_CSV_MARKER) != 1:
         raise ValueError(
-            f"{csv_path.name!r} does not end in {MERGED_CSV_SUFFIX!r}, so the "
-            "contact depth field sidecar that belongs to it cannot be named. "
-            "The two artifacts are paired by filename stem; refusing to guess."
+            f"{name!r} is not a stage CSV that can be paired with a contact "
+            f"depth field sidecar: the name must end in '.csv' and contain "
+            f"exactly one {MERGED_CSV_MARKER!r} segment — "
+            "'<block>_merged_data.csv' as the merging pipeline writes it, or "
+            "'<block>_merged_data_pca-xyz.csv' once a stage has appended its "
+            "own suffix. The two artifacts are paired by filename; refusing to "
+            "guess."
         )
-    stem = csv_path.name[: -len(MERGED_CSV_SUFFIX)]
-    return csv_path.with_name(f"{stem}{DEPTH_FIELD_SUFFIX}")
+    parquet_name = (
+        name[: -len(".csv")].replace(MERGED_CSV_MARKER, DEPTH_FIELD_MARKER)
+        + ".parquet"
+    )
+    return csv_path.with_name(parquet_name)
