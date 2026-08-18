@@ -57,6 +57,9 @@ Full background and the decision history: [`docs/development/brainstorms/per-ver
 ### Out of Scope
 
 - **The Parquet sidecar writer** — the contract is fixed here; the writer is not built.
+  *Built in the successor plan:*
+  [`contact-depth-field-sidecar.md`](contact-depth-field-sidecar.md), which persists the
+  field as `<video_stem>_contact_depth_field.parquet` next to the somatosensory CSV.
 - **Plumbing the field through the postprocessing chain** (ICP, dedup, projection onto
   forearm-of-reference, PCA calibration, RF-centring) and the parallel spatial transformer that
   would require.
