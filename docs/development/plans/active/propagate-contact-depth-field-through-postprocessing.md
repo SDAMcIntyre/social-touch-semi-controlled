@@ -751,25 +751,100 @@ from the Phase 6 baseline).
 
 ### Phase 8: Wiring and idempotency
 **Goal:** The DAG produces the artifact at every stage.
-**Started:** —  **Completed:** —
+**Started:** 2026-08-18 15:20  **Completed:** 2026-08-18 15:40
 
-- [ ] 8.1 — Resolve `source_parquets` alongside `session_input_files`
-      (`postprocess_workflow_kinect_auto.py:243-254`) and seed it into `context` at `:265-267`, index-
-      aligned with `session_configs`.
-- [ ] 8.2 — Extend each stage's `outputs` list and returned tuple; binding is positional, so existing
-      keys must keep their order.
-- [ ] 8.3 — Add the parquets to `input_paths` / `output_paths` / `clean_task_outputs` per stage, at
-      that stage's own boundary.
-- [ ] 8.4 — **Never pass an empty list** — the guard at `:388-391` would silently skip the whole
-      stage, CSVs included.
-- [ ] 8.5 — Decide and document the DAG config's session list: the depth field is a hard input, so a
-      session lacking one (`ST15-01` has merged CSVs but no field) must be excluded explicitly rather
-      than failing mid-run.
+- [x] 8.1 — Resolve `source_parquets` alongside `session_input_files` and seed it into `context`,
+      index-aligned with `session_configs`. *Done in the same loop over `session_configs` that builds
+      the CSV list, so the two can only ever be built in step, using `depth_field_path_for_csv`.
+      Existence is required there, with a `FileNotFoundError` naming the file and naming the merging
+      task that produces it — the same treatment the CSV already got. The field is a hard input, and a
+      session that lacks one belongs out of the DAG's `kinect_configs` list, not discovered mid-run.*
+- [x] 8.2 — Extend each stage's `outputs` list and pass the parquet inputs through `params`; binding
+      is positional, so existing keys keep their order. *Done — appended `registered_depth_fields`,
+      `deduped_depth_fields`, `projected_depth_fields`, `pca_depth_fields`, `rf_depth_fields`. Every
+      existing key kept its index, so `registered_files` / `deduped_files` / `deduped_forearm` /
+      `projected_files` / `pca_files` / `pca_output_dir` / `pca_forearm` / `rf_files` still mean what
+      they meant. The five flow wrappers gained a keyword-only `input_parquets`, forwarded to the
+      stage function they wrap; `deduplicate_xy_flow` — the one stage whose sidecar handling lives in
+      the workflow file — takes it too and length-checks it against `input_files` before use.*
+- [x] 8.3 — Both artifacts in `should_process_task` / `clean_task_outputs`, at each stage's own
+      boundary. *Verified end to end rather than re-implemented: Phases 5-7 put the parquets on both
+      sides inside each stage function, so this phase measured the result instead of duplicating it.
+      On the real ST13-01 session, deleting one sidecar at each of the five stages
+      (`blocks_registered/` 01, `blocks_deduped/` 02, `blocks_projected/` 03,
+      `blocks_pca_calibrated/` 04, `blocks_rf_centered/` 01) and re-driving regenerated all five, each
+      byte-for-byte the same size as the file removed. An unchanged re-run skips ICP, dedup,
+      projection (per block) and PCA.*
+- [x] 8.4 — Never pass an empty list. *Done through one named helper, `_nonempty_list`, applied to
+      every parquet list bound into `params`: `[]` and `None` both become `None`. The guard's own code
+      is quoted in that helper's docstring, with the failure it would cause — the stage skipped whole,
+      the previous stage's outputs left bound to the next stage's inputs — spelled out, and a pointer
+      to it added beside the guard itself. `None` is not a fallback: the stage then derives the
+      sidecar paths from its CSV paths and **requires** them to exist, so an absent field is a named
+      `FileNotFoundError` rather than a silent skip. Confirmed on the real drive: the guard printed
+      nothing and all seven tasks ran.*
+- [x] 8.5 — The DAG config's session list. *`valid_configs_ST15-01` removed from `kinect_configs`,
+      with the reason recorded in the file. Two independent reasons, both fatal:
+      `3_merged/2022-06-16_ST15-01/blocks_filtered/` holds 4 merged CSVs and **0**
+      `*_contact_depth_field.parquet`, and the config group had already been renamed
+      `_NOT_ENOUGH_DATA_valid_configs_ST15-01`, so `resolve_session_configs()` raised
+      `FileNotFoundError` on the stale entry before any session ran at all — the DAG as listed was
+      unrunnable. A survey of the other eleven listed sessions found a 1:1 CSV/parquet pairing in
+      every one (4/4, 8/8, 10/10, 9/9, 6/6, 3/3, 15/15, 5/5, 16/16, 16/16, 7/7); the list now resolves
+      to 99 block configs.*
+- [x] `pipeline_stage` restamp completed. *Phase 7 left `blocks_registered/`, `blocks_deduped/` and
+      `blocks_projected/` reporting `"merging"`. All three now stamp `PIPELINE_STAGE_POSTPROCESSING`,
+      so no intermediate misreports where the artifact has been. This **reverses one Phase 5
+      decision**: `_copy_field_unchanged` was a byte copy, and is now a read-modify-write that
+      restamps exactly one key. `coordinate_space` is still carried through untouched on that branch —
+      the points genuinely did not move — but a passthrough block that kept `"merging"` while its
+      transformed siblings said `"postprocessing"` would make the stamp mean nothing. The CSV on that
+      same branch is already round-tripped through pandas rather than byte-copied, so the sidecar now
+      matches it.*
+
+**Idempotency finding, pre-existing and out of scope.** `center_on_receptive_field` never skips on its
+**no-cluster passthrough** branch. `shutil.copy2` preserves each input's mtime, so the outputs inherit
+the *spread* of input mtimes: on ST13-01 the oldest output is 15:30:14 (block-01 CSV) while the latest
+input is 15:30:25 (block-04 parquet), and `should_process_task`'s `latest_input > oldest_output` test
+is therefore true forever. This predates Phase 8 — the CSV copies alone produce it — and the re-run is
+idempotent in content (byte- and mtime-identical outputs), merely not skipped. Not repaired here; this
+phase is wiring only.
 
 **Files Modified:** `code/scripts/postprocess_workflow_kinect_auto.py`,
-`configs/postprocess_workflow_kinect_auto_dag.yaml`
+`configs/postprocess_workflow_kinect_auto_dag.yaml`,
+`code/scripts/_5_postprocessing/apply_icp_registration.py`,
+`code/scripts/_5_postprocessing/deduplicate_xy_points.py`,
+`code/scripts/_5_postprocessing/project_contacts_onto_forearm.py`,
+`code/tests/test_deduplicate_xy_points.py`, `code/tests/test_project_contacts_onto_forearm.py`
 
 **Dependencies:** Phase 7
+
+**Verification:** `run_single_session_postprocessing` driven over the **whole real session**
+`2022-06-14_ST13-01` (4 blocks), through the actual DAG config, with no GUI monitor — every one of the
+seven tasks completed and all five spatial stages wrote 4 sidecars each:
+
+| stage | rows/block | schema | `coordinate_space` | `pipeline_stage` | `vertex_id` |
+|-------|-----------|--------|--------------------|------------------|-------------|
+| `blocks_filtered/` (input) | 187 056 / 923 205 / 804 323 / 402 753 | 1 | `kinect_space_1` | `merging` | — |
+| `blocks_registered/` | unchanged | 1 | `icp_registered` | `postprocessing` | — |
+| `blocks_deduped/` | 83 492 / 389 724 / 335 528 / 174 170 | 1 | `icp_registered` | `postprocessing` | — |
+| `blocks_projected/` | unchanged | 2 | `icp_registered` | `postprocessing` | `int32`, in `[13, 1713]` of 1 807 |
+| `blocks_pca_calibrated/` | unchanged | 2 | `pca_calibrated` | `postprocessing` | unchanged |
+| `blocks_rf_centered/` | unchanged | 2 | `pca_calibrated`¹ | `postprocessing` | unchanged |
+
+¹ ST13-01's selectivity never clears the DBSCAN threshold, so RF-centring took its documented
+**passthrough** branch: the sidecar is copied and correctly still declares `pca_calibrated`. The
+translating branch was exercised in Phase 7 and is not re-run here.
+
+Measured on that output: row-count agreement between each parquet and the CSV of the same stage holds
+at **all five stages, all four blocks** (24 checks). `signed_depth_mm` is **bitwise** unchanged (dtype
+included) through ICP, projection, PCA and RF-centring. Per-frame `max(|signed_depth_mm|)` is
+identical before and after dedup — max difference **0.000e+00** over 1 030 + 1 900 + 2 790 + 1 014
+frames. `vertex_id` is unchanged through PCA and RF-centring. `x/y/z` are still `float32` and moved up
+to 886.8 mm at the PCA stage. `reference_ply`, `reference_ply_vertex_count = 1807` and
+`dedup_epsilon = 0.5` are stamped from projection onward. The empty-list guard printed nothing on any
+run. Full suite **585 passed, 7 skipped** (584 + 1 new test; skip count unchanged and the same seven
+reasons — five reference-recording bundles, two `analyse_workflow_*` configs).
 
 ### Phase 9: Verification
 **Goal:** Measured evidence at every stage, not argument.

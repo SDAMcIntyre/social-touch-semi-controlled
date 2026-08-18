@@ -59,6 +59,7 @@ from preprocessing.motion_analysis.tactile_quantification.io.contact_depth_field
 )
 from postprocessing.depth_field_stage_io import (
     DEPTH_COLUMN,
+    PIPELINE_STAGE_POSTPROCESSING,
     apply_vertex_addressing_to_field,
     assert_row_counts_agree_with_csv,
     depth_field_path_for_csv,
@@ -386,6 +387,7 @@ def _write_projected_field(
     # version 1 does not know, and the writer refuses the contradiction.
     metadata: Dict[str, str] = dict(source_metadata)
     metadata["schema_version"] = SCHEMA_VERSION
+    metadata["pipeline_stage"] = PIPELINE_STAGE_POSTPROCESSING
     metadata["reference_ply"] = reference_ply_name
     metadata["reference_ply_vertex_count"] = str(provenance.n_vertices_deduped)
     metadata["dedup_epsilon"] = repr(provenance.dedup_epsilon)

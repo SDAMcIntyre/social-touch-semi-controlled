@@ -27,16 +27,17 @@ Three rules govern how it is moved here:
    to both.
 2. **Passthrough is all-or-nothing.**  There are two branches that write the
    CSV through untransformed: a session with no transforms file at all, and a
-   block with no applicable transform.  In both, the sidecar is copied byte for
-   byte, which keeps ``coordinate_space = "kinect_space_1"`` — the correct
-   declaration, because those points genuinely did not move.  Restamping it
-   would be a lie; transforming it would put it in a space its CSV is not in.
+   block with no applicable transform.  In both, the sidecar keeps
+   ``coordinate_space = "kinect_space_1"`` — the correct declaration, because
+   those points genuinely did not move.  Restamping it would be a lie;
+   transforming it would put it in a space its CSV is not in.  Only
+   ``pipeline_stage`` is restamped, on every branch alike, because every file
+   this stage writes was written by postprocessing.
 3. **Depth is not a coordinate.**  ``signed_depth_mm`` measures how far the
    hand penetrated the forearm.  A rigid transform moves both bodies together
    and cannot change it, so it is carried through bitwise and asserted to be.
 """
 import logging
-import shutil
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -57,6 +58,7 @@ from postprocessing.depth_field_stage_io import (
     DEPTH_COLUMN,
     DEPTH_FIELD_SUFFIX,
     MERGED_CSV_SUFFIX,
+    PIPELINE_STAGE_POSTPROCESSING,
     apply_transform_schedule_to_field,
     assert_row_counts_agree_with_csv,
     depth_field_path_for_csv,
@@ -175,10 +177,13 @@ def _write_transformed_field(
     moved = apply_transform_schedule_to_field(table, schedule)
     _assert_depth_preserved(table, moved, parquet_name=input_parquet.name)
 
-    # Provenance is carried through verbatim; only the declared space changes,
-    # because only the coordinates changed.
+    # Provenance is carried through verbatim apart from the two keys that are
+    # now false: the declared space, because the coordinates moved, and the
+    # pipeline stage, because this file was written by postprocessing and not by
+    # the merging filter its input came from.
     metadata: Dict[str, str] = dict(source_metadata)
     metadata["coordinate_space"] = COORDINATE_SPACE_AFTER_ICP
+    metadata["pipeline_stage"] = PIPELINE_STAGE_POSTPROCESSING
 
     write_contact_depth_field_table(moved, output_parquet, metadata=metadata)
     assert_row_counts_agree_with_csv(moved, output_csv)
@@ -187,19 +192,26 @@ def _write_transformed_field(
 def _copy_field_unchanged(
     input_parquet: Path, output_parquet: Path, output_csv: Path
 ) -> None:
-    """Copy a sidecar through a passthrough branch and check it against the CSV.
+    """Pass a sidecar through untransformed and check it against the CSV.
 
-    A byte copy, not a read-modify-write: the points did not move, so the file's
-    declared ``coordinate_space`` — ``kinect_space_1`` — is still the truth, and
-    copying the bytes is the only way to guarantee no key was restamped on the
-    way past.
+    The points did not move, so the declared ``coordinate_space`` —
+    ``kinect_space_1`` — is still the truth and is carried through untouched;
+    restamping it would be a lie.  ``pipeline_stage`` is the one key that is
+    restamped, on this branch as on the transformed one: the file in
+    ``blocks_registered/`` was written by postprocessing whether or not a
+    transform applied to it, and a copy that still reads ``"merging"`` would
+    disagree with its own sibling blocks about where the artifact has been.
 
     Raises:
-        ValueError: If the copied field and the CSV this stage wrote disagree
+        ValueError: If the written field and the CSV this stage wrote disagree
             about any frame's contact-point count.
     """
-    shutil.copyfile(input_parquet, output_parquet)
-    table, _ = read_contact_depth_field(output_parquet)
+    table, source_metadata = read_contact_depth_field(input_parquet)
+    metadata: Dict[str, str] = dict(source_metadata)
+    metadata["pipeline_stage"] = PIPELINE_STAGE_POSTPROCESSING
+
+    output_parquet.parent.mkdir(parents=True, exist_ok=True)
+    write_contact_depth_field_table(table, output_parquet, metadata=metadata)
     assert_row_counts_agree_with_csv(table, output_csv)
 
 

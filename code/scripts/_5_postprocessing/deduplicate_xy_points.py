@@ -37,6 +37,7 @@ from preprocessing.motion_analysis.tactile_quantification.io.contact_depth_field
 )
 from postprocessing.depth_field_stage_io import (
     DEPTH_COLUMN,
+    PIPELINE_STAGE_POSTPROCESSING,
     DedupMappingLike,
     apply_dedup_mapping_to_field,
     assert_max_depth_agrees_with_csv,
@@ -645,8 +646,12 @@ def deduplicate_contact_depth_field(
     reduced = apply_dedup_mapping_to_field(table, frame_mappings)
     _assert_depth_only_reduced(table, reduced, parquet_name=input_parquet.name)
 
-    # Verbatim: nothing moved, so nothing about the declared provenance changed.
+    # Verbatim apart from ``pipeline_stage``: nothing moved, so the declared
+    # space and the rest of the provenance are unchanged, but the file in
+    # ``blocks_deduped/`` was written by postprocessing and must say so rather
+    # than repeating the merging stamp its input carried.
     metadata: Dict[str, str] = dict(source_metadata)
+    metadata["pipeline_stage"] = PIPELINE_STAGE_POSTPROCESSING
 
     output_parquet = Path(output_parquet)
     output_parquet.parent.mkdir(parents=True, exist_ok=True)

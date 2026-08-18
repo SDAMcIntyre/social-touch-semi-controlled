@@ -72,16 +72,25 @@ def apply_icp_registration_flow(
     session_configs: List[KinectConfig],
     output_dir: Path,
     force_processing: bool = False,
+    *,
+    input_parquets: Optional[List[Path]] = None,
 ) -> Tuple[List[Path], List[Path]]:
     """Apply ICP registration to merged CSVs and their contact depth fields.
 
+    ``input_parquets`` is the ``blocks_filtered/`` depth field sidecar of each
+    block, index-aligned with *input_files*.  It is threaded explicitly rather
+    than left to the stage's own derivation so that the workflow's dataflow is
+    visible in one place; ``None`` means "derive from the CSV paths", which is
+    the same set of paths.
+
     Returns ``(registered_csvs, registered_depth_fields)``.  The stage's
     ``outputs`` list binds positionally, so the CSVs stay in first position and
-    ``registered_files`` keeps its meaning until Phase 8 binds the second slot.
+    ``registered_files`` keeps its meaning.
     """
     print(f"[{output_dir.name}] Applying ICP registration to {len(input_files)} files...")
     return apply_icp_registration(
         input_files, session_configs, output_dir,
+        input_parquets=input_parquets,
         force_processing=force_processing,
     )
 
@@ -91,16 +100,19 @@ def calibrate_pca_xyz_flow(
     forearm_ply_path: Path,
     forearm_output_dir: Path,
     force_processing: bool = False,
+    *,
+    input_parquets: Optional[List[Path]] = None,
 ) -> Tuple[List[Path], Path, Path, List[Path]]:
     """Apply PCA calibration to block CSVs, the forearm PLY and the depth fields.
 
     Returns ``(pca_csvs, output_dir, pca_forearm, pca_depth_fields)``.  The
     stage's ``outputs`` list binds positionally, so the first three slots keep
-    their meaning and Phase 8 binds the fourth.
+    their meaning and the fourth carries the sidecars.
     """
     print(f"[{output_dir.name}] Calibrating PCA XYZ reference on {len(input_files)} files...")
     return calibrate_pca_xyz(
         input_files, output_dir, forearm_ply_path, forearm_output_dir,
+        input_parquets=input_parquets,
         monitor=False,
         monitor_segment=False,
         force_processing=force_processing,
@@ -116,6 +128,7 @@ def deduplicate_xy_flow(
     *,
     monitor: bool,
     epsilon: float,
+    input_parquets: Optional[List[Path]] = None,
 ) -> Tuple[List[Path], Optional[Path], List[Path]]:
     """Deduplicate the unified forearm PLY and contact points in registered CSVs.
 
@@ -132,10 +145,14 @@ def deduplicate_xy_flow(
     to guarantee the sidecar and the CSV were collapsed by the same clustering
     is to hand the sidecar the mapping the CSV run just returned.
 
+    ``input_parquets`` is each block's registered sidecar, index-aligned with
+    *input_files*.  ``None`` means "derive from the CSV paths" — the sidecar
+    sits beside its CSV — which is the same set of paths the caller resolves.
+
     Returns:
         ``(deduped_csvs, deduped_forearm_ply, deduped_depth_fields)``. The
         stage's ``outputs`` list binds positionally, so the first two slots keep
-        their existing meaning and Phase 8 binds the third.
+        their existing meaning and the third carries the sidecars.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
     forearm_output_dir.mkdir(parents=True, exist_ok=True)
@@ -157,7 +174,17 @@ def deduplicate_xy_flow(
     # input's own name, so the registered parquet is named from the registered
     # CSV. Absence is an error, not a skip: the depth field is a hard input of
     # postprocessing and a missing block would leave a gap nothing notices.
-    input_parquets = [depth_field_path_for_csv(f) for f in input_files]
+    if input_parquets is None:
+        input_parquets = [depth_field_path_for_csv(f) for f in input_files]
+    else:
+        input_parquets = [Path(p) for p in input_parquets]
+        if len(input_parquets) != len(input_files):
+            raise ValueError(
+                f"deduplicate_xy received {len(input_parquets)} depth field "
+                f"sidecar(s) for {len(input_files)} block CSV(s). The two lists "
+                "are matched by position, one sidecar per block, so a length "
+                "mismatch would deduplicate a block against another block's field."
+            )
     missing_parquets = [p for p in input_parquets if not p.exists()]
     if missing_parquets:
         raise FileNotFoundError(
@@ -268,6 +295,8 @@ def project_contacts_onto_registered_forearm_flow(
     output_dir: Path,
     projection_stats_path: Path,
     force_processing: bool = False,
+    *,
+    input_parquets: Optional[List[Path]] = None,
 ) -> Tuple[List[Path], List[Path]]:
     """Project contact points onto the deduplicated forearm surface.
 
@@ -277,11 +306,13 @@ def project_contacts_onto_registered_forearm_flow(
         output_dir: Destination directory (``blocks_registered_projected/``).
         projection_stats_path: Path for the combined projection-stats CSV.
         force_processing: Re-run even when outputs are already up-to-date.
+        input_parquets: Per-block deduplicated depth field sidecars, index-aligned
+            with *input_files*.  ``None`` derives them from the CSV paths.
 
     Returns:
         ``(projected_csvs, projected_depth_fields)``. The stage's ``outputs``
         list binds positionally, so ``projected_files`` keeps pointing at the
-        CSVs until Phase 8 binds the second slot.
+        CSVs and the second slot carries the sidecars.
     """
     print(f"[{output_dir.name}] Projecting {len(input_files)} blocks onto forearm surface...")
 
@@ -290,6 +321,7 @@ def project_contacts_onto_registered_forearm_flow(
         forearm_ply_path=forearm_ply_path,
         output_dir=output_dir,
         projection_stats_path=projection_stats_path,
+        input_parquets=input_parquets,
         force_processing=force_processing,
     )
     if not output_files:
@@ -307,16 +339,22 @@ def center_on_receptive_field_flow(
     forearm_output_dir: Path,
     rf_origin_path: Path,
     force_processing: bool = False,
+    *,
+    input_parquets: Optional[List[Path]] = None,
 ) -> Tuple[List[Path], List[Path]]:
     """Center block CSVs, forearm PLY and depth fields on the RF origin.
 
+    ``input_parquets`` is each block's PCA-calibrated sidecar, index-aligned
+    with *input_files*.  ``None`` derives them from the CSV paths.
+
     Returns ``(rf_centered_csvs, rf_centered_depth_fields)``.  The stage's
     ``outputs`` list binds positionally, so the CSVs stay in first position and
-    ``rf_files`` keeps its meaning until Phase 8 binds the second slot.
+    ``rf_files`` keeps its meaning.
     """
     print(f"[{output_dir.name}] Centering spatial data on receptive field origin...")
     return center_on_receptive_field(
         input_files, forearm_ply_path, output_dir, forearm_output_dir, rf_origin_path,
+        input_parquets=input_parquets,
         force_processing=force_processing,
     )
 
@@ -339,6 +377,32 @@ def aggregate_session_blocks_flow(
 
 # --- Worker Flow ---
 
+def _nonempty_list(paths: Optional[List[Path]]) -> Optional[List[Path]]:
+    """Normalise an optional path list so it can never reach the executor empty.
+
+    The stage-execution loop below skips a task **entirely** — CSVs included —
+    when any of its ``list`` parameters has length zero::
+
+        input_lists = [v for v in params.values() if isinstance(v, list)]
+        if any(len(l) == 0 for l in input_lists):
+            continue
+
+    That guard exists to catch an empty *primary* input, but it does not know
+    which parameter is primary.  An empty list of depth field sidecars would
+    therefore silently cancel the whole stage, and the pipeline would carry on
+    with the previous stage's outputs bound to the next stage's inputs — the
+    quietest possible corruption.
+
+    Passing ``None`` instead means "not supplied": every stage derives the
+    sidecar paths from its CSV paths in that case and then *requires* them to
+    exist, so an absent field is a named ``FileNotFoundError`` rather than a
+    skipped stage.
+    """
+    if not paths:
+        return None
+    return list(paths)
+
+
 def run_single_session_postprocessing(
     session_id: str,
     session_configs: List[KinectConfig],
@@ -354,6 +418,7 @@ def run_single_session_postprocessing(
     # Resolve input files from Configs
     # We look for the specific file expected from the video processing stage
     session_input_files = []
+    session_source_parquets = []
     for config in session_configs:
         input_dir = config.session_merged_output_dir / "blocks_filtered"
         input_path = input_dir / f"{config.session_id}_semicontrolled_{config.block_id}_merged_data.csv"
@@ -365,6 +430,25 @@ def run_single_session_postprocessing(
             )
         session_input_files.append(input_path)
 
+        # The per-vertex contact depth field is a **hard input** of
+        # postprocessing, not an optional extra: it is what the five spatial
+        # stages carry into the RF-centred frame, and a block without one cannot
+        # produce the terminal artifact. It is therefore resolved and proven to
+        # exist here, index-aligned with the CSV it belongs to, exactly as the
+        # CSV is — a session missing one must be excluded from the DAG's
+        # 'kinect_configs' list rather than discovered mid-run.
+        parquet_path = depth_field_path_for_csv(input_path)
+        if not parquet_path.exists():
+            raise FileNotFoundError(
+                f"Contact depth field sidecar not found: {parquet_path}. "
+                f"The per-vertex depth field is a required input of "
+                f"postprocessing; it is written beside the filtered CSV by the "
+                f"merging pipeline's filter_contact_depth_field_by_neural_quality "
+                f"task. Re-run merging for this block, or remove this session "
+                f"from the postprocess DAG config's 'kinect_configs' list."
+            )
+        session_source_parquets.append(parquet_path)
+
     if monitor_queue is not None:
         monitor = PipelineMonitor(
             report_path=report_file_path, stages=list(dag_handler.tasks.keys()), data_queue=monitor_queue
@@ -375,6 +459,7 @@ def run_single_session_postprocessing(
     # Initialize context with the raw list of files AND the session configs
     context = {
         "source_files": session_input_files,
+        "source_parquets": session_source_parquets,
         "session_configs": session_configs
     }
 
@@ -396,10 +481,11 @@ def run_single_session_postprocessing(
             "func": apply_icp_registration_flow,
             "params": lambda: {
                 "input_files": context.get("source_files"),
+                "input_parquets": _nonempty_list(context.get("source_parquets")),
                 "session_configs": context.get("session_configs"),
                 "output_dir": session_output_dir / "blocks_registered",
             },
-            "outputs": ["registered_files"]
+            "outputs": ["registered_files", "registered_depth_fields"]
         },
         # Step 2: Deduplicate (x,y) in the unified forearm PLY and contact CSVs
         {
@@ -407,11 +493,12 @@ def run_single_session_postprocessing(
             "func": deduplicate_xy_flow,
             "params": lambda: {
                 "input_files": context.get("registered_files"),
+                "input_parquets": _nonempty_list(context.get("registered_depth_fields")),
                 "forearm_ply_path": context.get("source_forearm"),
                 "output_dir": session_output_dir / "blocks_deduped",
                 "forearm_output_dir": session_output_dir / "forearm_deduped",
             },
-            "outputs": ["deduped_files", "deduped_forearm"]
+            "outputs": ["deduped_files", "deduped_forearm", "deduped_depth_fields"]
         },
         # Step 3: Project contact points onto the deduplicated forearm surface
         {
@@ -419,11 +506,12 @@ def run_single_session_postprocessing(
             "func": project_contacts_onto_registered_forearm_flow,
             "params": lambda: {
                 "input_files": context.get("deduped_files"),
+                "input_parquets": _nonempty_list(context.get("deduped_depth_fields")),
                 "forearm_ply_path": context.get("deduped_forearm"),
                 "output_dir": session_output_dir / "blocks_projected",
                 "projection_stats_path": session_output_dir / "blocks_projected" / "projection_stats.csv",
             },
-            "outputs": ["projected_files"]
+            "outputs": ["projected_files", "projected_depth_fields"]
         },
         # Step 4: PCA XYZ Calibration — applies PCA transform to CSVs and forearm PLY
         {
@@ -431,11 +519,12 @@ def run_single_session_postprocessing(
             "func": calibrate_pca_xyz_flow,
             "params": lambda: {
                 "input_files": context.get("projected_files"),
+                "input_parquets": _nonempty_list(context.get("projected_depth_fields")),
                 "output_dir": session_output_dir / "blocks_pca_calibrated",
                 "forearm_ply_path": context.get("deduped_forearm"),
                 "forearm_output_dir": session_output_dir / "forearm_pca_calibrated",
             },
-            "outputs": ["pca_files", "pca_output_dir", "pca_forearm"]
+            "outputs": ["pca_files", "pca_output_dir", "pca_forearm", "pca_depth_fields"]
         },
         # Step 5: Center spatial data on the receptive field origin
         {
@@ -443,12 +532,13 @@ def run_single_session_postprocessing(
             "func": center_on_receptive_field_flow,
             "params": lambda: {
                 "input_files": context.get("pca_files"),
+                "input_parquets": _nonempty_list(context.get("pca_depth_fields")),
                 "forearm_ply_path": context.get("pca_forearm"),
                 "output_dir": session_output_dir / "blocks_rf_centered",
                 "forearm_output_dir": session_output_dir / "forearm_rf_centered",
                 "rf_origin_path": session_output_dir / "rf_center_origin.json",
             },
-            "outputs": ["rf_files"]
+            "outputs": ["rf_files", "rf_depth_fields"]
         },
         # Step 6: Aggregate fully-processed blocks into one session-level CSV
         {
@@ -497,6 +587,9 @@ def run_single_session_postprocessing(
             # Validation: Check if list inputs are empty
             # Note: We must exclude 'configs' from this check if configs are not lists of files, 
             # though in this architecture they are a List[KinectConfig], so len() check is valid.
+            # Every optional path list above is routed through _nonempty_list(),
+            # which yields None rather than [] — see its docstring: an empty list
+            # here silently cancels the entire stage, CSVs and all.
             input_lists = [v for v in params.values() if isinstance(v, list)]
             if any(len(l) == 0 for l in input_lists):
                  print(f"⚠️ Warning: Empty input list for task {task_name}. Skipping execution.")

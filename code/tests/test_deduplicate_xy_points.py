@@ -1044,6 +1044,10 @@ FIELD_METADATA = {
     "sign_convention": "negative_is_penetrating",
     "produced_by": "compute_somatosensory_characteristics",
     "source_recording": "unit-test",
+    # What the merging filter stamps, and what the ICP stage would have carried
+    # in before Phase 8 restamped it. Present here so the dedup stage's own
+    # restamp is observable rather than a no-op.
+    "pipeline_stage": "merging",
 }
 
 
@@ -1143,10 +1147,18 @@ class TestDeduplicateContactDepthField:
         assert maxima.loc[10] == 4.0
         assert maxima.loc[11] == 2.0
 
-    def test_the_metadata_is_carried_through_verbatim(self, tmp_path):
+    def test_only_the_pipeline_stage_is_restamped(self, tmp_path):
+        """Dedup removes rows; it does not move them.
+
+        Every declared key therefore survives verbatim -- ``coordinate_space``
+        above all -- except ``pipeline_stage``, which this stage owns: the file
+        in ``blocks_deduped/`` was written by postprocessing, and repeating its
+        input's ``"merging"`` stamp would misreport where the artifact has been.
+        """
         _, out_pq, _ = self._run(tmp_path)
         _, metadata = read_contact_depth_field(out_pq)
-        assert metadata == FIELD_METADATA
+        assert metadata == {**FIELD_METADATA, "pipeline_stage": "postprocessing"}
+        assert FIELD_METADATA["pipeline_stage"] == "merging"
 
     def test_no_vertex_id_is_assigned_here(self, tmp_path):
         _, out_pq, _ = self._run(tmp_path)

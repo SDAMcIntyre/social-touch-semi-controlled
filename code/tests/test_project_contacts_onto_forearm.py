@@ -225,6 +225,9 @@ FIELD_METADATA = {
     "sign_convention": "negative_is_penetrating",
     "produced_by": "compute_somatosensory_characteristics",
     "source_recording": "unit-test",
+    # What the merging filter stamps. Present here so the projection stage's
+    # restamp to "postprocessing" is observable rather than a no-op.
+    "pipeline_stage": "merging",
 }
 
 #: Contact points of two frames, deliberately off-lattice so projection moves them.
@@ -359,6 +362,19 @@ class TestProjectedDepthField:
         (_, parquets), _, _ = _project_stage(tmp_path, force_processing=True)
         _, metadata = read_contact_depth_field(parquets[0])
         assert metadata["coordinate_space"] == "icp_registered"
+
+    def test_the_pipeline_stage_is_restamped(self, tmp_path):
+        """``blocks_projected/`` was written by postprocessing, not by merging.
+
+        Projection does not move points between spaces, so
+        ``coordinate_space`` is carried through -- but the artifact's producing
+        stage did change, and an intermediate that still reads ``"merging"``
+        misreports where the field has been.
+        """
+        (_, parquets), _, _ = _project_stage(tmp_path, force_processing=True)
+        _, metadata = read_contact_depth_field(parquets[0])
+        assert metadata["pipeline_stage"] == "postprocessing"
+        assert FIELD_METADATA["pipeline_stage"] == "merging"
 
     def test_a_missing_provenance_sidecar_raises_naming_it(self, tmp_path):
         ply = _write_forearm_ply(tmp_path)
