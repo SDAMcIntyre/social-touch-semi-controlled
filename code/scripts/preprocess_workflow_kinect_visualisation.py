@@ -3,7 +3,6 @@ import sys
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
-from prefect import flow
 import utils.path_tools as path_tools
 from utils.pipeline.pipeline_config_manager import DagConfigHandler
 
@@ -231,7 +230,6 @@ def build_hand_mesh_comparison(
 
 
 # --- The "Worker" Flow ---
-@flow(name="Run Single Session Visualization")
 def run_single_session_visualization(
     config: KinectConfig,
     dag_handler: DagConfigHandler
@@ -308,7 +306,6 @@ def run_single_session_visualization(
 
 
 # --- The "Dispatcher" Flow ---
-@flow(name="Run Visualization Batch Sequentially", log_prints=True)
 def run_batch_sequentially(block_files: list[Path], project_data_root: Path, dag_config_path: Path):
     """
     Runs all session pipelines one by one.

@@ -8,8 +8,6 @@ import time
 import traceback
 from multiprocessing import Queue, freeze_support
 
-from prefect import flow
-
 # Setup a basic logger
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -38,13 +36,13 @@ from _2_primary_processing._2_generate_rgb_depth_video import (
 # PRIMARY PIPELINE TASKS
 # -----------------------------------------------------------------------------
 
-@flow(name="0. Analyse MKV video")
+# Stage 0: Analyse MKV video
 def validate_mkv_video(source_video: Path, output_dir: Path, *, force_processing: bool = False) -> Path:
     print(f"[{output_dir.name}] Analysing MKV video...")
     analysis_csv_path = output_dir / "mkv_analysis_report.csv"
     return generate_mkv_stream_analysis(source_video, analysis_csv_path, force_processing=force_processing)
 
-@flow(name="1. Generate RGB Video")
+# Stage 1: Generate RGB Video
 def generate_rgb_video(source_video: Path, output_dir: Path, *, force_processing: bool = False) -> Path:
     print(f"[{output_dir.name}] Generating RGB video...")
     base_filename = os.path.splitext(os.path.basename(source_video))[0]
@@ -52,7 +50,7 @@ def generate_rgb_video(source_video: Path, output_dir: Path, *, force_processing
     rgb_video_path = extract_color_to_mp4(source_video, rgb_path, force_processing=force_processing)
     return Path(rgb_video_path) if not isinstance(rgb_video_path, Path) else rgb_video_path
 
-@flow(name="2. Generate Depth Images")
+# Stage 2: Generate Depth Images
 def generate_depth_images(source_video: Path, output_dir: Path, *, force_processing: bool = False) -> Path:
     print(f"[{output_dir.name}] Generating depth images...")
     depth_dir = output_dir / source_video.name.replace(".mkv", "_depth")

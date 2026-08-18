@@ -1,6 +1,5 @@
 import argparse
 from pathlib import Path
-from prefect import flow
 import utils.path_tools as path_tools
 from utils import DagConfigHandler
 
@@ -35,7 +34,7 @@ from _3_preprocessing._6_metadata_matching import (
 
 
 # --- Sub-Flows (Manual Tasks) ---
-@flow(name="3. Track LED Blinking")
+# Stage 3: Track LED Blinking
 def prepare_led_tracking(
     rgb_video_path: Path, 
     output_dir: Path, 
@@ -49,7 +48,6 @@ def prepare_led_tracking(
     return True
 
 
-@flow(name="Manual: Define Hand Tracking ROI")
 def define_hand_tracking_roi_flow(
     rgb_video_path: Path,
     output_dir: Path,
@@ -67,7 +65,6 @@ def define_hand_tracking_roi_flow(
     )
 
 
-@flow(name="Manual: Prepare Hand Model")
 def assign_hand_model_metadata_flow(
     rgb_video_path: Path,
     hand_models_dir: Path,
@@ -98,7 +95,6 @@ def assign_hand_model_metadata_flow(
     
     return metadata_path
 
-@flow(name="Manual: Review Stickers")
 def review_2d_stickers(
     rgb_video_path: Path,
     objects_to_track: list[str],
@@ -124,7 +120,6 @@ def review_2d_stickers(
 
     return stickers_roi_csv_path
 
-@flow(name="Manual: Define Colorspace")
 def prepare_stickers_colorspace(
     rgb_video_path: Path,
     output_dir: Path,
@@ -146,7 +141,7 @@ def prepare_stickers_colorspace(
     )
     return
 
-@flow(name="Manual: Define correlation videos thresholding")
+# Manual stage: define the thresholding of the correlation videos
 def review_handstickers_color_threshold(
     rgb_video_path: Path,
     output_dir: Path,
@@ -169,7 +164,6 @@ def review_handstickers_color_threshold(
     )
     return
 
-@flow(name="Manual: Define trial chunks.")
 def define_trial_chunks_flow(
     rgb_video_path: Path,
     sticker_dir: Path,
@@ -193,7 +187,6 @@ def define_trial_chunks_flow(
     )
     return True
 
-@flow(name="Manual: Curate Hamer Models")
 def run_curate_hamer_hand_models(
     rgb_video_path: Path,
     kinematics_dir: Path,
@@ -234,7 +227,6 @@ def run_curate_hamer_hand_models(
     )
     return output_file_path
 
-@flow(name="Manual: Review Single Touches")
 def review_single_touches_flow(
     rgb_video_path: Path,
     sticker_dir: Path,
@@ -269,7 +261,6 @@ def review_single_touches_flow(
 
 
 # --- The "Worker" Flow ---
-@flow(name="Run Single Session Manual Pipeline")
 def run_single_session_pipeline(
     config: KinectConfig,
     dag_handler: DagConfigHandler
@@ -410,7 +401,6 @@ def run_single_session_pipeline(
 
 
 # --- The "Dispatcher" Flow ---
-@flow(name="Run Manual Batch Sequentially", log_prints=True)
 def run_batch_sequentially(block_files: list[Path], project_data_root: Path, dag_config_path: Path):
     """Runs all session pipelines one by one."""
     dag_handler_template = DagConfigHandler(dag_config_path)

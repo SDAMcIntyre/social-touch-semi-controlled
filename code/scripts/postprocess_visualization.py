@@ -25,8 +25,6 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
-
-from prefect import flow
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtCore import QCoreApplication
 
@@ -590,7 +588,6 @@ def run_forearm_stage_inspector(
 # Batch dispatcher
 # ---------------------------------------------------------------------------
 
-@flow(name="Run Postprocessed Viewer Batch Sequentially", log_prints=True)
 def run_batch_sequentially(
     block_files: list[Path],
     project_data_root: Path,

@@ -16,8 +16,6 @@ import open3d as o3d
 # sklearn is assumed to be present in the Anaconda environment
 from sklearn.decomposition import PCA
 
-from prefect import flow
-
 # Setup a basic logger
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -50,7 +48,6 @@ from _4_merging.aggregate_blocks_session import aggregate_session_blocks
 
 # --- Post-Processing Sub-Flows ---
 
-@flow(name="fetch_forearm_of_reference")
 def fetch_forearm_of_reference_flow(
     session_configs: List[KinectConfig],
     output_dir: Path,
@@ -64,7 +61,6 @@ def fetch_forearm_of_reference_flow(
     )
 
 
-@flow(name="apply_icp_registration")
 def apply_icp_registration_flow(
     input_files: List[Path],
     session_configs: List[KinectConfig],
@@ -78,7 +74,6 @@ def apply_icp_registration_flow(
         force_processing=force_processing,
     )
 
-@flow(name="calibrate_pca_xyz")
 def calibrate_pca_xyz_flow(
     input_files: List[Path],
     output_dir: Path,
@@ -96,7 +91,6 @@ def calibrate_pca_xyz_flow(
     )
 
 
-@flow(name="deduplicate_xy")
 def deduplicate_xy_flow(
     input_files: List[Path],
     forearm_ply_path: Path,
@@ -163,7 +157,6 @@ def deduplicate_xy_flow(
     return deduped_csv_paths, forearm_out
 
 
-@flow(name="project_contacts_onto_registered_forearm")
 def project_contacts_onto_registered_forearm_flow(
     input_files: List[Path],
     forearm_ply_path: Path,
@@ -200,7 +193,6 @@ def project_contacts_onto_registered_forearm_flow(
     return output_files
 
 
-@flow(name="center_on_receptive_field")
 def center_on_receptive_field_flow(
     input_files: List[Path],
     forearm_ply_path: Optional[Path],
@@ -217,7 +209,6 @@ def center_on_receptive_field_flow(
     )
 
 
-@flow(name="aggregate_session_blocks")
 def aggregate_session_blocks_flow(
     input_files: List[Path],
     output_path: Path,
@@ -236,7 +227,6 @@ def aggregate_session_blocks_flow(
 
 # --- Worker Flow ---
 
-# @flow(name="Run Single Session Postprocessing")
 def run_single_session_postprocessing(
     session_id: str,
     session_configs: List[KinectConfig],

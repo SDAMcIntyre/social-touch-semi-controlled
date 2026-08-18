@@ -7,8 +7,6 @@ import time
 import traceback
 from multiprocessing import Queue, freeze_support
 
-from prefect import flow
-
 # Setup a basic logger
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -78,13 +76,13 @@ from _3_preprocessing._7_unification import unify_datasets
 
 # --- 3. Sub-Flows (Formerly Tasks) ---
 
-@flow(name="0. Analyse MKV video")
+# Stage 0: Analyse MKV video
 def validate_mkv_video(source_video: Path, output_dir: Path, *, force_processing: bool = False) -> Path:
     print(f"[{output_dir.name}] Analysing MKV video...")
     analysis_csv_path = output_dir / "mkv_analysis_report.csv"
     return generate_mkv_stream_analysis(source_video, analysis_csv_path, force_processing=force_processing)
 
-@flow(name="1. Generate RGB Video")
+# Stage 1: Generate RGB Video
 def generate_rgb_video(source_video: Path, output_dir: Path, *, force_processing: bool = False) -> Path:
     print(f"[{output_dir.name}] Generating RGB video...")
     base_filename = os.path.splitext(os.path.basename(source_video))[0]
@@ -92,14 +90,14 @@ def generate_rgb_video(source_video: Path, output_dir: Path, *, force_processing
     rgb_video_path = extract_color_to_mp4(source_video, rgb_path, force_processing=force_processing)
     return Path(rgb_video_path) if not isinstance(rgb_video_path, Path) else rgb_video_path
 
-@flow(name="2. Generate Depth Images")
+# Stage 2: Generate Depth Images
 def generate_depth_images(source_video: Path, output_dir: Path, *, force_processing: bool = False) -> Path:
     print(f"[{output_dir.name}] Generating depth images...")
     depth_dir = output_dir / source_video.name.replace(".mkv", "_depth")
     extract_depth_to_tiff(source_video, depth_dir, force_processing=force_processing)
     return depth_dir
 
-@flow(name="3. Track LED Blinking")
+# Stage 3: Track LED Blinking
 def track_led_blinking(video_path: Path, stimulus_metadata: Path, output_dir: Path, *, force_processing: bool = False) -> Path:
     print(f"[{output_dir.name}] Tracking LED blinking...")
     name_baseline = video_path.stem + "_LED"
@@ -118,7 +116,7 @@ def track_led_blinking(video_path: Path, stimulus_metadata: Path, output_dir: Pa
 
     return csv_led_path_corrected
 
-@flow(name="5. Validate Forearm Extraction")
+# Stage 5: Validate Forearm Extraction
 def validate_forearm_extraction(session_output_dir: Path) -> Path:
     print(f"[{session_output_dir.name}] Validating forearm extraction...")
     is_valid = is_forearm_valid(session_output_dir / "forearm_pointclouds", verbose=True)
@@ -127,7 +125,7 @@ def validate_forearm_extraction(session_output_dir: Path) -> Path:
     # Returning the boolean status directly, as it does not produce a file path for downstream tasks.
     return is_valid
 
-@flow(name="5. Validate Hand Extraction")
+# Stage 5: Validate Hand Extraction
 def validate_hand_extraction(rgb_video_path: Path, hand_models_dir: Path, expected_labels: list, output_dir: Path) -> Path:
     print(f"[{output_dir.name}] Validating hand extraction...")
     name_baseline = rgb_video_path.stem + "_handmodel"
@@ -138,7 +136,7 @@ def validate_hand_extraction(rgb_video_path: Path, hand_models_dir: Path, expect
     return is_valid
 
 # --- REFACTORED: Track Stickers Raw Flow ---
-@flow(name="6a. Track Stickers (Raw 2D)")
+# Stage 6a: Track Stickers (Raw 2D)
 def track_stickers_raw_flow(
     rgb_video_path: Path, 
     output_dir: Path, 
@@ -158,7 +156,7 @@ def track_stickers_raw_flow(
     return stickers_roi_csv_path, metadata_roi_path
 
 # --- REFACTORED: Refine Sticker Features Flow ---
-@flow(name="6b. Refine Sticker Features")
+# Stage 6b: Refine Sticker Features
 def refine_sticker_features_flow(
     rgb_video_path: Path,
     output_dir: Path,
@@ -213,7 +211,7 @@ def refine_sticker_features_flow(
 
     return final_csv_path, True
 
-@flow(name="6. Generate XYZ Sticker Positions (3D)")
+# Stage 6: Generate XYZ Sticker Positions (3D)
 def generate_xyz_stickers(
     stickers_2d_path: Path, 
     source_video: Path, 
@@ -237,7 +235,7 @@ def generate_xyz_stickers(
     )
     return result_csv_path
 
-@flow(name="6c. Correct XYZ Sticker Motion")
+# Stage 6c: Correct XYZ Sticker Motion
 def correct_xyz_stickers_motion_flow(
     stickers_xyz_path: Path,
     output_dir: Path,
@@ -271,7 +269,7 @@ def correct_xyz_stickers_motion_flow(
 
 
 # --- REFACTORED: Track Hands Model Flow ---
-@flow(name="7a. Track Hands Model")
+# Stage 7a: Track Hands Model
 def track_hands_model_flow(
     rgb_video_path: Path,
     output_dir: Path,
@@ -295,7 +293,7 @@ def track_hands_model_flow(
     return tracked_hands_path
 
 # --- REFACTORED: Generate 3D Hand Motion Flow ---
-@flow(name="7b. Generate 3D Hand in Motion")
+# Stage 7b: Generate 3D Hand in Motion
 def generate_3d_hand_in_motion_flow(
     rgb_video_path: Path, 
     tracked_hands_path: Path, 
@@ -332,7 +330,7 @@ def generate_3d_hand_in_motion_flow(
 
     return out_motion_npz_path, metadata_path
 
-@flow(name="7c. Stabilise Hand Motion")
+# Stage 7c: Stabilise Hand Motion
 def stabilise_hand_motion_flow(
     hand_motion_npz_path: Path,
     output_dir: Path,
@@ -361,7 +359,7 @@ def stabilise_hand_motion_flow(
 
     return out_stabilised_npz_path
 
-@flow(name="8. Generate Somatosensory Characteristics")
+# Stage 8: Generate Somatosensory Characteristics
 def compute_somatosensory_characteristics_flow(
     hand_motion_npz_path: Path,
     hand_metadata_path: Path,
@@ -399,7 +397,7 @@ def compute_somatosensory_characteristics_flow(
     return contact_characteristics_path, contact_depth_field_path
 
 
-@flow(name="10. Define Trial IDs")
+# Stage 10: Define Trial IDs
 def define_trial_ids_flow(rgb_video_path: Path, output_dir: Path, *, force_processing: bool = False) -> Path:
     print(f"[{output_dir.name}] Defining Trial IDs...")
     name_baseline = Path(rgb_video_path).stem
@@ -414,7 +412,7 @@ def define_trial_ids_flow(rgb_video_path: Path, output_dir: Path, *, force_proce
     
     return output_path
 
-@flow(name="11. Add Stimuli Metadata")
+# Stage 11: Add Stimuli Metadata
 def generate_stimuli_metadata_flow(trial_data_path: Path, stimulus_metadata: Path, output_dir: Path, *, force_processing: bool = False) -> tuple[Path, Path]:
     print(f"[{output_dir.name}] Adding Stimuli Metadata...")
     name_baseline = Path(trial_data_path).stem.replace("_trial_ids_only", "")
@@ -428,7 +426,7 @@ def generate_stimuli_metadata_flow(trial_data_path: Path, stimulus_metadata: Pat
                                       force_processing=force_processing)
     return output_path, aligned_output_path
 
-@flow(name="12. Find Single Touches")
+# Stage 12: Find Single Touches
 def find_single_touches_flow(trial_data_path: Path, stickers_xyz_path: Path, stimuli_metadata_path: Path, output_dir: Path, *, force_processing: bool = False) -> Path:
     print(f"[{output_dir.name}] Finding Single Touches...")
     name_baseline = Path(trial_data_path).stem.replace("_trial-ids", "")
@@ -446,7 +444,7 @@ def find_single_touches_flow(trial_data_path: Path, stickers_xyz_path: Path, sti
     
     return final_path
     
-@flow(name="13. Unify Processed Data")
+# Stage 13: Unify Processed Data
 def unify_processed_data_flow(led_path: Path, 
                               contact_path: Path, 
                               trial_path: Path, 
@@ -462,7 +460,6 @@ def unify_processed_data_flow(led_path: Path,
     return final_path
 
 # --- 4. The "Worker" Flow ---
-# @flow(name="Run Single Session Pipeline")
 def run_single_session_pipeline(
     config: KinectConfig,
     dag_handler: DagConfigHandler,

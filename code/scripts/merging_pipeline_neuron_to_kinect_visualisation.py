@@ -48,8 +48,6 @@ from pathlib import Path
 from typing import Dict, Optional, Tuple
 
 import numpy as np
-
-from prefect import flow
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtCore import QCoreApplication
 
@@ -420,7 +418,6 @@ def _build_transformed_spec(
 # Batch dispatcher (sequential — one viewer window per task type)
 # ---------------------------------------------------------------------------
 
-@flow(name="Run Neural-Kinect Viewer Batch Sequentially", log_prints=True)
 def run_batch_sequentially(
     block_files: list[Path],
     project_data_root: Path,

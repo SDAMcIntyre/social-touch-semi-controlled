@@ -301,26 +301,70 @@ drive Prefect, and skips with an explicit reason if a module cannot be imported.
 
 ### Phase 3: Strip decorators and `get_run_logger`
 **Goal:** No `code/scripts/` file imports Prefect.
-**Started:** —  **Completed:** —
+**Started:** 2026-08-18 10:55  **Completed:** 2026-08-18 11:06
 
 Work file by file, committing per file is acceptable within the phase if the diff is large. The
 `@flow` names carry the stage numbering ("8. Generate Somatosensory Characteristics") — preserve that
 information in a comment or docstring where it is not already obvious from the function name.
 
-- [ ] 3.1 — `preprocess_workflow_kinect_auto.py` (18 flows).
-- [ ] 3.2 — `preprocess_workflow_kinect_manual.py` (11 flows, one with `log_prints=True`).
-- [ ] 3.3 — `postprocess_workflow_kinect_auto.py` (7 flows).
-- [ ] 3.4 — `preprocess_pipeline_nerve_auto.py` (5 flows, 5 `get_run_logger`). Delete each
+- [x] 3.1 — `preprocess_workflow_kinect_auto.py` (18 flows).
+- [x] 3.2 — `preprocess_workflow_kinect_manual.py` (11 flows, one with `log_prints=True`).
+- [x] 3.3 — `postprocess_workflow_kinect_auto.py` (7 flows).
+- [x] 3.4 — `preprocess_pipeline_nerve_auto.py` (5 flows, 5 `get_run_logger`). Delete each
       `logger = get_run_logger()` line — the Phase 1 module-level `logger` shadows it, so every
       `logger.info(...)` body stays byte-identical.
-- [ ] 3.5 — `merging_pipeline_neuron_to_kinect_auto.py` (2 flows, 3 tasks, 5 `get_run_logger`). Same
+- [x] 3.5 — `merging_pipeline_neuron_to_kinect_auto.py` (2 flows, 3 tasks, 5 `get_run_logger`). Same
       treatment.
-- [ ] 3.6 — `primary_workflow_kinect_auto.py` (3 flows).
-- [ ] 3.7 — `prepare_configs_workflow.py` (2 flows).
-- [ ] 3.8 — `preprocess_workflow_kinect_visualisation.py` (2 flows, one `log_prints=True`).
-- [ ] 3.9 — `merging_pipeline_neuron_to_kinect_visualisation.py` (1 flow, `log_prints=True`).
-- [ ] 3.10 — `postprocess_visualization.py` (1 flow, `log_prints=True`).
-- [ ] 3.11 — After each file, confirm it still imports and `--help` still works.
+- [x] 3.6 — `primary_workflow_kinect_auto.py` (3 flows).
+- [x] 3.7 — `prepare_configs_workflow.py` (2 flows).
+- [x] 3.8 — `preprocess_workflow_kinect_visualisation.py` (2 flows, one `log_prints=True`).
+- [x] 3.9 — `merging_pipeline_neuron_to_kinect_visualisation.py` (1 flow, `log_prints=True`).
+- [x] 3.10 — `postprocess_visualization.py` (1 flow, `log_prints=True`).
+- [x] 3.11 — After each file, confirm it still imports and `--help` still works.
+
+**Outcome — 55 decorators, 10 `from prefect import` lines, 10 `get_run_logger()` calls removed**
+(18 + 11 + 7 + 5 + 5 + 3 + 2 + 2 + 1 + 1 = 55; counts matched the plan exactly). The `prefect`
+import and the `get_run_logger()` calls were removed in the **same edit** per file, so narration
+never went through a silent window.
+
+Stage numbering was preserved as a leading `# Stage N: ...` comment for the 26 decorators whose
+`name=` carried information the function name does not — all 18 in
+`preprocess_workflow_kinect_auto.py`, the 3 in `primary_workflow_kinect_auto.py`, the 3 `@task`
+stages in `merging_pipeline_neuron_to_kinect_auto.py`, `3. Track LED Blinking` and
+`Manual: Define correlation videos thresholding` in `preprocess_workflow_kinect_manual.py`. The
+remaining 29 names were redundant with the function name (e.g. `@flow(name="create_kinect_configs")`
+on `create_kinect_configs_flow`) and were dropped outright.
+
+Two already-commented-out decorators were also deleted — `# @flow(name="Run Single Session Pipeline")`
+(`preprocess_workflow_kinect_auto.py`) and `# @flow(name="Run Single Session Postprocessing")`
+(`postprocess_workflow_kinect_auto.py`) — both redundant with their function names and dead
+references to a framework being removed.
+
+**Surviving `prefect` mentions under `code/scripts/`** (all prose, none executable):
+- the four `NotImplementedError` messages added in Phase 2 (2 lines each in
+  `merging_pipeline_neuron_to_kinect_auto.py`, `postprocess_workflow_kinect_auto.py`,
+  `preprocess_workflow_kinect_auto.py`, `primary_workflow_kinect_auto.py`)
+- `_3_preprocessing/_4_somatosensory_quantification/poc_contact_depth_field.py:32` and
+  `__misc/standalone_mkv_to_forearm_mesh.py:4` — docstrings noting "no Prefect flow". These become
+  stale once the dependency is gone; reword in Phase 5.6.
+- `code/tests/test_parallel_execution_removed.py:54` — `getattr(fn, "fn", fn)` with an explanatory
+  comment. Still correct on plain functions; left as-is.
+
+**Narration check (Success Criterion, measured).** Baseline = the HEAD (pre-Phase-3) copy of each
+file loaded via `importlib`; after = the current file imported as the entry script does, then a real
+module function called.
+
+| | `preprocess_pipeline_nerve_auto` | `merging_pipeline_neuron_to_kinect_auto` |
+|---|---|---|
+| before: root logger | `WARNING`, `['PrefectConsoleHandler']` | `WARNING`, `['PrefectConsoleHandler']` |
+| before: module logger effective | `WARNING` | `WARNING` |
+| before: `logger.info(...)` on stderr | **nothing** | **nothing** |
+| after: `'prefect' in sys.modules` | `False` | `False` |
+| after: root logger | `INFO`, `StreamHandler -> <stderr>` | `INFO`, `StreamHandler -> <stderr>` |
+| after: real call | `run_batch_processing([], ...)` | `filter_by_neural_quality_flow(...)` |
+| after: line on stderr | `... - INFO - Starting batch processing for 0 block files.` | `... - INFO - [does-not-exist-merged.csv] Filtering by neural quality xlsx: ...` |
+
+All 10 entry scripts import cleanly and `--help` exits 0. Suite: **328 passed, 7 skipped** (unchanged).
 
 **Files Modified:** the 10 entry scripts listed above.
 

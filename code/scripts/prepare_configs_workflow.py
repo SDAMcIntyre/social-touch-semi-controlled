@@ -3,8 +3,6 @@ import logging
 from multiprocessing import freeze_support
 from pathlib import Path
 
-from prefect import flow
-
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 import utils.path_tools as path_tools
@@ -20,7 +18,6 @@ from _2_primary_processing._1_prepare_configs.create_forearm_configs import crea
 # PREPARE CONFIGS TASKS
 # -----------------------------------------------------------------------------
 
-@flow(name="create_kinect_configs")
 def create_kinect_configs_flow(
     project_data_root: Path,
     project_code_root: Path,
@@ -41,7 +38,6 @@ def create_kinect_configs_flow(
         generate_yaml_config(video_path, project_config, project_data_root, project_code_root)
 
 
-@flow(name="create_forearm_configs")
 def create_forearm_configs_flow(
     project_code_root: Path,
     project_data_root: Path,

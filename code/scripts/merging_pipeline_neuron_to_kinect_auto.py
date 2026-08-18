@@ -5,8 +5,6 @@ from pathlib import Path
 from typing import Dict, List, Optional
 from multiprocessing import freeze_support
 
-from prefect import flow, task, get_run_logger
-
 # Setup a basic logger
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -89,7 +87,7 @@ def resolve_filenames(config: KinectConfig) -> Dict[str, Path]:
 
 # --- Individual Flows ---
 
-@task(name="9. Unify Dataset")
+# Stage 9: Unify Dataset
 def unify_dataset(
     kinect_data_path: Path,
     nerve_data_path: Path,
@@ -100,7 +98,6 @@ def unify_dataset(
     """
     Merges Kinect contact data with Nerve data (Block-level Unification).
     """
-    logger = get_run_logger()
     
     # Create parent directory if it doesn't exist
     output_file_path.parent.mkdir(parents=True, exist_ok=True)
@@ -118,7 +115,7 @@ def unify_dataset(
     return output_file_path
 
 
-@task(name="11. Filter by Neural Quality")
+# Stage 11: Filter by Neural Quality
 def filter_by_neural_quality_flow(
     merged_csv: Path,
     output_csv: Path,
@@ -130,7 +127,6 @@ def filter_by_neural_quality_flow(
     """
     Flow to filter a single block's merged CSV by removing Not2Use trials.
     """
-    logger = get_run_logger()
     logger.info(f"[{merged_csv.name}] Filtering by neural quality xlsx: {xlsx_path.name}")
     return filter_block_by_neural_quality(
         input_csv=merged_csv,
@@ -141,7 +137,7 @@ def filter_by_neural_quality_flow(
     )
 
 
-@task(name="12. Filter Contact Depth Field by Neural Quality")
+# Stage 12: Filter Contact Depth Field by Neural Quality
 def filter_contact_depth_field_by_neural_quality_flow(
     depth_field_path: Path,
     filtered_csv_path: Path,
@@ -153,7 +149,6 @@ def filter_contact_depth_field_by_neural_quality_flow(
     Flow to reduce a block's Space-1 contact depth field to the frames that
     survived the neural-quality filter applied to the merged CSV.
     """
-    logger = get_run_logger()
     logger.info(
         f"[{depth_field_path.name}] Filtering depth field by surviving frames "
         f"of {filtered_csv_path.name}"
@@ -166,7 +161,6 @@ def filter_contact_depth_field_by_neural_quality_flow(
     )
 
 
-@flow(name="Run Single Session Pipeline")
 def run_single_session_pipeline(
     config: KinectConfig,
     dag_handler: DagConfigHandler
@@ -175,7 +169,6 @@ def run_single_session_pipeline(
     Processes a single dataset block.
     Returns a PipelineResult object instead of a raw dict.
     """
-    logger = get_run_logger()
     block_name = config.source_video.stem
     logger.info(f"🚀 Starting pipeline for block: {block_name}")
     
@@ -275,7 +268,6 @@ def run_single_session_pipeline(
 
 # --- Main Dispatcher ---
 
-@flow(name="Batch Process All Sessions")
 def run_batch_processing(
     block_files: list[Path],
     project_data_root: Path,
@@ -297,7 +289,6 @@ def run_batch_processing(
             "See docs/development/plans/active/remove-prefect-orchestration.md."
         )
 
-    logger = get_run_logger()
     dag_handler_template = DagConfigHandler(dag_config_path)
 
     logger.info(f"🚀 Starting batch processing for {len(block_files)} sessions in SEQUENTIAL mode.")
