@@ -437,19 +437,81 @@ Phase 3 baseline).
 
 ### Phase 5: ICP propagation (Space 1 → 2)
 **Goal:** The field arrives in `blocks_registered/`.
-**Started:** —  **Completed:** —
+**Started:** 2026-08-18 14:15  **Completed:** 2026-08-18 14:40
 
-- [ ] 5.1 — Reuse the **same** `schedule` object the CSV uses (`apply_icp_registration.py:89`), and
+- [x] 5.1 — Reuse the **same** `schedule` object the CSV uses (`apply_icp_registration.py:89`), and
       the CSV-derived `max_frame` from `:87` — the parquet holds only contacting frames and would
-      otherwise build a different schedule.
-- [ ] 5.2 — Vectorised per-segment mask; `signed_depth_mm` untouched.
-- [ ] 5.3 — Handle the no-transforms passthrough at `:77`.
-- [ ] 5.4 — Restamp `coordinate_space = "icp_registered"`.
-- [ ] 5.5 — Idempotency at the session boundary, matching `:53-60`.
+      otherwise build a different schedule. *Done: the loop body is unchanged up to and including the
+      `get_transform_schedule` call; the sidecar is handed that same `schedule` object.*
+- [x] 5.2 — Vectorised per-segment mask; `signed_depth_mm` untouched. *Done via
+      `apply_transform_schedule_to_field`, plus an explicit stage-level assertion
+      (`_assert_depth_preserved`) that the column survived values and dtype alike — a silently
+      re-derived depth would be indistinguishable from a measured one in the output file.*
+- [x] 5.3 — Handle the no-transforms passthrough at `:77`. *Done, and the second one at `:98` (a
+      block with no applicable transform) as well. Both use a **byte copy**, not a read-modify-write:
+      the points did not move, so `coordinate_space` stays `kinect_space_1`, and copying the bytes is
+      the only way to guarantee no key was restamped in passing.*
+- [x] 5.4 — Restamp `coordinate_space = "icp_registered"`. *Done for the transformed branch only.
+      Every other metadata key is carried through verbatim — including `pipeline_stage = "merging"`,
+      deliberately left alone: only the coordinates changed, and re-deriving provenance a stage did
+      not produce is what lets the two artifacts drift apart.*
+- [x] 5.5 — Idempotency at the session boundary, matching `:53-60`. *Done: both artifacts in
+      `input_paths`, `output_paths` and `clean_task_outputs`, so deleting only the parquet re-runs the
+      whole session and the two can never be regenerated out of step.*
+- [x] 5.6 — `assert_row_counts_agree_with_csv` after every block, against the CSV this stage just
+      wrote. *Done on both branches. It passed on all four real ST13-01 blocks (187k / 923k / 804k /
+      403k rows) — the first real-data confirmation that the sidecar and the merged CSV agree
+      frame-by-frame.*
 
-**Files Modified:** `code/scripts/_5_postprocessing/apply_icp_registration.py`
+**Signature change.** `apply_icp_registration` now returns
+`Tuple[List[Path], List[Path]]` — `(csv_paths, parquet_paths)` — and takes a new keyword-only
+`input_parquets: Optional[Sequence[Path]] = None`. Phase 8 binds the second return slot and passes
+`source_parquets`; until then the executor's positional `outputs` binding keeps `registered_files`
+pointing at the CSVs, so the workflow is correct unchanged apart from the flow wrapper's annotation.
+When `input_parquets` is omitted the paths are derived by the new module-level
+`depth_field_path_for_csv`, which is the naming rule the merging pipeline used to write them
+(`..._merged_data.csv` → `..._contact_depth_field.parquet`, same directory) and which holds at every
+later stage too, since each stage writes its CSV under the input's own name. This is a derivation,
+not a fallback: the derived path is then required to exist.
+
+**Fail-fast:** a block whose sidecar is absent raises `FileNotFoundError` naming the file, before
+`should_process_task` is consulted. The depth field is a hard input of postprocessing; skipping the
+block would leave a gap nothing downstream would notice.
+
+**Byte-identity evidence.** `git show HEAD:code/scripts/_5_postprocessing/apply_icp_registration.py`
+extracted the pre-change module to the scratchpad; a harness ran old and new over the same real
+inputs — the four `blocks_filtered/` CSVs of `2022-06-14_ST13-01`, a genuinely multi-forearm session
+whose schedules have 3, 1, 2 and 1 segments — into separate output directories. All four CSVs are
+sha256-identical:
+
+| block | sha256 (identical before and after) |
+|-------|--------------------------------------|
+| 01 | `a7f6a4d327373bfd1d4e9273d792c8000e4508c5f6cd6ecdf54dad18ed117774` |
+| 02 | `a41500da5a7661cabb9446e1a431575782a9f165dfcdde4ad69639398321feb2` |
+| 03 | `af597c647267912681a63a9d38125ee8ad9a61bfbc09c4bec30de6b63c94dba0` |
+| 04 | `1b17f8528e52e59c312a976459e866809859ef7a4aaab4142aa53642859c7700` |
+
+Both passthrough branches were exercised separately (a session directory with no transforms file;
+a block whose number precedes every snapshot, giving an empty schedule) and their CSVs are
+sha256-identical to the pre-change module's on the same inputs, with the sidecar byte-identical to
+its input and still declaring `kinect_space_1`.
+
+**Cross-check that the two artifacts landed in the same space.** For each block, the registered
+parquet's coordinates were compared against the registered CSV's parsed `contact_points` over 200
+contact frames. Worst per-axis disagreement: 0.050 / 0.086 / 0.086 / 0.093 mm — inside the 0.137 mm
+bound implied by the CSV's double quantisation (its Space-1 `contact_points` were already `%.1f`,
+the rotation spreads that ≤ 0.05·√3 across axes, and the stage re-rounds on write) against the
+parquet's unquantised float32. `signed_depth_mm` is bitwise unchanged on all four blocks; `x/y/z`
+moved by up to 5.5 mm and are still float32.
+
+**Files Modified:** `code/scripts/_5_postprocessing/apply_icp_registration.py`,
+`code/scripts/_5_postprocessing/__init__.py`,
+`code/scripts/postprocess_workflow_kinect_auto.py` (flow wrapper return annotation only)
 
 **Dependencies:** Phases 3, 4
+
+**Verification:** full suite **517 passed, 7 skipped** — unchanged from the Phase 4 baseline, same
+seven skip reasons.
 
 ### Phase 6: Dedup and projection (the index-consuming stages)
 **Goal:** The field survives row removal and vertex re-addressing, and gains `vertex_id`.

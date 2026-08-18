@@ -70,8 +70,13 @@ def apply_icp_registration_flow(
     session_configs: List[KinectConfig],
     output_dir: Path,
     force_processing: bool = False,
-) -> List[Path]:
-    """Apply ICP registration transforms to merged CSVs."""
+) -> Tuple[List[Path], List[Path]]:
+    """Apply ICP registration to merged CSVs and their contact depth fields.
+
+    Returns ``(registered_csvs, registered_depth_fields)``.  The stage's
+    ``outputs`` list binds positionally, so the CSVs stay in first position and
+    ``registered_files`` keeps its meaning until Phase 8 binds the second slot.
+    """
     print(f"[{output_dir.name}] Applying ICP registration to {len(input_files)} files...")
     return apply_icp_registration(
         input_files, session_configs, output_dir,
