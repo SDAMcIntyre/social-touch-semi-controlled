@@ -38,6 +38,7 @@ from preprocessing.motion_analysis.tactile_quantification.io.contact_depth_field
     UNITS,
     read_contact_depth_field,
     write_contact_depth_field,
+    write_contact_depth_field_table,
 )
 
 
@@ -452,7 +453,289 @@ def test_clean_task_outputs_removes_both_artifacts(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# 6. Integration against a real recording
+# 6. The DataFrame writer
+# ---------------------------------------------------------------------------
+# ``write_contact_depth_field_table`` serialises rows a caller already holds,
+# with metadata that caller states outright.  Its job is to change nothing and
+# to refuse anything it would otherwise have to change, so these tests are
+# about bit-identity and about what it rejects.
+
+
+def _standard_metadata(**overrides) -> dict:
+    """The six keys the frame writer emits, as a caller would carry them over."""
+    metadata = {
+        "schema_version": SCHEMA_VERSION,
+        "coordinate_space": COORDINATE_SPACE,
+        "units": UNITS,
+        "sign_convention": SIGN_CONVENTION,
+        "source_recording": "rec",
+        "produced_by": PRODUCED_BY,
+    }
+    metadata.update(overrides)
+    return metadata
+
+
+def _written_sample_table(tmp_path: Path):
+    """Read back a freshly written sidecar — the shape a downstream stage sees."""
+    source = tmp_path / "rec_contact_depth_field.parquet"
+    write_contact_depth_field(_sample_series(), source, source_recording="rec")
+    frame, metadata = read_contact_depth_field(source)
+    return frame, metadata
+
+
+def test_table_writer_round_trips_a_reduced_table_bit_identically(tmp_path):
+    """Drop a frame's rows, write the rest back, recover them unchanged."""
+    frame, metadata = _written_sample_table(tmp_path)
+
+    # A boolean mask leaves a gapped index; the writer must not care.
+    reduced = frame[frame["frame_index"] != 1]
+    assert 0 < len(reduced) < len(frame)
+
+    out = tmp_path / "reduced.parquet"
+    write_contact_depth_field_table(reduced, out, metadata=metadata)
+    recovered, _ = read_contact_depth_field(out)
+
+    assert list(recovered.columns) == list(COLUMN_DTYPES)
+    for column, dtype in COLUMN_DTYPES.items():
+        assert recovered[column].dtype == dtype, column
+        # Not approximate: this task removes rows, it must not move a value.
+        assert np.array_equal(
+            recovered[column].to_numpy(), reduced[column].to_numpy()
+        ), column
+
+    assert recovered["frame_index"].tolist() == reduced["frame_index"].tolist()
+
+
+def test_table_writer_preserves_float64_depth_and_float32_positions(tmp_path):
+    """Values chosen so a float32 depth store would provably lose them."""
+    depths = np.array(
+        [-0.1234567890123456, -12.345678901234567, -1e-9, -199.99999999999997],
+        dtype=np.float64,
+    )
+    positions = np.array(
+        [[1.5, -2.25, 3.125]] * 4, dtype=np.float32
+    )
+    table = pd.DataFrame(
+        {
+            "frame_index": np.arange(4, dtype=np.int32),
+            "time_s": np.arange(4, dtype=np.float64) / 30.0,
+            "x": positions[:, 0],
+            "y": positions[:, 1],
+            "z": positions[:, 2],
+            "signed_depth_mm": depths,
+        }
+    )
+
+    out = tmp_path / "precision.parquet"
+    write_contact_depth_field_table(table, out, metadata=_standard_metadata())
+    recovered, _ = read_contact_depth_field(out)
+
+    assert recovered["signed_depth_mm"].dtype == np.dtype(np.float64)
+    assert np.array_equal(recovered["signed_depth_mm"].to_numpy(), depths)
+    # Guard against a vacuous pass: float32 really would have moved these.
+    assert not np.array_equal(depths.astype(np.float32).astype(np.float64), depths)
+
+    for axis in ("x", "y", "z"):
+        assert recovered[axis].dtype == np.dtype(np.float32), axis
+    assert np.array_equal(recovered[["x", "y", "z"]].to_numpy(), positions)
+
+
+def test_table_writer_ignores_the_dataframe_index(tmp_path):
+    """A filtered frame carries a gapped index; it must not reach the file."""
+    frame, metadata = _written_sample_table(tmp_path)
+    reduced = frame[frame["frame_index"] == 2]
+
+    out = tmp_path / "reduced.parquet"
+    write_contact_depth_field_table(reduced, out, metadata=metadata)
+
+    assert pq.read_table(out).column_names == list(COLUMN_DTYPES)
+
+
+def test_table_writer_metadata_round_trips_including_provenance_keys(tmp_path):
+    """The standard six carry through, plus the keys merging adds."""
+    frame, carried = _written_sample_table(tmp_path)
+    metadata = {
+        **carried,
+        "pipeline_stage": "merging",
+        "neural_quality_filtered": "true",
+        "frames_dropped": "17",
+    }
+
+    out = tmp_path / "filtered.parquet"
+    write_contact_depth_field_table(frame, out, metadata=metadata)
+    _, recovered = read_contact_depth_field(out)
+
+    assert recovered["schema_version"] == SCHEMA_VERSION
+    assert recovered["coordinate_space"] == COORDINATE_SPACE
+    assert recovered["units"] == UNITS
+    assert recovered["sign_convention"] == SIGN_CONVENTION
+    assert recovered["source_recording"] == "rec"
+    assert recovered["produced_by"] == PRODUCED_BY
+    assert recovered["pipeline_stage"] == "merging"
+    assert recovered["neural_quality_filtered"] == "true"
+    assert recovered["frames_dropped"] == "17"
+
+
+def test_table_writer_output_is_self_describing_without_any_repo_import(tmp_path):
+    frame, carried = _written_sample_table(tmp_path)
+    out = tmp_path / "filtered.parquet"
+    write_contact_depth_field_table(
+        frame, out, metadata={**carried, "neural_quality_filtered": "true"}
+    )
+
+    decoded = {
+        k.decode(): v.decode() for k, v in pq.read_table(out).schema.metadata.items()
+    }
+    assert decoded["units"] == "mm"
+    assert decoded["coordinate_space"] == "kinect_space_1"
+    assert decoded["sign_convention"] == "negative_is_penetrating"
+    assert decoded["neural_quality_filtered"] == "true"
+
+
+def test_table_writer_overwrites_wholesale_and_never_appends(tmp_path):
+    frame, metadata = _written_sample_table(tmp_path)
+    out = tmp_path / "filtered.parquet"
+
+    write_contact_depth_field_table(frame, out, metadata=metadata)
+    write_contact_depth_field_table(frame.iloc[:1], out, metadata=metadata)
+
+    recovered, _ = read_contact_depth_field(out)
+    assert len(recovered) == 1
+
+
+def test_table_writer_failed_write_leaves_no_half_file(tmp_path, monkeypatch):
+    """The atomic temp-file-plus-rename path is shared, not reimplemented."""
+    frame, metadata = _written_sample_table(tmp_path)
+    out = tmp_path / "filtered.parquet"
+
+    def _explode(*args, **kwargs):
+        raise PermissionError("simulated mid-write failure")
+
+    monkeypatch.setattr(pq, "write_table", _explode)
+    with pytest.raises(PermissionError):
+        write_contact_depth_field_table(frame, out, metadata=metadata)
+
+    assert not out.exists()
+    assert not (tmp_path / "filtered.parquet.partial").exists()
+
+
+# --- what the table writer refuses -----------------------------------------
+
+
+def test_table_writer_rejects_wrong_column_order(tmp_path):
+    frame, metadata = _written_sample_table(tmp_path)
+    swapped = frame[["time_s", "frame_index", "x", "y", "z", "signed_depth_mm"]]
+
+    out = tmp_path / "filtered.parquet"
+    with pytest.raises(ValueError, match="wrong order"):
+        write_contact_depth_field_table(swapped, out, metadata=metadata)
+
+    assert not out.exists()
+
+
+def test_table_writer_rejects_a_missing_column(tmp_path):
+    frame, metadata = _written_sample_table(tmp_path)
+    dropped = frame.drop(columns=["signed_depth_mm"])
+
+    with pytest.raises(ValueError, match="missing=\\['signed_depth_mm'\\]"):
+        write_contact_depth_field_table(
+            dropped, tmp_path / "filtered.parquet", metadata=metadata
+        )
+
+
+def test_table_writer_rejects_an_extra_column(tmp_path):
+    frame, metadata = _written_sample_table(tmp_path)
+    widened = frame.assign(vertex_id=np.arange(len(frame), dtype=np.int32))
+
+    with pytest.raises(ValueError, match="unexpected=\\['vertex_id'\\]"):
+        write_contact_depth_field_table(
+            widened, tmp_path / "filtered.parquet", metadata=metadata
+        )
+
+
+def test_table_writer_rejects_a_downcast_depth_column(tmp_path):
+    """The dtype that matters most: float32 depth breaks the CSV invariant."""
+    frame, metadata = _written_sample_table(tmp_path)
+    downcast = frame.assign(
+        signed_depth_mm=frame["signed_depth_mm"].astype(np.float32)
+    )
+
+    out = tmp_path / "filtered.parquet"
+    with pytest.raises(ValueError, match="signed_depth_mm"):
+        write_contact_depth_field_table(downcast, out, metadata=metadata)
+
+    assert not out.exists()
+
+
+def test_table_writer_rejects_a_widened_frame_index_column(tmp_path):
+    """int64 frame_index is the dtype a careless pandas round-trip produces."""
+    frame, metadata = _written_sample_table(tmp_path)
+    widened = frame.assign(frame_index=frame["frame_index"].astype(np.int64))
+
+    with pytest.raises(ValueError, match="frame_index"):
+        write_contact_depth_field_table(
+            widened, tmp_path / "filtered.parquet", metadata=metadata
+        )
+
+
+def test_table_writer_rejects_an_empty_table(tmp_path):
+    """Zero retained rows is an absent artifact, not a complete empty one."""
+    frame, metadata = _written_sample_table(tmp_path)
+    empty = frame.iloc[0:0]
+    assert list(empty.columns) == list(COLUMN_DTYPES)
+
+    out = tmp_path / "filtered.parquet"
+    with pytest.raises(ValueError, match="empty"):
+        write_contact_depth_field_table(empty, out, metadata=metadata)
+
+    assert not out.exists()
+
+
+def test_table_writer_rejects_none(tmp_path):
+    with pytest.raises(ValueError, match="None"):
+        write_contact_depth_field_table(
+            None, tmp_path / "filtered.parquet", metadata=_standard_metadata()
+        )
+
+
+def test_table_writer_rejects_metadata_without_a_schema_version(tmp_path):
+    frame, metadata = _written_sample_table(tmp_path)
+    stripped = {k: v for k, v in metadata.items() if k != "schema_version"}
+
+    out = tmp_path / "filtered.parquet"
+    with pytest.raises(ValueError, match="schema_version"):
+        write_contact_depth_field_table(frame, out, metadata=stripped)
+
+    assert not out.exists()
+
+
+def test_table_writer_rejects_an_unknown_schema_version(tmp_path):
+    """Refused at write time, mirroring the reader's refusal at read time."""
+    frame, metadata = _written_sample_table(tmp_path)
+
+    out = tmp_path / "filtered.parquet"
+    with pytest.raises(ValueError, match="schema_version"):
+        write_contact_depth_field_table(
+            frame, out, metadata={**metadata, "schema_version": "99"}
+        )
+
+    assert not out.exists()
+
+
+def test_table_writer_rejects_non_string_metadata_values(tmp_path):
+    """``frames_dropped=17`` must be stringified by the caller, deliberately."""
+    frame, metadata = _written_sample_table(tmp_path)
+
+    with pytest.raises(ValueError, match="frames_dropped"):
+        write_contact_depth_field_table(
+            frame,
+            tmp_path / "filtered.parquet",
+            metadata={**metadata, "frames_dropped": 17},
+        )
+
+
+# ---------------------------------------------------------------------------
+# 7. Integration against a real recording
 # ---------------------------------------------------------------------------
 # Shares the reference bundle documented in ``test_contact_depth_field.py``:
 # point SOCIAL_TOUCH_CONTACT_REFERENCE_DIR at a directory holding

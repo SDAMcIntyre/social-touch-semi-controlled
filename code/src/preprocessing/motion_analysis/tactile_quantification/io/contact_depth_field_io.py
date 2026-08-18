@@ -57,12 +57,32 @@ whose hand pose could not be measured is *absent* and raises upstream — it is
 never written as zero.  Collapsing the two would silently down-weight real
 spikes once this field weights instantaneous firing rate.
 
+Two writers, one schema
+-----------------------
+:func:`write_contact_depth_field` serialises a sequence of
+:class:`ContactDepthFrame`.  It is the producing path and therefore owns the
+standard metadata block, including ``produced_by``.
+
+:func:`write_contact_depth_field_table` serialises an already-schema-conforming
+long-form DataFrame together with caller-supplied metadata.  It exists for
+downstream stages that read a sidecar, drop rows, and write the reduced table
+back: reconstructing :class:`ContactDepthFrame` objects to re-serialise rows
+that were just deserialised would be pure ceremony, and would round-trip the
+values through a second conversion for no benefit.
+
+Neither writer knows *why* rows are present or absent — row selection is the
+caller's business.  The writers' only obligation is that what they are handed
+reaches disk unaltered, in schema order, with its metadata attached.  The table
+writer consequently validates and refuses rather than coercing: a column in the
+wrong position or the wrong dtype is a caller bug, and quietly repairing it is
+how a downcast ``signed_depth_mm`` would reach disk unnoticed.
+
 Purity contract
 ---------------
-This module knows about sequences of :class:`ContactDepthFrame` and a path.  It
-must never learn about sessions, configs, DAGs, Prefect, or the CSV.  That is
-what keeps the storage format swappable: only the two function bodies here
-change if parquet is ever replaced.
+This module knows about sequences of :class:`ContactDepthFrame`,
+schema-conforming DataFrames, and a path.  It must never learn about sessions,
+configs, DAGs, Prefect, or the CSV.  That is what keeps the storage format
+swappable: only the function bodies here change if parquet is ever replaced.
 
 For the same reason :class:`ContactDepthFrame` is imported for typing only:
 serialisation reads four plain attributes and needs no geometry engine, so this
@@ -92,6 +112,7 @@ __all__ = [
     "UNITS",
     "read_contact_depth_field",
     "write_contact_depth_field",
+    "write_contact_depth_field_table",
 ]
 
 
@@ -135,6 +156,117 @@ COLUMN_DTYPES: Dict[str, np.dtype] = {
     "z": np.dtype(np.float32),
     "signed_depth_mm": np.dtype(np.float64),
 }
+
+
+def _write_arrow_table_atomically(table: pa.Table, output_path: Path) -> None:
+    """Write ``table`` to ``output_path`` via a sibling temp file and a rename.
+
+    A failure mid-write then leaves either the previous file or nothing — never
+    a truncated file that a later run's existence check would accept as
+    complete.  Shared by both writers so the two cannot drift apart on the one
+    property that makes the artifact safe to resume against.
+    """
+    output_path = Path(output_path)
+    temp_path = output_path.with_name(output_path.name + ".partial")
+    try:
+        pq.write_table(table, temp_path)
+        os.replace(temp_path, output_path)
+    finally:
+        if temp_path.exists():
+            temp_path.unlink()
+
+
+def _validate_table_against_schema(table: pd.DataFrame) -> None:
+    """Raise unless ``table`` matches :data:`COLUMN_DTYPES` exactly.
+
+    Names, order and dtypes are all checked.  Nothing is coerced: the caller
+    handing over a mis-ordered or mis-typed frame has a bug, and repairing it
+    here would hide a downcast of ``signed_depth_mm`` behind a successful write.
+    """
+    if table is None:
+        raise ValueError(
+            "table is None. A depth-field table with no rows at all is a fact "
+            "worth surfacing, not a zero-row file to write silently."
+        )
+    if not isinstance(table, pd.DataFrame):
+        raise ValueError(
+            f"table must be a pandas DataFrame, got {type(table).__name__}. "
+            "This writer serialises an already-schema-conforming long-form "
+            "table; it does not construct one."
+        )
+
+    expected_columns = list(COLUMN_DTYPES)
+    actual_columns = list(table.columns)
+    if actual_columns != expected_columns:
+        missing = [c for c in expected_columns if c not in actual_columns]
+        unexpected = [c for c in actual_columns if c not in expected_columns]
+        if missing or unexpected:
+            raise ValueError(
+                f"table columns do not match the contact depth field schema: "
+                f"missing={missing}, unexpected={unexpected}. Expected exactly "
+                f"{expected_columns}, got {actual_columns}."
+            )
+        raise ValueError(
+            f"table columns are in the wrong order: expected {expected_columns}, "
+            f"got {actual_columns}. Column order is part of the on-disk schema; "
+            "refusing to reorder silently."
+        )
+
+    for column, expected_dtype in COLUMN_DTYPES.items():
+        actual_dtype = table[column].dtype
+        if actual_dtype != expected_dtype:
+            raise ValueError(
+                f"table column {column!r} has dtype {actual_dtype}, expected "
+                f"{expected_dtype}. Precision is a schema decision here; "
+                "refusing to cast it silently."
+            )
+
+    if len(table) == 0:
+        raise ValueError(
+            "table is empty: no row survived selection. Refusing to write a "
+            "zero-row sidecar, which a later run would treat as a valid, "
+            "complete artifact. Zero rows and an absent artifact must not "
+            "collapse into the same thing on disk."
+        )
+
+
+def _validate_supplied_metadata(metadata: Dict[str, str]) -> None:
+    """Raise unless ``metadata`` is a str->str mapping declaring a known version.
+
+    The schema version is checked at *write* time, mirroring the reader: a file
+    stamped with a version this module does not understand is unreadable the
+    moment it lands, and finding that out on the next read is finding out too
+    late.
+    """
+    if not isinstance(metadata, dict):
+        raise ValueError(
+            f"metadata must be a dict of str->str, got {type(metadata).__name__}."
+        )
+
+    for key, value in metadata.items():
+        if not isinstance(key, str) or not isinstance(value, str):
+            raise ValueError(
+                f"metadata entry {key!r}: {value!r} is not str->str (got "
+                f"{type(key).__name__} -> {type(value).__name__}). Parquet file "
+                "metadata is bytes; every value must be stringified by the "
+                "caller, deliberately, rather than by this writer's guess at a "
+                "format."
+            )
+
+    if "schema_version" not in metadata:
+        raise ValueError(
+            "metadata carries no 'schema_version'. Every contact depth field "
+            "file must declare the schema it was written against; a file "
+            "without one cannot be interpreted safely by the reader."
+        )
+
+    version = metadata["schema_version"]
+    if version not in SUPPORTED_SCHEMA_VERSIONS:
+        raise ValueError(
+            f"metadata declares schema_version={version!r}, which this module "
+            f"does not support (known: {sorted(SUPPORTED_SCHEMA_VERSIONS)}). "
+            "Refusing to write a file its own reader would reject."
+        )
 
 
 def write_contact_depth_field(
@@ -234,17 +366,62 @@ def write_contact_depth_field(
         schema=schema,
     )
 
-    # Write to a sibling temp file and rename into place.  A failure mid-write
-    # then leaves either the previous file or nothing — never a truncated file
-    # that a later run's existence check would accept as complete.
-    output_path = Path(output_path)
-    temp_path = output_path.with_name(output_path.name + ".partial")
-    try:
-        pq.write_table(table, temp_path)
-        os.replace(temp_path, output_path)
-    finally:
-        if temp_path.exists():
-            temp_path.unlink()
+    _write_arrow_table_atomically(table, output_path)
+
+
+def write_contact_depth_field_table(
+    table: pd.DataFrame,
+    output_path: Path,
+    *,
+    metadata: Dict[str, str],
+) -> None:
+    """Write a schema-conforming long-form table with explicit file metadata.
+
+    The counterpart of :func:`write_contact_depth_field` for callers that
+    already hold rows rather than :class:`ContactDepthFrame` objects — a stage
+    that read a sidecar, selected a subset of its rows, and is writing the
+    result back.  Overwrites wholesale; never appends.
+
+    Nothing is recomputed, rescaled, rounded or reordered: the rows handed in
+    are the rows written out, in schema order, at their existing precision.
+    Why those rows and not others is the caller's business and is not knowledge
+    this module holds.
+
+    Args:
+        table: Long-form rows matching :data:`COLUMN_DTYPES` in name, order and
+            dtype.  Its index is ignored and not written, so a table filtered
+            with a boolean mask needs no ``reset_index``.
+        output_path: Destination ``.parquet`` path.  Its parent must exist.
+        metadata: Complete file metadata, written verbatim.  Unlike the frame
+            writer, this function supplies no defaults — the caller states the
+            provenance it means, including any keys beyond the standard six.
+            Must contain ``schema_version``; all keys and values must be ``str``.
+
+    Raises:
+        ValueError: If ``table`` is ``None``, is not a DataFrame, is empty, or
+            deviates from :data:`COLUMN_DTYPES` in column names, column order or
+            dtypes; or if ``metadata`` is not a ``str``-to-``str`` mapping, omits
+            ``schema_version``, or declares a version outside
+            :data:`SUPPORTED_SCHEMA_VERSIONS`.
+    """
+    _validate_table_against_schema(table)
+    _validate_supplied_metadata(metadata)
+
+    schema = pa.schema(_SCHEMA_FIELDS).with_metadata(dict(metadata))
+
+    # Column by column against the declared arrow types rather than
+    # ``Table.from_pandas``: dtypes were just proved to match exactly, so this
+    # is a reinterpretation and not a cast, and it cannot smuggle in pandas'
+    # own index/schema metadata alongside the caller's.
+    arrow_table = pa.Table.from_arrays(
+        [
+            pa.array(table[field.name].to_numpy(), type=field.type)
+            for field in _SCHEMA_FIELDS
+        ],
+        schema=schema,
+    )
+
+    _write_arrow_table_atomically(arrow_table, output_path)
 
 
 def read_contact_depth_field(path: Path) -> Tuple[pd.DataFrame, Dict[str, str]]:

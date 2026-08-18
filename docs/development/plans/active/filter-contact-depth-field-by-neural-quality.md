@@ -286,18 +286,38 @@ one. Nothing in this plan can be tested until this is fixed.
 
 ### Phase 2: The DataFrame writer
 **Goal:** A table read from disk can be written back with explicit metadata, unit-tested in isolation.
-**Started:** —  **Completed:** —
+**Started:** 2026-08-18 11:00  **Completed:** 2026-08-18 11:40
 
-- [ ] 2.1 — Add `write_contact_depth_field_table(table, output_path, *, metadata)` to
+- [x] 2.1 — Add `write_contact_depth_field_table(table, output_path, *, metadata)` to
       `contact_depth_field_io.py`, reusing `_SCHEMA_FIELDS` and the temp-file-plus-`os.replace`
-      write already used by `write_contact_depth_field`.
-- [ ] 2.2 — Validate the incoming DataFrame against `COLUMN_DTYPES` — names, order and dtypes — and
-      raise on mismatch rather than coercing silently.
-- [ ] 2.3 — Require `schema_version` in the supplied metadata and reject an unknown value at write
-      time, mirroring the reader.
-- [ ] 2.4 — Extend the module docstring: two writers now exist; neither knows why rows were selected.
-- [ ] 2.5 — Tests: round-trip a reduced table; dtype preservation; metadata round-trip including the
-      new keys; wrong column order raises; wrong dtype raises; empty table raises.
+      write already used by `write_contact_depth_field`. The atomic write was factored out into
+      `_write_arrow_table_atomically()`, now shared by both writers; `write_contact_depth_field`'s
+      signature and behaviour are unchanged. The arrow table is built column-by-column against
+      `_SCHEMA_FIELDS` rather than via `Table.from_pandas`, so the DataFrame index and pandas'
+      own schema metadata cannot leak in alongside the caller's metadata.
+- [x] 2.2 — Validate the incoming DataFrame against `COLUMN_DTYPES` — names, order and dtypes — and
+      raise on mismatch rather than coercing silently. `_validate_table_against_schema()`
+      distinguishes a missing/unexpected column (names it) from a mis-ordered one (says so), and
+      names the offending column and both dtypes on a dtype mismatch. Empty and `None` tables are
+      refused here too.
+- [x] 2.3 — Require `schema_version` in the supplied metadata and reject an unknown value at write
+      time, mirroring the reader. `_validate_supplied_metadata()` also refuses non-`str` keys or
+      values, so `frames_dropped=17` must be stringified by the caller deliberately rather than by
+      this writer guessing a format.
+- [x] 2.4 — Extend the module docstring: two writers now exist; neither knows why rows were selected.
+      New "Two writers, one schema" section; the purity contract is intact and now also names
+      schema-conforming DataFrames.
+- [x] 2.5 — Tests: round-trip a reduced table; dtype preservation; metadata round-trip including the
+      new keys; wrong column order raises; wrong dtype raises; empty table raises. 19 tests added in
+      a new section 6 of `test_contact_depth_field_io.py`; existing tests untouched apart from the
+      import list and the renumbering of the integration section to 7. Bit-identity is asserted with
+      `np.array_equal` on all six columns, and the float32-depth guard proves the assertion is not
+      vacuous.
+
+`write_contact_depth_field_table` is added to the module's `__all__`. It is deliberately **not**
+re-exported from `io/__init__.py`: that package's docstring states it is "deliberately empty of
+re-exports" so no caller drags in a serialisation dependency it does not need, and
+`write_contact_depth_field` is not exported there either.
 
 **Files Modified:**
 - `code/src/preprocessing/motion_analysis/tactile_quantification/io/contact_depth_field_io.py`
@@ -376,10 +396,10 @@ one. Nothing in this plan can be tested until this is fixed.
 ## Testing Plan
 
 ### Unit Tests
-- [ ] `write_contact_depth_field_table` round-trips a table with dtypes preserved.
-- [ ] Wrong column order raises; wrong dtype raises; empty table raises.
-- [ ] Metadata round-trips, including `pipeline_stage`, `neural_quality_filtered`, `frames_dropped`.
-- [ ] Writing with an unknown `schema_version` raises.
+- [x] `write_contact_depth_field_table` round-trips a table with dtypes preserved.
+- [x] Wrong column order raises; wrong dtype raises; empty table raises.
+- [x] Metadata round-trips, including `pipeline_stage`, `neural_quality_filtered`, `frames_dropped`.
+- [x] Writing with an unknown `schema_version` raises.
 - [ ] Surviving set equal to all frames returns a row-identical table.
 - [ ] Partial surviving set removes exactly the complement.
 - [ ] NaN `frame_index` values in the CSV are excluded from the surviving set.
