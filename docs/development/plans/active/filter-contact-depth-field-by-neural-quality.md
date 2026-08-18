@@ -59,6 +59,9 @@ exclusion is the substance of this task; relocating the file is the incidental p
 5. Idempotency consistent with the rest of the repo (`should_process_task` / `clean_task_outputs`).
 6. **Prerequisite fix:** the merging DAG names a config group that does not exist, which aborts the
    pipeline at startup. See Phase 1.
+7. **(Added 2026-08-18)** Render the depth field in the Neural+Kinect visualisation GUI as contact
+   vertices coloured by penetration depth, and repoint that pipeline at `blocks_filtered/` so its CSV
+   and its depth field carry the same frames. See Phase 6.
 
 ### Out of Scope
 
@@ -83,6 +86,9 @@ exclusion is the substance of this task; relocating the file is the incidental p
 - **Adding the depth field to the `input_paths` of `unify_dataset` or `filter_by_neural_quality`.**
   Regenerating a depth field must not invalidate merged CSVs that do not depend on it.
 - **Fixing the `filter_by_neural_quality` staleness hole** (see Risks). Documented, not repaired here.
+- **The postprocessing viewers** (`postprocessed_scene_viewer.py`, `before_after_step_viewer.py`,
+  `postprocessing_stage_viewer.py`). They read postprocessed CSVs, which carry no depth field until
+  the successor plan transports it. Only the merging-stage Neural+Kinect viewer is in scope.
 - **Reconciling the merging DAG's session list with the analysis repo's.** Merging covers 9 groups
   and omits `ST13-01/02/03`; that is a separate curation decision.
 
@@ -107,6 +113,15 @@ exclusion is the substance of this task; relocating the file is the incidental p
 - [ ] `clean_task_outputs` removes it, so a failed run leaves no partial artifact.
 - [ ] The merging pipeline starts and completes on at least one real session (currently impossible —
       see Phase 1).
+- [ ] The Neural+Kinect viewer renders contact vertices coloured by penetration depth against a
+      **fixed global** colour range — the same frame shows the same colour whether reached by
+      scrubbing forward or back.
+- [ ] The visualisation pipeline resolves both its CSV and its depth field from `blocks_filtered/`,
+      so every displayed contact frame has depth data and no frame renders uncoloured by accident.
+- [ ] A missing depth field leaves the viewer running with colouring disabled and an explicit
+      message — never a silent fallback to flat colour.
+- [ ] In registered-frame mode the depth points move with the cloud, hand mesh and stickers, and the
+      depth *values* are unchanged by the rigid transform.
 
 ## Definitions
 
@@ -178,6 +193,8 @@ the largest block and must not be loaded whole.
 | `filter_contact_depth_field_by_neural_quality.py` (new) | Determine surviving frames from the filtered CSV and write the reduced depth field | `(depth_field_path, filtered_csv_path, output_path)` → parquet file | Prefect, `KinectConfig`, parquet internals, the quality xlsx, how the field was computed |
 | `filter_contact_depth_field_by_neural_quality_flow` (new, in `merging_pipeline_neuron_to_kinect_auto.py`) | Path arithmetic from config | `KinectConfig` → three paths | Serialisation, filtering semantics |
 | `filter_merged_by_neural_quality.py` | unchanged | — | — |
+| `merging_pipeline_neuron_to_kinect_visualisation.py` (modified, Phase 6) | Resolve artifacts, load the field, compute the global colour range | `KinectConfig` → paths + per-frame points/depths + `clim` | Rendering, VTK/PyVista, actor lifecycle |
+| `neural_kinect_scene_viewer.py` (modified, Phase 6) | Draw what it is given | per-frame points + penetration depths + a fixed `clim` → pixels | How the field was computed, file paths, session identity, any statistic it would have to derive itself (a **pure sink**) |
 
 ```
 code/src/preprocessing/motion_analysis/tactile_quantification/io/
@@ -525,6 +542,77 @@ by side.
 verified only by the direct `DagConfigHandler` checks of Phase 4.4; and no block in the eight groups
 exercised the zero-retained-rows error path on real data (it is covered by unit tests only).
 
+### Phase 6: Depth field in the Neural+Kinect viewer
+**Goal:** The merged-scene GUI renders contact vertices coloured by penetration depth.
+**Started:** —  **Completed:** —
+
+Added 2026-08-18, after Phases 1-5 shipped. The artifact now exists in `blocks_filtered/` but nothing
+displays it. `ContactDepthFieldViewer`
+(`code/src/preprocessing/motion_analysis/tactile_quantification/gui/contact_depth_field_viewer.py`)
+already proved the rendering during the PoC; this phase brings the same treatment to the merged
+neural+Kinect scene, where depth can be seen against spikes.
+
+**Artifact pairing decision.** `merging_pipeline_neuron_to_kinect_visualisation.py:152,159-161`
+currently resolves its merged CSV from `blocks_merged/`, while the depth field lands in
+`blocks_filtered/`. Those two carry different frame sets, so pairing them as-is would leave frames
+with `contact_points` but no depth rows. The visualisation pipeline is therefore **repointed at
+`blocks_filtered/`** for both artifacts. This changes what the viewer shows — trials excluded for
+unusable neural quality no longer appear — which is the correct behaviour for a tool whose purpose is
+inspecting contact *alongside neural data*.
+
+- [ ] 6.1 — Repoint `resolve_visualisation_paths` (or equivalent) in
+      `code/scripts/merging_pipeline_neuron_to_kinect_visualisation.py` at
+      `blocks_filtered/` for the merged CSV, and additionally resolve
+      `<session_id>_semicontrolled_<block_id>_contact_depth_field.parquet` from the same directory.
+      A missing depth field is an explicit absent state, never a silent fallback: the viewer runs
+      without depth colouring and says so at startup.
+- [ ] 6.2 — Load the field with `read_contact_depth_field()` and compute the **global** colour range
+      once over the whole recording, before any frame is drawn. Pass it to the viewer as
+      `clim_penetration_mm`. Per-frame autoscaling is prohibited — it makes the animation lie about
+      relative depth (`contact_depth_field_viewer.py:11-13`, guide 02 §9).
+- [ ] 6.3 — Index the field by `frame_index` into per-frame `(N,3)` points plus `(N,)` penetration
+      depths, where `penetration_depth_mm = -signed_depth_mm` (positive is deeper, matching the PoC's
+      `CONTACT_SCALAR_NAME`). Do this in the pipeline/adapter layer, not inside the viewer.
+- [ ] 6.4 — In `neural_kinect_scene_viewer.py`, attach the scalar array to the existing
+      `contact_points` actor and render with `cmap="inferno"` and the fixed `clim`, plus a scalar bar
+      titled "Penetration depth (mm)". `inferno` is not a preference: `jet` has non-monotonic
+      lightness and invents banding
+      (`docs/development/knowledge-base/investigation-jet-colormap-perceptual-problems.md`).
+- [ ] 6.5 — Add a "Colour by depth" checkbox to the existing **Contact Points** object group, beside
+      its point-size slider, so flat colour stays available for comparison. Default to depth
+      colouring when the field is present.
+- [ ] 6.6 — Registered-frame mode (`view_neural_kinect_scene_transformed`) must transform the depth
+      points with the same per-forearm-key ICP matrix already applied to the cloud, hand mesh and
+      stickers (`neural_kinect_scene_viewer.py:1476-1499`, `apply_rigid_transform`). Depth *values*
+      are invariant under a rigid transform and must not be recomputed.
+- [ ] 6.7 — Honour the viewer's standing invariants: `_update_frame()` must not call
+      `plotter.clear()`, `add_mesh()` or `remove_actor()` — mutate the dataset in place and
+      re-assert `actor.mapper.scalar_range` after each swap, or the mapper silently reverts to
+      per-frame autoscale (`contact_depth_field_viewer.py:49-57`).
+- [ ] 6.8 — Do **not** add a sixth `_parse_contact_points_cell` clone
+      (`per-vertex-contact-depth-poc.md:172`). The depth field is columnar; it needs no string
+      parsing at all.
+- [ ] 6.9 — Tests: frame indexing returns the right `(N,3)`/`(N,)` pair for a synthetic field; the
+      global clim is computed over the whole recording, not per frame; `penetration_depth_mm` is
+      exactly `-signed_depth_mm`; a missing parquet yields the explicit no-depth state rather than a
+      crash or a silent default.
+
+**Files Modified:**
+- `code/scripts/merging_pipeline_neuron_to_kinect_visualisation.py` — repoint at `blocks_filtered/`,
+  resolve and load the depth field, compute the global clim
+- `code/src/merging/gui/neural_kinect_scene_viewer.py` — scalars on the contact actor, colormap,
+  scalar bar, toggle, transform handling
+- `configs/merging_pipeline_neuron_to_kinect_visualisation_dag.yaml` — option for the depth colouring
+  default if one is warranted
+- `code/tests/test_neural_kinect_depth_field_view.py` — new
+
+**Dependencies:** Phase 3 (the artifact), Phase 4 (it is produced by the DAG)
+
+**Out of scope for this phase:** any change to what the depth field *contains*; the RF-centred /
+postprocessed spaces (the viewer works in Space 1 and the ICP-registered frame only); the
+postprocessing viewers (`postprocessed_scene_viewer.py`, `before_after_step_viewer.py`,
+`postprocessing_stage_viewer.py`) — they read postprocessed CSVs that carry no depth field yet.
+
 ---
 
 ## Testing Plan
@@ -588,6 +676,10 @@ exercised the zero-retained-rows error path on real data (it is covered by unit 
       (`export_forearm_pca_calibrated`) that no longer exists. The live order is
       dedup -> project -> PCA. Cheap to fix, and the successor plan depends on the corrected version.
 - [ ] Note in the knowledge base that `blocks_filtered/` is now a two-artifact directory.
+- [ ] Note that the Neural+Kinect visualisation pipeline now reads `blocks_filtered/`, not
+      `blocks_merged/` — a behaviour change: neurally-excluded trials no longer appear in the scene.
+- [ ] Note the DagConfigHandler encoding trap found in Phase 4: it opens YAML without an explicit
+      encoding, so non-ASCII in a DAG comment mojibakes under the Windows default code page.
 - [ ] **Not** updating CLAUDE.md — no architectural boundary moves.
 
 ---
@@ -633,6 +725,7 @@ exercised the zero-retained-rows error path on real data (it is covered by unit 
 | Phase 3 — neural-quality filter | ~130 LOC + ~150 test | Phase 2 |
 | Phase 4 — pipeline wiring | ~45 LOC | Phase 3 |
 | Phase 5 — verification | measurement only | Phases 1, 4 |
+| Phase 6 — depth field in the viewer | ~150 LOC + ~90 test | Phases 3, 4 |
 
 ---
 
