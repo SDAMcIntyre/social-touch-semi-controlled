@@ -327,25 +327,44 @@ re-exports" so no caller drags in a serialisation dependency it does not need, a
 
 ### Phase 3: The neural-quality filter
 **Goal:** A pure, testable function that produces the reduced depth field.
-**Started:** —  **Completed:** —
+**Started:** 2026-08-18 12:00  **Completed:** 2026-08-18 12:50
 
-- [ ] 3.1 — New `code/scripts/_4_merging/filter_contact_depth_field_by_neural_quality.py` with the
-      signature above.
-- [ ] 3.2 — `should_process_task(input_paths=[depth_field_path, filtered_csv_path], output_paths=[output_path])`
-      then `clean_task_outputs([output_path])`.
-- [ ] 3.3 — Read the surviving frame set with `pd.read_csv(..., usecols=["frame_index"])` and drop
-      NaN; do not read the ~112 MB CSV whole.
-- [ ] 3.4 — Select retained rows by `frame_index` membership; assert retained values are bitwise
-      unchanged.
-- [ ] 3.5 — Implement every row of the Error Boundaries table above.
-- [ ] 3.6 — Build output metadata: carry `schema_version`, `coordinate_space`, `units`,
-      `sign_convention`, `source_recording`, `produced_by` through unchanged; add
-      `pipeline_stage="merging"`, `neural_quality_filtered="true"`, `frames_dropped`,
-      `source_artifact`.
-- [ ] 3.7 — Export from `code/scripts/_4_merging/__init__.py` following the existing pattern.
-- [ ] 3.8 — Tests with synthetic parquet + CSV fixtures: no-drop case is row-identical; drop case
-      removes exactly the expected frames; NaN `frame_index` rows are ignored; empty result raises;
-      CSV-frame-not-in-depth-field raises; metadata carries through.
+- [x] 3.1 — New `code/scripts/_4_merging/filter_contact_depth_field_by_neural_quality.py` with the
+      signature above. Returns `output_path` when it wrote, `None` when the output was already
+      up to date — the `Optional` in the signature is the skip case, matching
+      `align_and_merge_neural_and_kinect`. It imports neither Prefect nor `KinectConfig`, and the
+      only preprocessing import is the `contact_depth_field_io` leaf (numpy/pandas/pyarrow only),
+      so the CuPy import-order constraint does not bite: verified that
+      `merging_pipeline_neuron_to_kinect_auto.py` imports no CuPy at all.
+- [x] 3.2 — `should_process_task(input_paths=[depth_field_path, filtered_csv_path], output_paths=[output_path], force=force_processing)`
+      then `clean_task_outputs([output_path])`, in that order, as the sibling merging tasks do.
+- [x] 3.3 — The CSV header is read first (`nrows=0`) so a missing column can be reported by name
+      against the columns actually found; the body is then read with
+      `usecols=["frame_index", "contact_detected"]`. `contact_detected` is needed for the
+      stale-artifact check of 3.5 and costs nothing extra in the same pass. NaN `frame_index` rows
+      are dropped before anything else, so the NaN `contact_detected` they also carry is never
+      examined.
+- [x] 3.4 — Selection is `np.isin` on `frame_index` alone — never a coordinate value. The input
+      columns are copied out of the DataFrame immediately after the read, so the bit-identity
+      assertion compares the written rows against what came off disk rather than against a view of
+      themselves; dtype and `np.array_equal` are both checked, for all six columns.
+- [x] 3.5 — Every row implemented: missing input raises through `should_process_task`; a missing
+      `frame_index` or `contact_detected` column raises naming the file and listing the columns
+      found; zero retained rows raises; a CSV contact frame absent from the sidecar raises as a
+      staleness disagreement; a sidecar frame absent from the CSV is the filter working and is
+      counted into `frames_dropped` and logged. Two further violations raise rather than being
+      papered over: a non-integral `frame_index`, and a `contact_detected` that is missing or
+      non-numeric on a frame row (treating it as "no contact" would silently weaken the
+      staleness check).
+- [x] 3.6 — `CARRIED_METADATA_KEYS` carries the six through verbatim — `coordinate_space` included
+      rather than restated, since re-deriving it here is how the declared space would drift from the
+      actual one — and raises if the input omits any of them. `frames_dropped` counts frames, not
+      rows, and is stringified at the call site as Phase 2's writer requires.
+- [x] 3.7 — Exported from `code/scripts/_4_merging/__init__.py`.
+- [x] 3.8 — 17 tests in `code/tests/test_filter_contact_depth_field_by_neural_quality.py`, all on
+      synthetic `tmp_path` fixtures. The CSV fixture reproduces the real shape — one anchor row per
+      frame followed by interpolated rows that are NaN in *every* Kinect column, `contact_detected`
+      included. Bit-identity is asserted on raw bytes (`.tobytes()`), not `np.allclose`.
 
 **Files Modified:**
 - `code/scripts/_4_merging/filter_contact_depth_field_by_neural_quality.py` — new
@@ -400,19 +419,19 @@ re-exports" so no caller drags in a serialisation dependency it does not need, a
 - [x] Wrong column order raises; wrong dtype raises; empty table raises.
 - [x] Metadata round-trips, including `pipeline_stage`, `neural_quality_filtered`, `frames_dropped`.
 - [x] Writing with an unknown `schema_version` raises.
-- [ ] Surviving set equal to all frames returns a row-identical table.
-- [ ] Partial surviving set removes exactly the complement.
-- [ ] NaN `frame_index` values in the CSV are excluded from the surviving set.
-- [ ] Zero retained rows raises.
-- [ ] A `contact_detected` frame in the CSV but absent from the depth field raises.
+- [x] Surviving set equal to all frames returns a row-identical table.
+- [x] Partial surviving set removes exactly the complement.
+- [x] NaN `frame_index` values in the CSV are excluded from the surviving set.
+- [x] Zero retained rows raises.
+- [x] A `contact_detected` frame in the CSV but absent from the depth field raises.
 
 ### Integration Tests
 - [ ] Against a real block: retained `x/y/z/signed_depth_mm` are `np.array_equal` to Space 1.
 - [ ] Against a real block: output frame set equals CSV non-NaN frame set intersected with Space 1.
 - [ ] A no-Not2Use block produces a row-count-identical output.
-- [ ] `should_process_task` returns True when only the filtered parquet is missing, False on a clean
+- [x] `should_process_task` returns True when only the filtered parquet is missing, False on a clean
       re-run — asserted directly, so it runs without a recording.
-- [ ] `clean_task_outputs` removes the filtered parquet.
+- [x] `clean_task_outputs` removes the filtered parquet.
 
 ### Manual Verification
 - [ ] Open a filtered parquet in pandas with no repo import; confirm metadata alone states units,
@@ -423,7 +442,7 @@ re-exports" so no caller drags in a serialisation dependency it does not need, a
 ### Edge Cases
 - [ ] Block with zero contact frames throughout — the Space-1 file does not exist (the producer
       raises rather than writing an empty file), so this surfaces as a missing input.
-- [ ] Block where every trial is Not2Use — zero retained rows, must raise.
+- [x] Block where every trial is Not2Use — zero retained rows, must raise.
 - [ ] Block where `filter_by_neural_quality` took the no-Not2Use `shutil.copy2` branch — output must
       still be produced, row-identical.
 - [ ] Windows-locked output file during `clean_task_outputs` (warns and continues by design).
@@ -434,7 +453,7 @@ re-exports" so no caller drags in a serialisation dependency it does not need, a
 
 ## Documentation Plan
 
-- [ ] Module docstring in `filter_contact_depth_field_by_neural_quality.py`: what the filter removes
+- [x] Module docstring in `filter_contact_depth_field_by_neural_quality.py`: what the filter removes
       and why, why the exclusion is read from the CSV rather than the xlsx, why the field is not
       upsampled, why selection is by `frame_index` only.
 - [ ] Changelog entry `docs/changelogs/filter-contact-depth-field-by-neural-quality.md`.
