@@ -19,6 +19,7 @@ from primary_processing import (
 from _4_merging import (
     align_and_merge_neural_and_kinect,
     filter_block_by_neural_quality,
+    filter_contact_depth_field_by_neural_quality,
 )
 
 # --- Data Structures ---
@@ -58,10 +59,29 @@ def resolve_filenames(config: KinectConfig) -> Dict[str, Path]:
     # Output: Merged Block Data
     output_name = f"{config.session_id}_semicontrolled_{config.block_id}_merged_data.csv"
 
+    # Output: Merged Block Data, stripped of Not2Use trials
+    filtered_dir = config.session_merged_output_dir / "blocks_filtered"
+
+    # Input: Space-1 per-vertex contact depth field sidecar (preprocessing artifact).
+    # Note the two block-id spellings are BOTH config attributes and are used as-is:
+    # `source_video.stem` carries `block-order02` while `config.block_id` carries
+    # `block-order-02`. No string surgery converts between them.
+    depth_field_name = f"{config.source_video.stem}_contact_depth_field.parquet"
+
+    # Output: the same depth field reduced to the neurally usable frames
+    depth_field_output_name = (
+        f"{config.session_id}_semicontrolled_{config.block_id}_contact_depth_field.parquet"
+    )
+
     return {
         "nerve_path": config.nerve_processed_dir / nerve_name,
         "kinect_path": kinect_path,
-        "output_path": config.session_merged_output_dir / "blocks_merged" / output_name
+        "output_path": config.session_merged_output_dir / "blocks_merged" / output_name,
+        "filtered_csv_path": filtered_dir / output_name,
+        "depth_field_path": (
+            config.video_processed_output_dir / "kinematics_analysis" / depth_field_name
+        ),
+        "depth_field_output_path": filtered_dir / depth_field_output_name,
     }
 
 # --- Individual Flows ---
@@ -115,6 +135,31 @@ def filter_by_neural_quality_flow(
         xlsx_path=xlsx_path,
         force_processing=force_processing,
         discard_from_first_not2use=discard_from_first_not2use,
+    )
+
+
+@task(name="12. Filter Contact Depth Field by Neural Quality")
+def filter_contact_depth_field_by_neural_quality_flow(
+    depth_field_path: Path,
+    filtered_csv_path: Path,
+    output_path: Path,
+    *,
+    force_processing: bool = False,
+) -> Optional[Path]:
+    """
+    Flow to reduce a block's Space-1 contact depth field to the frames that
+    survived the neural-quality filter applied to the merged CSV.
+    """
+    logger = get_run_logger()
+    logger.info(
+        f"[{depth_field_path.name}] Filtering depth field by surviving frames "
+        f"of {filtered_csv_path.name}"
+    )
+    return filter_contact_depth_field_by_neural_quality(
+        depth_field_path=depth_field_path,
+        filtered_csv_path=filtered_csv_path,
+        output_path=output_path,
+        force_processing=force_processing,
     )
 
 
@@ -178,15 +223,29 @@ def run_single_session_pipeline(
             force = options.get('force_processing', False)
             discard_from_first = options.get('discard_from_first_not2use', True)
 
-            filtered_output = (
-                config.session_merged_output_dir / "blocks_filtered" / output_file_path.name
-            )
             filter_by_neural_quality_flow(
                 merged_csv=output_file_path,
-                output_csv=filtered_output,
+                output_csv=paths["filtered_csv_path"],
                 xlsx_path=xlsx_path,
                 force_processing=force,
                 discard_from_first_not2use=discard_from_first,
+            )
+
+            dag_handler.mark_completed(task_name)
+
+        # --- Filter Contact Depth Field by Neural Quality ---
+        task_name = 'filter_contact_depth_field_by_neural_quality'
+        if dag_handler.can_run(task_name):
+            logger.info(f"[{block_name}] ==> Running task: {task_name}")
+
+            options = dag_handler.get_task_options(task_name)
+            force = options.get('force_processing', False)
+
+            filter_contact_depth_field_by_neural_quality_flow(
+                depth_field_path=paths["depth_field_path"],
+                filtered_csv_path=paths["filtered_csv_path"],
+                output_path=paths["depth_field_output_path"],
+                force_processing=force,
             )
 
             dag_handler.mark_completed(task_name)

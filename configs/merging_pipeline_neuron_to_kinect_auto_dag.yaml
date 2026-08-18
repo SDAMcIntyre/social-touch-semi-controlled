@@ -33,3 +33,13 @@ tasks:
       # When false, remove only the individual Not2Use trial rows (original behaviour).
       discard_from_first_not2use: true
     depends_on: [unify_dataset]
+
+  # Applies the exclusion above to the Space-1 per-vertex contact depth field
+  # sidecar: keeps only the frames that survive into the filtered merged CSV and
+  # writes the reduced parquet beside it in blocks_filtered/. Removes rows only:
+  # no coordinate transformation, no value is recomputed.
+  filter_contact_depth_field_by_neural_quality:
+    enabled: true
+    options:
+      force_processing: false
+    depends_on: [filter_by_neural_quality]

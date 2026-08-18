@@ -375,18 +375,38 @@ re-exports" so no caller drags in a serialisation dependency it does not need, a
 
 ### Phase 4: Pipeline wiring
 **Goal:** The task runs as part of the merging DAG.
-**Started:** —  **Completed:** —
+**Started:** 2026-08-18 13:10  **Completed:** 2026-08-18 13:45
 
-- [ ] 4.1 — `filter_contact_depth_field_by_neural_quality_flow(config, ...)` in
-      `merging_pipeline_neuron_to_kinect_auto.py`, building the three paths from `KinectConfig`:
-      depth field = `video_processed_output_dir / "kinematics_analysis" / f"{source_video.stem}_contact_depth_field.parquet"`;
-      CSV = `session_merged_output_dir / "blocks_filtered" / f"{session_id}_semicontrolled_{block_id}_merged_data.csv"`;
-      output = same directory, `f"{session_id}_semicontrolled_{block_id}_contact_depth_field.parquet"`.
-- [ ] 4.2 — Register the stage after `filter_by_neural_quality` in `run_single_session_pipeline`,
-      following the existing `can_run` / `mark_completed` pattern.
-- [ ] 4.3 — DAG entry: `enabled: true`, `options: {force_processing: false}`,
-      `depends_on: [filter_by_neural_quality]`.
-- [ ] 4.4 — Verify the task is skipped cleanly (not crashed) when disabled in the DAG.
+- [x] 4.1 — `filter_contact_depth_field_by_neural_quality_flow(...)` added to
+      `merging_pipeline_neuron_to_kinect_auto.py`, decorated `@task(name="12. Filter Contact Depth
+      Field by Neural Quality")` — the file's two existing "flow" wrappers (`unify_dataset`,
+      `filter_by_neural_quality_flow`) are `@task`-decorated with numbered names, so the new one
+      follows that, not the `@flow` used for the two orchestrating entry points. The wrapper takes
+      the three resolved paths, not the config: **all** path arithmetic went into the existing
+      `resolve_filenames` helper, which the file already uses to centralise naming conventions.
+      Three keys added there: `depth_field_path`, `filtered_csv_path`, `depth_field_output_path`.
+      The two block-id spellings are each taken straight from the config attribute that carries them
+      (`source_video.stem` → `block-order02`, `block_id` → `block-order-02`); nothing converts
+      between them. `filtered_csv_path` also replaces the inline derivation that
+      `filter_by_neural_quality` was doing in `run_single_session_pipeline`, so the filtered CSV path
+      is now computed in exactly one place and the two tasks cannot drift apart.
+- [x] 4.2 — Registered in `run_single_session_pipeline` immediately after `filter_by_neural_quality`,
+      inside the same `try` block, using the identical `dag_handler.can_run(...)` →
+      `get_task_options(...)` → `options.get('force_processing', False)` → call →
+      `dag_handler.mark_completed(...)` sequence as its two siblings. No extra existence checks are
+      added: the task's own `should_process_task` raises on a missing input, which is the documented
+      error boundary.
+- [x] 4.3 — DAG entry added after `filter_by_neural_quality`, with a four-line comment in the style of
+      the neighbouring entries. The file was edited as text, so comments, key order and the flow-style
+      `kinect_configs` sequence are untouched. The comment is deliberately ASCII-only:
+      `DagConfigHandler` opens the YAML with `open(path, 'r')` and no explicit encoding, so a UTF-8
+      em-dash would be silently mojibaked under the Windows default code page.
+- [x] 4.4 — Verified directly against `DagConfigHandler` (no Prefect run needed). With
+      `enabled: false` the task's `can_run` returns `False` and nothing raises, so the stage is
+      skipped and the flow continues to its success return; with the entry deleted entirely it also
+      returns `False`, printing the handler's "not found in DAG configuration" warning. Also
+      asserted: `can_run` is `False` while `filter_by_neural_quality` is uncompleted and `True` once
+      it is, and the three resolved paths match the spec exactly for a synthetic config.
 
 **Files Modified:**
 - `code/scripts/merging_pipeline_neuron_to_kinect_auto.py` — flow + stage registration
