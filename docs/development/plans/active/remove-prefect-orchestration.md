@@ -87,23 +87,28 @@ decorators are decoration.
 
 ### Success Criteria
 
-- [ ] `grep -rn "prefect" code/ --include=*.py -i` returns only prose comments (no imports, no
-      decorators, no calls). Enumerate the survivors in the changelog.
-- [ ] `pip uninstall prefect` (or an env without it) leaves every entry script importable and every
-      workflow runnable.
-- [ ] The full test suite passes at no fewer than its pre-change count (currently **320 passed,
-      7 skipped**).
-- [ ] The GUI opens with **no** Prefect server, and Run starts a workflow with no readiness wait.
-      Measure launch-to-interactive before and after.
-- [ ] Console output in the GUI appears **line by line** during a long-running workflow, not in
-      bursts — verified on a workflow that prints steadily.
-- [ ] `preprocess_pipeline_nerve_auto.py` and `merging_pipeline_neuron_to_kinect_auto.py` still emit
+- [x] `grep -rn "prefect" code/ --include=*.py -i` returns only prose comments (no imports, no
+      decorators, no calls). Enumerate the survivors in the changelog. — 11 lines, all prose; zero
+      hits under `code/src/`.
+- [x] `pip uninstall prefect` (or an env without it) leaves every entry script importable and every
+      workflow runnable. — 10/10 import + `--help` under a meta-path prefect blocker; 2 of the 10
+      (merging, nerve) additionally run end to end. The other 8 need Kinect data or manual GUI work
+      and were not executed.
+- [x] The full test suite passes at no fewer than its pre-change count (currently **320 passed,
+      7 skipped**). — **328 passed, 7 skipped**.
+- [x] The GUI opens with **no** Prefect server, and Run starts a workflow with no readiness wait.
+      Measure launch-to-interactive before and after. — 32.40 s / 8.08 s → **0.73–0.75 s**;
+      `_on_run()` returns in 14 ms and `_server_manager` no longer exists.
+- [x] Console output in the GUI appears **line by line** during a long-running workflow, not in
+      bursts — verified on a workflow that prints steadily. — 120 lines at 48 distinct arrival
+      instants over 12.6 s of a real merging run.
+- [x] `preprocess_pipeline_nerve_auto.py` and `merging_pipeline_neuron_to_kinect_auto.py` still emit
       their `INFO` narration. This is the headline regression risk; assert it explicitly, do not
-      assume it.
-- [ ] One real workflow runs end to end and produces byte-identical outputs to a pre-change run of
-      the same inputs (hash-compared).
-- [ ] `parallel_execution: true` raises `NotImplementedError` loudly rather than silently doing
-      nothing or crashing with `AttributeError`.
+      assume it. — 0 of 60 before-lines lost; 10 previously-suppressed library lines gained.
+- [x] One real workflow runs end to end and produces byte-identical outputs to a pre-change run of
+      the same inputs (hash-compared). — merging DAG, ST13-01, 12 / 12 artifacts sha256-identical.
+- [x] `parallel_execution: true` raises `NotImplementedError` loudly rather than silently doing
+      nothing or crashing with `AttributeError`. — exit code 1, raised before any config is loaded.
 - [x] `prefect` appears in no dependency file.
 
 ## Definitions
@@ -499,19 +504,19 @@ table with per-line justification is in the changelog. **`code/src/` has zero hi
 
 ### Phase 6: Verification against a real run
 **Goal:** Measured equivalence, not argument.
-**Started:** —  **Completed:** —
+**Started:** 2026-08-18 11:22  **Completed:** 2026-08-18 11:40
 
-- [ ] 6.1 — In an environment **without** prefect installed, confirm all 10 entry scripts import and
+- [x] 6.1 — In an environment **without** prefect installed, confirm all 10 entry scripts import and
       `--help` works.
-- [ ] 6.2 — Full test suite: no fewer than 320 passed / 7 skipped.
-- [ ] 6.3 — Run one real workflow end to end before and after (a cheap one — the merging DAG on a
+- [x] 6.2 — Full test suite: no fewer than 320 passed / 7 skipped.
+- [x] 6.3 — Run one real workflow end to end before and after (a cheap one — the merging DAG on a
       single session) and hash-compare every output artifact.
-- [ ] 6.4 — Assert the narration: capture stdout+stderr of `preprocess_pipeline_nerve_auto.py` and
+- [x] 6.4 — Assert the narration: capture stdout+stderr of `preprocess_pipeline_nerve_auto.py` and
       `merging_pipeline_neuron_to_kinect_auto.py` and confirm the expected INFO lines are present.
-- [ ] 6.5 — GUI: open, press Run, confirm the workflow starts with no readiness delay and the console
+- [x] 6.5 — GUI: open, press Run, confirm the workflow starts with no readiness delay and the console
       streams line by line.
-- [ ] 6.6 — Set `parallel_execution: true` in one config and confirm a loud `NotImplementedError`.
-- [ ] 6.7 — Record before/after GUI launch time and workflow start latency.
+- [x] 6.6 — Set `parallel_execution: true` in one config and confirm a loud `NotImplementedError`.
+- [x] 6.7 — Record before/after GUI launch time and workflow start latency.
 
 **Files Modified:** none (verification only)
 
@@ -519,23 +524,150 @@ table with per-line justification is in the changelog. **`code/src/` has zero hi
 
 ---
 
+## Verification Results (2026-08-18)
+
+All figures below were measured on `feature/remove-prefect-orchestration` at commit `707829e`,
+Python 3.10.20 in the `social-touch` conda env. Nothing in the repo was modified: every temporary
+config, script copy and log lives in the session scratchpad, and the user's three uncommitted
+`configs/*_dag.yaml` files were read but never written. `git status` at the end of the phase is
+byte-identical to `git status` at the start.
+
+| # | Check | Method | Before | After |
+|---|-------|--------|--------|-------|
+| 6.1 | 10 entry scripts import + `--help` with **no** prefect | meta-path blocker (below) | — | **10/10 import OK, 10/10 `--help` exit 0**; `'prefect' in sys.modules` is `False` after every import |
+| 6.2 | Full test suite | `python -m pytest -q` from repo root | 320 / 7 (plan baseline), 328 / 7 (Phases 3–5) | **328 passed, 7 skipped** in 19.63 s |
+| 6.3 | Real workflow, hash-compared | merging DAG, session ST13-01, 4 blocks, `force_processing: true` on all 3 tasks | 12 artifacts | **12 / 12 sha256-identical** |
+| 6.4 | Narration survives a real `--dag-config` invocation | multiset diff of application `INFO` lines | 42 (merging) / 18 (nerve) | 51 / 19 — **0 missing**, 9 + 1 added |
+| 6.5 | GUI Run: no readiness delay, line-by-line console | scripted Qt drive of the real `LauncherWindow` | server wait on every Run | `_on_run()` returns in **14 ms**; 120 lines at **48 distinct arrival instants** over 12.6 s |
+| 6.6 | `parallel_execution: true` | scratchpad copy of the merging DAG | silent no-op / `AttributeError` | **`NotImplementedError`, exit code 1**, raised before any config is loaded |
+| 6.7 | GUI launch-to-interactive | `QApplication` + `LauncherWindow` + drained event queue | **32.40 s** (broken shared `~/.prefect`), **8.08 s** (healthy per-project `PREFECT_HOME`) | **0.73–0.75 s** (4 runs) |
+| 6.7 | Workflow start latency (Run → first console line) | timestamped `line_received` signal | **5.94 s** (healthy `PREFECT_HOME`; up to +30 s more when the server is unreachable, `launcher_window.py:330-336` @ `777a445`) | **0.99 s** |
+
+**6.1 — how prefect absence was simulated.** The user's conda env was **not** modified and prefect
+3.6.22 is still installed in it. Instead a `sitecustomize.py` on `PYTHONPATH` inserts a meta-path
+finder at `sys.meta_path[0]` that raises `ModuleNotFoundError` for `prefect` and every `prefect.*`
+submodule — the same exception the import machinery raises when a package is genuinely absent, and
+it fires before any user code runs. The env has no pre-existing `sitecustomize.py` or
+`usercustomize.py`, so nothing was shadowed. Verified active by an `import prefect` precheck that
+must fail before the 10 imports are attempted. All 10 scripts were then also run as real
+subprocesses with `--help`: exit 0, `usage:` present, no prefect string in any output.
+
+**6.3 — what was compared.** `git show 777a445:code/scripts/merging_pipeline_neuron_to_kinect_auto.py`
+(the last pre-Phase-1 revision, with all 3 `@task`, 2 `@flow` and 5 `get_run_logger()` sites intact)
+was written to the scratchpad and run against a scratchpad DAG copy limited to `valid_configs_ST13-01`
+with `force_processing: true` on all three tasks, so nothing was skipped by `should_process_task`.
+`HEAD` was never moved and no repo file was touched. `PREFECT_HOME=C:\Users\basil\.prefect-social-touch`
+made the "before" run work; it started its own temporary server on port 8294 and exited 0 in 30.2 s.
+The current script then ran the same config in 14.5 s.
+
+The comparison is **three-way**, not two-way, and all three agree on all 12 artifacts
+(4 × `blocks_merged/*_merged_data.csv`, 4 × `blocks_filtered/*_merged_data.csv`,
+4 × `blocks_filtered/*_contact_depth_field.parquet`, 183 MB total):
+
+| Comparison | Result |
+|------------|--------|
+| artifacts already on disk (produced under Prefect) vs "before" run | 12 / 12 sha256-identical |
+| "before" run vs "after" run | **12 / 12 sha256-identical** |
+| artifacts already on disk vs "after" run | 12 / 12 sha256-identical |
+
+The session was backed up to the scratchpad first. It was rewritten four times over the phase
+(before-CLI, after-CLI, after-GUI, before-GUI) and re-hashed at the end: still 12 / 12 identical to
+the original backup, so the user's data is bit-for-bit as it was found.
+
+**6.4 — narration is a strict superset, not merely preserved.** Both scripts were invoked as real
+subprocesses with `--dag-config` (nerve on a scratchpad ST13-01 copy with `force_processing: false`;
+merging as in 6.3), before and after, and the combined stdout+stderr was reduced to the multiset of
+application `INFO` messages — Prefect's own framework lines (`Beginning flow run`, `Finished in
+state`, temporary-server start/stop) excluded on the before side, `Flow run '…' - ` and
+`Task run '…' - ` prefixes stripped.
+
+| | before | after | missing after | added after |
+|---|---|---|---|---|
+| `merging_pipeline_neuron_to_kinect_auto.py` | 42 | 51 | **0** | 9 |
+| `preprocess_pipeline_nerve_auto.py` | 18 | 19 | **0** | 1 |
+
+The 10 added lines are not new logging — they are library `INFO` from `code/src/merging/` and
+`_4_merging/` (`Copied (no Not2Use trials): …`, `truncated from trial 6 onward … removed 56300 rows`,
+`dropped 1272 of 2286 frames …`) plus `NumExpr defaulting to 16 threads.`. Prefect's
+`dictConfig(root: WARNING)` had been **suppressing** them; with the Phase-1 `basicConfig` now
+effective they reach the console. The headline regression risk did not merely fail to materialise —
+the change is net additive.
+
+**6.5 / 6.7 — GUI.** The real `LauncherWindow` was driven programmatically rather than clicked:
+built and shown exactly as `launch_pipeline_gui.main` does, `processEvents()` pumped until the queue
+drained (which is when the launcher becomes interactive, because it defers startup with
+`QTimer.singleShot(0, …)`), then `_load_workflow(entry)` and `_on_run()` called, with a probe
+connected to `_reader.line_received` — the same signal the console widget listens to — timestamping
+every line. Both runs used a scratchpad `launcher.yaml` pointing at a scratchpad DAG copy, so
+`_on_run`'s unconditional `self._on_save()` could not write to a repo config.
+
+- After: `hasattr(window, '_server_manager')` is `False` — the attribute is gone, not `None`. Status
+  bar after launch is empty (no `"Starting Prefect server…"`). `_on_run()` returned in **0.014 s**.
+  First console line at **0.986 s** (child interpreter startup), last at 12.631 s; 120 lines spread
+  over **48 distinct arrival instants**, max gap 3.04 s and that gap is the child's own import phase
+  (0.99 s → 4.02 s), not buffering. Status bar ended `'Finished (exit code 0)'`.
+- Before: the pre-Phase-4 `launcher_window.py` and `prefect_server_manager.py` were restored from
+  `777a445` into a scratchpad copy of `code/src/utils/`, put first on `PYTHONPATH` (the editable
+  install is a plain `.pth`, so `PYTHONPATH` wins), and driven by the identical script against the
+  pre-Phase-1 merging script. With a **healthy** `PREFECT_HOME` the server came up and
+  launch-to-interactive was **8.08 s**, status bar `'Prefect server ready'`; first console line at
+  **5.94 s** after Run. `_on_run()` itself returned in 0.021 s only because `is_running()` was
+  already true — when the health probe fails (the real-world case Phase 4 reproduced) that path adds
+  a further `wait_until_ready(timeout_seconds=30.0)` on **every** Run click.
+- The **32.40 s** launch figure from Phase 4 is the same code against the user's default shared
+  `~/.prefect`, whose alembic revision this Prefect cannot read. That case was deliberately **not**
+  re-run here: starting a server against the shared database risks mutating it, and it is not this
+  repo's to touch.
+
+**6.6 — the guard fires loudly.** A scratchpad copy of the merging DAG with `parallel_execution: true`
+produced an uncaught `NotImplementedError` and exit code 1, with the full message naming this plan.
+It was raised *before* `"Starting batch processing"` was logged and before any config was loaded, so
+zero sessions were touched — which is the point, since today's postprocess behaviour was to silently
+process nothing. `code/tests/test_parallel_execution_removed.py` covers the other three batch runners
+(8 passed).
+
+**Surviving `prefect` mentions under `code/`** — 11 lines, all prose, none executable: 8 in the four
+`NotImplementedError` message strings, 3 in `test_parallel_execution_removed.py` (a docstring, a
+`PLAN_REFERENCE` constant, and the `getattr(fn, "fn", fn)` comment). Zero imports, zero decorators,
+zero calls. **`code/src/` has zero hits.**
+
+**Not verified.**
+
+- *Every* workflow runnable without prefect. All 10 entry scripts import and answer `--help` in a
+  prefect-free interpreter, and 2 of the 10 (merging, nerve) were additionally run end to end with
+  `--dag-config`. The other 8 need Kinect MKV data, manual GUI interaction, or hours of GPU compute
+  and were not executed.
+- The pre-Phase-1 `preprocess_pipeline_nerve_auto.py` run and the "before" GUI run both used the
+  *current* `code/src/` (only `launcher_window.py` was rolled back for the GUI measurement). This is
+  sound because `git diff 777a445 HEAD -- code/src/` touches only the GUI launcher, the deleted
+  server manager, and three comment/docstring lines — none of which are on the merging or nerve
+  execution path.
+- The 30 s Run-click penalty against the broken shared `~/.prefect` is read from the deleted code at
+  `777a445:launcher_window.py:330-336`, not measured, for the reason given above.
+- `PipelineMonitor`'s live dashboard and Excel status report, and the abort button, were not
+  re-exercised in this phase; they were verified in Phase 4.5.
+
+---
+
 ## Testing Plan
 
 ### Unit Tests
-- [ ] No test currently references Prefect — confirm the suite is unaffected by construction.
+- [x] No test currently references Prefect — confirm the suite is unaffected by construction.
+      *Confirmed: the only mentions in `code/tests/` are a docstring, a plan-path constant, and one
+      explanatory comment — no import, no decorator, no call.*
 - [x] Add a test asserting `parallel_execution: true` raises `NotImplementedError` for each of the
       four batch runners. — `code/tests/test_parallel_execution_removed.py`
 - [ ] Add a guard test that imports all 10 entry-point modules, so a stray Prefect import fails CI
       rather than at runtime.
 
 ### Integration Tests
-- [ ] One real workflow, before/after, hash-compared outputs (6.3).
-- [ ] Narration assertion for the two `get_run_logger` files (6.4).
-- [ ] Entry scripts import in a prefect-free environment (6.1).
+- [x] One real workflow, before/after, hash-compared outputs (6.3).
+- [x] Narration assertion for the two `get_run_logger` files (6.4).
+- [x] Entry scripts import in a prefect-free environment (6.1).
 
 ### Manual Verification
-- [ ] GUI opens with no server, no 30 s wait.
-- [ ] Run streams console output live during a long workflow.
+- [x] GUI opens with no server, no 30 s wait.
+- [x] Run streams console output live during a long workflow.
 - [ ] Abort still terminates the workflow subprocess.
 - [ ] `PipelineMonitor` dashboard and the Excel status report still appear.
 
@@ -629,3 +761,38 @@ update the header.
   `code/src/utils/pipeline/monitoring/pipeline_monitor.py`, `code/src/utils/should_process_task.py`
 - Guides: `~/.claude/knowledge/data-pipeline-engineering/` 02 (§1 pipe-and-filter, §5 idempotency,
   §8 error boundaries), 05 (§YAGNI, §technical debt)
+
+---
+
+## Modified Files
+
+<!-- auto-generated by /plan-implement — do not edit manually -->
+- code/scripts/__misc/standalone_mkv_to_forearm_mesh.py
+- code/scripts/_3_preprocessing/_4_somatosensory_quantification/poc_contact_depth_field.py
+- code/scripts/merging_pipeline_neuron_to_kinect_auto.py
+- code/scripts/merging_pipeline_neuron_to_kinect_visualisation.py
+- code/scripts/postprocess_visualization.py
+- code/scripts/postprocess_workflow_kinect_auto.py
+- code/scripts/prepare_configs_workflow.py
+- code/scripts/preprocess_pipeline_nerve_auto.py
+- code/scripts/preprocess_workflow_kinect_auto.py
+- code/scripts/preprocess_workflow_kinect_manual.py
+- code/scripts/preprocess_workflow_kinect_visualisation.py
+- code/scripts/primary_workflow_kinect_auto.py
+- code/src/merging/contact_depth_field_series.py
+- code/src/preprocessing/motion_analysis/tactile_quantification/io/contact_depth_field_io.py
+- code/src/utils/gui/dag_launcher/launcher_window.py
+- code/src/utils/gui/dag_launcher/prefect_server_manager.py  (DELETED)
+- code/src/utils/pipeline/dependency_popup.py
+- code/tests/test_parallel_execution_removed.py  (new)
+- docs/architecture/gui-dag-launcher-reference.md
+- docs/changelogs/remove-prefect-orchestration.md  (new)
+- docs/development/knowledge-base/README.md
+- docs/development/knowledge-base/note-prefect-removal.md  (new)
+- docs/development/plans/active/remove-prefect-orchestration.md
+- docs/development/plans/completed/persistent-prefect-server-at-gui-launch.md
+- environment.yml
+- requirements.txt
+
+Not committed (gitignored at `.gitignore:147`, edited on disk only):
+- CLAUDE.md
