@@ -85,25 +85,38 @@ several keys — and its output defines the origin of Space 4 for the entire ses
 
 - [ ] `blocks_rf_centered/<session>_semicontrolled_<block>_..._contact_depth_field.parquet` exists for
       every block the postprocess DAG processes.
-- [ ] Its metadata declares `coordinate_space = "rf_centered"`, and every intermediate declares the
-      space it is actually in — never the space it came from.
-- [ ] **Row-count agreement at every stage**: for each frame, the parquet's row count equals the
+      *Holds for all 10 blocks of the 2 sessions driven (ST13-01, ST14-02); the other 9 of the DAG's
+      11 sessions were not driven, so this is unproven at DAG scope.*
+- [x] Its metadata declares `coordinate_space = "rf_centered"`, and every intermediate declares the
+      space it is actually in — never the space it came from. *ST14-02's terminal artifact declares
+      `rf_centered`; ST13-01 takes the no-cluster passthrough and correctly declares `pca_calibrated`.*
+- [x] **Row-count agreement at every stage**: for each frame, the parquet's row count equals the
       parsed length of that frame's `contact_points` cell in the CSV written by the same stage. This
       is the single check that catches desynchronisation, and it must hold at all five stages.
-- [ ] After dedup, `max(|signed_depth_mm|)` per frame still equals the CSV's `contact_depth` for that
-      frame. The max-magnitude reduction rule is what preserves this; assert it.
-- [ ] `vertex_id` is present from the projection stage onward, is `int32`, and every value is a valid
-      index into the reference PLY (`0 <= vertex_id < n_vertices`).
-- [ ] Metadata records `reference_ply`, `reference_ply_vertex_count` and `dedup_epsilon`, and the
-      reader **raises** on a vertex-count mismatch against the PLY it is joined to.
-- [ ] Resolving `vertex_id` against `forearm_rf_centered/*.ply` reproduces the parquet's own `x/y/z`
+      *36/36 checks on ST14-02, 24/24 on ST13-01.*
+- [x] After dedup, `max(|signed_depth_mm|)` per frame still equals the CSV's `contact_depth` for that
+      frame. The max-magnitude reduction rule is what preserves this; assert it. *Max disagreement
+      7.105e-15 mm over 10 199 frames; the field's own per-frame maximum is unchanged to 0.000e+00.*
+- [x] `vertex_id` is present from the projection stage onward, is `int32`, and every value is a valid
+      index into the reference PLY (`0 <= vertex_id < n_vertices`). *`[0, 10711]` of 10 712 across
+      5.68 M rows.*
+- [x] Metadata records `reference_ply`, `reference_ply_vertex_count` and `dedup_epsilon`, and the
+      reader **raises** on a vertex-count mismatch against the PLY it is joined to. *Stamped values
+      measured on real output; the raising behaviour is covered by the Phase 2 unit tests.*
+- [x] Resolving `vertex_id` against `forearm_rf_centered/*.ply` reproduces the parquet's own `x/y/z`
       to within the PLY's 0.1 mm rounding — the cross-check that the index and the coordinates agree.
-- [ ] The three replayable stages (ICP, PCA, RF-centring) leave `signed_depth_mm` **bitwise
-      unchanged**; only coordinates move.
-- [ ] Deleting only a stage's parquet re-runs that stage; `clean_task_outputs` removes both artifacts.
-- [ ] A passthrough branch (ICP with no transforms, RF-centring with no cluster) copies the parquet as
-      well as the CSV, so the two never land in different spaces.
-- [ ] Full test suite does not regress from its count at branch point (**352 passed, 7 skipped**).
+      *0.09999771 mm (two roundings) and 0.04999390 mm (one).*
+- [x] The three replayable stages (ICP, PCA, RF-centring) leave `signed_depth_mm` **bitwise
+      unchanged**; only coordinates move. *Values and dtype, on every block of both sessions —
+      projection too.*
+- [x] Deleting only a stage's parquet re-runs that stage; `clean_task_outputs` removes both artifacts.
+      *Measured per stage on ST13-01 in Phase 8; a clean whole-session re-run of ST14-02 skips all
+      seven tasks.*
+- [x] A passthrough branch (ICP with no transforms, RF-centring with no cluster) copies the parquet as
+      well as the CSV, so the two never land in different spaces. *Both branches measured in Phases 5
+      and 7; ST13-01's end-to-end drive exercises the RF one.*
+- [x] Full test suite does not regress from its count at branch point (**352 passed, 7 skipped**).
+      *585 passed, 7 skipped.*
 
 ## Definitions
 
@@ -848,21 +861,159 @@ reasons — five reference-recording bundles, two `analyse_workflow_*` configs).
 
 ### Phase 9: Verification
 **Goal:** Measured evidence at every stage, not argument.
-**Started:** —  **Completed:** —
+**Started:** 2026-08-18 15:40  **Completed:** 2026-08-18 16:10
 
-- [ ] 9.1 — Run one session end to end.
-- [ ] 9.2 — Row-count agreement between parquet and CSV at **all five** stages.
-- [ ] 9.3 — `signed_depth_mm` bitwise unchanged through ICP, PCA and RF-centring.
-- [ ] 9.4 — After dedup, per-frame `max(|signed_depth_mm|)` equals the CSV's `contact_depth`.
-- [ ] 9.5 — Every `vertex_id` in range; resolving it against `forearm_rf_centered/*.ply` reproduces
-      the parquet's `x/y/z` within the PLY's 0.1 mm rounding.
-- [ ] 9.6 — The CSVs at every stage are byte-identical to a pre-change run of the same inputs.
-- [ ] 9.7 — Delete one stage's parquet, re-run, confirm regeneration; re-run clean, confirm skip.
-- [ ] 9.8 — Record artifact sizes per stage and the dataset-wide total.
+- [x] 9.1 — Run one session end to end. *Two sessions, so the evidence is not single-session:
+      `2022-06-14_ST13-01` (4 blocks) in Phase 8, and `2022-06-15_ST14-02` (6 blocks) here — chosen
+      because its `rf_center_origin.json` reads `status: "ok"`, which is what puts the **RF
+      translating branch** on the end-to-end path for the first time. 7/7 tasks, 6 sidecars at every
+      one of the five stages.*
+- [x] 9.2 — Row-count agreement between parquet and CSV at **all five** stages. *36/36 on ST14-02
+      (six blocks x the five stages plus the Space-1 input), on top of Phase 8's 24/24 on ST13-01.*
+- [x] 9.3 — `signed_depth_mm` bitwise unchanged through ICP, PCA and RF-centring. *All six ST14-02
+      blocks, all four transitions including projection, values and dtype alike.*
+- [x] 9.4 — After dedup, per-frame `max(|signed_depth_mm|)` equals the CSV's `contact_depth`.
+      *Max absolute disagreement 7.105e-15 mm over 10 199 frames; the field's own per-frame maximum
+      is unchanged by dedup to **0.000e+00** despite 34.6-45.4% of rows being dropped.*
+- [x] 9.5 — Every `vertex_id` in range; resolving it against `forearm_rf_centered/*.ply` reproduces
+      the parquet's `x/y/z` within the PLY's 0.1 mm rounding. *Measured on genuine end-to-end output
+      rather than Phase 7's reconstruction: **0.09999771 mm** on ST14-02 (5.68 M rows, 10 712
+      vertices) and **0.04999390 mm** on ST13-01 (983 k rows, 1 807 vertices).*
+- [x] 9.6 — The CSVs at every stage are byte-identical to a pre-change run of the same inputs.
+      *Proven end-to-end through the whole chain — see the controlled experiment below. 36/36
+      artifacts identical.*
+- [x] 9.7 — Delete one stage's parquet, re-run, confirm regeneration; re-run clean, confirm skip.
+      *Regeneration measured per stage on ST13-01 in Phase 8. The clean-re-run half is measured here
+      on ST14-02: **all seven tasks skipped**, in 0.04 s.*
+- [x] 9.8 — Record artifact sizes per stage. *Per stage, for both driven sessions, below. The
+      **dataset-wide** total is **not** measured — only 2 of the DAG's 11 sessions were driven.*
 
 **Files Modified:** none (verification only)
 
 **Dependencies:** Phase 8
+
+---
+
+#### Verification Results (2026-08-18)
+
+Session `2022-06-15_ST14-02`, driven through `run_single_session_postprocessing` on the real DAG
+config with no GUI monitor. All 7 tasks completed; 6 sidecars landed at each of the five stages.
+
+**Per-stage shape, metadata and row-count agreement (9.1, 9.2).** Rows are summed across the six
+blocks; the per-block breakdown is in `verify_2022-06-15_ST14-02.json`.
+
+| stage | rows (6 blocks) | schema | `coordinate_space` | `pipeline_stage` | `vertex_id` | row-count checks |
+|-------|----------------|--------|--------------------|------------------|-------------|------------------|
+| `blocks_filtered/` (input) | 9 284 464 | 1 | `kinect_space_1` | `merging` | — | 6/6 |
+| `blocks_registered/` | 9 284 464 | 1 | `icp_registered` | `postprocessing` | — | 6/6 |
+| `blocks_deduped/` | 5 683 526 | 1 | `icp_registered` | `postprocessing` | — | 6/6 |
+| `blocks_projected/` | 5 683 526 | 2 | `icp_registered` | `postprocessing` | `int32`, `[0,10711]` of 10 712 | 6/6 |
+| `blocks_pca_calibrated/` | 5 683 526 | 2 | `pca_calibrated` | `postprocessing` | unchanged | 6/6 |
+| `blocks_rf_centered/` | 5 683 526 | 2 | **`rf_centered`** | `postprocessing` | unchanged | 6/6 |
+
+`reference_ply_vertex_count = 10712` and `dedup_epsilon = 0.5` are stamped from projection onward and
+match the PLY actually on disk. This is the first end-to-end run whose terminal artifact declares
+`rf_centered` — ST13-01 takes the documented no-cluster passthrough and correctly stops at
+`pca_calibrated`.
+
+**Depth preservation (9.3, 9.4).** Per block, `signed_depth_mm` bitwise unchanged (dtype included)
+across all four transitions:
+
+| block | rows in → out of dedup | dropped | ICP | projection | PCA | RF | `max\|depth\|` reg vs ded | ded vs CSV `contact_depth` |
+|-------|----------------------|---------|-----|-----------|-----|----|----------------------|---------------------------|
+| 01 | 647 169 → 423 111 | 34.6% | OK | OK | OK | OK | 0.000e+00 over 983 frames | 7.105e-15 |
+| 02 | 2 175 484 → 1 413 058 | 35.0% | OK | OK | OK | OK | 0.000e+00 over 1 534 frames | 7.105e-15 |
+| 04 | 1 987 640 → 1 086 204 | 45.4% | OK | OK | OK | OK | 0.000e+00 over 2 750 frames | 7.105e-15 |
+| 05 | 3 632 693 → 2 273 340 | 37.4% | OK | OK | OK | OK | 0.000e+00 over 2 678 frames | 7.105e-15 |
+| 06 | 338 901 → 202 167 | 40.3% | OK | OK | OK | OK | 0.000e+00 over 1 103 frames | 1.776e-15 |
+| 08 | 502 577 → 285 646 | 43.2% | OK | OK | OK | OK | 0.000e+00 over 1 151 frames | 1.776e-15 |
+
+The `contact_depth` residual is one ULP of the CSV's decimal round trip, matching Phase 6's
+measurement. No frame was lost at any stage — the frame count is identical on both sides of dedup.
+
+**The RF translating branch, end to end.** ST14-02's `rf_center_origin.json` reads
+`status: "ok"`, `rf_center = [19.950000000000003, 355.0375, 400.3875]` (5 clusters found, dominant
+cluster 59 points, mean selectivity 0.712). Every row of every block is translated by exactly
+`-rf_center`: the per-axis shift is constant at `-19.9500 / -355.0375 / -400.3875` and
+`max|shift − (−rf_center)|` is **3.05e-06 mm** across 5.68 M rows (1.72e-06 mm on the two smaller
+blocks) — the float32 storage rounding of coordinates of that magnitude, nothing more. This is the
+branch that Phase 7 could only reach with an injected permissive `SelectivityDBSCANConfig`.
+
+**`vertex_id` resolution (9.5).**
+
+| session | vertices | rows | `max\|PLY[vertex_id] − parquet x/y/z\|` | roundings between them |
+|---------|---------|------|--------------------------------------|------------------------|
+| ST14-02 (translating) | 10 712 | 5 683 526 | 0.09999771 mm | two (`np.round(...,1)` at PCA **and** at RF) |
+| ST13-01 (passthrough) | 1 807 | 982 914 | 0.04999390 mm | one (PCA only; RF copies the PLY) |
+
+Both sit just inside their bound and the two differ by exactly the factor the branch predicts, which
+is the cross-check that the index and the coordinates agree rather than merely both existing.
+
+**9.6 — byte-identity, the controlled experiment.** The pre-Phase-1 versions of all five stage
+modules (`git show f6bba02:...`, the parent of `a5f64de`) were loaded by file path and driven over
+ST14-02's real `blocks_filtered/` inputs into a separate output tree, in the **same interpreter and
+the same library versions** as the new chain, and every artifact sha256-compared. The old
+`deduplicate_xy_flow` lived in the workflow file and had different required kwargs, so its body was
+replicated from `workflow_old.py` verbatim, minus the monitor branch the DAG disables and an
+idempotency check `force_processing=True` bypasses anyway. **36/36 artifacts identical** — 31 CSVs
+across the five stages, plus the three forearm PLYs, `pca-xyz_transformation-matrices.json` and
+`rf_center_origin.json`. The last two matter most: the files that *define* Spaces 3 and 4 did not
+move, so 7.7 holds on a second session.
+
+**A confound found and attributed, not waved away.** The session's on-disk CSVs from the 2026-05-13
+production run were hashed *before* this drive overwrote them. All 32 differ from the new output,
+while the three PLYs and `rf_center_origin.json` are identical to May. Rather than assume, the
+pre-change ICP module was re-run today over an **untouched** session (`2022-06-15_ST14-04`, whose
+outputs are still the 2026-05-13 ones) and compared against its own May output: **0/3 reproduce it**,
+with sizes differing by 18-51 bytes on files of 6-15 MB. The pre-change code therefore no longer
+reproduces its own May bytes, so the drift predates this branch and cannot be caused by it —
+consistent with a float-formatting change in a dependency between May and now (current env: pandas
+2.3.3, numpy 2.2.6, scipy 1.15.2, scikit-learn 1.7.2, open3d 0.19.0). The controlled same-environment
+old-vs-new comparison above is the evidence for 9.6; the May hashes are recorded only to explain why
+they are not.
+
+Independently, `git diff` over the five stage modules between the code state at the May run
+(`f3de8b6`) and the pre-Phase-1 ref is **one import-path line** in `center_on_receptive_field.py`
+(`analysis.receptive_field_mapping` → `postprocessing.receptive_field.rf_clustering`, moved verbatim
+by `82e5083`), so the May outputs were produced by numerically the same stage code.
+
+**9.7 — idempotency.** An unchanged re-run of the whole session skipped **every** task:
+`fetch_forearm_of_reference`, `apply_icp_registration`, `deduplicate_xy`,
+`project_contacts_onto_forearm` (all six blocks), `calibrate_pca_xyz`, `center_on_receptive_field`
+and `aggregate_session`. Note this includes RF-centring: the Phase 8 finding that
+`center_on_receptive_field` never skips is specific to its **no-cluster passthrough** branch, where
+`shutil.copy2` propagates the spread of input mtimes. The translating branch writes its outputs
+normally and skips correctly.
+
+**9.8 — sidecar sizes per stage (MB).**
+
+| stage | ST13-01 (4 blocks) | ST14-02 (6 blocks) | total |
+|-------|-------------------|--------------------|-------|
+| `blocks_filtered/` | 20.6 | 91.6 | 112.3 |
+| `blocks_registered/` | 22.1 | 105.4 | 127.4 |
+| `blocks_deduped/` | 10.2 | 63.6 | 73.8 |
+| `blocks_projected/` | 11.3 | 71.3 | 82.7 |
+| `blocks_pca_calibrated/` | 11.3 | 71.4 | 82.7 |
+| `blocks_rf_centered/` | 11.3 | 71.4 | 82.7 |
+| **total, 2 sessions** | 86.8 | 474.7 | **561.6** |
+
+Registration *grows* the file (22.1 vs 20.6 MB) because the transform destroys the compressibility of
+the quantised Space-1 coordinates; dedup then more than halves it; projection grows it again by
+adding `vertex_id` and re-addressing coordinates to a small vertex set. The dataset-wide total is not
+measured — 9 of the DAG's 11 sessions were not driven.
+
+**Test suite:** 585 passed, 7 skipped — unchanged from the Phase 8 baseline, same seven skip reasons.
+
+**Not verified in this phase**, and left unticked above where it applies:
+
+- The other **9 of 11** sessions in the DAG's `kinect_configs`. Only ST13-01 and ST14-02 were driven,
+  so the dataset-wide artifact total and "every block the DAG processes" are unproven at DAG scope.
+- The **Testing Plan's Manual Verification and Edge Cases** sections. Three edge cases were exercised
+  incidentally across Phases 5-8 (ICP passthrough, RF `no_cluster_found`, a block dropped by PCA
+  gesture segmentation); "a frame whose every contact vertex is removed by dedup" and "a malformed
+  `contact_points` cell" were not constructed on real data.
+- The **render check** — no visual confirmation that the RF-centred field sits on the RF-centred
+  forearm surface. The 0.09999771 mm `vertex_id` residual is the numerical stand-in for it.
 
 ---
 
