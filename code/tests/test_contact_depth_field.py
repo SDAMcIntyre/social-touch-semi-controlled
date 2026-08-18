@@ -74,6 +74,33 @@ _needs_processor = pytest.mark.skipif(
 )
 
 
+def _load_controller():
+    """Return ``ObjectsInteractionController``, or ``None`` with a skip reason.
+
+    Same stub-lifting dance as :func:`_load_processor` — the controller imports
+    the processor, which imports ``preprocessing.forearm_extraction``.
+    """
+    if _PROCESSOR_CLS is None:
+        return None
+    try:
+        from preprocessing.motion_analysis.tactile_quantification.core.objects_interaction_controller import (
+            ObjectsInteractionController,
+        )
+    except ImportError:
+        return None
+    return ObjectsInteractionController
+
+
+_CONTROLLER_CLS = _load_controller()
+_needs_controller = pytest.mark.skipif(
+    _CONTROLLER_CLS is None,
+    reason=(
+        "ObjectsInteractionController needs the real preprocessing.forearm_extraction "
+        "package (open3d / PyQt5 / pyk4a SDKs), which this environment stubs out."
+    ),
+)
+
+
 # ---------------------------------------------------------------------------
 # Geometry helpers
 # ---------------------------------------------------------------------------
@@ -611,11 +638,13 @@ def test_refactored_processor_reproduces_the_legacy_algorithm_bit_identically():
     contacting_frames = 0
     empty_frames = 0
 
-    for hand in _pose_sweep():
+    for index, hand in enumerate(_pose_sweep()):
         expected_quantities, expected_viz = _legacy_intersection_volume(
             forearm, hand, serialize_contact_points
         )
-        actual_quantities, actual_viz = processor.process_single_frame(current_mesh=hand)
+        actual_quantities, actual_viz, _ = processor.process_single_frame(
+            current_mesh=hand, frame_index=index, time_s=index / 30.0
+        )
 
         assert set(actual_quantities) == set(expected_quantities)
         for key, expected in expected_quantities.items():
@@ -651,12 +680,15 @@ def test_max_abs_field_equals_the_processor_scalar_bit_identically():
     processor = _PROCESSOR_CLS(reference_geometry=forearm)
 
     checked = 0
-    for hand in _pose_sweep():
-        quantities, _ = processor.process_single_frame(current_mesh=hand)
+    for index, hand in enumerate(_pose_sweep()):
+        quantities, _, surfaced = processor.process_single_frame(
+            current_mesh=hand, frame_index=index, time_s=index / 30.0
+        )
         frame = signed_contact_depth_mm(hand, forearm)
 
         if frame is None:
             assert quantities["contact_detected"] == 0
+            assert surfaced is None
             continue
 
         checked += 1
@@ -667,6 +699,14 @@ def test_max_abs_field_equals_the_processor_scalar_bit_identically():
         )
         assert len(frame.signed_depth_mm) == len(frame.points)
 
+        # The processor must surface the very field it summarised, stamped with
+        # the identity it was given — not a recomputation and not an unlabelled one.
+        assert surfaced is not None
+        assert surfaced.frame_index == index
+        assert surfaced.time_s == pytest.approx(index / 30.0)
+        assert np.array_equal(surfaced.signed_depth_mm, frame.signed_depth_mm)
+        assert np.array_equal(surfaced.points, frame.points)
+
     assert checked > 0
 
 
@@ -676,7 +716,66 @@ def test_processor_refuses_an_absent_hand_pose():
     processor = _PROCESSOR_CLS(reference_geometry=forearm)
 
     with pytest.raises(ValueError, match="absent"):
-        processor.process_single_frame(current_mesh=None)
+        processor.process_single_frame(current_mesh=None, frame_index=0, time_s=0.0)
+
+
+# ---------------------------------------------------------------------------
+# 4b. The controller surfaces the field series
+# ---------------------------------------------------------------------------
+
+
+def _controller_over_the_sweep():
+    """Run the real controller over the deterministic pose sweep."""
+    forearm = _planar_grid_mesh(half_extent_mm=60.0, divisions=24, z_mm=90.0)
+    hands = list(_pose_sweep())
+    timestamps = [index / 30.0 for index in range(len(hands))]
+    controller = _CONTROLLER_CLS(
+        hand_meshes=hands,
+        timestamps=timestamps,
+        references_mesh={0: forearm},
+    )
+    return controller.run()
+
+
+@_needs_controller
+def test_controller_returns_a_field_series_matching_the_dataframe():
+    """The series holds exactly the contacting frames, labelled consistently."""
+    df, series, vis_artifacts = _controller_over_the_sweep()
+
+    assert vis_artifacts is not None
+    contacting = df.loc[df["contact_detected"] == 1]
+
+    # Guard against a vacuous pass: the sweep must exercise both branches.
+    assert len(contacting) > 0
+    assert len(contacting) < len(df)
+
+    assert len(series) == len(contacting)
+    assert [f.frame_index for f in series] == contacting["frame_index"].tolist()
+    np.testing.assert_allclose(
+        [f.time_s for f in series], contacting["time"].to_numpy()
+    )
+
+    # Frame identity is populated, never left unlabelled.
+    assert all(f.frame_index is not None and f.time_s is not None for f in series)
+
+
+@_needs_controller
+def test_controller_field_series_agrees_with_the_csv_scalar_bit_identically():
+    """``max(|field|)`` per frame is the CSV's ``contact_depth``, to the bit."""
+    df, series, _ = _controller_over_the_sweep()
+
+    indexed = df.set_index("frame_index")
+    for frame in series:
+        recovered = np.max(np.abs(frame.signed_depth_mm))
+        assert np.array_equal(
+            recovered, np.float64(indexed.loc[frame.frame_index, "contact_depth"])
+        ), frame.frame_index
+
+    # A frame absent from the series is zero contact, not an unrecorded frame.
+    covered = {f.frame_index for f in series}
+    for frame_index, row in indexed.iterrows():
+        if frame_index not in covered:
+            assert row["contact_detected"] == 0
 
 
 # ---------------------------------------------------------------------------
@@ -753,7 +852,9 @@ def test_recording_regression_against_reference_csv():
             o3d.utility.Vector3dVector(np.asarray(vertices, dtype=np.float64)),
             triangles,
         )
-        quantities, _ = processor.process_single_frame(current_mesh=hand)
+        quantities, _, _ = processor.process_single_frame(
+            current_mesh=hand, frame_index=index, time_s=index / 30.0
+        )
         recomputed_depth[index] = quantities["contact_depth"]
         recomputed_area[index] = quantities["contact_area"]
         recomputed_detected[index] = quantities["contact_detected"]

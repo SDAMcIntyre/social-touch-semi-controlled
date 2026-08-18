@@ -19,6 +19,10 @@ from preprocessing.motion_analysis import (
     HandMetadataManager
 )
 
+from preprocessing.motion_analysis.tactile_quantification.io.contact_depth_field_io import (
+    write_contact_depth_field
+)
+
 from preprocessing.forearm_extraction import (
     ForearmFrameParametersFileHandler,
     ForearmParameters,
@@ -50,18 +54,23 @@ def compute_somatosensory_characteristics(
         forearm_pointcloud_dir: Path,
         current_video_filename: str,
         output_csv_path: Path,
+        output_parquet_path: Path,
         *,
         force_processing: bool = False,
         monitor: bool = True,
         fps: int = 30
 ) -> Optional[str]:
+    # The per-vertex sidecar is listed alongside the CSV so that a session with
+    # a current CSV but no sidecar reprocesses instead of skipping forever.
+    # This is what makes the artifact appear on already-processed recordings.
+    task_outputs = [output_csv_path, output_parquet_path]
     if not should_process_task(
-        output_paths=output_csv_path,
+        output_paths=task_outputs,
         input_paths=[hand_motion_path, forearm_metadata_path],
         force=force_processing):
         print(f"✅ Output file '{output_csv_path}' already exists. Use force_processing to overwrite.")
         return None
-    clean_task_outputs(output_csv_path)
+    clean_task_outputs(task_outputs)
     # 1. LOAD MOTION DATA via HandMotionManager
     print(f"Loading Hand Motion Data from: {hand_motion_path}")
     motion_manager = HandMotionManager(fps=float(fps))
@@ -108,7 +117,7 @@ def compute_somatosensory_characteristics(
         fps=fps
     )
     
-    results_df, vis_artifacts = controller.run()
+    results_df, depth_field_series, vis_artifacts = controller.run()
     
     print("Results from run:")
     print(results_df.head())
@@ -171,5 +180,15 @@ def compute_somatosensory_characteristics(
 
     # Save the DataFrame to the CSV file
     results_df.to_csv(output_csv_path, index=False)
+
+    # The per-vertex sidecar is written immediately alongside the CSV so both
+    # artifacts succeed or fail together.  It is unconditional when the task
+    # runs — there is no DAG toggle for it.
+    write_contact_depth_field(
+        depth_field_series,
+        output_parquet_path,
+        source_recording=Path(current_video_filename).stem,
+    )
+    print(f"Wrote contact depth field sidecar: '{output_parquet_path}'")
 
     return str(output_csv_path)

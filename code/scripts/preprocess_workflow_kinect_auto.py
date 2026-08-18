@@ -372,24 +372,31 @@ def compute_somatosensory_characteristics_flow(
     *,
     monitor: bool = False,
     force_processing: bool = False
-) -> Path:
+) -> tuple[Path, Path]:
     print(f"[{output_dir.name}] Generating somatosensory characteristics...")
     name_baseline = Path(current_video_filename).stem
     forearm_pointcloud_dir = session_processed_dir / "forearm_pointclouds"
     forearm_metadata_path = forearm_pointcloud_dir / (session_id + "_arm_roi_metadata.json")
 
     contact_characteristics_path = output_dir / (name_baseline + "_contact_and_kinematic_data.csv")
+    # Per-vertex sidecar of the same stem, in the same directory. Derived from
+    # path arithmetic alone so the skip check stays resolvable without opening
+    # either artifact.
+    contact_depth_field_path = output_dir / (name_baseline + "_contact_depth_field.parquet")
     compute_somatosensory_characteristics(
         hand_motion_npz_path,
         hand_metadata_path,
-        forearm_metadata_path, 
+        forearm_metadata_path,
         forearm_pointcloud_dir,
-        current_video_filename, 
-        contact_characteristics_path, 
-        monitor=monitor, 
+        current_video_filename,
+        contact_characteristics_path,
+        contact_depth_field_path,
+        monitor=monitor,
         force_processing=force_processing
     )
-    return contact_characteristics_path
+    # Order matters: the registry binds these positionally, and
+    # unify_processed_data consumes the CSV as somatosensory_chars_path.
+    return contact_characteristics_path, contact_depth_field_path
 
 
 @flow(name="10. Define Trial IDs")
@@ -585,7 +592,7 @@ def run_single_session_pipeline(
                             "session_id": config.session_id,
                             "current_video_filename": context.get("rgb_video_path").name,
                             "output_dir": config.video_processed_output_dir / "kinematics_analysis"},
-         "outputs": ["somatosensory_chars_path"]},
+         "outputs": ["somatosensory_chars_path", "contact_depth_field_path"]},
 
         {"name": "find_single_touches",
          "func": find_single_touches_flow,

@@ -3,6 +3,7 @@ import open3d as o3d
 import numpy as np
 from typing import Dict, Tuple, Optional, Any, List, Union
 
+from ..model.contact_depth_field import ContactDepthFrame
 from ..model.objects_interaction_processor import ObjectsInteractionProcessor
 
 class ObjectsInteractionController:
@@ -103,15 +104,26 @@ class ObjectsInteractionController:
         
         return proprio_data, {}
 
-    def run(self) -> Tuple[pd.DataFrame, Optional[Dict[str, Any]]]:
+    def run(self) -> Tuple[pd.DataFrame, List[ContactDepthFrame], Optional[Dict[str, Any]]]:
         """
         Executes the simulation iterating over the injected mesh sequence.
+
+        Returns:
+            The per-frame DataFrame (one row per frame), the per-vertex contact
+            depth field series (one entry per *contacting* frame, in frame
+            order), and the visualization artifacts.
+
+            The field series is deliberately sparse: a frame with no contact
+            contributes no entry.  Absence from the series therefore means
+            "zero contact", never "not measured" — a frame that cannot be
+            measured raises out of ``process_single_frame``.
         """
         results = []
         num_frames = len(self.timestamps)
 
         print(f"Computing {num_frames} frames...")
         visualization_frames = []
+        depth_field_series: List[ContactDepthFrame] = []
 
         # Iterate directly over the sequence of meshes and times
         for frame_id, (time, current_mesh) in enumerate(zip(self.timestamps, self.hand_meshes)):
@@ -134,7 +146,15 @@ class ObjectsInteractionController:
 
             # 3. Process Contact
             # The contact processor now receives the mesh with excluded vertices removed.
-            contact_data, viz = self.contact_processor.process_single_frame(current_mesh=current_mesh, _debug=False)
+            contact_data, viz, depth_field = self.contact_processor.process_single_frame(
+                current_mesh=current_mesh,
+                frame_index=frame_id,
+                time_s=float(time),
+                _debug=False,
+            )
+
+            if depth_field is not None:
+                depth_field_series.append(depth_field)
 
             # Store metrics
             merged_data = {**proprio_data, **contact_data}
@@ -176,4 +196,4 @@ class ObjectsInteractionController:
             "view_width": self.view_width_in_frame
         }
 
-        return df, vis_artifacts
+        return df, depth_field_series, vis_artifacts

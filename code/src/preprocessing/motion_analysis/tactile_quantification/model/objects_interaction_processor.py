@@ -3,7 +3,7 @@ import open3d as o3d
 from typing import Optional, Dict, Union, Tuple, Any
 from preprocessing.forearm_extraction import serialize_contact_points
 
-from .contact_depth_field import signed_contact_depth_mm
+from .contact_depth_field import ContactDepthFrame, signed_contact_depth_mm
 
 class ObjectsInteractionProcessor:
     """
@@ -77,7 +77,12 @@ class ObjectsInteractionProcessor:
         self.ref_triangle_areas = 0.5 * np.linalg.norm(cross_product, axis=1)
         self.ref_vertices = vertices
 
-    def _calculate_intersection_volume(self, input_mesh: o3d.geometry.TriangleMesh) -> tuple[dict, dict]:
+    def _calculate_intersection_volume(
+            self,
+            input_mesh: o3d.geometry.TriangleMesh,
+            frame_index: int,
+            time_s: float
+        ) -> tuple[dict, dict, Optional[ContactDepthFrame]]:
         """
         Summarises one frame of contact into the CSV row schema.
 
@@ -89,15 +94,24 @@ class ObjectsInteractionProcessor:
 
         Args:
             input_mesh: The dynamic object mesh.
+            frame_index: Kinect frame index, stamped onto the returned field.
+            time_s: Frame timestamp in seconds, stamped onto the returned field.
 
         Returns:
-            Tuple containing contact metrics and visualization data.
+            Tuple containing contact metrics, visualization data, and the
+            per-vertex depth field (``None`` when there is no contact).
         """
-        frame = signed_contact_depth_mm(input_mesh, self.ref_mesh)
+        frame = signed_contact_depth_mm(
+            input_mesh,
+            self.ref_mesh,
+            frame_index=frame_index,
+            time_s=time_s,
+        )
 
         if frame is None:
             # No contact this frame — a legitimate empty result, not a failure.
-            return self.empty_structure()
+            contact_quantities, contact_info = self.empty_structure()
+            return contact_quantities, contact_info, None
 
         # Depth Estimation:
         # For open meshes, "Depth" is the magnitude of the negative signed distance.
@@ -123,22 +137,31 @@ class ObjectsInteractionProcessor:
             "contact_normals": frame.normals,
         }
 
-        return contact_quantities, contact_info
+        return contact_quantities, contact_info, frame
 
     def process_single_frame(
-            self, 
+            self,
             current_mesh: o3d.geometry.TriangleMesh,
+            frame_index: int,
+            time_s: float,
             _debug: bool = False
-        ) -> tuple[dict, dict]:
+        ) -> tuple[dict, dict, Optional[ContactDepthFrame]]:
         """
         Processes a single frame of interaction.
 
         Args:
             current_mesh (o3d.geometry.TriangleMesh): The dynamic object mesh in world space.
+            frame_index (int): Kinect frame index; stamped onto the depth field so
+                the field can be joined back to the CSV row for this frame.
+            time_s (float): Frame timestamp in seconds; stamped onto the depth field.
             _debug (bool): Enable debug visualization for this frame.
 
         Returns:
-            Tuple[dict, dict]: contact_data, visualization_data
+            Tuple[dict, dict, Optional[ContactDepthFrame]]: contact_data,
+            visualization_data, and the per-vertex depth field.  The field is
+            ``None`` when the hand does not touch the forearm this frame; that
+            is *zero contact*, never *absent measurement* — an absent hand pose
+            raises instead.
         """
         self._debug = _debug
 
@@ -153,7 +176,7 @@ class ObjectsInteractionProcessor:
                 "Record it as absent — do not process it as a zero-depth frame."
             )
 
-        return self._calculate_intersection_volume(current_mesh)
+        return self._calculate_intersection_volume(current_mesh, frame_index, time_s)
     
     def empty_structure(self) -> tuple[dict, dict]:
         """Returns standard empty data structure."""

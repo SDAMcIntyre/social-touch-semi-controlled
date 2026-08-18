@@ -8,6 +8,9 @@ h5py==3.14.0
 matplotlib==3.10.6
 numpy #==2.3.3
 pandas==2.3.3
+# pyarrow: parquet writer/reader for the contact-depth-field sidecar
+# (preprocessing/motion_analysis/tactile_quantification/io).
+pyarrow>=15.0
 scikit-image==0.25.2
 scikit-learn==1.7.2
 scipy==1.15.3 #1.16.2
