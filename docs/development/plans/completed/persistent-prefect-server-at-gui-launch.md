@@ -1,5 +1,14 @@
 # Plan: Persistent Prefect Server at GUI Launch
 
+> **SUPERSEDED (2026-08-18) — historical record only.**
+> Prefect was removed from this repository entirely by
+> [remove-prefect-orchestration.md](../active/remove-prefect-orchestration.md).
+> `prefect_server_manager.py` and all of its wiring in `launcher_window.py` are
+> deleted; the GUI starts no server. This document is the design record for what
+> was deleted and is kept for that reason — do not implement from it.
+> See also [note-prefect-removal.md](../../knowledge-base/note-prefect-removal.md)
+> and [remove-prefect-orchestration.md](../../../changelogs/remove-prefect-orchestration.md).
+
 **Date:** 2026-03-14
 **Author:** Basil Duvernoy
 **Status:** Active

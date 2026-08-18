@@ -58,9 +58,6 @@ dependencies:
       - QtPy>=2.4
       - qimage2ndarray>=1.10
 
-      # --- Workflow Orchestration ---
-      - prefect>=3.4
-
       # --- GPU Acceleration (optional, CUDA 12.x+) ---
       # Install separately after environment creation:
       #   pip install cupy-cuda12x

@@ -50,9 +50,6 @@ PyQt5_sip==12.17.0
 # PyQt6-Qt6==6.9.1
 # pyqt6_sip==13.10.2
 
-# --- Workflow Orchestration ---
-prefect==3.4.22
-
 # --- GPU Acceleration (optional) ---
 # cupy-cuda12x works with CUDA 12.x+ drivers (RTX 4070 Ti Super confirmed).
 # Install separately if needed: pip install cupy-cuda12x

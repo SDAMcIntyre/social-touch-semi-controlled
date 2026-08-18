@@ -32,7 +32,6 @@ GUI editing (Layer 4) with runtime execution (Layer 5).
 - `ruamel.yaml` — round-trip YAML editing with comment preservation (Layer 3)
 - `PyYAML` — fast YAML loading for runtime (Layer 5)
 - `grandalf` — hierarchical graph layout (Layer 4 graph view, optional)
-- A workflow orchestrator such as Prefect (optional; the core architecture works without one)
 
 ---
 
@@ -835,7 +834,6 @@ class LauncherWindow(QMainWindow):
         # Build toolbar (Save, Save As)
         # Build UI (3-column splitter + console + run bar)
         # Connect signals
-        # Optionally start orchestrator server (e.g. Prefect)
         ...
 
     def _load_workflow(self, entry: WorkflowEntry) -> None:
@@ -1206,8 +1204,8 @@ def main():
         dag_instance = dag_template.copy()  # fresh DAG state per session
 
         if is_parallel:
-            # Submit as async flow (e.g. Prefect .submit())
-            run_session.submit(session_config, dag_instance)
+            # Requires an executor (process pool / orchestrator); not provided here
+            raise NotImplementedError("parallel execution")
         else:
             run_session(session_config, dag_instance)
 ```
@@ -1430,8 +1428,8 @@ tasks:
 │                                        ▼                                │
 │                               ┌─────────────────────┐                   │
 │                               │ Your Task Functions  │                   │
-│                               │ (Prefect @flow or    │                   │
-│                               │  plain functions)    │                   │
+│                               │ (plain Python        │                   │
+│                               │  functions)          │                   │
 │                               └─────────────────────┘                   │
 │                                                                         │
 │  resolve_session_configs() ──▶ session loop with dag.copy()             │

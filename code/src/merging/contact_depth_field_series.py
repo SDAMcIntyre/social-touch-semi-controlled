@@ -38,7 +38,7 @@ nothing".
 Purity contract
 ---------------
 This module knows about a path, a table and numpy arrays.  It must not learn
-about Qt, VTK/PyVista, actors, sessions, DAGs or Prefect.  Equally, nothing it
+about Qt, VTK/PyVista, actors, sessions, DAGs or the workflow entry points.  Equally, nothing it
 returns carries a file path or a session identity into the viewer: the DTO is
 geometry, scalars and a colour range, and nothing else.
 

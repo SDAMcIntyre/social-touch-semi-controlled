@@ -29,7 +29,8 @@ infrastructure:
 * **Hardcoded paths.**  The ``__main__`` configuration block names one
   recording, following the convention of
   ``code/scripts/_3_preprocessing/_2_hand_tracking/stabilise_hand_motion.py``.
-* **No DAG integration.**  No Prefect flow, no task in any ``configs/*_dag.yaml``.
+* **No DAG integration.**  Not called by any workflow entry point, and no task
+  in any ``configs/*_dag.yaml``.
 * **One recording at a time.**  No session-level or multi-block batching.
 
 Decision record

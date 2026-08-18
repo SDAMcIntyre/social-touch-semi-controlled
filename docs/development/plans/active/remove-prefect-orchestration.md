@@ -104,7 +104,7 @@ decorators are decoration.
       the same inputs (hash-compared).
 - [ ] `parallel_execution: true` raises `NotImplementedError` loudly rather than silently doing
       nothing or crashing with `AttributeError`.
-- [ ] `prefect` appears in no dependency file.
+- [x] `prefect` appears in no dependency file.
 
 ## Definitions
 
@@ -428,25 +428,70 @@ merely list Prefect among things a module must not know about — still true, an
 
 ### Phase 5: Drop the dependency and update docs
 **Goal:** Prefect is not installed, not declared, and not documented as required.
-**Started:** —  **Completed:** —
+**Started:** 2026-08-18 11:13  **Completed:** 2026-08-18 11:20
 
-- [ ] 5.1 — Remove `prefect==3.4.22` and its `# --- Workflow Orchestration ---` header from
-      `requirements.txt:53-54`.
-- [ ] 5.2 — Remove `- prefect>=3.4` and its header from `environment.yml:61-62`.
-- [ ] 5.3 — Check whether anything still imports `pydantic_settings`; if not, note it as orphaned but
+- [x] 5.1 — Remove `prefect==3.4.22` and its `# --- Workflow Orchestration ---` header from
+      `requirements.txt:53-54`. *Both lines and the now-redundant blank line removed; the section was
+      empty afterwards. The file still parses to 46 requirements via
+      `packaging.requirements.Requirement`.*
+- [x] 5.2 — Remove `- prefect>=3.4` and its header from `environment.yml:61-62`. *Same treatment;
+      the file round-trips through `ruamel.yaml` with 47 pip entries, none matching `prefect`.*
+- [x] 5.3 — Check whether anything still imports `pydantic_settings`; if not, note it as orphaned but
       do not remove it here.
-- [ ] 5.4 — Update `CLAUDE.md`: the Architecture Overview says workflows are "orchestrated by
-      Prefect" and describes `@flow` functions. Correct it.
-- [ ] 5.5 — Update `docs/architecture/gui-dag-launcher-reference.md` (`:35`, `:838`, `:1209`,
-      `:1433`).
-- [ ] 5.6 — Changelog `docs/changelogs/remove-prefect-orchestration.md`, listing the surviving prose
-      mentions so a future grep hit is not mistaken for a leftover.
-- [ ] 5.7 — Knowledge-base note recording the shared-`PREFECT_HOME` collision and why the dependency
-      was dropped, so the reasoning survives the code.
+      ***Orphaned.*** No `import pydantic_settings`, no `from pydantic_settings ...`, and no
+      `BaseSettings` subclass anywhere in the tree — the only hits are the two declarations
+      themselves (`requirements.txt:40`, `environment.yml:52`) and this plan. It was a Prefect
+      transitive dependency, declared independently. **Left in place** per Out of Scope; recorded as
+      a follow-up in the changelog.
+- [x] 5.4 — Update `CLAUDE.md`. *Three edits: "orchestrated by Prefect" → "orchestrated by the
+      repo's own DAG layer (`DagConfigHandler` + `TaskExecutor`)"; the `utils/` table row's "Prefect
+      server management" → "pipeline monitoring"; "All workflows are defined as Prefect `@flow`
+      functions" → "All workflows are plain Python entry-point functions". The sentence two
+      paragraphs down that already named `DagConfigHandler` and `TaskExecutor` was left untouched —
+      it was already correct.*
+- [x] 5.5 — Update `docs/architecture/gui-dag-launcher-reference.md` (`:35`, `:838`, `:1209`,
+      `:1433`). *`:35` (the "A workflow orchestrator such as Prefect (optional)" dependency bullet)
+      deleted — the doc's own thesis is that the architecture needs no orchestrator. `:838` comment
+      "Optionally start orchestrator server (e.g. Prefect)" deleted from the `LauncherWindow.__init__`
+      sketch. `:1209` `run_session.submit(...)` replaced with `raise NotImplementedError`, matching
+      what the four batch runners actually do now. `:1433` ASCII box "(Prefect @flow or plain
+      functions)" → "(plain Python functions)", box width preserved. Zero `prefect` hits remain in
+      the file.*
+- [x] 5.6 — Prose sweep across the five stale/boundary mentions (table below).
+- [x] 5.7 — Changelog `docs/changelogs/remove-prefect-orchestration.md` and knowledge-base note
+      `docs/development/knowledge-base/note-prefect-removal.md`. The changelog carries the full
+      surviving-grep table with per-line justification; the note follows the 7-section KB structure
+      and is indexed in `docs/development/knowledge-base/README.md`.
+- [x] Mark `docs/development/plans/completed/persistent-prefect-server-at-gui-launch.md` as
+      superseded — a blockquote header directly under its title, linking here, to the note and to
+      the changelog. File not moved or deleted.
+
+**5.6 prose sweep — what was changed and why.**
+
+| Site | Decision |
+|------|----------|
+| `code/src/utils/pipeline/dependency_popup.py:14` | Reworded. "(e.g. under Prefect parallel execution)" dropped, replaced with a note that the pipeline is sequential today but the guard is kept because the function is reachable from any caller. The `threading.current_thread() is not threading.main_thread()` guard at `:23` is **unchanged** |
+| `.../poc_contact_depth_field.py:32` | "No Prefect flow, no task in any `configs/*_dag.yaml`" → "Not called by any workflow entry point, and no task in any `configs/*_dag.yaml`". Same fact, stated against something that still exists |
+| `code/scripts/__misc/standalone_mkv_to_forearm_mesh.py:4` | "no DAG config, no Prefect flow, no session configs" → "no DAG config, no workflow entry point, no session configs" |
+| `code/src/merging/contact_depth_field_series.py:41` | **Reworded, not dropped.** The purity contract is still true and still load-bearing, but naming a framework the repo no longer has invites a reader to go looking for it. "DAGs or Prefect" → "DAGs or the workflow entry points" — a boundary that names something real |
+| `.../io/contact_depth_field_io.py:84` | Same treatment: "configs, DAGs, Prefect, or the CSV" → "configs, DAGs, the workflow entry points, or the CSV" |
+
+**Verification.** `grep -rn "prefect" . -i --include=*.py --include=*.txt --include=*.yml
+--include=*.yaml --include=*.toml --exclude-dir=.git` returns **12 lines across 6 files**, every one
+of them prose in a string literal, a docstring, a comment, or a gitignored build artifact — the full
+table with per-line justification is in the changelog. **`code/src/` has zero hits.** Suite:
+**328 passed, 7 skipped** (unchanged from Phases 3 and 4).
 
 **Files Modified:**
 - `requirements.txt`, `environment.yml`, `CLAUDE.md`
 - `docs/architecture/gui-dag-launcher-reference.md`
+- `code/src/utils/pipeline/dependency_popup.py` — comment only
+- `code/src/merging/contact_depth_field_series.py` — docstring only
+- `code/src/preprocessing/motion_analysis/tactile_quantification/io/contact_depth_field_io.py` — docstring only
+- `code/scripts/_3_preprocessing/_4_somatosensory_quantification/poc_contact_depth_field.py` — docstring only
+- `code/scripts/__misc/standalone_mkv_to_forearm_mesh.py` — docstring only
+- `docs/development/plans/completed/persistent-prefect-server-at-gui-launch.md` — superseded header
+- `docs/development/knowledge-base/README.md` — index row
 - `docs/changelogs/remove-prefect-orchestration.md` — new
 - `docs/development/knowledge-base/note-prefect-removal.md` — new
 
@@ -504,14 +549,14 @@ merely list Prefect among things a module must not know about — still true, an
 
 ## Documentation Plan
 
-- [ ] `CLAUDE.md` — Architecture Overview currently states workflows are "orchestrated by Prefect"
+- [x] `CLAUDE.md` — Architecture Overview currently states workflows are "orchestrated by Prefect"
       and defined as `@flow` functions. Correct both.
-- [ ] `docs/architecture/gui-dag-launcher-reference.md` — four references.
-- [ ] Changelog `docs/changelogs/remove-prefect-orchestration.md`, including the list of surviving
+- [x] `docs/architecture/gui-dag-launcher-reference.md` — four references.
+- [x] Changelog `docs/changelogs/remove-prefect-orchestration.md`, including the list of surviving
       prose mentions.
-- [ ] Knowledge-base note: the shared-`PREFECT_HOME` collision, the `DEVNULL` swallowing that hid it,
+- [x] Knowledge-base note: the shared-`PREFECT_HOME` collision, the `DEVNULL` swallowing that hid it,
       and why the dependency was dropped rather than pinned.
-- [ ] Mark `docs/development/plans/completed/persistent-prefect-server-at-gui-launch.md` as superseded
+- [x] Mark `docs/development/plans/completed/persistent-prefect-server-at-gui-launch.md` as superseded
       by this plan — it is the design record for what is being deleted.
 
 ---

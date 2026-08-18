@@ -81,7 +81,7 @@ Purity contract
 ---------------
 This module knows about sequences of :class:`ContactDepthFrame`,
 schema-conforming DataFrames, and a path.  It must never learn about sessions,
-configs, DAGs, Prefect, or the CSV.  That is what keeps the storage format
+configs, DAGs, the workflow entry points, or the CSV.  That is what keeps the storage format
 swappable: only the function bodies here change if parquet is ever replaced.
 
 For the same reason :class:`ContactDepthFrame` is imported for typing only:
