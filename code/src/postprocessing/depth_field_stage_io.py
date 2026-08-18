@@ -88,6 +88,9 @@ from preprocessing.motion_analysis.tactile_quantification.io.contact_depth_field
 )
 
 __all__ = [
+    "CONTACT_DEPTH_COLUMN",
+    "DEPTH_FIELD_SUFFIX",
+    "MERGED_CSV_SUFFIX",
     "CONTACT_POINTS_COLUMN",
     "COORDINATE_COLUMNS",
     "DEPTH_COLUMN",
@@ -99,8 +102,12 @@ __all__ = [
     "apply_rigid_transform_to_field",
     "apply_transform_schedule_to_field",
     "apply_vertex_addressing_to_field",
+    "assert_max_depth_agrees_with_csv",
     "assert_row_counts_agree_with_csv",
+    "csv_contact_depth_by_frame",
     "csv_contact_point_counts_by_frame",
+    "depth_field_path_for_csv",
+    "field_max_depth_magnitude_by_frame",
     "field_row_counts_by_frame",
 ]
 
@@ -117,6 +124,26 @@ COORDINATE_COLUMNS: Tuple[str, str, str] = ("x", "y", "z")
 
 #: The measurement that survives every replayable stage untouched.
 DEPTH_COLUMN: str = "signed_depth_mm"
+
+#: The CSV column holding each frame's deepest penetration, in mm and positive.
+#: Written once in preprocessing and never recomputed by a postprocessing
+#: stage, which is what makes it a usable fixed point for the depth check.
+CONTACT_DEPTH_COLUMN: str = "contact_depth"
+
+#: Tolerances for that check.  ``contact_depth`` round-trips through the CSV's
+#: decimal text while the parquet's value does not, so exact equality is not
+#: available; on real blocks the two differ by about one ULP.
+_DEPTH_AGREEMENT_RTOL: float = 1e-9
+_DEPTH_AGREEMENT_ATOL: float = 1e-9
+
+#: The two halves of a block's filename.  The sidecar sits beside its CSV and
+#: shares its stem up to the suffix: ``<block>_merged_data.csv`` alongside
+#: ``<block>_contact_depth_field.parquet``.  Both names are produced by
+#: ``merging_pipeline_neuron_to_kinect_auto._resolve_paths`` and every
+#: postprocessing stage writes its CSV under the input's own name.
+MERGED_CSV_SUFFIX: str = "_merged_data.csv"
+DEPTH_FIELD_SUFFIX: str = "_contact_depth_field.parquet"
+
 
 #: An ordered ``[(start_frame, T_4x4), ...]`` list as
 #: ``csv_spatial_transformer.get_transform_schedule`` returns it.  Entry *i*
@@ -916,3 +943,208 @@ def assert_row_counts_agree_with_csv(table: pd.DataFrame, csv_path: Path) -> Non
         "means one of them lost points — most likely a malformed "
         "contact_points cell, which parse_contact_points drops silently."
     )
+
+
+def csv_contact_depth_by_frame(csv_path: Path) -> Dict[int, float]:
+    """Return ``frame_index -> contact_depth`` for a stage CSV's contact rows.
+
+    ``contact_depth`` is the scalar preprocessing recorded as the deepest
+    penetration of a frame's contact patch.  No postprocessing stage recomputes
+    it, so it is a fixed reference the depth field can be checked against at
+    every later stage.
+
+    Read with ``float_precision="round_trip"``: the column is written at full
+    repr, and the default parser would perturb the last bits of every value,
+    turning an exact agreement into a near one for no reason.
+
+    **Only contact-bearing rows count.**  ``contact_depth`` is ``0.0``, not
+    blank, on every row where nothing touched the arm, and the depth field
+    holds no rows for those frames at all.  Membership is decided by the same
+    ``contact_points`` cell the row-count check parses, so the two checks agree
+    on which frames exist rather than each having its own idea.
+
+    Args:
+        csv_path: A CSV written by a postprocessing stage.
+
+    Returns:
+        One entry per contact-bearing row with a finite ``contact_depth``.
+
+    Raises:
+        FileNotFoundError: If *csv_path* does not exist.
+        ValueError: If any of the three columns is absent, if such a row's
+            ``frame_index`` is not a whole number, or if two of them share one
+            ``frame_index``.
+    """
+    csv_path = Path(csv_path)
+    if not csv_path.exists():
+        raise FileNotFoundError(f"Stage CSV not found: {csv_path}")
+
+    try:
+        frame = pd.read_csv(
+            csv_path,
+            usecols=[FRAME_INDEX_COLUMN, CONTACT_POINTS_COLUMN, CONTACT_DEPTH_COLUMN],
+            float_precision="round_trip",
+        )
+    except ValueError as error:
+        raise ValueError(
+            f"{csv_path} does not expose all of {FRAME_INDEX_COLUMN!r}, "
+            f"{CONTACT_POINTS_COLUMN!r} and {CONTACT_DEPTH_COLUMN!r}; the "
+            f"per-frame contact depth cannot be taken from it ({error})."
+        ) from error
+
+    depths: Dict[int, float] = {}
+    for row_position, (raw_frame, cell, raw_depth) in enumerate(
+        zip(
+            frame[FRAME_INDEX_COLUMN],
+            frame[CONTACT_POINTS_COLUMN],
+            frame[CONTACT_DEPTH_COLUMN],
+        )
+    ):
+        if not parse_contact_points(cell):
+            continue
+
+        depth = float(raw_depth)
+        if not np.isfinite(depth):
+            continue
+
+        as_float = float(raw_frame)
+        if not np.isfinite(as_float) or as_float != int(as_float):
+            raise ValueError(
+                f"Row {row_position} of {csv_path} carries a "
+                f"{CONTACT_DEPTH_COLUMN} but its {FRAME_INDEX_COLUMN} is "
+                f"{raw_frame!r}, which is not a whole number. Contact rows must "
+                "be anchored to a Kinect frame."
+            )
+        key = int(as_float)
+        if key in depths:
+            raise ValueError(
+                f"{csv_path} has two rows with {FRAME_INDEX_COLUMN}={key} and a "
+                f"{CONTACT_DEPTH_COLUMN} (second at row {row_position}); the "
+                "per-frame depth would be ambiguous."
+            )
+        depths[key] = depth
+
+    return depths
+
+
+def field_max_depth_magnitude_by_frame(table: pd.DataFrame) -> Dict[int, float]:
+    """Return ``frame_index -> max(|signed_depth_mm|)`` for a depth field.
+
+    Args:
+        table: A schema-conforming depth field.
+
+    Returns:
+        One entry per frame that carries rows.
+
+    Raises:
+        ValueError: If *table* is not schema-conforming.
+    """
+    _validate_field_table(table, what="depth field table")
+    frames = _frame_index_array(table)
+    magnitudes = np.abs(table[DEPTH_COLUMN].to_numpy(dtype=np.float64))
+
+    unique = np.unique(frames)
+    maxima = np.zeros(len(unique), dtype=np.float64)
+    np.maximum.at(maxima, np.searchsorted(unique, frames), magnitudes)
+    return {int(frame): float(value) for frame, value in zip(unique, maxima)}
+
+
+def assert_max_depth_agrees_with_csv(
+    table: pd.DataFrame,
+    csv_path: Path,
+    *,
+    rtol: float = _DEPTH_AGREEMENT_RTOL,
+    atol: float = _DEPTH_AGREEMENT_ATOL,
+) -> None:
+    """Raise unless each frame's deepest measured penetration survived a stage.
+
+    ``contact_depth`` was computed once, in preprocessing, from the very rows
+    this field holds, and no postprocessing stage recomputes it.  So for every
+    frame the two artifacts must still agree that the patch reached the same
+    depth.  The check earns its keep at the deduplication stage in particular:
+    dedup is the one stage that drops rows, and the max-magnitude inheritance
+    rule exists precisely so that dropping the deepest row cannot quietly reduce
+    a frame's reported depth.  If this raises there, the rule or the mapping is
+    wrong — not the tolerance.
+
+    Frames present in only one artifact are reported too: the field holding a
+    frame the CSV has no depth for (or the reverse) is the same
+    desynchronisation the row-count check exists to catch, seen from the other
+    side.
+
+    Args:
+        table: The depth field the stage produced.
+        csv_path: The CSV **the same stage** produced.
+        rtol: Relative tolerance.  Not zero, because ``contact_depth`` makes a
+            round trip through the CSV's decimal text while the parquet's value
+            does not; observed disagreement on real blocks is ~1 ULP.
+        atol: Absolute tolerance, for frames whose depth is near zero.
+
+    Returns:
+        ``None``.  Agreement is the silent outcome.
+
+    Raises:
+        FileNotFoundError: If *csv_path* does not exist.
+        ValueError: If *table* is not schema-conforming, if the CSV cannot be
+            read, or if any frame disagrees — naming the lowest-numbered
+            offender and both values.
+    """
+    field_maxima = field_max_depth_magnitude_by_frame(table)
+    csv_depths = csv_contact_depth_by_frame(csv_path)
+
+    offenders: List[int] = []
+    for frame in sorted(set(field_maxima) | set(csv_depths)):
+        if frame not in field_maxima or frame not in csv_depths:
+            offenders.append(frame)
+            continue
+        if not np.isclose(
+            field_maxima[frame], csv_depths[frame], rtol=rtol, atol=atol
+        ):
+            offenders.append(frame)
+
+    if not offenders:
+        return
+
+    first = offenders[0]
+    raise ValueError(
+        f"Depth disagreement at frame {first}: the depth field's "
+        f"max(|{DEPTH_COLUMN}|) is {field_maxima.get(first)!r} but {csv_path} "
+        f"records {CONTACT_DEPTH_COLUMN}={csv_depths.get(first)!r}. "
+        f"{len(offenders)} frame(s) disagree in total; this is the lowest. "
+        "contact_depth is measured once in preprocessing and never recomputed, "
+        "so the two must still describe the same deepest penetration — a stage "
+        "that drops rows must let the survivor inherit its group's deepest value."
+    )
+
+
+def depth_field_path_for_csv(csv_path: Path) -> Path:
+    """Return the contact-depth-field sidecar that belongs to *csv_path*.
+
+    The sidecar always sits in the same directory as the CSV it describes and
+    differs only in suffix.  Every postprocessing stage writes its CSV under the
+    input's own name, so this derivation holds at every stage.
+
+    It lives in this leaf rather than in any one stage script because several
+    stages need it and stage scripts must not import one another.
+
+    Args:
+        csv_path: A block's ``*_merged_data.csv``.
+
+    Returns:
+        The sibling ``*_contact_depth_field.parquet`` path.  Existence is not
+        checked here.
+
+    Raises:
+        ValueError: If *csv_path* does not end in ``_merged_data.csv``.  The
+            name is the join between the two artifacts; guessing at an
+            unrecognised one would pair a CSV with the wrong sidecar.
+    """
+    csv_path = Path(csv_path)
+    if not csv_path.name.endswith(MERGED_CSV_SUFFIX):
+        raise ValueError(
+            f"{csv_path.name!r} does not end in {MERGED_CSV_SUFFIX!r}, so the "
+            "contact depth field sidecar that belongs to it cannot be named. "
+            "The two artifacts are paired by filename stem; refusing to guess."
+        )
+    stem = csv_path.name[: -len(MERGED_CSV_SUFFIX)]
+    return csv_path.with_name(f"{stem}{DEPTH_FIELD_SUFFIX}")

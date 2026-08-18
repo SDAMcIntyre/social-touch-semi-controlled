@@ -40,9 +40,11 @@ from _5_postprocessing import (
     fetch_forearm_of_reference,
     apply_icp_registration,
     calibrate_pca_xyz,
+    depth_field_path_for_csv,
     project_contacts_onto_forearm,
     center_on_receptive_field,
     deduplicate_forearm_ply,
+    deduplicate_contact_depth_field,
     deduplicate_contact_points_csv,
     forearm_dedup_metadata_path,
     monitor_deduplicate_xy_interactive,
@@ -109,7 +111,7 @@ def deduplicate_xy_flow(
     *,
     monitor: bool,
     epsilon: float,
-) -> Tuple[List[Path], Optional[Path]]:
+) -> Tuple[List[Path], Optional[Path], List[Path]]:
     """Deduplicate the unified forearm PLY and contact points in registered CSVs.
 
     ``monitor`` and ``epsilon`` are deliberately required keyword arguments with
@@ -118,6 +120,17 @@ def deduplicate_xy_flow(
     dedup radius — and with it the whole vertex numbering — change silently when
     the DAG config key is dropped. Both are supplied by the
     ``deduplicate_xy.options`` block of the postprocess DAG config.
+
+    Each block's contact depth field sidecar is reduced here too, and it must be
+    reduced **in this function**: under ``monitor: true`` the effective epsilon
+    is chosen interactively below and exists in no config file, so the only way
+    to guarantee the sidecar and the CSV were collapsed by the same clustering
+    is to hand the sidecar the mapping the CSV run just returned.
+
+    Returns:
+        ``(deduped_csvs, deduped_forearm_ply, deduped_depth_fields)``. The
+        stage's ``outputs`` list binds positionally, so the first two slots keep
+        their existing meaning and Phase 8 binds the third.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
     forearm_output_dir.mkdir(parents=True, exist_ok=True)
@@ -135,18 +148,41 @@ def deduplicate_xy_flow(
             f"Check the postprocess DAG config."
         )
 
+    # The sidecar sits beside its CSV; every stage writes its CSV under the
+    # input's own name, so the registered parquet is named from the registered
+    # CSV. Absence is an error, not a skip: the depth field is a hard input of
+    # postprocessing and a missing block would leave a gap nothing notices.
+    input_parquets = [depth_field_path_for_csv(f) for f in input_files]
+    missing_parquets = [p for p in input_parquets if not p.exists()]
+    if missing_parquets:
+        raise FileNotFoundError(
+            "Contact depth field sidecar(s) missing: "
+            f"{[str(p) for p in missing_parquets]}. The per-vertex depth field "
+            "is a required input of the deduplicate_xy stage — it is written "
+            "beside the registered CSV by apply_icp_registration. Re-run that "
+            "stage for the affected block(s) rather than deduplicating without it."
+        )
+
     expected_output_csvs = [output_dir / f.name for f in input_files]
+    expected_output_parquets = [output_dir / p.name for p in input_parquets]
     expected_forearm_out = forearm_output_dir / forearm_ply_path.name
     expected_metadata_out = forearm_dedup_metadata_path(expected_forearm_out)
-    all_outputs = expected_output_csvs + [expected_forearm_out, expected_metadata_out]
+    all_outputs = (
+        expected_output_csvs
+        + expected_output_parquets
+        + [expected_forearm_out, expected_metadata_out]
+    )
 
+    # Idempotency stays at this stage's own boundary — the session — with both
+    # artifacts on both sides, so deleting either regenerates the whole session
+    # and the two can never be produced out of step.
     if not should_process_task(
-        input_paths=list(input_files) + [forearm_ply_path],
+        input_paths=list(input_files) + input_parquets + [forearm_ply_path],
         output_paths=all_outputs,
         force=force_processing,
     ):
         logging.info("Deduplication up-to-date. Skipping.")
-        return expected_output_csvs, expected_forearm_out
+        return expected_output_csvs, expected_forearm_out, expected_output_parquets
 
     clean_task_outputs(all_outputs)
 
@@ -194,10 +230,14 @@ def deduplicate_xy_flow(
         metadata_out.name,
     )
 
-    # Deduplicate contact points in each registered CSV
+    # Deduplicate contact points in each registered CSV, and its depth field by
+    # the very mapping that CSV run produced — never by a re-run of DBSCAN
+    # against the sidecar's own float32 coordinates.
     deduped_csv_paths: List[Path] = []
-    for input_csv in input_files:
+    deduped_parquet_paths: List[Path] = []
+    for input_csv, input_parquet in zip(input_files, input_parquets):
         csv_out = output_dir / input_csv.name
+        parquet_out = output_dir / input_parquet.name
         stats = deduplicate_contact_points_csv(input_csv, csv_out, epsilon=epsilon)
         logging.info(
             "CSV dedup (%s): %d rows, %d → %d contact points",
@@ -208,7 +248,13 @@ def deduplicate_xy_flow(
         )
         deduped_csv_paths.append(csv_out)
 
-    return deduped_csv_paths, forearm_out
+        deduplicate_contact_depth_field(
+            input_parquet, parquet_out, csv_out, stats["frame_mappings"]
+        )
+        logging.info("Depth field dedup (%s) → %s", input_csv.stem, parquet_out.name)
+        deduped_parquet_paths.append(parquet_out)
+
+    return deduped_csv_paths, forearm_out, deduped_parquet_paths
 
 
 def project_contacts_onto_registered_forearm_flow(
@@ -217,7 +263,7 @@ def project_contacts_onto_registered_forearm_flow(
     output_dir: Path,
     projection_stats_path: Path,
     force_processing: bool = False,
-) -> List[Path]:
+) -> Tuple[List[Path], List[Path]]:
     """Project contact points onto the deduplicated forearm surface.
 
     Args:
@@ -228,11 +274,13 @@ def project_contacts_onto_registered_forearm_flow(
         force_processing: Re-run even when outputs are already up-to-date.
 
     Returns:
-        List of output CSV paths in *output_dir*.
+        ``(projected_csvs, projected_depth_fields)``. The stage's ``outputs``
+        list binds positionally, so ``projected_files`` keeps pointing at the
+        CSVs until Phase 8 binds the second slot.
     """
     print(f"[{output_dir.name}] Projecting {len(input_files)} blocks onto forearm surface...")
 
-    output_files = project_contacts_onto_forearm(
+    output_files, output_parquets = project_contacts_onto_forearm(
         input_files=input_files,
         forearm_ply_path=forearm_ply_path,
         output_dir=output_dir,
@@ -244,7 +292,7 @@ def project_contacts_onto_registered_forearm_flow(
             f"project_contacts_onto_forearm returned no outputs — "
             f"expected {len(input_files)} output CSVs."
         )
-    return output_files
+    return output_files, output_parquets
 
 
 def center_on_receptive_field_flow(

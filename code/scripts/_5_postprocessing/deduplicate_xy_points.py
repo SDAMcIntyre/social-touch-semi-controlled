@@ -1,6 +1,26 @@
-import json
+"""Postprocessing step 2: deduplicate (x, y) duplicates in the forearm PLY and
+in every registered block's contact points.
+
+The per-vertex contact depth field
+----------------------------------
+Deduplication is not a coordinate transform — it *removes rows*.  The sidecar
+must therefore lose exactly the rows the CSV lost, and it must lose them by the
+CSV's **own** clustering: re-running DBSCAN against the sidecar's float32
+coordinates would collapse a different set of points wherever two candidates sit
+either side of the epsilon boundary, and would do so silently.
+:func:`deduplicate_contact_points_csv` surfaces that clustering as
+``frame_mappings``; :func:`deduplicate_contact_depth_field` is the only
+consumer, and it must be handed the mapping from the *same* call, so the epsilon
+is the one actually applied even when the operator overrode it interactively.
+
+A survivor inherits the deepest penetration of the group that collapsed into it.
+That is what keeps the pipeline's strongest cross-artifact invariant true: per
+frame, ``max(|signed_depth_mm|)`` still equals the CSV's ``contact_depth``, a
+column computed before deduplication and never recomputed after it.
+"""
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Dict, Mapping
 
 import numpy as np
 import open3d as o3d
@@ -11,29 +31,36 @@ from preprocessing.forearm_extraction.registration.csv_spatial_transformer impor
     parse_contact_points,
     serialize_contact_points,
 )
+from preprocessing.motion_analysis.tactile_quantification.io.contact_depth_field_io import (
+    read_contact_depth_field,
+    write_contact_depth_field_table,
+)
+from postprocessing.depth_field_stage_io import (
+    DEPTH_COLUMN,
+    DedupMappingLike,
+    apply_dedup_mapping_to_field,
+    assert_max_depth_agrees_with_csv,
+    assert_row_counts_agree_with_csv,
+)
 
 # --- Deduplicated-forearm provenance sidecar -------------------------------
 #
-# A vertex index into the deduplicated forearm PLY is only meaningful relative
-# to the epsilon that produced that PLY: change epsilon and every vertex is
-# renumbered. The DAG config is not part of the mtime-based staleness check
-# (utils/should_process_task.py), and under `monitor: true` the epsilon is
-# chosen interactively and never reaches the config at all. The sidecar is the
-# only place the *effective* epsilon and the resulting vertex count survive, so
-# a downstream consumer can prove which PLY a vertex index belongs to.
-
-FOREARM_DEDUP_METADATA_SUFFIX = "_dedup_metadata.json"
-FOREARM_DEDUP_METADATA_SCHEMA_VERSION = "1"
-
-#: Epsilon came from the DAG config's ``deduplicate_xy.epsilon`` option.
-EPSILON_SOURCE_DAG_CONFIG = "dag_config"
-#: Epsilon was chosen by the operator in the interactive monitor viewer.
-EPSILON_SOURCE_INTERACTIVE_MONITOR = "interactive_monitor"
-
-EPSILON_SOURCES = frozenset({
+# The format lives in ``postprocessing.forearm_dedup_metadata`` because two
+# stage scripts need it and stage scripts must not import one another: this one
+# writes it, and ``project_contacts_onto_forearm`` reads it to stamp the
+# reference-PLY provenance onto the depth field it assigns ``vertex_id`` to.
+# Re-exported here so existing importers keep working.
+from postprocessing.forearm_dedup_metadata import (  # noqa: E402
     EPSILON_SOURCE_DAG_CONFIG,
     EPSILON_SOURCE_INTERACTIVE_MONITOR,
-})
+    EPSILON_SOURCES,
+    FOREARM_DEDUP_METADATA_SCHEMA_VERSION,
+    FOREARM_DEDUP_METADATA_SUFFIX,
+    ForearmDedupMetadata,
+    forearm_dedup_metadata_path,
+    read_forearm_dedup_metadata,
+    write_forearm_dedup_metadata,
+)
 
 #: CSV column that identifies the Kinect frame a row belongs to. Contact data is
 #: keyed by this value, never by row position: the merged CSV is upsampled to the
@@ -348,98 +375,6 @@ def monitor_deduplicate_xy_interactive(
     return initial_epsilon
 
 
-def forearm_dedup_metadata_path(deduped_ply: Path) -> Path:
-    """Return the path of the provenance sidecar for a deduplicated forearm PLY.
-
-    Producers and consumers must both go through this helper so the sidecar is
-    always found next to the PLY it describes.
-
-    Args:
-        deduped_ply: Path of the deduplicated forearm PLY.
-
-    Returns:
-        Path of the JSON sidecar (same directory, same stem).
-    """
-    return deduped_ply.with_name(deduped_ply.stem + FOREARM_DEDUP_METADATA_SUFFIX)
-
-
-def write_forearm_dedup_metadata(
-    deduped_ply: Path,
-    *,
-    source_ply: Path,
-    epsilon: float,
-    epsilon_source: str,
-    stats: dict,
-) -> Path:
-    """Record the effective dedup epsilon and vertex counts beside the deduped PLY.
-
-    Written as a deterministic JSON sidecar (sorted keys, no timestamps) so an
-    unchanged re-run produces a byte-identical file.
-
-    Args:
-        deduped_ply: Path of the deduplicated forearm PLY this describes.
-        source_ply: Path of the PLY that was deduplicated.
-        epsilon: The epsilon actually applied — not the configured default.
-        epsilon_source: One of EPSILON_SOURCES, saying where that value came from.
-        stats: The dict returned by deduplicate_forearm_ply.
-
-    Returns:
-        Path of the written sidecar.
-
-    Raises:
-        ValueError: If epsilon is not a positive finite value, epsilon_source is
-            unknown, stats is missing a required key, or the vertex counts do
-            not satisfy n_deduped + n_removed == n_original.
-    """
-    epsilon = float(epsilon)
-    if not np.isfinite(epsilon) or epsilon <= 0.0:
-        raise ValueError(
-            f"dedup epsilon must be a positive finite value, got {epsilon!r} "
-            f"(writing metadata for {deduped_ply})"
-        )
-
-    if epsilon_source not in EPSILON_SOURCES:
-        raise ValueError(
-            f"Unknown epsilon_source {epsilon_source!r}; expected one of "
-            f"{sorted(EPSILON_SOURCES)}"
-        )
-
-    required = ("n_original", "n_deduped", "n_removed")
-    missing = [key for key in required if key not in stats]
-    if missing:
-        raise ValueError(
-            f"dedup stats is missing required key(s) {missing} "
-            f"(writing metadata for {deduped_ply})"
-        )
-
-    n_original = int(stats["n_original"])
-    n_deduped = int(stats["n_deduped"])
-    n_removed = int(stats["n_removed"])
-    if n_deduped + n_removed != n_original:
-        raise ValueError(
-            f"Inconsistent dedup vertex counts: {n_deduped} + {n_removed} "
-            f"!= {n_original} (writing metadata for {deduped_ply})"
-        )
-
-    metadata = {
-        "schema_version": FOREARM_DEDUP_METADATA_SCHEMA_VERSION,
-        "source_ply": source_ply.name,
-        "deduplicated_ply": deduped_ply.name,
-        "dedup_epsilon": epsilon,
-        "epsilon_source": epsilon_source,
-        "n_vertices_original": n_original,
-        "n_vertices_deduped": n_deduped,
-        "n_vertices_removed": n_removed,
-    }
-
-    metadata_path = forearm_dedup_metadata_path(deduped_ply)
-    metadata_path.parent.mkdir(parents=True, exist_ok=True)
-    metadata_path.write_text(
-        json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
-    return metadata_path
-
-
 def deduplicate_forearm_ply(input_ply: Path, output_ply: Path, *, epsilon: float) -> dict:
     """Deduplicate a forearm PLY point cloud by (x, y) position.
 
@@ -614,3 +549,109 @@ def deduplicate_contact_points_csv(
         "total_points_after": total_points_after,
         "frame_mappings": frame_mappings,
     }
+
+
+def _assert_depth_only_reduced(
+    original: pd.DataFrame, deduped: pd.DataFrame, *, parquet_name: str
+) -> None:
+    """Raise unless every surviving depth is a value that was already in the frame.
+
+    Deduplication is the one stage allowed to change ``signed_depth_mm``, and it
+    is allowed to change it in exactly one way: a survivor may inherit the
+    deepest penetration of the group that collapsed into it.  Nothing is
+    averaged, interpolated or re-measured, so every value written out must be a
+    value that was read in — asserted per frame, because a value borrowed from
+    another frame would be just as wrong as an invented one.
+
+    Args:
+        original: The field as read, before deduplication.
+        deduped: The field after :func:`apply_dedup_mapping_to_field`.
+        parquet_name: Name used in the error message.
+
+    Raises:
+        ValueError: If the dtype changed, or if any surviving depth is not one
+            of the depths its own frame held before deduplication.
+    """
+    before_dtype = original[DEPTH_COLUMN].to_numpy().dtype
+    after_dtype = deduped[DEPTH_COLUMN].to_numpy().dtype
+    if before_dtype != after_dtype:
+        raise ValueError(
+            f"{parquet_name}: deduplication changed the {DEPTH_COLUMN!r} dtype "
+            f"({before_dtype} -> {after_dtype}). A depth is a measurement that "
+            "is re-attributed, never recomputed."
+        )
+
+    for frame, group in deduped.groupby(FRAME_INDEX_COLUMN, sort=False):
+        source = original.loc[
+            original[FRAME_INDEX_COLUMN] == frame, DEPTH_COLUMN
+        ].to_numpy()
+        survivors = group[DEPTH_COLUMN].to_numpy()
+        if not np.isin(survivors, source).all():
+            raise ValueError(
+                f"{parquet_name}: frame {int(frame)} carries a "
+                f"{DEPTH_COLUMN!r} value that was not measured at that frame. "
+                "Deduplication may only re-attribute an existing measurement to "
+                "the vertex that now stands for its group."
+            )
+
+
+def deduplicate_contact_depth_field(
+    input_parquet: Path,
+    output_parquet: Path,
+    output_csv: Path,
+    frame_mappings: Mapping[int, DedupMappingLike],
+) -> Path:
+    """Reduce a contact depth field by the mapping its CSV was reduced by.
+
+    The mapping **must** come from the :func:`deduplicate_contact_points_csv`
+    call that produced *output_csv*.  That is the only way the epsilon applied
+    to the sidecar is guaranteed to be the epsilon actually applied to the CSV —
+    which under ``monitor: true`` is chosen interactively and appears in no
+    config file.  DBSCAN is never re-run here.
+
+    Deduplication removes rows; it does not move them.  ``coordinate_space`` is
+    therefore carried through verbatim along with the rest of the metadata: the
+    surviving points are exactly where they were.
+
+    Args:
+        input_parquet: The block's depth field as the previous stage left it.
+        output_parquet: Destination in ``blocks_deduped/``.
+        output_csv: The deduplicated CSV **this stage just wrote** for the same
+            block — the only CSV the cross-checks are meaningful against.
+        frame_mappings: ``frame_index -> DedupMapping`` from the same CSV run.
+
+    Returns:
+        *output_parquet*.
+
+    Raises:
+        FileNotFoundError: If *input_parquet* does not exist.
+        ValueError: If the mapping does not cover exactly the frames the field
+            holds, if a frame's mapping disagrees with its row count, if a
+            surviving depth was not one the frame already held, if the written
+            field and CSV disagree about a frame's contact-point count, or if
+            per-frame ``max(|signed_depth_mm|)`` no longer equals the CSV's
+            ``contact_depth``.
+    """
+    input_parquet = Path(input_parquet)
+    if not input_parquet.exists():
+        raise FileNotFoundError(
+            f"Contact depth field sidecar missing: {input_parquet}. The "
+            "per-vertex depth field is a required input of postprocessing; "
+            "re-run the previous stage for this block rather than "
+            "deduplicating without it."
+        )
+
+    table, source_metadata = read_contact_depth_field(input_parquet)
+    reduced = apply_dedup_mapping_to_field(table, frame_mappings)
+    _assert_depth_only_reduced(table, reduced, parquet_name=input_parquet.name)
+
+    # Verbatim: nothing moved, so nothing about the declared provenance changed.
+    metadata: Dict[str, str] = dict(source_metadata)
+
+    output_parquet = Path(output_parquet)
+    output_parquet.parent.mkdir(parents=True, exist_ok=True)
+    write_contact_depth_field_table(reduced, output_parquet, metadata=metadata)
+
+    assert_row_counts_agree_with_csv(reduced, output_csv)
+    assert_max_depth_agrees_with_csv(reduced, output_csv)
+    return output_parquet

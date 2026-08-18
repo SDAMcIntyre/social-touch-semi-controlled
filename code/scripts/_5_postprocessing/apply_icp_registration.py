@@ -55,8 +55,11 @@ from preprocessing.motion_analysis.tactile_quantification.io.contact_depth_field
 )
 from postprocessing.depth_field_stage_io import (
     DEPTH_COLUMN,
+    DEPTH_FIELD_SUFFIX,
+    MERGED_CSV_SUFFIX,
     apply_transform_schedule_to_field,
     assert_row_counts_agree_with_csv,
+    depth_field_path_for_csv,
 )
 from primary_processing import KinectConfig
 
@@ -69,42 +72,12 @@ logger = logging.getLogger(__name__)
 #: declared frame nothing recognises.
 COORDINATE_SPACE_AFTER_ICP: str = "icp_registered"
 
-#: The two halves of a block's filename.  The sidecar sits beside its CSV and
-#: shares its stem up to the suffix: ``<block>_merged_data.csv`` alongside
-#: ``<block>_contact_depth_field.parquet``.  Both names are produced by
-#: ``merging_pipeline_neuron_to_kinect_auto._resolve_paths``.
-_MERGED_CSV_SUFFIX: str = "_merged_data.csv"
-_DEPTH_FIELD_SUFFIX: str = "_contact_depth_field.parquet"
-
-
-def depth_field_path_for_csv(csv_path: Path) -> Path:
-    """Return the contact-depth-field sidecar that belongs to *csv_path*.
-
-    The sidecar always sits in the same directory as the CSV it describes and
-    differs only in suffix.  Every postprocessing stage writes its CSV under the
-    input's own name, so this derivation holds at every stage, not just this one.
-
-    Args:
-        csv_path: A block's ``*_merged_data.csv``.
-
-    Returns:
-        The sibling ``*_contact_depth_field.parquet`` path.  Existence is not
-        checked here.
-
-    Raises:
-        ValueError: If *csv_path* does not end in ``_merged_data.csv``.  The
-            name is the join between the two artifacts; guessing at an
-            unrecognised one would pair a CSV with the wrong sidecar.
-    """
-    csv_path = Path(csv_path)
-    if not csv_path.name.endswith(_MERGED_CSV_SUFFIX):
-        raise ValueError(
-            f"{csv_path.name!r} does not end in {_MERGED_CSV_SUFFIX!r}, so the "
-            "contact depth field sidecar that belongs to it cannot be named. "
-            "The two artifacts are paired by filename stem; refusing to guess."
-        )
-    stem = csv_path.name[: -len(_MERGED_CSV_SUFFIX)]
-    return csv_path.with_name(f"{stem}{_DEPTH_FIELD_SUFFIX}")
+#: Re-exported from ``postprocessing.depth_field_stage_io``.  The CSV/sidecar
+#: filename pairing is needed by more than one stage, and stage scripts must
+#: not import one another, so the rule lives in the leaf and every stage
+#: reaches it from there.
+_MERGED_CSV_SUFFIX: str = MERGED_CSV_SUFFIX
+_DEPTH_FIELD_SUFFIX: str = DEPTH_FIELD_SUFFIX
 
 
 def _resolve_input_parquets(

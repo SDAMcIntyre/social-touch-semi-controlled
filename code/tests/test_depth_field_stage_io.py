@@ -23,6 +23,7 @@ import pandas as pd
 import pytest
 
 from postprocessing.depth_field_stage_io import (
+    CONTACT_DEPTH_COLUMN,
     CONTACT_POINTS_COLUMN,
     DEPTH_COLUMN,
     FRAME_INDEX_COLUMN,
@@ -31,8 +32,12 @@ from postprocessing.depth_field_stage_io import (
     apply_rigid_transform_to_field,
     apply_transform_schedule_to_field,
     apply_vertex_addressing_to_field,
+    assert_max_depth_agrees_with_csv,
     assert_row_counts_agree_with_csv,
+    csv_contact_depth_by_frame,
     csv_contact_point_counts_by_frame,
+    depth_field_path_for_csv,
+    field_max_depth_magnitude_by_frame,
     field_row_counts_by_frame,
 )
 from postprocessing.xyz_reference_from_gestures.calibration_pca_engine import (
@@ -1081,3 +1086,191 @@ def test_the_module_imports_without_open3d_or_pyqt5():
     )
     assert completed.returncode == 0, completed.stderr
     assert "clean" in completed.stdout
+
+
+# ---------------------------------------------------------------------------
+# The depth agreement check (task 6.2) and the artifact pairing rule
+# ---------------------------------------------------------------------------
+
+
+def write_stage_csv_with_depth(path: Path, points_by_frame, depths_by_frame,
+                               *, extra_rows=0) -> Path:
+    """Write a stage CSV carrying ``contact_depth`` as well as the points.
+
+    ``extra_rows`` appends non-contact rows with ``contact_depth = 0.0`` — which
+    is what the real merged CSV holds on every frame nothing touched, and which
+    the check must ignore rather than treat as a frame with zero depth.
+    """
+    records = []
+    for frame in sorted(points_by_frame):
+        points = [tuple(float(v) for v in pt) for pt in points_by_frame[frame]]
+        records.append(
+            {
+                FRAME_INDEX_COLUMN: float(frame),
+                CONTACT_POINTS_COLUMN: serialize_contact_points(points),
+                CONTACT_DEPTH_COLUMN: float(depths_by_frame[frame]),
+            }
+        )
+    for index in range(extra_rows):
+        records.append(
+            {
+                FRAME_INDEX_COLUMN: float(9000 + index),
+                CONTACT_POINTS_COLUMN: "[]",
+                CONTACT_DEPTH_COLUMN: 0.0,
+            }
+        )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame.from_records(
+        records,
+        columns=[FRAME_INDEX_COLUMN, CONTACT_POINTS_COLUMN, CONTACT_DEPTH_COLUMN],
+    ).to_csv(path, index=False)
+    return path
+
+
+class TestFieldMaxDepthMagnitude:
+    def test_takes_the_largest_absolute_value_per_frame(self):
+        table = make_field(
+            frames=[3, 3, 3, 4],
+            xyz=np.zeros((4, 3)),
+            depths=[-1.5, -0.25, 0.75, -2.0],
+        )
+        assert field_max_depth_magnitude_by_frame(table) == {3: 1.5, 4: 2.0}
+
+    def test_a_positive_value_counts_when_it_is_the_largest(self):
+        table = make_field(
+            frames=[7, 7], xyz=np.zeros((2, 3)), depths=[0.5, -0.25]
+        )
+        assert field_max_depth_magnitude_by_frame(table) == {7: 0.5}
+
+    def test_rejects_a_table_that_is_not_the_schema(self):
+        with pytest.raises(ValueError):
+            field_max_depth_magnitude_by_frame(pd.DataFrame({"a": [1]}))
+
+
+class TestCsvContactDepth:
+    def test_reads_only_contact_bearing_rows(self, tmp_path):
+        csv = write_stage_csv_with_depth(
+            tmp_path / "s.csv",
+            {10: [(0.0, 0.0, 0.0)], 11: [(1.0, 1.0, 1.0)]},
+            {10: 2.5, 11: 4.0},
+            extra_rows=3,
+        )
+        assert csv_contact_depth_by_frame(csv) == {10: 2.5, 11: 4.0}
+
+    def test_a_missing_column_raises_naming_all_three(self, tmp_path):
+        csv = write_stage_csv(tmp_path / "s.csv", {10: [(0.0, 0.0, 0.0)]})
+        with pytest.raises(ValueError, match=CONTACT_DEPTH_COLUMN):
+            csv_contact_depth_by_frame(csv)
+
+    def test_a_duplicated_frame_is_ambiguous(self, tmp_path):
+        csv = tmp_path / "dup.csv"
+        cell = serialize_contact_points([(0.0, 0.0, 0.0)])
+        pd.DataFrame(
+            {
+                FRAME_INDEX_COLUMN: [5.0, 5.0],
+                CONTACT_POINTS_COLUMN: [cell, cell],
+                CONTACT_DEPTH_COLUMN: [1.0, 2.0],
+            }
+        ).to_csv(csv, index=False)
+        with pytest.raises(ValueError, match="ambiguous"):
+            csv_contact_depth_by_frame(csv)
+
+    def test_a_fractional_frame_index_on_a_contact_row_raises(self, tmp_path):
+        csv = tmp_path / "frac.csv"
+        pd.DataFrame(
+            {
+                FRAME_INDEX_COLUMN: [5.5],
+                CONTACT_POINTS_COLUMN: [serialize_contact_points([(0.0, 0.0, 0.0)])],
+                CONTACT_DEPTH_COLUMN: [1.0],
+            }
+        ).to_csv(csv, index=False)
+        with pytest.raises(ValueError, match="whole number"):
+            csv_contact_depth_by_frame(csv)
+
+    def test_a_missing_file_raises(self, tmp_path):
+        with pytest.raises(FileNotFoundError):
+            csv_contact_depth_by_frame(tmp_path / "nope.csv")
+
+
+class TestMaxDepthAgreement:
+    def _pair(self, tmp_path, depths, csv_depths):
+        table = make_field(
+            frames=[10, 10, 11],
+            xyz=np.zeros((3, 3)),
+            depths=depths,
+        )
+        csv = write_stage_csv_with_depth(
+            tmp_path / "s.csv",
+            {10: [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0)], 11: [(2.0, 0.0, 0.0)]},
+            csv_depths,
+        )
+        return table, csv
+
+    def test_agreement_is_silent(self, tmp_path):
+        table, csv = self._pair(tmp_path, [-1.0, -3.0, -2.0], {10: 3.0, 11: 2.0})
+        assert assert_max_depth_agrees_with_csv(table, csv) is None
+
+    def test_a_reduced_depth_raises_naming_the_frame(self, tmp_path):
+        table, csv = self._pair(tmp_path, [-1.0, -1.5, -2.0], {10: 3.0, 11: 2.0})
+        with pytest.raises(ValueError, match="frame 10"):
+            assert_max_depth_agrees_with_csv(table, csv)
+
+    def test_one_ulp_of_csv_round_trip_is_tolerated(self, tmp_path):
+        table, csv = self._pair(
+            tmp_path, [-1.0, -3.0, -2.0], {10: np.nextafter(3.0, 4.0), 11: 2.0}
+        )
+        assert assert_max_depth_agrees_with_csv(table, csv) is None
+
+    def test_a_frame_only_the_field_has_raises(self, tmp_path):
+        table = make_field(frames=[10, 12], xyz=np.zeros((2, 3)), depths=[-3.0, -1.0])
+        csv = write_stage_csv_with_depth(
+            tmp_path / "s.csv", {10: [(0.0, 0.0, 0.0)]}, {10: 3.0}
+        )
+        with pytest.raises(ValueError, match="frame 12"):
+            assert_max_depth_agrees_with_csv(table, csv)
+
+    def test_a_frame_only_the_csv_has_raises(self, tmp_path):
+        table = make_field(frames=[10], xyz=np.zeros((1, 3)), depths=[-3.0])
+        csv = write_stage_csv_with_depth(
+            tmp_path / "s.csv",
+            {10: [(0.0, 0.0, 0.0)], 12: [(1.0, 1.0, 1.0)]},
+            {10: 3.0, 12: 1.0},
+        )
+        with pytest.raises(ValueError, match="frame 12"):
+            assert_max_depth_agrees_with_csv(table, csv)
+
+    def test_the_dedup_rule_keeps_the_invariant_true(self, tmp_path):
+        """The reason the rule is a group *maximum magnitude* and not the survivor's own.
+
+        The deepest row of frame 10 is dropped by the mapping; the survivor
+        inherits its depth, so the CSV's pre-dedup ``contact_depth`` still holds.
+        """
+        table = make_field(
+            frames=[10, 10, 11],
+            xyz=[[0.0, 0.0, 0.0], [0.05, 0.0, 1.0], [5.0, 5.0, 0.0]],
+            depths=[-1.0, -3.0, -2.0],
+        )
+        mappings = {
+            10: FakeDedupMapping(kept_indices=[0], labels=[0, 0]),
+            11: FakeDedupMapping(kept_indices=[0], labels=[0]),
+        }
+        reduced = apply_dedup_mapping_to_field(table, mappings)
+        csv = write_stage_csv_with_depth(
+            tmp_path / "s.csv",
+            {10: [(0.0, 0.0, 0.0)], 11: [(5.0, 5.0, 0.0)]},
+            {10: 3.0, 11: 2.0},
+        )
+        assert reduced[DEPTH_COLUMN].tolist() == [-3.0, -2.0]
+        assert assert_max_depth_agrees_with_csv(reduced, csv) is None
+
+
+class TestDepthFieldPathForCsv:
+    def test_pairs_the_two_artifacts_by_stem(self):
+        csv = Path("/data/blocks_deduped/S_semicontrolled_block-order-01_merged_data.csv")
+        assert depth_field_path_for_csv(csv) == csv.with_name(
+            "S_semicontrolled_block-order-01_contact_depth_field.parquet"
+        )
+
+    def test_refuses_to_guess_an_unrecognised_name(self):
+        with pytest.raises(ValueError, match="_merged_data.csv"):
+            depth_field_path_for_csv(Path("/data/whatever.csv"))

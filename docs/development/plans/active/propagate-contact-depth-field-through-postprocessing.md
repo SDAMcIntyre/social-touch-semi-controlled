@@ -515,26 +515,113 @@ seven skip reasons.
 
 ### Phase 6: Dedup and projection (the index-consuming stages)
 **Goal:** The field survives row removal and vertex re-addressing, and gains `vertex_id`.
-**Started:** —  **Completed:** —
+**Started:** 2026-08-18 14:30  **Completed:** 2026-08-18 15:05
 
-- [ ] 6.1 — Dedup: filter parquet rows by the CSV's per-frame `kept_indices`; the survivor's
+- [x] 6.1 — Dedup: filter parquet rows by the CSV's per-frame `kept_indices`; the survivor's
       `signed_depth_mm` becomes the maximum magnitude of its DBSCAN group. Never re-run DBSCAN.
-- [ ] 6.2 — Assert after dedup that per-frame `max(|signed_depth_mm|)` still equals the CSV's
-      `contact_depth` — this is what the reduction rule was chosen to preserve.
-- [ ] 6.3 — The epsilon used must be the one actually applied, including an interactive override
-      (`postprocess_workflow_kinect_auto.py:126`), so the hook lives inside that wrapper.
-- [ ] 6.4 — Projection: re-address each parquet row's `x/y/z` using the CSV's KD-tree `indices`, and
-      write `vertex_id`. Never re-query the tree.
-- [ ] 6.5 — Stamp `reference_ply`, `reference_ply_vertex_count`, `dedup_epsilon`.
-- [ ] 6.6 — `signed_depth_mm` preserved through both stages except where 6.1 deliberately replaces it.
-- [ ] 6.7 — Idempotency: session boundary for dedup, **block** boundary for projection
-      (`project_contacts_onto_forearm.py:173`).
+      *Done: `deduplicate_contact_depth_field(input_parquet, output_parquet, output_csv,
+      frame_mappings)` in the dedup stage script, consuming `frame_mappings` from the same
+      `deduplicate_contact_points_csv` call. On real ST13-01 blocks it drops 56.5% / 61.9% of the
+      sidecar's rows — exactly the fraction the CSV lost.*
+- [x] 6.2 — Assert after dedup that per-frame `max(|signed_depth_mm|)` still equals the CSV's
+      `contact_depth` — this is what the reduction rule was chosen to preserve. *Done:
+      `assert_max_depth_agrees_with_csv` in the Phase 4 leaf, over the new public counters
+      `csv_contact_depth_by_frame` and `field_max_depth_magnitude_by_frame`. Measured on real data:
+      max absolute disagreement **8.88e-16 mm** over 258 + 568 frames (max relative 4.5e-16), i.e.
+      one ULP of the CSV's decimal round trip.*
+- [x] 6.3 — The epsilon used must be the one actually applied, including an interactive override
+      (`postprocess_workflow_kinect_auto.py:126`), so the hook lives inside that wrapper. *Done, and
+      by construction rather than by threading a number: the parquet is reduced by the mapping the
+      CSV run returned, so it cannot have been clustered at a different epsilon. The `dedup_epsilon`
+      that reaches metadata at 6.5 is read from the Phase 1 JSON sidecar, never re-derived.*
+- [x] 6.4 — Projection: re-address each parquet row's `x/y/z` using the CSV's KD-tree `indices`, and
+      write `vertex_id`. Never re-query the tree. *Done: `_write_projected_field` consumes
+      `ProjectionResult.vertex_indices`. The tree is queried exactly once per block, by the CSV path.*
+- [x] 6.5 — Stamp `reference_ply`, `reference_ply_vertex_count`, `dedup_epsilon`. *Done, plus
+      `schema_version` bumped to `"2"` — Phase 2 refuses the column under version 1. The count is
+      also checked against the PLY actually loaded before anything is written.*
+- [x] 6.6 — `signed_depth_mm` preserved through both stages except where 6.1 deliberately replaces it.
+      *Done, asserted at both stage boundaries: `_assert_depth_only_reduced` (dedup — every surviving
+      value must be one the frame already held, so nothing is averaged or invented) and
+      `_assert_depth_preserved` (projection — bitwise, dtype included). Bitwise preservation through
+      projection confirmed on both real blocks.*
+- [x] 6.7 — Idempotency: session boundary for dedup, **block** boundary for projection
+      (`project_contacts_onto_forearm.py:173`). *Done and exercised on real data: an unchanged
+      re-run of `deduplicate_xy_flow` rewrites nothing; deleting one parquet regenerates the whole
+      session; the projection stage skips or re-runs per block, and `clean_task_outputs` removes both
+      artifacts at each stage.*
+
+**Signature changes.**
+
+- `project_contacts_onto_forearm` now returns `Tuple[List[Path], List[Path]]` — `(csv_paths,
+  parquet_paths)` — and takes a keyword-only `input_parquets: Optional[Sequence[Path]] = None`,
+  derived from the CSV paths when omitted. The missing-PLY and empty-PLY early returns became
+  `([], [])`. Phase 8 binds the second slot; until then the positional `outputs` binding keeps
+  `projected_files` on the CSVs.
+- `deduplicate_xy_flow` now returns `(deduped_csvs, deduped_forearm_ply, deduped_depth_fields)` —
+  a third slot appended, so the first two keep their meaning.
+- `project_contacts_onto_registered_forearm_flow` mirrors the stage and returns a 2-tuple.
+- New: `deduplicate_contact_depth_field` (dedup stage), exported from `_5_postprocessing`.
+
+**Two module moves, forced by the "stage scripts must not know about each other" contract.**
+
+1. **`postprocessing/forearm_dedup_metadata.py` (new).** The Phase 1 provenance sidecar is *written*
+   by the dedup stage and now *read* by the projection stage, which needs the epsilon and the vertex
+   count to stamp at 6.5. The constants, the path rule, the writer and a new
+   `read_forearm_dedup_metadata` moved into a leaf; `deduplicate_xy_points` re-exports all of them,
+   so `_5_postprocessing/__init__`, the workflow and the existing tests are unaffected. The reader
+   parses every field rather than fetching it: an unverified epsilon stamped onto a `vertex_id`
+   artifact is worse than no artifact.
+2. **`depth_field_path_for_csv` moved from `apply_icp_registration` into the Phase 4 leaf**, for the
+   same reason — projection needs the CSV/sidecar pairing rule too. `apply_icp_registration` imports
+   and re-exports it, so the Phase 5 public surface is unchanged.
+
+**A defect the 6.2 check found immediately.** `contact_depth` is `0.0`, not blank, on every row where
+nothing touched the arm, so a first cut keyed on "finite `contact_depth`" reported 642 phantom frames.
+Membership is now decided by the same `contact_points` cell the row-count check parses, so the two
+checks agree on which frames exist rather than each having its own idea.
+
+**Byte-identity evidence.** `git show HEAD:<path>` extracted both pre-change stage modules to the
+scratchpad; a harness imported old and new by file path and ran both over the same real inputs — two
+truncated `2022-06-14_ST13-01` blocks (block-order-01: 30 000 rows, 258 contact frames, 49 577 field
+rows; block-order-02: 40 000 rows, 568 contact frames, 277 175 field rows), projected onto a forearm
+PLY deduplicated at the DAG's epsilon of 0.5 (3 718 → 1 807 vertices). All four CSVs are
+sha256-identical:
+
+| stage | block | sha256 (identical before and after) |
+|-------|-------|--------------------------------------|
+| dedup | 01 | `c1f6d9b0384c65a1f7bae381653bcaf2fe6b4acb86044b8f0e6490279d112226` |
+| dedup | 02 | `1b212eb51f565bc1338709aad3940b964d674cb841f00f9e3d488511bee95b99` |
+| projection | 01 | `b2a2a891cfb04a8f5e7e1bbc86b91b083c3750c869fc15e3cae75d5154a7a85e` |
+| projection | 02 | `28c10b07d29149740b4ca8846844ee2e05da3c8ba220165209a03e43e7853c6e` |
+
+**Cross-checks on the projected sidecar** (real data, both blocks): `vertex_id` is `int32`, in range
+(`[556, 1223]` and `[7, 1546]` against 1 807 vertices), and resolving it against the reference PLY
+reproduces the parquet's own `x/y/z` to within **3.05e-05 mm** — the float32 storage rounding, and
+the cross-check that the index and the coordinates agree. `signed_depth_mm` is bitwise unchanged by
+projection. `coordinate_space` is carried through untouched by both stages, as specified.
+
+**Fail-fast:** a block whose sidecar is absent raises `FileNotFoundError` naming the file — in the
+dedup flow wrapper *before* the idempotency check, and in the projection stage's
+`_resolve_input_parquets`. A missing or count-mismatched forearm provenance sidecar raises before any
+`vertex_id` is written. A frame in the field with no mapping entry, or a mapping entry for an absent
+frame, raises from the leaf.
 
 **Files Modified:** `code/scripts/_5_postprocessing/deduplicate_xy_points.py`,
 `code/scripts/_5_postprocessing/project_contacts_onto_forearm.py`,
-`code/scripts/postprocess_workflow_kinect_auto.py`
+`code/scripts/_5_postprocessing/apply_icp_registration.py`,
+`code/scripts/_5_postprocessing/__init__.py`,
+`code/scripts/postprocess_workflow_kinect_auto.py`,
+`code/src/postprocessing/depth_field_stage_io.py`,
+`code/src/postprocessing/forearm_dedup_metadata.py` (new),
+`code/tests/test_depth_field_stage_io.py`, `code/tests/test_deduplicate_xy_points.py`,
+`code/tests/test_project_contacts_onto_forearm.py`,
+`code/tests/test_forearm_dedup_metadata.py` (new)
 
 **Dependencies:** Phase 5
+
+**Verification:** full suite **581 passed, 7 skipped** (517 + 64 new; skip count and reasons unchanged
+from the Phase 5 baseline).
 
 ### Phase 7: PCA and RF-centring (Space 2 → 3 → 4)
 **Goal:** The field reaches `blocks_rf_centered/`.

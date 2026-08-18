@@ -199,3 +199,234 @@ class TestFrameIndexValidation:
         ])
 
         assert set(result.vertex_indices) == {168}
+
+
+# ---------------------------------------------------------------------------
+# The contact depth field sidecar (Phase 6, tasks 6.4 - 6.7)
+# ---------------------------------------------------------------------------
+
+from project_contacts_onto_forearm import project_contacts_onto_forearm  # noqa: E402
+from postprocessing.forearm_dedup_metadata import (  # noqa: E402
+    EPSILON_SOURCE_DAG_CONFIG,
+    forearm_dedup_metadata_path,
+    write_forearm_dedup_metadata,
+)
+from preprocessing.motion_analysis.tactile_quantification.io.contact_depth_field_io import (  # noqa: E402
+    read_contact_depth_field,
+    write_contact_depth_field_table,
+)
+
+o3d = pytest.importorskip("open3d", reason="the projection stage needs Open3D")
+
+FIELD_METADATA = {
+    "schema_version": "1",
+    "coordinate_space": "icp_registered",
+    "units": "mm",
+    "sign_convention": "negative_is_penetrating",
+    "produced_by": "compute_somatosensory_characteristics",
+    "source_recording": "unit-test",
+}
+
+#: Contact points of two frames, deliberately off-lattice so projection moves them.
+CONTACTS = {
+    3: [(0.4, 0.3, 7.0), (10.6, 4.8, 8.0)],
+    4: [(29.4, 9.7, 1.0)],
+}
+DEPTHS = {3: [-2.5, -1.25], 4: [-0.75]}
+
+
+def _write_forearm_ply(tmp_path: Path) -> Path:
+    """Materialise the lattice as a deduplicated forearm PLY plus its sidecar."""
+    ply = tmp_path / "forearm_deduped" / "S_forearm.ply"
+    ply.parent.mkdir(parents=True, exist_ok=True)
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(VERTICES)
+    assert o3d.io.write_point_cloud(str(ply), pcd)
+    write_forearm_dedup_metadata(
+        ply,
+        source_ply=tmp_path / "S_forearm_source.ply",
+        epsilon=0.5,
+        epsilon_source=EPSILON_SOURCE_DAG_CONFIG,
+        stats={
+            "n_original": len(VERTICES) + 3,
+            "n_deduped": len(VERTICES),
+            "n_removed": 3,
+        },
+    )
+    return ply
+
+
+def _write_stage_block(tmp_path: Path) -> tuple[Path, Path]:
+    """Write one block's CSV and its matching sidecar into ``blocks_deduped/``."""
+    block = tmp_path / "blocks_deduped"
+    block.mkdir(parents=True, exist_ok=True)
+    stem = "S_semicontrolled_block-order-01"
+    csv = block / f"{stem}_merged_data.csv"
+    pd.DataFrame(
+        {
+            "frame_index": [float(f) for f in sorted(CONTACTS)],
+            "contact_points": [_cell(CONTACTS[f]) for f in sorted(CONTACTS)],
+            "contact_depth": [
+                max(abs(d) for d in DEPTHS[f]) for f in sorted(CONTACTS)
+            ],
+            "contact_location_x": [0.0] * len(CONTACTS),
+            "contact_location_y": [0.0] * len(CONTACTS),
+            "contact_location_z": [0.0] * len(CONTACTS),
+        }
+    ).to_csv(csv, index=False)
+
+    frames, points, depths = [], [], []
+    for frame in sorted(CONTACTS):
+        for point, depth in zip(CONTACTS[frame], DEPTHS[frame]):
+            frames.append(frame)
+            points.append(point)
+            depths.append(depth)
+    points = np.asarray(points, dtype=np.float32)
+    parquet = block / f"{stem}_contact_depth_field.parquet"
+    write_contact_depth_field_table(
+        pd.DataFrame(
+            {
+                "frame_index": np.asarray(frames, dtype=np.int32),
+                "time_s": np.asarray(frames, dtype=np.float64) / 30.0,
+                "x": points[:, 0],
+                "y": points[:, 1],
+                "z": points[:, 2],
+                "signed_depth_mm": np.asarray(depths, dtype=np.float64),
+            }
+        ),
+        parquet,
+        metadata=dict(FIELD_METADATA),
+    )
+    return csv, parquet
+
+
+def _project_stage(tmp_path: Path, **kwargs):
+    ply = kwargs.pop("ply", None) or _write_forearm_ply(tmp_path)
+    csv, parquet = _write_stage_block(tmp_path)
+    out = tmp_path / "blocks_projected"
+    return (
+        project_contacts_onto_forearm(
+            input_files=[csv],
+            forearm_ply_path=ply,
+            output_dir=out,
+            projection_stats_path=out / "projection_stats.csv",
+            **kwargs,
+        ),
+        ply,
+        out,
+    )
+
+
+class TestProjectedDepthField:
+    def test_it_returns_both_artifacts(self, tmp_path):
+        (csvs, parquets), _, _ = _project_stage(tmp_path, force_processing=True)
+        assert len(csvs) == len(parquets) == 1
+        assert parquets[0].exists()
+
+    def test_every_row_addresses_the_vertex_its_csv_point_snapped_to(self, tmp_path):
+        (csvs, parquets), ply, _ = _project_stage(tmp_path, force_processing=True)
+        table, _ = read_contact_depth_field(parquets[0])
+
+        assert table["vertex_id"].dtype == np.int32
+        resolved = VERTICES[table["vertex_id"].to_numpy()]
+        np.testing.assert_allclose(
+            resolved, table[["x", "y", "z"]].to_numpy(), atol=1e-4
+        )
+
+        # And the same vertices the CSV chose, in the same order.
+        csv_points = []
+        for _, row in pd.read_csv(csvs[0]).iterrows():
+            csv_points.extend(parse_contact_points(row["contact_points"]))
+        np.testing.assert_allclose(
+            np.round(resolved, 1), np.asarray(csv_points), atol=1e-9
+        )
+
+    def test_depth_is_carried_through_bitwise(self, tmp_path):
+        (_, parquets), _, _ = _project_stage(tmp_path, force_processing=True)
+        table, _ = read_contact_depth_field(parquets[0])
+        expected = [d for frame in sorted(DEPTHS) for d in DEPTHS[frame]]
+        assert table["signed_depth_mm"].tolist() == expected
+
+    def test_the_reference_ply_provenance_is_stamped(self, tmp_path):
+        (_, parquets), ply, _ = _project_stage(tmp_path, force_processing=True)
+        _, metadata = read_contact_depth_field(parquets[0])
+        assert metadata["schema_version"] == "2"
+        assert metadata["reference_ply"] == ply.name
+        assert int(metadata["reference_ply_vertex_count"]) == len(VERTICES)
+        assert float(metadata["dedup_epsilon"]) == 0.5
+
+    def test_the_coordinate_space_is_not_restamped(self, tmp_path):
+        (_, parquets), _, _ = _project_stage(tmp_path, force_processing=True)
+        _, metadata = read_contact_depth_field(parquets[0])
+        assert metadata["coordinate_space"] == "icp_registered"
+
+    def test_a_missing_provenance_sidecar_raises_naming_it(self, tmp_path):
+        ply = _write_forearm_ply(tmp_path)
+        forearm_dedup_metadata_path(ply).unlink()
+        with pytest.raises(FileNotFoundError, match="_dedup_metadata.json"):
+            _project_stage(tmp_path, ply=ply, force_processing=True)
+
+    def test_a_provenance_count_that_disagrees_with_the_ply_raises(self, tmp_path):
+        ply = _write_forearm_ply(tmp_path)
+        write_forearm_dedup_metadata(
+            ply,
+            source_ply=tmp_path / "src.ply",
+            epsilon=0.5,
+            epsilon_source=EPSILON_SOURCE_DAG_CONFIG,
+            stats={"n_original": 99, "n_deduped": 90, "n_removed": 9},
+        )
+        with pytest.raises(ValueError, match="out of step"):
+            _project_stage(tmp_path, ply=ply, force_processing=True)
+
+    def test_a_missing_input_sidecar_raises(self, tmp_path):
+        ply = _write_forearm_ply(tmp_path)
+        csv, parquet = _write_stage_block(tmp_path)
+        parquet.unlink()
+        out = tmp_path / "blocks_projected"
+        with pytest.raises(FileNotFoundError, match="contact_depth_field.parquet"):
+            project_contacts_onto_forearm(
+                input_files=[csv], forearm_ply_path=ply, output_dir=out,
+                projection_stats_path=out / "projection_stats.csv",
+                force_processing=True,
+            )
+
+
+class TestProjectionIdempotency:
+    """Task 6.7: the boundary is the block, matching this stage's existing check."""
+
+    def test_an_unchanged_rerun_regenerates_nothing(self, tmp_path):
+        (_, parquets), ply, out = _project_stage(tmp_path, force_processing=True)
+        stamp = parquets[0].stat().st_mtime_ns
+
+        csv = tmp_path / "blocks_deduped" / parquets[0].name.replace(
+            "_contact_depth_field.parquet", "_merged_data.csv"
+        )
+        again, again_pq = project_contacts_onto_forearm(
+            input_files=[csv], forearm_ply_path=ply, output_dir=out,
+            projection_stats_path=out / "projection_stats.csv",
+        )
+        assert again_pq == parquets
+        assert again_pq[0].stat().st_mtime_ns == stamp
+
+    def test_deleting_only_the_parquet_re_runs_the_block(self, tmp_path):
+        (_, parquets), ply, out = _project_stage(tmp_path, force_processing=True)
+        parquets[0].unlink()
+
+        csv = tmp_path / "blocks_deduped" / parquets[0].name.replace(
+            "_contact_depth_field.parquet", "_merged_data.csv"
+        )
+        _, again_pq = project_contacts_onto_forearm(
+            input_files=[csv], forearm_ply_path=ply, output_dir=out,
+            projection_stats_path=out / "projection_stats.csv",
+        )
+        assert again_pq[0].exists()
+
+    def test_a_missing_forearm_ply_returns_two_empty_lists(self, tmp_path):
+        csv, _ = _write_stage_block(tmp_path)
+        result = project_contacts_onto_forearm(
+            input_files=[csv],
+            forearm_ply_path=tmp_path / "absent.ply",
+            output_dir=tmp_path / "out",
+            projection_stats_path=tmp_path / "out" / "stats.csv",
+        )
+        assert result == ([], [])

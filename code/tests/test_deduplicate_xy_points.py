@@ -1025,3 +1025,169 @@ class TestDeduplicateContactPointsCsvMapping:
         stats = deduplicate_contact_points_csv(src, out, epsilon=0.1)
 
         assert set(stats["frame_mappings"]) == {168}
+
+
+# ---------------------------------------------------------------------------
+# The contact depth field sidecar (Phase 6, task 6.1 / 6.2 / 6.6)
+# ---------------------------------------------------------------------------
+
+from deduplicate_xy_points import deduplicate_contact_depth_field  # noqa: E402
+from preprocessing.motion_analysis.tactile_quantification.io.contact_depth_field_io import (  # noqa: E402
+    read_contact_depth_field,
+    write_contact_depth_field_table,
+)
+
+FIELD_METADATA = {
+    "schema_version": "1",
+    "coordinate_space": "icp_registered",
+    "units": "mm",
+    "sign_convention": "negative_is_penetrating",
+    "produced_by": "compute_somatosensory_characteristics",
+    "source_recording": "unit-test",
+}
+
+
+def _write_depth_field(path: Path, frames, points, depths, metadata=None) -> Path:
+    """Write a schema-conforming sidecar whose rows mirror a CSV's contact cells."""
+    points = np.asarray(points, dtype=np.float32).reshape(len(frames), 3)
+    table = pd.DataFrame(
+        {
+            "frame_index": np.asarray(frames, dtype=np.int32),
+            "time_s": np.asarray(frames, dtype=np.float64) / 30.0,
+            "x": points[:, 0],
+            "y": points[:, 1],
+            "z": points[:, 2],
+            "signed_depth_mm": np.asarray(depths, dtype=np.float64),
+        }
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_contact_depth_field_table(
+        table, path, metadata=dict(metadata or FIELD_METADATA)
+    )
+    return path
+
+
+def _write_depth_contact_csv(path: Path, rows) -> Path:
+    """``rows`` is a list of ``(frame_index, points, contact_depth)``."""
+    pd.DataFrame(
+        {
+            "frame_index": [float(f) for f, _, _ in rows],
+            "contact_points": [
+                serialize_contact_points([tuple(float(v) for v in p) for p in pts])
+                for _, pts, _ in rows
+            ],
+            "contact_depth": [float(d) for _, _, d in rows],
+            "contact_location_x": [0.0] * len(rows),
+            "contact_location_y": [0.0] * len(rows),
+            "contact_location_z": [0.0] * len(rows),
+        }
+    ).to_csv(path, index=False)
+    return path
+
+
+class TestDeduplicateContactDepthField:
+    """The sidecar loses exactly the rows the CSV lost, by the CSV's own mapping."""
+
+    #: Frame 10 has three points, two of them within epsilon in (x, y); frame 11
+    #: has two points that are far apart and both survive.
+    ROWS = [
+        (10, [(0.0, 0.0, 5.0), (0.1, 0.0, 1.0), (9.0, 9.0, 2.0)], 4.0),
+        (11, [(0.0, 0.0, 3.0), (20.0, 20.0, 1.0)], 2.0),
+    ]
+    FRAMES = [10, 10, 10, 11, 11]
+    POINTS = [
+        (0.0, 0.0, 5.0), (0.1, 0.0, 1.0), (9.0, 9.0, 2.0),
+        (0.0, 0.0, 3.0), (20.0, 20.0, 1.0),
+    ]
+    DEPTHS = [-4.0, -0.5, -1.25, -2.0, -0.75]
+
+    def _run(self, tmp_path, *, depths=None, epsilon=0.5):
+        in_csv = _write_depth_contact_csv(tmp_path / "in.csv", self.ROWS)
+        in_pq = _write_depth_field(
+            tmp_path / "in.parquet", self.FRAMES, self.POINTS,
+            depths if depths is not None else self.DEPTHS,
+        )
+        out_csv = tmp_path / "out" / "in.csv"
+        out_pq = tmp_path / "out" / "in.parquet"
+        stats = deduplicate_contact_points_csv(in_csv, out_csv, epsilon=epsilon)
+        deduplicate_contact_depth_field(in_pq, out_pq, out_csv, stats["frame_mappings"])
+        return out_csv, out_pq, stats
+
+    def test_the_survivor_inherits_the_groups_deepest_value(self, tmp_path):
+        out_csv, out_pq, _ = self._run(tmp_path)
+        table, _ = read_contact_depth_field(out_pq)
+
+        # Frame 10 collapsed (0,0,5) and (0.1,0,1) into the lower-z one.
+        assert len(table) == 4
+        frame10 = table[table["frame_index"] == 10]
+        assert len(frame10) == 2
+        # The survivor of the collapsed pair carries the pair's deepest value.
+        assert -4.0 in frame10["signed_depth_mm"].tolist()
+
+    def test_the_row_count_matches_the_csv_it_was_written_beside(self, tmp_path):
+        out_csv, out_pq, _ = self._run(tmp_path)
+        table, _ = read_contact_depth_field(out_pq)
+        counts = table.groupby("frame_index").size().to_dict()
+        parsed = {
+            int(row["frame_index"]): len(parse_contact_points(row["contact_points"]))
+            for _, row in pd.read_csv(out_csv).iterrows()
+        }
+        assert {int(k): int(v) for k, v in counts.items()} == parsed
+
+    def test_the_max_magnitude_per_frame_is_preserved(self, tmp_path):
+        _, out_pq, _ = self._run(tmp_path)
+        table, _ = read_contact_depth_field(out_pq)
+        maxima = table.groupby("frame_index")["signed_depth_mm"].apply(
+            lambda s: float(np.max(np.abs(s)))
+        )
+        assert maxima.loc[10] == 4.0
+        assert maxima.loc[11] == 2.0
+
+    def test_the_metadata_is_carried_through_verbatim(self, tmp_path):
+        _, out_pq, _ = self._run(tmp_path)
+        _, metadata = read_contact_depth_field(out_pq)
+        assert metadata == FIELD_METADATA
+
+    def test_no_vertex_id_is_assigned_here(self, tmp_path):
+        _, out_pq, _ = self._run(tmp_path)
+        table, _ = read_contact_depth_field(out_pq)
+        assert "vertex_id" not in table.columns
+
+    def test_a_depth_the_frame_never_held_would_be_caught(self, tmp_path):
+        """The stage-level guard, exercised by faking a rule that invents a value."""
+        import deduplicate_xy_points as module
+
+        original = pd.DataFrame(
+            {"frame_index": [10, 10], "signed_depth_mm": [-1.0, -2.0]}
+        )
+        invented = pd.DataFrame(
+            {"frame_index": [10], "signed_depth_mm": [-1.5]}
+        )
+        with pytest.raises(ValueError, match="not measured at that frame"):
+            module._assert_depth_only_reduced(
+                original, invented, parquet_name="x.parquet"
+            )
+
+    def test_a_missing_sidecar_raises_naming_the_file(self, tmp_path):
+        in_csv = _write_depth_contact_csv(tmp_path / "in.csv", self.ROWS)
+        out_csv = tmp_path / "out" / "in.csv"
+        stats = deduplicate_contact_points_csv(in_csv, out_csv, epsilon=0.5)
+        with pytest.raises(FileNotFoundError, match="absent.parquet"):
+            deduplicate_contact_depth_field(
+                tmp_path / "absent.parquet", tmp_path / "o.parquet",
+                out_csv, stats["frame_mappings"],
+            )
+
+    def test_a_field_holding_a_frame_the_mapping_does_not_cover_raises(self, tmp_path):
+        in_csv = _write_depth_contact_csv(tmp_path / "in.csv", self.ROWS)
+        in_pq = _write_depth_field(
+            tmp_path / "in.parquet",
+            self.FRAMES + [12], self.POINTS + [(1.0, 1.0, 1.0)],
+            self.DEPTHS + [-9.0],
+        )
+        out_csv = tmp_path / "out" / "in.csv"
+        stats = deduplicate_contact_points_csv(in_csv, out_csv, epsilon=0.5)
+        with pytest.raises(ValueError):
+            deduplicate_contact_depth_field(
+                in_pq, tmp_path / "o.parquet", out_csv, stats["frame_mappings"]
+            )
