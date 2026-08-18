@@ -416,19 +416,114 @@ re-exports" so no caller drags in a serialisation dependency it does not need, a
 
 ### Phase 5: Verification on real data
 **Goal:** Measured evidence, not argument.
-**Started:** —  **Completed:** —
+**Started:** 2026-08-18 14:00  **Completed:** 2026-08-18 14:35
 
-- [ ] 5.1 — Run on `ST14-01`, which has both no-drop blocks and heavy-drop blocks
-      (`block-order-02` retains 39.8%, `block-order-03` 34.2%, `block-order-10` 35.0%).
-- [ ] 5.2 — For each block, assert bitwise equality of retained rows against the Space-1 depth field.
-- [ ] 5.3 — Confirm frame-set agreement in both directions against the filtered CSV.
-- [ ] 5.4 — Record output sizes and the dataset-wide total; compare against the 1,030 MB Space-1
-      baseline to quantify how much the neural-quality filter removes.
-- [ ] 5.5 — Delete one filtered parquet, re-run, confirm regeneration; re-run again, confirm skip.
+- [x] 5.1 — Run on `ST14-01`. All 9 of its blocks hold both a Space-1 sidecar and a
+      `blocks_filtered/` CSV, and all 9 were processed: 4 lose no frame at all, 5 lose frames
+      (`block-order-03` retains 30.0% of its rows, `block-order-10` 33.3%, `block-order-02` 35.4%).
+      The plan's earlier percentages were *CSV byte* ratios; the numbers here are depth-field **row**
+      ratios, which is why they differ by a few points. The run was then extended to all 77 blocks of
+      the eight merging-DAG config groups — every one succeeded.
+- [x] 5.2 — Bitwise equality asserted **independently of the task's own internal check**: the output
+      parquet was re-read and compared against the Space-1 parquet reduced by the CSV frame set, using
+      `np.array_equal` *and* a raw `.tobytes()` comparison, on all six columns (`frame_index`,
+      `time_s`, `x`, `y`, `z`, `signed_depth_mm`), with dtypes compared too. 77/77 blocks pass on
+      every column; no approximate comparison was used anywhere.
+- [x] 5.3 — Frame-set agreement confirmed in both directions on all 77 blocks: the output frame set
+      equals `Space-1 frames ∩ CSV non-NaN frames` exactly (zero extra, zero missing), no output frame
+      is absent from the CSV, and **zero** CSV frames marked `contact_detected` are absent from the
+      output. The 66,753 CSV frames dataset-wide that are absent from the output are the non-contact
+      frames the sidecar never contained.
+- [x] 5.4 — Sizes recorded per block and per session (tables below). Dataset-wide over the 77 DAG
+      blocks: **971.5 MB Space-1 → 809.5 MB filtered (−16.7%)**. The plan's "1,030 MB baseline"
+      re-measured as 1,082.7 MB / 1,032.5 MiB across all **99** blocks on disk — the 22-block gap is
+      the sessions the merging DAG does not cover (`ST13-*` etc.), which therefore produce no filtered
+      copy at all.
+- [x] 5.5 — `ST14-01/block-order-05`'s filtered parquet deleted, re-run regenerated it
+      **byte-identical** (1,008,080 bytes, md5 `e3cfe159f1ba0ce1b7520d54fb40c0c8` before and after);
+      an immediate second call returned `None` and left mtime and md5 untouched. A whole-set re-run of
+      all 77 blocks returned `None` 77/77 and changed 0 mtimes.
 
 **Files Modified:** none (verification only)
 
 **Dependencies:** Phase 4, Phase 1
+
+#### Verification Results (2026-08-18)
+
+**How it was run.** Option A: a scratchpad driver (not committed) that imports `resolve_filenames`
+from `merging_pipeline_neuron_to_kinect_auto.py` and feeds it a `KinectConfig` built exactly as
+`run_batch_processing` builds one (`KinectConfigFileHandler.load_and_resolve_config` →
+`KinectConfig(config_data=..., database_path=<project data root>)`), then calls the Phase-3 function
+per block. Path arithmetic is therefore the *real* Phase-4 arithmetic, not a re-implementation.
+Prefect was deliberately not driven (the shared `~/.prefect/prefect.db` is incompatible with this
+environment's Prefect, as recorded in Phase 1.3), so **the DAG task wrapper and `dag_handler` gating
+were not exercised on real data here** — they were verified directly against `DagConfigHandler` in
+Phase 4.4. Every CSV used for comparison was read with `float_precision="round_trip"`.
+
+**ST14-01 — per block** (rows/frames from the parquets; `keep%` is retained rows / Space-1 rows):
+
+| Block | S1 rows | Retained rows | S1 frames | Retained frames | Frames dropped | Out MB | S1 MB | keep% | Bitwise | Frame-set |
+|-------|--------:|--------------:|----------:|----------------:|---------------:|-------:|------:|------:|:-------:|:---------:|
+| block-order-01 |   251,434 |   125,497 | 1,208 |   753 |   455 |  1.32 |  2.46 |  49.9% | PASS | PASS |
+| block-order-02 | 1,502,134 |   531,627 | 1,425 |   602 |   823 |  5.40 | 15.27 |  35.4% | PASS | PASS |
+| block-order-03 |   858,856 |   257,248 | 2,668 |   934 | 1,734 |  2.48 |  8.12 |  30.0% | PASS | PASS |
+| block-order-05 |    99,658 |    99,658 |   784 |   784 |     0 |  1.01 |  1.01 | 100.0% | PASS | PASS |
+| block-order-06 |   544,290 |   544,290 | 1,052 | 1,052 |     0 |  4.78 |  4.78 | 100.0% | PASS | PASS |
+| block-order-07 |   178,967 |   178,967 | 1,108 | 1,108 |     0 |  1.66 |  1.66 | 100.0% | PASS | PASS |
+| block-order-08 | 1,021,821 | 1,021,821 | 1,011 | 1,011 |     0 |  9.61 |  9.61 | 100.0% | PASS | PASS |
+| block-order-09 |   963,164 |   382,400 | 1,454 |   654 |   800 |  3.79 |  9.27 |  39.7% | PASS | PASS |
+| block-order-10 | 2,018,873 |   672,789 | 2,761 |   950 | 1,811 |  6.62 | 20.01 |  33.3% | PASS | PASS |
+| **ST14-01 total** | **7,439,197** | **3,814,297** | | | | **36.7** | **72.2** | **51.3%** | 9/9 | 9/9 |
+
+Metadata checked on every block: `coordinate_space` still `kinect_space_1`, `units`,
+`sign_convention`, `source_recording`, `produced_by` and `schema_version` carried through verbatim,
+plus `pipeline_stage="merging"`, `neural_quality_filtered="true"` and a `frames_dropped` that matches
+the independently recomputed count. 77/77 pass.
+
+**All eight merging-DAG config groups — per session:**
+
+| Session | Blocks | Blocks losing frames | S1 MB | Filtered MB | S1 rows | Retained rows |
+|---------|-------:|---------------------:|------:|------------:|--------:|--------------:|
+| 2022-06-15_ST14-01 |  9 | 5 |  72.2 |  36.7 |  7,439,197 |  3,814,297 |
+| 2022-06-15_ST14-02 |  6 | 2 |  98.5 |  91.6 |  9,960,012 |  9,284,464 |
+| 2022-06-15_ST14-04 |  3 | 3 |  23.3 |  11.6 |  2,380,133 |  1,183,848 |
+| 2022-06-17_ST16-02 | 15 | 7 | 228.3 | 158.8 | 22,680,274 | 15,853,953 |
+| 2022-06-17_ST16-03 |  5 | 2 |  24.0 |  18.7 |  2,598,770 |  2,022,298 |
+| 2022-06-17_ST16-05 | 16 | 1 | 287.5 | 276.1 | 28,671,871 | 27,575,817 |
+| 2022-06-22_ST18-01 | 16 | 2 | 170.4 | 161.8 | 19,770,270 | 18,773,020 |
+| 2022-06-22_ST18-04 |  7 | 3 |  67.2 |  54.1 |  6,686,427 |  5,366,840 |
+| **Total** | **77** | **25** | **971.5** | **809.5** | **100,186,954** | **83,874,537** |
+
+**Dataset-level totals (5.4).**
+
+- 77/77 blocks processed; **0 failures, 0 skipped for missing input** — every block of the eight
+  groups had both a Space-1 sidecar and a `blocks_filtered/` CSV.
+- Space-1 across the 77 DAG blocks: **971.5 MB**. Filtered output: **809.5 MB** — a **16.7%**
+  reduction on disk.
+- Rows: 100,186,954 → 83,874,537 (**83.7% retained**). Frames: 113,685 → 93,600 (**82.3% retained**).
+- 52 blocks lose no frame (output row-count-identical); 25 lose frames; worst retention
+  `ST14-01/block-order-03` at **30.0%** of rows.
+- Whole-dataset baseline re-measured: 99 Space-1 sidecars totalling **1,082.7 MB (1,032.5 MiB)** —
+  the plan's "1,030 MB" figure was MiB, and is confirmed. Only 77 of those 99 blocks are covered by
+  the merging DAG, so 22 blocks (~111 MB of Space-1 data) currently gain no filtered copy; that is
+  the already-documented session-list divergence, not a fault of this task.
+
+**Idempotency (5.5).** Delete → re-run → byte-identical regeneration (same size, same md5);
+re-run again → `None` returned, nothing written, mtime and md5 unchanged. Extended to the whole set:
+77/77 returned `None` on an unchanged re-run and 0 files were rewritten.
+
+**Manual read with no repo import.** `pyarrow.parquet.read_metadata` alone on a filtered file returns
+`schema_version=1`, `coordinate_space=kinect_space_1`, `units=mm`,
+`sign_convention=negative_is_penetrating`, `source_recording`, `produced_by`,
+`pipeline_stage=merging`, `neural_quality_filtered=true`, `frames_dropped`, `source_artifact`; the
+schema reads back as `frame_index:int32, time_s:double, x:float, y:float, z:float,
+signed_depth_mm:double`. All 77 `blocks_filtered/` directories now hold the CSV and the parquet side
+by side.
+
+**Not verified in this phase (stated plainly):** the Prefect flow itself was not executed, so the
+`@task` wrapper, the DAG `can_run`/`mark_completed` gating and `force_processing` plumbing remain
+verified only by the direct `DagConfigHandler` checks of Phase 4.4; and no block in the eight groups
+exercised the zero-retained-rows error path on real data (it is covered by unit tests only).
 
 ---
 
@@ -446,18 +541,27 @@ re-exports" so no caller drags in a serialisation dependency it does not need, a
 - [x] A `contact_detected` frame in the CSV but absent from the depth field raises.
 
 ### Integration Tests
-- [ ] Against a real block: retained `x/y/z/signed_depth_mm` are `np.array_equal` to Space 1.
-- [ ] Against a real block: output frame set equals CSV non-NaN frame set intersected with Space 1.
-- [ ] A no-Not2Use block produces a row-count-identical output.
+- [x] Against a real block: retained `x/y/z/signed_depth_mm` are `np.array_equal` to Space 1 —
+      verified on 77 real blocks, plus `frame_index`/`time_s`, plus a raw-bytes comparison (Phase 5.2).
+- [x] Against a real block: output frame set equals CSV non-NaN frame set intersected with Space 1 —
+      77/77, both directions, with zero CSV contact frames missing from the output (Phase 5.3).
+- [x] A no-Not2Use block produces a row-count-identical output — 52 of the 77 blocks dropped zero
+      frames and are row-identical (e.g. `ST14-01/block-order-05`, 99,658 rows in and out).
 - [x] `should_process_task` returns True when only the filtered parquet is missing, False on a clean
       re-run — asserted directly, so it runs without a recording.
 - [x] `clean_task_outputs` removes the filtered parquet.
 
 ### Manual Verification
-- [ ] Open a filtered parquet in pandas with no repo import; confirm metadata alone states units,
-      space, sign convention, and that the neural-quality filter was applied.
-- [ ] Confirm `blocks_filtered/` contains the CSV and the parquet side by side for every block.
-- [ ] Re-run the merging pipeline unchanged; confirm the task skips and writes nothing.
+- [x] Open a filtered parquet in pandas with no repo import; confirm metadata alone states units,
+      space, sign convention, and that the neural-quality filter was applied — done with
+      `pyarrow.parquet` alone (pandas' own parquet backend); all keys present (Phase 5).
+- [x] Confirm `blocks_filtered/` contains the CSV and the parquet side by side for every block —
+      77/77 of the merging DAG's blocks. (The 22 blocks outside the DAG's config groups have no
+      filtered parquet, by design of the session list.)
+- [ ] Re-run the merging pipeline unchanged; confirm the task skips and writes nothing. **Partially
+      done:** the task *function* skipped on all 77 blocks (returned `None`, 0 mtimes changed), but
+      the Prefect flow itself was not run — the shared Prefect database is incompatible with this
+      environment, as recorded in Phase 1.3. Left unticked deliberately.
 
 ### Edge Cases
 - [ ] Block with zero contact frames throughout — the Space-1 file does not exist (the producer
