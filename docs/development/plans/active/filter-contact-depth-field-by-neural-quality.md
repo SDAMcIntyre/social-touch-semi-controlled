@@ -129,6 +129,14 @@ exclusion is the substance of this task; relocating the file is the incidental p
       `ContactDepthFieldResolution`, so it cannot be omitted.
 - [x] In registered-frame mode the depth points move with the cloud, hand mesh and stickers, and the
       depth *values* are unchanged by the rigid transform — asserted byte-for-byte, not `allclose`.
+- [x] The timeseries cursor lands on the merged-CSV row of the frame actually displayed, resolved
+      by lookup rather than by a scale factor. Measured on `ST13-02/block-order-01`: frame 437
+      resolves to row 14,566 (`contact_detected=0`), not the 7,927 the old multiplication gave;
+      0/1,734 frames mis-resolved, against 1,733/1,734 before. See Phase 7.
+- [x] The viewer navigates only the frames the filtered CSV contains — the slider, the frame
+      label, play and the initial render all move over that set, and a frame outside it raises
+      rather than being clamped to a neighbour. Pure-3D mode (no merged CSV) still offers the
+      whole MKV range. See Phase 7.2.
 
 ## Definitions
 
@@ -716,6 +724,142 @@ postprocessed spaces (the viewer works in Space 1 and the ICP-registered frame o
 postprocessing viewers (`postprocessed_scene_viewer.py`, `before_after_step_viewer.py`,
 `postprocessing_stage_viewer.py`) — they read postprocessed CSVs that carry no depth field yet.
 
+### Phase 7: Fix the timeseries cursor the Phase 6 repoint broke
+**Goal:** The red cursor sits on the row of the frame actually on screen, and the viewer navigates
+only frames that have neural data.
+**Started:** 2026-08-18 17:00  **Completed:** 2026-08-18 18:10
+
+Added 2026-08-18, after Phase 6 shipped. **This is a regression Phase 6 introduced**, not new work.
+
+**The regression.** 6.1 repointed the visualisation pipeline from `blocks_merged/` to
+`blocks_filtered/`. The filtered CSV has had trials removed, so it covers fewer kinect frames than
+the recording — but the viewer computed the cursor's position with a single multiplication:
+
+```python
+self._total_frames  = len(self._point_cloud_view)          # MKV length, unaffected by filtering
+self._neural_scale  = len(self.merged_df) / self._total_frames
+sample_idx          = int(frame_idx * self._neural_scale)  # NeuralDataPanel.update_cursor
+```
+
+That expression encodes two assumptions the artifact does not make: that the CSV spans the whole
+recording, and that its anchor rows are evenly spaced. Filtering breaks the first; the second was
+never exactly true (measured anchor spacing alternates 33 and 34 rows). **Measured on
+`2022-06-14_ST13-02/block-order-01`:** 1,734 of the recording's 3,186 frames survive in 57,800 rows,
+so the scale is 18.14 against a true spacing of 33.33 — an error of 1.837x that grows linearly with
+frame number. Frame 437 (`contact_detected=0`, `contact_depth=0.0`, absent from the depth field)
+resolved to row **7,927**, which belongs to frame 237 (`contact_detected=1`,
+`contact_depth=4.7955`), instead of its own row **14,566**. Drift reached **790 frames** by the end
+of the block. The data is correct — the depth field and the CSV's `contact_detected` agree exactly —
+only the cursor was wrong.
+
+**The user's decision, recorded: stop at the valid data.** The navigable set is now the frames the
+filtered CSV actually contains, not the MKV's length. Scrubbing into an excluded trial would show a
+scene with no neural data at all beside it, which is the opposite of what this viewer is for.
+
+- [x] 7.1 — **The scale factor is gone, replaced by a lookup.** `NeuralDataPanel.update_cursor` now
+      takes an already-resolved `sample_idx` — no `scale_factor` parameter, no
+      `int(frame_idx * scale_factor)` — and `self._neural_scale` and its assignment in `_init_actors`
+      are deleted. The mapping resolves to **positional** row numbers, verified against
+      `_setup_axes`, which draws the three axes over `x = np.arange(len(merged_df))`; the real CSV
+      does carry a clean `RangeIndex` today, but nothing in the pipeline promises that, so anchors
+      are located with `np.flatnonzero` rather than by index label. Two cases pin this
+      (`test_row_lookup_is_positional_not_label_based`, with both a shifted `RangeIndex` and a string
+      index). A multiply cannot express a non-uniform mapping; a lookup is correct under truncation,
+      mid-recording gaps and any future re-indexing.
+- [x] 7.2 — **The navigable set is a sorted array of frames, not a count.** `filter_by_neural_quality`
+      has two modes: `discard_from_first_not2use: true` truncates from the first unusable trial,
+      `false` removes individual trials and leaves **gaps** mid-recording. A count or a max-frame
+      describes only the first, so the set of frames that exist is stored instead. The slider now
+      indexes **navigation positions** into that array; `_on_slider_change`, `_on_slider_released`,
+      `_play_advance` and `_deferred_start` all go through it, and the initial render starts at
+      `frames[0]` rather than frame 0 (truncation can drop the opening trials outright). The frame
+      readout shows **`"<kinect frame> (<position>/<navigable>)"`** — e.g. `437 (438/1734)` — so the
+      real kinect frame, which is what every other artifact is keyed by, stays visible; the label
+      widget was widened from 100 to 150 px to fit it. With no merged CSV (`merged_csv_path is None`)
+      the whole MKV range is navigable: nothing was filtered, so nothing is being hidden.
+- [x] 7.3 — **The contact-points fallback path had the identical defect.**
+      `_contact_pts_by_frame` was built positionally over the anchor rows and then indexed with a
+      kinect frame index; it was masked only because the depth field takes precedence when present.
+      It is now a `Dict[int, Optional[np.ndarray]]` keyed by `frame_index` through the same lookup,
+      and a frame missing from it raises rather than drawing a neighbour's contact.
+- [x] 7.4 — **Regression test:** `code/tests/test_neural_cursor_alignment.py`, 24 tests. Every
+      fixture is deliberately **non-uniform** — a uniform one passes under both the broken and the
+      correct implementation and would be worthless. The main fixture is truncated **and** gapped
+      (frames 0-99 then 200-249 of a 400-frame recording) with anchor spacing alternating 33/34, and
+      `test_the_broken_scale_factor_would_have_disagreed` asserts the old multiplication disagrees on
+      >90% of frames *and* that the row it picks for frame 200 belongs to a different frame — so the
+      suite cannot pass with the regression restored. Absent frames are covered explicitly
+      (`test_a_frame_inside_the_gap_is_not_navigable`,
+      `test_an_absent_frame_is_never_mapped_to_a_neighbour`): they raise `KeyError`, never resolve to
+      a neighbour.
+- [x] 7.5 — **Verified against the measured reproduction, without launching the GUI.** Driving the
+      new code path directly on `ST13-02/block-order-01`: `nav.row_of(437)` returns **14,566**, whose
+      `frame_index` is 437, `contact_detected` 0 and `contact_depth` 0.0 — label `437 (438/1734)`.
+      The old expression returns 7,927, a row belonging to frame 237 with `contact_detected=1` and
+      `contact_depth=4.7955`. Exhaustively over the block: **0/1,734** frames mis-resolved by the new
+      lookup, **1,733/1,734** by the old scale, max drift 26,327 rows (790 frames). Frames 1734, 2000
+      and 3185 are correctly outside the navigable set. Extended to the whole dataset: all **103**
+      `blocks_filtered/` CSVs on disk build a navigation without raising; all are currently
+      contiguous from frame 0 (the truncating mode is what the DAG is configured for today), which is
+      precisely why the gap case is proven synthetically rather than assumed away. A separate
+      offscreen smoke test exercised the real `NeuralDataPanel` on the real CSV: `update_cursor` on
+      five frames, the click-to-position round trip landing on 437 from ±3 rows and on 438 when
+      nearer its anchor, and the misaligned-anchor-rows guard raising.
+
+**Design.** The mapping lives in a new leaf, `code/src/merging/frame_navigation.py`, exposing a
+frozen `FrameNavigation` DTO (`frames`, `rows`, `frame_at`, `position_of`, `row_of`, `contains`,
+`format_label`) plus two builders. Same reasoning as `contact_depth_field_series.py` in Phase 6: the
+viewer module imports PyQt5, PyVista and the whole Kinect stack, and the test conftest stubs
+`preprocessing.motion_analysis`, so logic living inside the viewer could not be unit-tested at all.
+The viewer keeps a `self._nav` and only asks it questions — the pure-sink contract of guide 02 §9 is
+tightened, not loosened: the viewer no longer *derives* a cursor position, it looks one up.
+
+**Fail-fast, no clamping.** `position_of` / `row_of` raise `KeyError` naming the frame; they never
+round to the nearest navigable frame. `build_frame_navigation_from_merged_df` raises on a missing
+`frame_index` column (listing the columns found), an all-NaN `frame_index`, a non-integral or
+negative `frame_index`, a frame anchored on two rows, and anchors that run backwards. `_load_block`
+additionally raises when the CSV references a frame beyond the MKV's length — the two artifacts would
+then not be the same recording.
+
+**Call sites outside this plan.** `NeuralDataPanel` is also used by three postprocessing viewers
+(`before_after_step_viewer.py`, `postprocessed_scene_viewer.py`, `postprocessing_stage_viewer.py`).
+Dropping `scale_factor` forces a one-line change in each: they now pass
+`int(frame_idx * self._neural_scale)` themselves, which is **byte-for-byte the behaviour they had**.
+Their own data model makes frame and row position proportional by construction — `frame_idx` *is*
+the position in their anchor DataFrame — so nothing is silently repaired or degraded there. Whether
+those viewers have an analogous problem is a separate question and deliberately not answered here.
+For the same reason `kinect_anchor_rows` is a keyword-only argument: supplied by the Neural+Kinect
+viewer, omitted by the three others, and documented at the point where it is read.
+
+**`frame_requested` now carries a navigation position, not a frame.** That is what the slider
+indexes, and in the three postprocessing viewers position and frame coincide, so the signal's meaning
+is unchanged for them. `_on_canvas_click` resolves a click to the nearest anchor row by binary
+search — the exact inverse of `update_cursor`'s lookup, so click-then-cursor is a round trip instead
+of two different linear approximations.
+
+**Phase 6 invariants preserved** — checked line by line: fixed global per-block `clim`; no
+`plotter.clear()`, `add_mesh()` or `remove_actor()` on the contact path in `_update_frame`;
+`scalar_range` re-asserted after every dataset swap and every mode toggle; the scalar bar removed and
+re-added on hot-swap; `penetration_depth_mm = -signed_depth_mm`; `inferno`; and the lazy per-block
+depth loading with its `maxsize=2` LRU. No artifact, writer, filter or io module was touched.
+
+**Files Modified:**
+- `code/src/merging/frame_navigation.py` — **new**; the `FrameNavigation` DTO and its two builders
+- `code/src/merging/gui/neural_kinect_scene_viewer.py` — lookup replaces the scale factor; slider,
+  label, play and initial render move over the navigable set; contact-points dict keyed by frame
+- `code/src/postprocessing/gui/before_after_step_viewer.py` — call-site only (1 line)
+- `code/src/postprocessing/gui/postprocessed_scene_viewer.py` — call-site only (1 line)
+- `code/src/postprocessing/gui/postprocessing_stage_viewer.py` — call-site only (1 line)
+- `code/tests/test_neural_cursor_alignment.py` — **new**; 24 tests
+
+**Not verified in this phase (stated plainly):** the GUI was not launched — everything above was
+verified by unit tests, by driving the new code path over the real CSV, and by an offscreen
+`NeuralDataPanel` exercise. What remains unproven is purely visual: that the cursor *looks* aligned
+on screen. No real block on disk currently exhibits the mid-recording-gap mode, so that half of 7.2
+is proven synthetically only.
+
+**Dependencies:** Phase 6 (which introduced the regression)
+
 ---
 
 ## Testing Plan
@@ -748,6 +892,21 @@ postprocessing viewers (`postprocessed_scene_viewer.py`, `before_after_step_view
 - [x] The DTO refuses an empty field, misaligned points/depths, a frame present in only one mapping,
       an inverted clim, and an empty resolution message.
 - [x] Depth values are byte-identical before and after a rigid transform of the points.
+
+#### Phase 7 — cursor alignment (`test_neural_cursor_alignment.py`, 24 tests)
+- [x] Every frame of a truncated **and** gapped CSV resolves to its exact anchor row.
+- [x] The old scale factor is shown to disagree on >90% of those frames, and to pick a row
+      belonging to a different frame — so the fixture cannot pass under the regression.
+- [x] The lookup is positional, not label-based: a shifted `RangeIndex` and a string index both
+      give identical answers.
+- [x] A frame inside the gap, or past the truncation, raises and is never mapped to a neighbour.
+- [x] The navigable set is the CSV's frames, not the recording's length; stepping crosses a gap
+      in one position.
+- [x] Pure-3D mode navigates the whole MKV range and has no rows to ask for.
+- [x] Malformed CSVs raise loudly: missing `frame_index` (naming the columns found), all-NaN,
+      non-integral, negative, duplicated, and backwards-running anchors.
+- [x] The frame label keeps the real kinect frame visible alongside the position.
+- [x] Contact points keyed by `frame_index` survive a gap where the positional build did not.
 
 ### Integration Tests
 - [x] Against a real block: retained `x/y/z/signed_depth_mm` are `np.array_equal` to Space 1 —

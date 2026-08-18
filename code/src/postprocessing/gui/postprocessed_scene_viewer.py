@@ -659,7 +659,7 @@ class PostprocessedSceneViewer(QMainWindow):
 
         # 6. Neural panel cursor ----------------------------------------
         if self._neural_panel is not None:
-            self._neural_panel.update_cursor(frame_idx, self._neural_scale)
+            self._neural_panel.update_cursor(int(frame_idx * self._neural_scale))
 
         # 7. Frame label -------------------------------------------------
         self.frame_label.setText(f"{frame_idx + 1} / {self._total_frames}")

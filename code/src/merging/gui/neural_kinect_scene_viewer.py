@@ -169,6 +169,11 @@ from preprocessing.motion_analysis.tactile_quantification.gui.contact_depth_fiel
 from preprocessing.stickers_analysis import XYZDataFileHandler
 
 from ..contact_depth_field_series import ContactDepthFieldLoader, ContactDepthFieldSeries
+from ..frame_navigation import (
+    FrameNavigation,
+    build_frame_navigation_from_merged_df,
+    build_frame_navigation_over_range,
+)
 from .sticker_velocity_compass import StickerVelocityCompass
 
 
@@ -545,10 +550,43 @@ class NeuralDataPanel(QWidget):
         total_kinect_frames: int,
         neural_fps: int = 1000,
         parent=None,
+        *,
+        kinect_anchor_rows: Optional[np.ndarray] = None,
     ):
         super().__init__(parent)
         self._total_kinect_frames = total_kinect_frames
         self._total_samples: int = len(merged_df)
+
+        # ------------------------------------------------------------------
+        # Navigation position -> merged-CSV row.
+        #
+        # ``kinect_anchor_rows[i]`` is the POSITIONAL row of the i-th navigable
+        # kinect frame — the same space the x-axis is drawn in
+        # (``np.arange(len(merged_df))`` in ``_setup_axes``).  It is supplied by
+        # callers whose frames do not map to rows uniformly: a neural-quality
+        # filtered merged CSV covers fewer frames than the recording, and may
+        # have mid-recording gaps, so no single multiplier can express the map.
+        #
+        # When omitted, the caller's own data model already makes position and
+        # row proportional — the postprocessing viewers index their anchor
+        # DataFrame by ``frame_idx`` directly — and click-to-frame uses the
+        # uniform inverse those callers have always used.  This is a documented
+        # call-site exception, not a fallback for a failed lookup.
+        # ------------------------------------------------------------------
+        if kinect_anchor_rows is not None:
+            kinect_anchor_rows = np.asarray(kinect_anchor_rows, dtype=np.int64)
+            if kinect_anchor_rows.shape != (total_kinect_frames,):
+                raise ValueError(
+                    "kinect_anchor_rows must hold exactly one merged-CSV row "
+                    f"per navigable frame: got shape {kinect_anchor_rows.shape} "
+                    f"for {total_kinect_frames} frames."
+                )
+            if kinect_anchor_rows.size and not np.all(np.diff(kinect_anchor_rows) > 0):
+                raise ValueError(
+                    "kinect_anchor_rows must be strictly increasing — the "
+                    "cursor and the click-to-frame search both rely on it."
+                )
+        self._kinect_anchor_rows: Optional[np.ndarray] = kinect_anchor_rows
 
         # Zoom state — zoomed ±30 s window is the default
         self._neural_fps: int = neural_fps
@@ -739,9 +777,16 @@ class NeuralDataPanel(QWidget):
     # Cursor update — hot path
     # ------------------------------------------------------------------
 
-    def update_cursor(self, frame_idx: int, scale_factor: float) -> None:
+    def update_cursor(self, sample_idx: int) -> None:
         """
-        Move the red vertical cursor to *frame_idx* in merged-CSV sample space.
+        Move the red vertical cursor to *sample_idx*, a merged-CSV ROW POSITION.
+
+        The caller resolves the row; this panel never derives it.  It used to
+        take ``(frame_idx, scale_factor)`` and compute
+        ``int(frame_idx * scale_factor)``, which silently assumed the CSV spans
+        the whole recording at a constant rate.  A neural-quality filtered CSV
+        does not, and the cursor drifted linearly away from the displayed frame.
+        A multiplication cannot express a non-uniform mapping; a lookup can.
 
         Fast path: restore the cached background bitmap, draw only the cursor
         lines via ``ax.draw_artist`` + ``canvas.blit`` — ~1–3 ms per call.
@@ -756,7 +801,7 @@ class NeuralDataPanel(QWidget):
         Mode ``_centered_mode=False`` (edge-pan): resnap when cursor reaches
         within 5 % of the left or right edge of the current view.
         """
-        sample_idx = int(frame_idx * scale_factor)
+        sample_idx = int(sample_idx)
         self._current_sample = sample_idx
 
         # Update cursor line positions
@@ -818,12 +863,32 @@ class NeuralDataPanel(QWidget):
         self.canvas.draw_idle()
 
     def _on_canvas_click(self, event) -> None:
-        """Convert a matplotlib left-click to a kinect frame and emit frame_requested."""
+        """Convert a left-click to a NAVIGATION POSITION and emit frame_requested.
+
+        With ``kinect_anchor_rows`` supplied the click resolves to the nearest
+        anchor row — the exact inverse of ``update_cursor``'s lookup, so a click
+        followed by a cursor update is a round trip.  Without it, position and
+        frame are proportional by the caller's own construction and the uniform
+        inverse is used (see ``__init__``).
+        """
         if event.inaxes is None or event.button != 1:
             return
         sample_idx = event.xdata
         if sample_idx is None:
             return
+
+        rows = self._kinect_anchor_rows
+        if rows is not None:
+            if rows.size == 0:
+                return
+            pos = int(np.searchsorted(rows, sample_idx))
+            if pos >= rows.size:
+                pos = rows.size - 1
+            elif pos > 0 and abs(sample_idx - rows[pos - 1]) <= abs(rows[pos] - sample_idx):
+                pos -= 1
+            self.frame_requested.emit(pos)
+            return
+
         scale = self._total_samples / self._total_kinect_frames
         frame = int(round(sample_idx / scale))
         frame = max(0, min(frame, self._total_kinect_frames - 1))
@@ -955,8 +1020,19 @@ class NeuralKinectViewer(QMainWindow):
         # that an interim _update_frame fired during a hot-swap (before the new
         # block's actors exist) cannot hit an undefined attribute.
         self._depth_series: Optional[ContactDepthFieldSeries] = None
-        self._contact_pts_by_frame: Optional[List[Optional[np.ndarray]]] = None
+        # Keyed by kinect ``frame_index``, never by position — see _load_block.
+        self._contact_pts_by_frame: Optional[Dict[int, Optional[np.ndarray]]] = None
         self._contact_clim: Optional[Tuple[float, float]] = None
+
+        # ------------------------------------------------------------------
+        # Navigation model — which kinect frames this block can display and
+        # where each one sits in the merged CSV.  All the logic lives in the
+        # ``merging.frame_navigation`` leaf; this viewer only asks it questions.
+        # Declared here so an interim _update_frame fired during a hot-swap
+        # cannot hit an undefined attribute.
+        # ------------------------------------------------------------------
+        self._nav: FrameNavigation = build_frame_navigation_over_range(0)
+        self.current_position: int = 0
 
         # ------------------------------------------------------------------
         # Build the Qt UI (plotter + static right panel + frame controls)
@@ -1079,6 +1155,13 @@ class NeuralKinectViewer(QMainWindow):
         )
 
         # ------------------------------------------------------------------
+        # 4a-bis. Navigation model: frame -> merged-CSV row, and the sorted set
+        # of frames the CSV actually contains.  Built from the CSV itself; the
+        # MKV length is NOT the navigable range when a merged CSV is present.
+        # ------------------------------------------------------------------
+        self._build_navigable_frames(spec.merged_csv_path)
+
+        # ------------------------------------------------------------------
         # 4a. Contact depth field (columnar; needs no parsing of any kind)
         #
         # The spec carries a LOADER, not a series, and this call is the moment
@@ -1107,17 +1190,27 @@ class NeuralKinectViewer(QMainWindow):
         # ------------------------------------------------------------------
         # 4b. Pre-extract contact points indexed by kinect frame
         # ------------------------------------------------------------------
-        self._contact_pts_by_frame: Optional[List[Optional[np.ndarray]]] = None
+        #
+        # Keyed by kinect ``frame_index``, NOT by position in the anchor list.
+        # The two coincide only when the CSV covers the whole recording; a
+        # neural-quality filtered CSV does not, and positional indexing silently
+        # served a different frame's contact points.  Currently masked whenever
+        # a depth field is present (it takes precedence), which is exactly why
+        # it had to be fixed rather than left as "the path nobody takes".
+        self._contact_pts_by_frame: Optional[Dict[int, Optional[np.ndarray]]] = None
         if (
             self.merged_df is not None
             and 'contact_points' in self.merged_df.columns
-            and 'time_kinect' in self.merged_df.columns
         ):
-            kinect_rows = self.merged_df.dropna(subset=['time_kinect'])
-            self._contact_pts_by_frame = [
-                _parse_contact_points_cell(cell)
-                for cell in kinect_rows['contact_points']
-            ]
+            assert self._nav.rows is not None, (
+                "the navigation must carry rows whenever a merged CSV exists; "
+                "_build_navigable_frames guarantees it a few lines above"
+            )
+            _cells = self.merged_df['contact_points'].to_numpy()[self._nav.rows]
+            self._contact_pts_by_frame = {
+                int(frame): _parse_contact_points_cell(cell)
+                for frame, cell in zip(self._nav.frames, _cells)
+            }
 
         # ------------------------------------------------------------------
         # 5. Contact centroid (used for GPU crop centre)
@@ -1151,6 +1244,20 @@ class NeuralKinectViewer(QMainWindow):
         self._point_cloud_view = KinectPointCloudView(self._mkv)
         self._total_frames: int = len(self._point_cloud_view)
 
+        # The MKV length is the only authority on which frames can be decoded.
+        # In pure-3D mode it is also the navigable set; otherwise it is a bound
+        # the CSV's frames must respect.  A frame the CSV claims but the MKV
+        # does not have means the two artifacts describe different recordings.
+        if self.merged_df is None:
+            self._nav = build_frame_navigation_over_range(self._total_frames)
+        elif self._nav.size and int(self._nav.frames[-1]) >= self._total_frames:
+            raise ValueError(
+                f"Merged CSV '{spec.merged_csv_path}' references kinect frame "
+                f"{int(self._nav.frames[-1])}, but '{spec.kinect_mkv_path}' holds "
+                f"only {self._total_frames} frames. The CSV and the MKV are not "
+                "the same recording."
+            )
+
         # ------------------------------------------------------------------
         # 7. Background preloader (512-frame ring buffer)
         # ------------------------------------------------------------------
@@ -1163,7 +1270,8 @@ class NeuralKinectViewer(QMainWindow):
         # ------------------------------------------------------------------
         # 8. Reset per-block interaction state
         # ------------------------------------------------------------------
-        self.current_index: int = 0
+        self.current_index: int = self._nav.frame_at(0) if self._nav.size else 0
+        self.current_position: int = 0
         self._slider_dragging: bool = False
         self._exact_frame_pending: Optional[int] = None
         self._recording_name: str = spec.recording_name
@@ -1180,9 +1288,12 @@ class NeuralKinectViewer(QMainWindow):
         # ------------------------------------------------------------------
         # 9. Update frame slider range + window title
         # ------------------------------------------------------------------
-        self.frame_slider.setRange(0, max(self._total_frames - 1, 0))
+        # The slider indexes the NAVIGABLE SET, not the MKV.  Frames the merged
+        # CSV does not contain have no neural data at all, so scrubbing into
+        # them would show a scene with nothing to compare it against.
+        self.frame_slider.setRange(0, max(self._nav.size - 1, 0))
         self.frame_slider.setValue(0)
-        self.frame_label.setText(f"1 / {self._total_frames}")
+        self.frame_label.setText(self._format_frame_label(0))
         self._buffer_label.setText(f"Buf: 0/{self._preloader_buf_size}")
         self.crop_spinbox.blockSignals(True)
         self.crop_spinbox.setValue(int(self._crop_half_size))
@@ -1211,7 +1322,13 @@ class NeuralKinectViewer(QMainWindow):
             self.neural_panel = None
 
         if self.merged_df is not None:
-            self.neural_panel = NeuralDataPanel(self.merged_df, self._total_frames)
+            self.neural_panel = NeuralDataPanel(
+                self.merged_df,
+                self._nav.size,
+                kinect_anchor_rows=self._nav.rows,
+            )
+            # ``frame_requested`` carries a navigation POSITION, which is
+            # exactly what the slider indexes.
             self.neural_panel.frame_requested.connect(self.frame_slider.setValue)
             self._outer_layout.addWidget(self.neural_panel)
         else:
@@ -1226,7 +1343,38 @@ class NeuralKinectViewer(QMainWindow):
         # 13. Deferred render (if already shown)
         # ------------------------------------------------------------------
         if self._initial_render_done:
-            QTimer.singleShot(0, lambda: self._update_frame(0))
+            _first = self._frame_at(0)
+            QTimer.singleShot(0, lambda: self._update_frame(_first))
+
+    # ======================================================================
+    # Navigation model — frame <-> merged-CSV row <-> slider position
+    # ======================================================================
+
+    def _build_navigable_frames(self, merged_csv_path: Optional[Path]) -> None:
+        """Install this block's navigable frame set from the merged CSV.
+
+        Delegates entirely to ``merging.frame_navigation``, which documents why
+        the mapping is a lookup rather than a scale factor and why the navigable
+        set is an array rather than a count.
+
+        Leaves the set empty when there is no merged CSV; ``_load_block`` fills
+        it from the MKV once the recording is open.  That is the pure-3D case —
+        nothing was filtered, so nothing is being hidden.
+        """
+        if self.merged_df is None:
+            self._nav = build_frame_navigation_over_range(0)
+            return
+        self._nav = build_frame_navigation_from_merged_df(
+            self.merged_df, merged_csv_path
+        )
+
+    def _frame_at(self, position: int) -> int:
+        """Return the kinect frame at navigation *position* (fail-fast)."""
+        return self._nav.frame_at(position)
+
+    def _format_frame_label(self, position: int) -> str:
+        """``"<kinect frame> (<position>/<navigable>)"`` for the frame readout."""
+        return self._nav.format_label(position)
 
     # ======================================================================
     # UI construction
@@ -1485,8 +1633,10 @@ class NeuralKinectViewer(QMainWindow):
         self.frame_slider.sliderReleased.connect(self._on_slider_released)
         layout.addWidget(self.frame_slider)
 
-        self.frame_label = QLabel("1 / 0")
-        self.frame_label.setFixedWidth(100)
+        # "<kinect frame> (<position>/<navigable>)" — wider than the old
+        # "<n> / <total>" because the real frame and the position are both shown.
+        self.frame_label = QLabel("— (0/0)")
+        self.frame_label.setFixedWidth(150)
         layout.addWidget(self.frame_label)
 
         self._buffer_label = QLabel(f"Buf: 0/{self._preloader_buf_size}")
@@ -1694,15 +1844,8 @@ class NeuralKinectViewer(QMainWindow):
         # Also reset the last-forearm-key sentinel so the forearm is redrawn
         self._last_forearm_key: Any = object()
 
-        # Neural scale: ratio of merged-CSV rows to kinect frames.
-        # Must be set here (not only in _deferred_start) so that hot-swap
-        # renders triggered by _load_block use the correct scale for the
-        # new block.
-        self._neural_scale: float = (
-            len(self.merged_df) / self._total_frames
-            if self.merged_df is not None and self._total_frames > 0
-            else 1.0
-        )
+        # No neural scale here any more: the cursor position comes from
+        # ``self._nav``, built in _load_block from the CSV itself.
 
     # ======================================================================
     # Frame update — the hot path
@@ -1727,6 +1870,11 @@ class NeuralKinectViewer(QMainWindow):
         ``plotter.render()`` at the end propagates all VTK Modified() flags.
         """
         self.current_index = frame_idx
+        # Raises rather than clamping: a frame outside the navigable set was
+        # removed by neural-quality filtering, and rendering it anyway would put
+        # the timeseries cursor on some other frame's row.
+        _position = self._nav.position_of(frame_idx)
+        self.current_position = _position
 
         # Dirty flags — set by each per-actor block when data actually changes.
         # dirty:       at least one actor was modified → need plotter.render()
@@ -1928,7 +2076,13 @@ class NeuralKinectViewer(QMainWindow):
                     _pair = self._depth_series.frame(frame_idx)
                     if _pair is not None:
                         _cpts, _cdepths = _pair
-                elif frame_idx < len(self._contact_pts_by_frame):
+                elif self._contact_pts_by_frame is not None:
+                    if frame_idx not in self._contact_pts_by_frame:
+                        raise KeyError(
+                            f"Kinect frame {frame_idx} has no contact_points row "
+                            "in the merged CSV. Reading a neighbouring frame's "
+                            "points instead would silently draw the wrong contact."
+                        )
                     _cpts = self._contact_pts_by_frame[frame_idx]
             _contact_is_empty = _cpts is None or len(_cpts) == 0
 
@@ -1974,10 +2128,10 @@ class NeuralKinectViewer(QMainWindow):
 
         # 7. Neural panel cursor --------------------------------------------
         if self.neural_panel is not None:
-            self.neural_panel.update_cursor(frame_idx, self._neural_scale)
+            self.neural_panel.update_cursor(self._nav.row_of(frame_idx))
 
         # 8. Frame label + buffer fill indicator ----------------------------
-        self.frame_label.setText(f"{frame_idx + 1} / {self._total_frames}")
+        self.frame_label.setText(self._format_frame_label(_position))
         buf_n = self._preloader.buffer_count()
         buf_max = self._preloader._buffer_size
         if not self._play_timer.isActive() or (frame_idx % 5 == 0):
@@ -2128,7 +2282,7 @@ class NeuralKinectViewer(QMainWindow):
         self._slider_dragging = False
         self._drag_timer.stop()
         self._pending_drag_frame = None
-        self._update_frame(self.frame_slider.value())
+        self._update_frame(self._frame_at(self.frame_slider.value()))
         self._refresh_cam_pos_label()
 
     def _on_drag_timer_fired(self) -> None:
@@ -2139,12 +2293,14 @@ class NeuralKinectViewer(QMainWindow):
             self._update_frame(frame)
 
     def _on_slider_change(self, value: int) -> None:
+        """*value* is a navigation POSITION, not a kinect frame index."""
+        frame = self._frame_at(value)
         if self._slider_dragging:
-            self.frame_label.setText(f"{value + 1} / {self._total_frames}")
-            self._preloader.seek(value)
-            self._pending_drag_frame = value
+            self.frame_label.setText(self._format_frame_label(value))
+            self._preloader.seek(frame)
+            self._pending_drag_frame = frame
         else:
-            self._update_frame(value)
+            self._update_frame(frame)
 
     def _on_visibility_changed(self, key: str, state: int) -> None:
         self._visibility[key] = state == Qt.Checked
@@ -2273,7 +2429,10 @@ class NeuralKinectViewer(QMainWindow):
             self.play_button.setText("⏸ Pause")
 
     def _play_advance(self) -> None:
-        nxt = (self.current_index + 1) % self._total_frames
+        """Advance one step through the NAVIGABLE set (which may have gaps)."""
+        if not self._nav.size:
+            return
+        nxt = (self.current_position + 1) % self._nav.size
         self.frame_slider.setValue(nxt)
 
     # ======================================================================
@@ -2283,10 +2442,9 @@ class NeuralKinectViewer(QMainWindow):
     def _deferred_start(self) -> None:
         """Initialize the VTK interactor (once), then render frame 0.
 
-        ``_neural_scale`` is already set by ``_load_block()`` so it does not
-        need to be recomputed here.  The VTK interactor initialisation is
-        guarded so it only runs once even when this method is called on the
-        first show.
+        The frame -> row lookup is already built by ``_load_block()`` so nothing
+        needs recomputing here.  The VTK interactor initialisation is guarded so
+        it only runs once even when this method is called on the first show.
         """
         if not getattr(self, '_vtk_interactor_initialized', False):
             try:
@@ -2299,7 +2457,9 @@ class NeuralKinectViewer(QMainWindow):
         if sz.width() > 0 and sz.height() > 0:
             self.plotter.render_window.SetSize(sz.width(), sz.height())
 
-        self._update_frame(0)
+        # Frame 0 is not necessarily navigable: truncating filtering can drop
+        # the opening trials outright.  Start at the first frame that exists.
+        self._update_frame(self._frame_at(0))
 
     def showEvent(self, event) -> None:  # noqa: N802
         """Trigger the first render once the window has real geometry."""
