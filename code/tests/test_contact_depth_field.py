@@ -40,26 +40,35 @@ from preprocessing.motion_analysis.tactile_quantification.model.contact_depth_fi
 # ---------------------------------------------------------------------------
 # Importing the processor
 # ---------------------------------------------------------------------------
-# ``code/tests/conftest.py`` replaces ``preprocessing.forearm_extraction`` with a
-# bare stub so the rest of the suite runs without the Kinect/OpenGL/Qt SDKs.  The
-# processor imports ``serialize_contact_points`` from that package's ``__init__``,
-# which the stub does not carry, so the stub has to be lifted here.  If the real
-# package cannot be imported (SDK-free environment) the stub is put back and the
-# processor-level tests skip with a recorded reason rather than silently passing.
+# ``code/tests/conftest.py`` replaces ``preprocessing.forearm_extraction`` and its
+# ``registration`` subpackage with bare stubs so the rest of the suite runs
+# without the Kinect/OpenGL/Qt SDKs.  The processor imports
+# ``serialize_contact_points`` from the package's ``__init__``, which re-exports
+# it from ``.registration``, so *both* stubs have to be lifted here — leaving the
+# subpackage stubbed makes the parent's own ``__init__`` fail on import.  If the
+# real package cannot be imported (SDK-free environment) the stubs are put back
+# and the processor-level tests skip with a recorded reason rather than silently
+# passing.
+
+_STUBBED_FOR_PROCESSOR = (
+    "preprocessing.forearm_extraction",
+    "preprocessing.forearm_extraction.registration",
+)
+
 
 def _load_processor():
     """Return ``ObjectsInteractionProcessor``, or ``None`` with a skip reason."""
-    stub = sys.modules.get("preprocessing.forearm_extraction")
-    stub_was_installed = stub is not None and getattr(stub, "__file__", None) is None
-    if stub_was_installed:
-        del sys.modules["preprocessing.forearm_extraction"]
+    lifted = {}
+    for dotted in _STUBBED_FOR_PROCESSOR:
+        module = sys.modules.get(dotted)
+        if module is not None and getattr(module, "__file__", None) is None:
+            lifted[dotted] = sys.modules.pop(dotted)
     try:
         from preprocessing.motion_analysis.tactile_quantification.model.objects_interaction_processor import (
             ObjectsInteractionProcessor,
         )
     except ImportError:
-        if stub_was_installed:
-            sys.modules["preprocessing.forearm_extraction"] = stub
+        sys.modules.update(lifted)
         return None
     return ObjectsInteractionProcessor
 

@@ -367,20 +367,73 @@ belongs in the Phase 4 leaf if a third stage ever needs it.
 
 ### Phase 4: The stage io leaf
 **Goal:** A testable module that reads, transforms and writes the sidecar per stage.
-**Started:** —  **Completed:** —
+**Started:** 2026-08-18 13:35  **Completed:** 2026-08-18 14:23
 
-- [ ] 4.1 — New `code/src/postprocessing/depth_field_stage_io.py`: apply a 4x4, apply a
+- [x] 4.1 — New `code/src/postprocessing/depth_field_stage_io.py`: apply a 4x4, apply a
       `CalibrationResult`, apply a per-frame index filter with the max-magnitude rule, and apply a
-      per-frame vertex re-addressing.
-- [ ] 4.2 — The row-count agreement check: given a parquet and the CSV written by the same stage,
-      assert per-frame parity and raise naming the first offending frame.
-- [ ] 4.3 — float64 compute, float32 cast-back, dtype preserved.
-- [ ] 4.4 — Tests on synthetic tables — no Open3D, no PyQt5, no recording.
+      per-frame vertex re-addressing. *Done as five pure functions —
+      `apply_rigid_transform_to_field`, `apply_transform_schedule_to_field`,
+      `apply_pca_calibration_to_field`, `apply_dedup_mapping_to_field`,
+      `apply_vertex_addressing_to_field` — each taking and returning a schema-conforming table and
+      never mutating its arguments. The 4x4 comes in both flavours because the ICP stage applies a
+      **schedule**, not a matrix; the schedule path reproduces
+      `transform_spatial_columns_scheduled`'s half-open segmentation exactly, transforms each row
+      from its original coordinates (segments are disjoint), and leaves frames below the first
+      `start_frame` alone. Both delegate to `csv_spatial_transformer.apply_rigid_transform`, so the
+      two artifacts are moved by the same arithmetic and not merely the same matrix.*
+- [x] 4.2 — The row-count agreement check: given a parquet and the CSV written by the same stage,
+      assert per-frame parity and raise naming the first offending frame. *Done:
+      `assert_row_counts_agree_with_csv(table, csv_path)`, over the two public counters
+      `field_row_counts_by_frame` and `csv_contact_point_counts_by_frame`. The CSV side reads only
+      `frame_index` and `contact_points` and parses with `parse_contact_points` itself, so it counts
+      what the stage actually saw — a stricter parser would report a number no stage ever worked
+      with. The message names the lowest offending frame, both counts, and how many frames disagree
+      in total.*
+- [x] 4.3 — float64 compute, float32 cast-back, dtype preserved. *Done in one place,
+      `_with_coordinates`, which is the only writer of `x/y/z`: it rejects a wrong-shaped, non-finite
+      or float32-overflowing result and casts exactly once, at the end. `signed_depth_mm` is
+      untouched by every path except the dedup rule, asserted bitwise.*
+- [x] 4.4 — Tests on synthetic tables — no Open3D, no PyQt5, no recording. *Done — 76 tests.*
+
+**The dedup reduction rule, stated unambiguously.** A survivor inherits the **minimum** signed depth
+of its DBSCAN group — the most negative value, which under the `negative_is_penetrating` convention
+is the deepest penetration. The value is taken verbatim from the group; nothing is averaged or
+recomputed. On real data this is the same row "largest absolute value" would pick: the field's
+positive values, where they exist at all, are bounded by the contact-detection epsilon
+(`inside_mask = np.all(tri_distances < epsilon, axis=1)`), so a positive can never be the largest
+magnitude in a group that contains a penetrating vertex. Where a synthetic group mixes signs the two
+readings diverge, and the module keeps the penetrating row; a test asserts that, and a 20-case
+randomised test asserts the invariant the rule exists for — per-frame `max(|signed_depth_mm|)` is
+unchanged by deduplication, which is what keeps 6.2 / 9.4 true against the CSV's `contact_depth`.
+
+**Purity, and the conftest change it required.** The leaf imports no geometry engine and no GUI
+toolkit: vertex re-addressing takes a vertex *array*, the count check takes a *CSV path*. But
+`csv_spatial_transformer` — numpy, pandas and `re` only — sits under
+`preprocessing/forearm_extraction/registration/__init__.py`, which imports open3d and
+`open3d.visualization.gui`, so importing the leaf dragged both in. `conftest.py` now stubs
+`preprocessing.forearm_extraction.registration` the same way it already stubs its parent, and a
+subprocess test proves the leaf imports with neither `open3d` nor `PyQt5` in `sys.modules`. The
+stub-lifting dance in `test_contact_depth_field.py::_load_processor` had to lift the subpackage stub
+as well — the parent's own `__init__` re-exports from `.registration` — or its six processor tests
+would have skipped instead of running.
+
+**Public surface:** `apply_rigid_transform_to_field`, `apply_transform_schedule_to_field`,
+`apply_pca_calibration_to_field`, `apply_dedup_mapping_to_field`, `apply_vertex_addressing_to_field`,
+`assert_row_counts_agree_with_csv`, `field_row_counts_by_frame`,
+`csv_contact_point_counts_by_frame`; the constants `FRAME_INDEX_COLUMN`, `CONTACT_POINTS_COLUMN`,
+`COORDINATE_COLUMNS`, `DEPTH_COLUMN`; and the types `TransformSchedule` and `DedupMappingLike`.
+`DedupMappingLike` is a `Protocol`, not an import: the stage scripts depend on this module, so the
+module cannot depend on them, and `deduplicate_xy_points.DedupMapping` satisfies it as written —
+Phase 6 passes `frame_mappings` straight through with no conversion.
 
 **Files Modified:** `code/src/postprocessing/depth_field_stage_io.py` (new),
-`code/tests/test_depth_field_stage_io.py` (new)
+`code/tests/test_depth_field_stage_io.py` (new), `code/tests/conftest.py`,
+`code/tests/test_contact_depth_field.py`
 
 **Dependencies:** Phase 2
+
+**Verification:** full suite **517 passed, 7 skipped** (441 + 76 new; skip count unchanged from the
+Phase 3 baseline).
 
 ### Phase 5: ICP propagation (Space 1 → 2)
 **Goal:** The field arrives in `blocks_registered/`.

@@ -44,6 +44,14 @@ _stub_package("preprocessing.stickers_analysis")
 # model and data-access sub-packages can still be imported directly.
 _stub_package("preprocessing.forearm_extraction")
 
+# registration/__init__.py imports open3d (forearm_registrator) and
+# open3d.visualization.gui / PyQt5 (registration_workbench).  Stubbing it too
+# lets pure leaves such as registration.csv_spatial_transformer — numpy, pandas
+# and re only — be imported without a geometry engine or a GUI toolkit, which
+# is what keeps postprocessing.depth_field_stage_io testable.  Nothing imports
+# the subpackage root except forearm_extraction/__init__.py, itself stubbed.
+_stub_package("preprocessing.forearm_extraction.registration")
+
 # motion_analysis/__init__.py is a facade that eagerly imports the hand-tracking
 # managers, the tactile-quantification controller and the GUI layer (PyQt5,
 # open3d.visualization, the HaMeR client).  Stub the root so leaf modules such as
