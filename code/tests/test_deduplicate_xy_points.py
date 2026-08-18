@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -12,7 +13,29 @@ import pytest
 _SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts" / "_5_postprocessing"
 sys.path.insert(0, str(_SCRIPTS_DIR))
 
-from deduplicate_xy_points import deduplicate_xy
+from deduplicate_xy_points import (
+    EPSILON_SOURCE_DAG_CONFIG,
+    EPSILON_SOURCE_INTERACTIVE_MONITOR,
+    FOREARM_DEDUP_METADATA_SCHEMA_VERSION,
+    deduplicate_forearm_ply,
+    deduplicate_xy,
+    forearm_dedup_metadata_path,
+    write_forearm_dedup_metadata,
+)
+
+o3d = pytest.importorskip("open3d", reason="deduplicate_forearm_ply needs Open3D")
+
+
+def _write_ply(path: Path, points, colors=None, normals=None) -> None:
+    """Materialise a point cloud as a PLY so tests exercise the real IO path."""
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(np.asarray(points, dtype=np.float64).reshape(-1, 3))
+    if colors is not None:
+        pcd.colors = o3d.utility.Vector3dVector(np.asarray(colors, dtype=np.float64))
+    if normals is not None:
+        pcd.normals = o3d.utility.Vector3dVector(np.asarray(normals, dtype=np.float64))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    assert o3d.io.write_point_cloud(str(path), pcd)
 
 
 class TestDeduplicateXyBasic:
@@ -502,3 +525,273 @@ class TestDeduplicateXyReturnIndices:
 
         assert n_removed == 0
         np.testing.assert_array_equal(indices, [0, 1, 2])
+
+
+class TestForearmDedupMetadataPath:
+    """The sidecar location must be derived in exactly one place."""
+
+    def test_path_sits_beside_the_ply(self) -> None:
+        ply = Path("/data/forearm_deduped/ST14-01_forearm.ply")
+        meta = forearm_dedup_metadata_path(ply)
+
+        assert meta.parent == ply.parent
+        assert meta.name == "ST14-01_forearm_dedup_metadata.json"
+
+    def test_path_is_deterministic(self) -> None:
+        ply = Path("a/b/c.ply")
+        assert forearm_dedup_metadata_path(ply) == forearm_dedup_metadata_path(ply)
+
+
+class TestWriteForearmDedupMetadata:
+    """The effective epsilon and vertex count must survive on disk."""
+
+    @staticmethod
+    def _stats(n_original: int = 10, n_deduped: int = 7, n_removed: int = 3) -> dict:
+        return {
+            "n_original": n_original,
+            "n_deduped": n_deduped,
+            "n_removed": n_removed,
+        }
+
+    def test_writes_all_provenance_fields(self, tmp_path: Path) -> None:
+        deduped = tmp_path / "forearm_deduped" / "session_forearm.ply"
+        source = tmp_path / "forearm_source" / "session_forearm.ply"
+
+        out = write_forearm_dedup_metadata(
+            deduped,
+            source_ply=source,
+            epsilon=0.5,
+            epsilon_source=EPSILON_SOURCE_DAG_CONFIG,
+            stats=self._stats(),
+        )
+
+        assert out == forearm_dedup_metadata_path(deduped)
+        payload = json.loads(out.read_text(encoding="utf-8"))
+        assert payload == {
+            "schema_version": FOREARM_DEDUP_METADATA_SCHEMA_VERSION,
+            "source_ply": "session_forearm.ply",
+            "deduplicated_ply": "session_forearm.ply",
+            "dedup_epsilon": 0.5,
+            "epsilon_source": EPSILON_SOURCE_DAG_CONFIG,
+            "n_vertices_original": 10,
+            "n_vertices_deduped": 7,
+            "n_vertices_removed": 3,
+        }
+
+    def test_records_the_interactive_epsilon_not_the_configured_one(
+        self, tmp_path: Path
+    ) -> None:
+        """A monitor run is only reproducible if the chosen epsilon is stored."""
+        deduped = tmp_path / "forearm.ply"
+
+        out = write_forearm_dedup_metadata(
+            deduped,
+            source_ply=tmp_path / "src.ply",
+            epsilon=1.234,
+            epsilon_source=EPSILON_SOURCE_INTERACTIVE_MONITOR,
+            stats=self._stats(),
+        )
+
+        payload = json.loads(out.read_text(encoding="utf-8"))
+        assert payload["dedup_epsilon"] == pytest.approx(1.234)
+        assert payload["epsilon_source"] == EPSILON_SOURCE_INTERACTIVE_MONITOR
+
+    def test_output_is_byte_identical_on_rewrite(self, tmp_path: Path) -> None:
+        """No timestamps — an unchanged re-run must not churn the artifact."""
+        deduped = tmp_path / "forearm.ply"
+        kwargs = dict(
+            source_ply=tmp_path / "src.ply",
+            epsilon=0.5,
+            epsilon_source=EPSILON_SOURCE_DAG_CONFIG,
+            stats=self._stats(),
+        )
+
+        first = write_forearm_dedup_metadata(deduped, **kwargs).read_bytes()
+        second = write_forearm_dedup_metadata(deduped, **kwargs).read_bytes()
+
+        assert first == second
+
+    def test_creates_parent_directory(self, tmp_path: Path) -> None:
+        deduped = tmp_path / "does" / "not" / "exist" / "forearm.ply"
+
+        out = write_forearm_dedup_metadata(
+            deduped,
+            source_ply=tmp_path / "src.ply",
+            epsilon=0.5,
+            epsilon_source=EPSILON_SOURCE_DAG_CONFIG,
+            stats=self._stats(),
+        )
+
+        assert out.exists()
+
+    @pytest.mark.parametrize("bad_epsilon", [0.0, -0.5, float("nan"), float("inf")])
+    def test_rejects_non_positive_or_non_finite_epsilon(
+        self, tmp_path: Path, bad_epsilon: float
+    ) -> None:
+        with pytest.raises(ValueError, match="positive finite"):
+            write_forearm_dedup_metadata(
+                tmp_path / "forearm.ply",
+                source_ply=tmp_path / "src.ply",
+                epsilon=bad_epsilon,
+                epsilon_source=EPSILON_SOURCE_DAG_CONFIG,
+                stats=self._stats(),
+            )
+
+    def test_rejects_unknown_epsilon_source(self, tmp_path: Path) -> None:
+        with pytest.raises(ValueError, match="Unknown epsilon_source"):
+            write_forearm_dedup_metadata(
+                tmp_path / "forearm.ply",
+                source_ply=tmp_path / "src.ply",
+                epsilon=0.5,
+                epsilon_source="guessed",
+                stats=self._stats(),
+            )
+
+    def test_rejects_missing_stats_key(self, tmp_path: Path) -> None:
+        with pytest.raises(ValueError, match="missing required key"):
+            write_forearm_dedup_metadata(
+                tmp_path / "forearm.ply",
+                source_ply=tmp_path / "src.ply",
+                epsilon=0.5,
+                epsilon_source=EPSILON_SOURCE_DAG_CONFIG,
+                stats={"n_original": 10, "n_deduped": 7},
+            )
+
+    def test_rejects_inconsistent_vertex_counts(self, tmp_path: Path) -> None:
+        with pytest.raises(ValueError, match="Inconsistent dedup vertex counts"):
+            write_forearm_dedup_metadata(
+                tmp_path / "forearm.ply",
+                source_ply=tmp_path / "src.ply",
+                epsilon=0.5,
+                epsilon_source=EPSILON_SOURCE_DAG_CONFIG,
+                stats=self._stats(n_original=10, n_deduped=7, n_removed=2),
+            )
+
+
+class TestDeduplicateForearmPly:
+    """The source -> deduped vertex mapping must be recoverable by the caller."""
+
+    def test_returns_kept_indices(self, tmp_path: Path) -> None:
+        points = [
+            [0.0, 0.0, 2.0],
+            [0.0, 0.0, 0.5],
+            [5.0, 0.0, 1.0],
+        ]
+        src = tmp_path / "src.ply"
+        out = tmp_path / "deduped" / "out.ply"
+        _write_ply(src, points)
+
+        stats = deduplicate_forearm_ply(src, out, epsilon=0.1)
+
+        assert stats["n_original"] == 3
+        assert stats["n_deduped"] == 2
+        assert stats["n_removed"] == 1
+        np.testing.assert_array_equal(stats["kept_indices"], [1, 2])
+
+    def test_kept_indices_index_the_source_vertices(self, tmp_path: Path) -> None:
+        points = [
+            [0.0, 0.0, 0.0],
+            [0.5, 0.0, 1.0],
+            [5.0, 0.0, 2.0],
+            [5.5, 0.0, 3.0],
+            [10.0, 0.0, 4.0],
+        ]
+        src = tmp_path / "src.ply"
+        out = tmp_path / "out.ply"
+        _write_ply(src, points)
+
+        stats = deduplicate_forearm_ply(src, out, epsilon=1.0)
+
+        source_pts = np.asarray(o3d.io.read_point_cloud(str(src)).points)
+        deduped_pts = np.asarray(o3d.io.read_point_cloud(str(out)).points)
+        np.testing.assert_allclose(
+            deduped_pts, source_pts[stats["kept_indices"]], atol=1e-6
+        )
+
+    def test_kept_indices_match_written_vertex_count(self, tmp_path: Path) -> None:
+        points = [[float(i % 4), float(i // 4), float(i)] for i in range(16)]
+        src = tmp_path / "src.ply"
+        out = tmp_path / "out.ply"
+        _write_ply(src, points)
+
+        stats = deduplicate_forearm_ply(src, out, epsilon=0.5)
+
+        n_written = len(np.asarray(o3d.io.read_point_cloud(str(out)).points))
+        assert len(stats["kept_indices"]) == n_written == stats["n_deduped"]
+
+    def test_kept_indices_agree_with_carried_colors(self, tmp_path: Path) -> None:
+        points = [
+            [0.0, 0.0, 2.0],
+            [0.0, 0.0, 0.5],
+            [5.0, 0.0, 1.0],
+        ]
+        colors = [
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ]
+        src = tmp_path / "src.ply"
+        out = tmp_path / "out.ply"
+        _write_ply(src, points, colors=colors)
+
+        stats = deduplicate_forearm_ply(src, out, epsilon=0.1)
+
+        source_colors = np.asarray(o3d.io.read_point_cloud(str(src)).colors)
+        deduped_colors = np.asarray(o3d.io.read_point_cloud(str(out)).colors)
+        np.testing.assert_allclose(
+            deduped_colors, source_colors[stats["kept_indices"]], atol=1e-6
+        )
+
+    def test_empty_ply_returns_empty_kept_indices(self, tmp_path: Path) -> None:
+        # Open3D refuses to *write* a 0-point cloud, so the empty PLY is
+        # hand-written; it reads back as an empty cloud all the same.
+        src = tmp_path / "src.ply"
+        out = tmp_path / "out.ply"
+        src.write_text(
+            "ply\nformat ascii 1.0\nelement vertex 0\n"
+            "property float x\nproperty float y\nproperty float z\n"
+            "end_header\n",
+            encoding="ascii",
+        )
+        assert len(np.asarray(o3d.io.read_point_cloud(str(src)).points)) == 0
+
+        stats = deduplicate_forearm_ply(src, out, epsilon=0.5)
+
+        assert stats["n_original"] == 0
+        assert stats["n_deduped"] == 0
+        assert stats["n_removed"] == 0
+        assert len(stats["kept_indices"]) == 0
+        assert stats["kept_indices"].dtype == np.intp
+
+    def test_epsilon_is_required_and_keyword_only(self, tmp_path: Path) -> None:
+        """A silent default epsilon would repoint every derived vertex index."""
+        src = tmp_path / "src.ply"
+        out = tmp_path / "out.ply"
+        _write_ply(src, [[0.0, 0.0, 0.0]])
+
+        with pytest.raises(TypeError):
+            deduplicate_forearm_ply(src, out)
+
+        with pytest.raises(TypeError):
+            deduplicate_forearm_ply(src, out, 0.5)
+
+    def test_stats_feed_the_metadata_writer_directly(self, tmp_path: Path) -> None:
+        """The dict returned by the dedup is the dict the sidecar writer consumes."""
+        points = [[float(i % 3), 0.0, float(i)] for i in range(9)]
+        src = tmp_path / "src.ply"
+        out = tmp_path / "out.ply"
+        _write_ply(src, points)
+
+        stats = deduplicate_forearm_ply(src, out, epsilon=0.5)
+        meta_path = write_forearm_dedup_metadata(
+            out,
+            source_ply=src,
+            epsilon=0.5,
+            epsilon_source=EPSILON_SOURCE_DAG_CONFIG,
+            stats=stats,
+        )
+
+        payload = json.loads(meta_path.read_text(encoding="utf-8"))
+        n_written = len(np.asarray(o3d.io.read_point_cloud(str(out)).points))
+        assert payload["n_vertices_deduped"] == n_written
+        assert payload["n_vertices_deduped"] == len(stats["kept_indices"])

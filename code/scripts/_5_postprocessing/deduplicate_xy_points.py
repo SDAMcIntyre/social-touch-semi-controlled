@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import numpy as np
@@ -9,6 +10,29 @@ from preprocessing.forearm_extraction.registration.csv_spatial_transformer impor
     parse_contact_points,
     serialize_contact_points,
 )
+
+# --- Deduplicated-forearm provenance sidecar -------------------------------
+#
+# A vertex index into the deduplicated forearm PLY is only meaningful relative
+# to the epsilon that produced that PLY: change epsilon and every vertex is
+# renumbered. The DAG config is not part of the mtime-based staleness check
+# (utils/should_process_task.py), and under `monitor: true` the epsilon is
+# chosen interactively and never reaches the config at all. The sidecar is the
+# only place the *effective* epsilon and the resulting vertex count survive, so
+# a downstream consumer can prove which PLY a vertex index belongs to.
+
+FOREARM_DEDUP_METADATA_SUFFIX = "_dedup_metadata.json"
+FOREARM_DEDUP_METADATA_SCHEMA_VERSION = "1"
+
+#: Epsilon came from the DAG config's ``deduplicate_xy.epsilon`` option.
+EPSILON_SOURCE_DAG_CONFIG = "dag_config"
+#: Epsilon was chosen by the operator in the interactive monitor viewer.
+EPSILON_SOURCE_INTERACTIVE_MONITOR = "interactive_monitor"
+
+EPSILON_SOURCES = frozenset({
+    EPSILON_SOURCE_DAG_CONFIG,
+    EPSILON_SOURCE_INTERACTIVE_MONITOR,
+})
 
 
 def deduplicate_xy(
@@ -254,7 +278,99 @@ def monitor_deduplicate_xy_interactive(
     return initial_epsilon
 
 
-def deduplicate_forearm_ply(input_ply: Path, output_ply: Path, epsilon: float = 0.35) -> dict:
+def forearm_dedup_metadata_path(deduped_ply: Path) -> Path:
+    """Return the path of the provenance sidecar for a deduplicated forearm PLY.
+
+    Producers and consumers must both go through this helper so the sidecar is
+    always found next to the PLY it describes.
+
+    Args:
+        deduped_ply: Path of the deduplicated forearm PLY.
+
+    Returns:
+        Path of the JSON sidecar (same directory, same stem).
+    """
+    return deduped_ply.with_name(deduped_ply.stem + FOREARM_DEDUP_METADATA_SUFFIX)
+
+
+def write_forearm_dedup_metadata(
+    deduped_ply: Path,
+    *,
+    source_ply: Path,
+    epsilon: float,
+    epsilon_source: str,
+    stats: dict,
+) -> Path:
+    """Record the effective dedup epsilon and vertex counts beside the deduped PLY.
+
+    Written as a deterministic JSON sidecar (sorted keys, no timestamps) so an
+    unchanged re-run produces a byte-identical file.
+
+    Args:
+        deduped_ply: Path of the deduplicated forearm PLY this describes.
+        source_ply: Path of the PLY that was deduplicated.
+        epsilon: The epsilon actually applied — not the configured default.
+        epsilon_source: One of EPSILON_SOURCES, saying where that value came from.
+        stats: The dict returned by deduplicate_forearm_ply.
+
+    Returns:
+        Path of the written sidecar.
+
+    Raises:
+        ValueError: If epsilon is not a positive finite value, epsilon_source is
+            unknown, stats is missing a required key, or the vertex counts do
+            not satisfy n_deduped + n_removed == n_original.
+    """
+    epsilon = float(epsilon)
+    if not np.isfinite(epsilon) or epsilon <= 0.0:
+        raise ValueError(
+            f"dedup epsilon must be a positive finite value, got {epsilon!r} "
+            f"(writing metadata for {deduped_ply})"
+        )
+
+    if epsilon_source not in EPSILON_SOURCES:
+        raise ValueError(
+            f"Unknown epsilon_source {epsilon_source!r}; expected one of "
+            f"{sorted(EPSILON_SOURCES)}"
+        )
+
+    required = ("n_original", "n_deduped", "n_removed")
+    missing = [key for key in required if key not in stats]
+    if missing:
+        raise ValueError(
+            f"dedup stats is missing required key(s) {missing} "
+            f"(writing metadata for {deduped_ply})"
+        )
+
+    n_original = int(stats["n_original"])
+    n_deduped = int(stats["n_deduped"])
+    n_removed = int(stats["n_removed"])
+    if n_deduped + n_removed != n_original:
+        raise ValueError(
+            f"Inconsistent dedup vertex counts: {n_deduped} + {n_removed} "
+            f"!= {n_original} (writing metadata for {deduped_ply})"
+        )
+
+    metadata = {
+        "schema_version": FOREARM_DEDUP_METADATA_SCHEMA_VERSION,
+        "source_ply": source_ply.name,
+        "deduplicated_ply": deduped_ply.name,
+        "dedup_epsilon": epsilon,
+        "epsilon_source": epsilon_source,
+        "n_vertices_original": n_original,
+        "n_vertices_deduped": n_deduped,
+        "n_vertices_removed": n_removed,
+    }
+
+    metadata_path = forearm_dedup_metadata_path(deduped_ply)
+    metadata_path.parent.mkdir(parents=True, exist_ok=True)
+    metadata_path.write_text(
+        json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    return metadata_path
+
+
+def deduplicate_forearm_ply(input_ply: Path, output_ply: Path, *, epsilon: float) -> dict:
     """Deduplicate a forearm PLY point cloud by (x, y) position.
 
     Loads the PLY, removes (x, y) duplicates keeping the lowest z (outermost
@@ -263,10 +379,15 @@ def deduplicate_forearm_ply(input_ply: Path, output_ply: Path, epsilon: float = 
     Args:
         input_ply: Path to the input PLY file.
         output_ply: Path to write the deduplicated PLY.
-        epsilon: Bin size in mm for (x, y) deduplication.
+        epsilon: Bin size in mm for (x, y) deduplication. Required — a default
+            here would silently repoint every vertex index derived from the
+            output PLY (see the sidecar note at the top of this module).
 
     Returns:
-        Dict with keys n_original, n_deduped, n_removed.
+        Dict with keys n_original, n_deduped, n_removed and kept_indices, where
+        kept_indices is a 1-D intp array of the surviving source-PLY vertex
+        indices in output order: output vertex i is source vertex
+        kept_indices[i].
     """
     pcd = o3d.io.read_point_cloud(str(input_ply))
     vertices = np.asarray(pcd.points, dtype=np.float64)
@@ -274,7 +395,12 @@ def deduplicate_forearm_ply(input_ply: Path, output_ply: Path, epsilon: float = 
     if len(vertices) == 0:
         output_ply.parent.mkdir(parents=True, exist_ok=True)
         o3d.io.write_point_cloud(str(output_ply), pcd)
-        return {"n_original": 0, "n_deduped": 0, "n_removed": 0}
+        return {
+            "n_original": 0,
+            "n_deduped": 0,
+            "n_removed": 0,
+            "kept_indices": np.empty(0, dtype=np.intp),
+        }
 
     deduped, n_removed, kept_indices = deduplicate_xy(vertices, epsilon, return_indices=True)
 
@@ -296,6 +422,7 @@ def deduplicate_forearm_ply(input_ply: Path, output_ply: Path, epsilon: float = 
         "n_original": len(vertices),
         "n_deduped": len(deduped),
         "n_removed": n_removed,
+        "kept_indices": kept_indices,
     }
 
 

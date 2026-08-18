@@ -5,7 +5,7 @@
 **Approved:** —
 **Completed:** —
 **Author:** Basil Duvernoy
-**Status:** Draft
+**Status:** In Progress
 **Base Branch:** `feature/remove-prefect-orchestration`
 **Branch:** `feature/depth-field-postprocessing`
 
@@ -214,24 +214,37 @@ scope and are **not importable in the unit-test environment**. Logic placed in t
 
 ### Phase 1: Harden the dedup epsilon hazards
 **Goal:** A persisted `vertex_id` cannot be silently repointed by an unrecorded or drifted epsilon.
-**Started:** —  **Completed:** —
+**Started:** 2026-08-18 13:20  **Completed:** 2026-08-18 13:50
 
 These are pre-existing defects, but `vertex_id` makes them dangerous: an epsilon change re-deduplicates
 the forearm and renumbers every vertex, with nothing on disk to detect it.
 
-- [ ] 1.1 — Reconcile the epsilon defaults. `deduplicate_xy_flow` defaults `epsilon=5.0`
+- [x] 1.1 — Reconcile the epsilon defaults. `deduplicate_xy_flow` defaults `epsilon=5.0`
       (`postprocess_workflow_kinect_auto.py:101`) against the YAML's `0.5` — dropping the key is a
       silent 10x change. Make the flow require it, or make the defaults agree.
-- [ ] 1.2 — Record the **effective** epsilon on disk. Under `monitor: true` it is chosen interactively
+      *Done: `monitor` and `epsilon` are now required keyword-only arguments of `deduplicate_xy_flow`
+      (the `monitor=True` default diverged from the YAML's `false` the same way), validated on entry;
+      `deduplicate_forearm_ply`'s own `epsilon=0.35` default was removed for the same reason. The YAML
+      values were not changed.*
+- [x] 1.2 — Record the **effective** epsilon on disk. Under `monitor: true` it is chosen interactively
       (`:126`) and survives only in a log line, making the run unreproducible.
-- [ ] 1.3 — Return `kept_indices` from `deduplicate_forearm_ply` (already in scope at
+      *Done: `forearm_deduped/<stem>_dedup_metadata.json`, written beside the PLY the epsilon
+      produced, also recording `epsilon_source` (`dag_config` vs `interactive_monitor`).*
+- [x] 1.3 — Return `kept_indices` from `deduplicate_forearm_ply` (already in scope at
       `deduplicate_xy_points.py:279`, currently dropped at `:295-299`) so the source→deduped vertex
-      mapping is recoverable.
-- [ ] 1.4 — Record `n_vertices` and the epsilon alongside the deduped PLY, so a `vertex_id` can be
-      validated against the PLY it claims to index.
+      mapping is recoverable. *Done: added as a fourth dict key; existing by-key readers unaffected.*
+- [x] 1.4 — Record `n_vertices` and the epsilon alongside the deduped PLY, so a `vertex_id` can be
+      validated against the PLY it claims to index. *Done: `n_vertices_original` /
+      `n_vertices_deduped` / `n_vertices_removed` in the same sidecar, with the
+      `deduped + removed == original` invariant asserted at write time.*
+
+**Not done in this phase (deliberate):** `should_process_task` still does not see the DAG YAML, so
+changing `epsilon` and re-running does not re-trigger dedup. Per the Risks table, the mitigation is
+the Phase 2 reader raising on a recorded-vs-actual mismatch, not a new re-run trigger.
 
 **Files Modified:** `code/scripts/_5_postprocessing/deduplicate_xy_points.py`,
-`code/scripts/postprocess_workflow_kinect_auto.py`
+`code/scripts/_5_postprocessing/__init__.py`,
+`code/scripts/postprocess_workflow_kinect_auto.py`, `code/tests/test_deduplicate_xy_points.py`
 
 **Dependencies:** None
 

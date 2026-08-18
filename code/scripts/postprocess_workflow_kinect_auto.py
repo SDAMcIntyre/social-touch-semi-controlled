@@ -35,6 +35,8 @@ from primary_processing import (
 
 
 from _5_postprocessing import (
+    EPSILON_SOURCE_DAG_CONFIG,
+    EPSILON_SOURCE_INTERACTIVE_MONITOR,
     fetch_forearm_of_reference,
     apply_icp_registration,
     calibrate_pca_xyz,
@@ -42,7 +44,9 @@ from _5_postprocessing import (
     center_on_receptive_field,
     deduplicate_forearm_ply,
     deduplicate_contact_points_csv,
+    forearm_dedup_metadata_path,
     monitor_deduplicate_xy_interactive,
+    write_forearm_dedup_metadata,
 )
 from _4_merging.aggregate_blocks_session import aggregate_session_blocks
 
@@ -97,16 +101,39 @@ def deduplicate_xy_flow(
     output_dir: Path,
     forearm_output_dir: Path,
     force_processing: bool = False,
-    monitor: bool = True,
-    epsilon: float = 5.0,
+    *,
+    monitor: bool,
+    epsilon: float,
 ) -> Tuple[List[Path], Optional[Path]]:
-    """Deduplicate the unified forearm PLY and contact points in registered CSVs."""
+    """Deduplicate the unified forearm PLY and contact points in registered CSVs.
+
+    ``monitor`` and ``epsilon`` are deliberately required keyword arguments with
+    no defaults. Every vertex index into the deduplicated forearm PLY is defined
+    relative to the epsilon that produced it, so a default here would let the
+    dedup radius — and with it the whole vertex numbering — change silently when
+    the DAG config key is dropped. Both are supplied by the
+    ``deduplicate_xy.options`` block of the postprocess DAG config.
+    """
     output_dir.mkdir(parents=True, exist_ok=True)
     forearm_output_dir.mkdir(parents=True, exist_ok=True)
 
+    if not isinstance(monitor, bool):
+        raise TypeError(
+            f"deduplicate_xy 'monitor' option must be a bool, got {type(monitor).__name__} "
+            f"({monitor!r}). Check the postprocess DAG config."
+        )
+
+    epsilon = float(epsilon)
+    if not np.isfinite(epsilon) or epsilon <= 0.0:
+        raise ValueError(
+            f"deduplicate_xy 'epsilon' option must be a positive finite value, got {epsilon!r}. "
+            f"Check the postprocess DAG config."
+        )
+
     expected_output_csvs = [output_dir / f.name for f in input_files]
     expected_forearm_out = forearm_output_dir / forearm_ply_path.name
-    all_outputs = expected_output_csvs + [expected_forearm_out]
+    expected_metadata_out = forearm_dedup_metadata_path(expected_forearm_out)
+    all_outputs = expected_output_csvs + [expected_forearm_out, expected_metadata_out]
 
     if not should_process_task(
         input_paths=list(input_files) + [forearm_ply_path],
@@ -118,26 +145,48 @@ def deduplicate_xy_flow(
 
     clean_task_outputs(all_outputs)
 
+    epsilon_source = EPSILON_SOURCE_DAG_CONFIG
     if monitor:
         try:
             pcd = o3d.io.read_point_cloud(str(forearm_ply_path))
             vertices = np.asarray(pcd.points, dtype=np.float64)
             if len(vertices) > 0:
-                epsilon = monitor_deduplicate_xy_interactive(vertices, initial_epsilon=epsilon)
+                epsilon = float(monitor_deduplicate_xy_interactive(vertices, initial_epsilon=epsilon))
+                epsilon_source = EPSILON_SOURCE_INTERACTIVE_MONITOR
                 logging.info("User selected epsilon = %.4f from interactive monitor.", epsilon)
             else:
                 logging.warning("Forearm PLY has 0 points, skipping monitor.")
         except KeyboardInterrupt:
-            logging.info("Monitor aborted by user. Using default epsilon=%.4f.", epsilon)
+            logging.info("Monitor aborted by user. Using configured epsilon=%.4f.", epsilon)
 
     # Deduplicate the single forearm PLY
     forearm_out = forearm_output_dir / forearm_ply_path.name
-    stats = deduplicate_forearm_ply(forearm_ply_path, forearm_out, epsilon=epsilon)
+    forearm_stats = deduplicate_forearm_ply(forearm_ply_path, forearm_out, epsilon=epsilon)
     logging.info(
         "Forearm dedup: %d → %d (removed %d)",
-        stats["n_original"],
-        stats["n_deduped"],
-        stats["n_removed"],
+        forearm_stats["n_original"],
+        forearm_stats["n_deduped"],
+        forearm_stats["n_removed"],
+    )
+
+    # Persist the *effective* epsilon and the resulting vertex count. Under
+    # monitor=True the epsilon is chosen interactively and exists nowhere else;
+    # the DAG config is not part of the mtime staleness check either. This
+    # sidecar is what lets a later vertex index be validated against the PLY it
+    # claims to index.
+    metadata_out = write_forearm_dedup_metadata(
+        forearm_out,
+        source_ply=forearm_ply_path,
+        epsilon=epsilon,
+        epsilon_source=epsilon_source,
+        stats=forearm_stats,
+    )
+    logging.info(
+        "Recorded dedup provenance (epsilon=%.4f from %s, %d deduped vertices) → %s",
+        epsilon,
+        epsilon_source,
+        forearm_stats["n_deduped"],
+        metadata_out.name,
     )
 
     # Deduplicate contact points in each registered CSV
