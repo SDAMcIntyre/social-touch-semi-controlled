@@ -6,7 +6,6 @@ from typing import Dict, List, Optional
 from multiprocessing import freeze_support
 
 from prefect import flow, task, get_run_logger
-from prefect.futures import PrefectFuture
 
 # Setup a basic logger
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -284,54 +283,38 @@ def run_batch_processing(
     parallel: bool
 ):
     """
-    Dispatches pipeline runs for all session configs found in a directory.
-    Handles both sequential and parallel execution uniformly.
+    Dispatches pipeline runs sequentially for all session configs found in a directory.
+
+    `parallel` is still read from the DAG config so existing YAML stays valid, but
+    the parallel execution path has been removed; enabling it raises immediately.
     """
+    if parallel:
+        raise NotImplementedError(
+            "parallel_execution is not supported: the parallel batch path was removed "
+            "along with Prefect. It never functioned -- it was disabled in every shipped "
+            "config, unreachable from the GUI, and broken or empty at three of its four "
+            "call sites. Set 'parallel_execution: false' in the DAG config. "
+            "See docs/development/plans/active/remove-prefect-orchestration.md."
+        )
+
     logger = get_run_logger()
     dag_handler_template = DagConfigHandler(dag_config_path)
 
-    mode = "PARALLEL" if parallel else "SEQUENTIAL"
-    logger.info(f"🚀 Starting batch processing for {len(block_files)} sessions in {mode} mode.")
+    logger.info(f"🚀 Starting batch processing for {len(block_files)} sessions in SEQUENTIAL mode.")
 
-    # 1. Dispatch Runs
-    futures_or_states = []
-    
     for block_file in block_files:
         try:
             config_data = KinectConfigFileHandler.load_and_resolve_config(block_file)
             validated_config = KinectConfig(config_data=config_data, database_path=project_data_root)
             dag_handler_instance = dag_handler_template.copy()
 
-            if parallel:
-                # Submit returns a PrefectFuture
-                run_future = run_single_session_pipeline.submit(
-                    config=validated_config,
-                    dag_handler=dag_handler_instance,
-                    flow_run_name=f"block-{validated_config.source_video.stem}"
-                )
-                futures_or_states.append(run_future)
-            else:
-                # Direct call returns the result object immediately
-                result = run_single_session_pipeline(
-                    config=validated_config,
-                    dag_handler=dag_handler_instance
-                )
-                futures_or_states.append(result)
-                
+            run_single_session_pipeline(
+                config=validated_config,
+                dag_handler=dag_handler_instance
+            )
+
         except Exception as e:
             logger.error(f"Failed to initialize config for {block_file}: {e}")
-
-    # 2. Wait for parallel runs to complete and log any failures
-    if parallel:
-        logger.info("Waiting for parallel runs to complete...")
-        for future in futures_or_states:
-            try:
-                if isinstance(future, PrefectFuture):
-                    state = future.wait()
-                    if not state.is_completed():
-                        logger.error(f"Flow run failed: {state}")
-            except Exception as e:
-                logger.error(f"Error retrieving future result: {e}")
 
     logger.info("✅ All batch processing tasks have finished.")
 

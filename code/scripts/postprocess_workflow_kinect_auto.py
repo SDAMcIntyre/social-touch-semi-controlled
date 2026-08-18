@@ -429,7 +429,19 @@ def run_batch_postprocessing(
 ):
     """
     Loads all block configurations, groups them by session_id, and triggers postprocessing per session.
+
+    `parallel` is still read from the DAG config so existing YAML stays valid, but
+    the parallel execution path has been removed; enabling it raises immediately.
     """
+    if parallel:
+        raise NotImplementedError(
+            "parallel_execution is not supported: the parallel batch path was removed "
+            "along with Prefect. It never functioned -- it was disabled in every shipped "
+            "config, unreachable from the GUI, and broken or empty at three of its four "
+            "call sites. Set 'parallel_execution: false' in the DAG config. "
+            "See docs/development/plans/active/remove-prefect-orchestration.md."
+        )
+
     # 1. Load Configs
     dag_handler_template = DagConfigHandler(dag_config_path)
     if not block_files:
@@ -456,23 +468,18 @@ def run_batch_postprocessing(
     # 3. Execute Pipeline per Session
     dag_handler_template = DagConfigHandler(dag_config_path)
     
-    mode = "PARALLEL" if parallel else "SEQUENTIAL"
-    logging.info(f"🚀 Starting postprocessing batch in {mode} mode.")
-    
+    logging.info("🚀 Starting postprocessing batch in SEQUENTIAL mode.")
+
     for session_id, session_configs in session_map.items():
         dag_handler_instance = dag_handler_template.copy()
-        
-        if parallel:
-            # Prefect Future submission logic would go here
-            pass
-        else:
-            run_single_session_postprocessing(
-                session_id=session_id,
-                session_configs=session_configs,
-                dag_handler=dag_handler_instance,
-                monitor_queue=monitor_queue,
-                report_file_path=report_file_path
-            )
+
+        run_single_session_postprocessing(
+            session_id=session_id,
+            session_configs=session_configs,
+            dag_handler=dag_handler_instance,
+            monitor_queue=monitor_queue,
+            report_file_path=report_file_path
+        )
 
     logging.info("✅ All postprocessing tasks finished.")
 

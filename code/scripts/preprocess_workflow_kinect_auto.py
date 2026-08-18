@@ -663,46 +663,39 @@ def run_batch_processing(
     report_file_path: Path,
     parallel: bool,
 ):
+    # `parallel` is still read from the DAG config so existing YAML stays valid, but
+    # the parallel execution path has been removed; enabling it raises immediately.
+    if parallel:
+        raise NotImplementedError(
+            "parallel_execution is not supported: the parallel batch path was removed "
+            "along with Prefect. It never functioned -- it was disabled in every shipped "
+            "config, unreachable from the GUI, and broken or empty at three of its four "
+            "call sites. Set 'parallel_execution: false' in the DAG config. "
+            "See docs/development/plans/active/remove-prefect-orchestration.md."
+        )
+
     dag_handler_template = DagConfigHandler(dag_config_path)
 
-    mode = "PARALLEL" if parallel else "SEQUENTIAL"
-    logging.info(f"🚀 Starting batch processing for {len(block_files)} sessions in {mode} mode.")
+    logging.info(f"🚀 Starting batch processing for {len(block_files)} sessions in SEQUENTIAL mode.")
 
-    submitted_runs = []
     for block_file in block_files:
         logging.info(f"Preparing session: {block_file.stem}")
         config_data = KinectConfigFileHandler.load_and_resolve_config(block_file)
         validated_config = KinectConfig(config_data=config_data, database_path=project_data_root)
         dag_handler_instance = dag_handler_template.copy()
 
-        if parallel:
-            run = run_single_session_pipeline.submit(
+        try:
+            run_single_session_pipeline(
                 config=validated_config,
                 dag_handler=dag_handler_instance,
                 monitor_queue=monitor_queue,
-                report_file_path=report_file_path,
-                flow_run_name=f"session-{validated_config.session_id}",
+                report_file_path=report_file_path
             )
-            submitted_runs.append(run)
-        else:
-            try:
-                run_single_session_pipeline(
-                    config=validated_config,
-                    dag_handler=dag_handler_instance,
-                    monitor_queue=monitor_queue,
-                    report_file_path=report_file_path
-                )
-                logging.info(f"--- Completed session: {block_file.stem} ---")
-            except Exception as e:
-                logging.error(f"Failed to process session {block_file.stem}. Error: {e}")
-                continue
+            logging.info(f"--- Completed session: {block_file.stem} ---")
+        except Exception as e:
+            logging.error(f"Failed to process session {block_file.stem}. Error: {e}")
+            continue
 
-    if parallel:
-        logging.info("All flows submitted. Waiting for parallel runs to complete...")
-        for i, run in enumerate(submitted_runs):
-            run.wait()
-            logging.info(f"({i+1}/{len(submitted_runs)}) Completed flow run: {run.name}")
-    
     logging.info("✅ All batch processing tasks have finished.")
 
 

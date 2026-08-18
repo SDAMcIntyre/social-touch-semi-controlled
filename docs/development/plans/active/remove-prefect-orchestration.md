@@ -262,25 +262,40 @@ Consequences:
 
 ### Phase 2: Delete the dead parallel branches
 **Goal:** The only genuine Prefect runtime feature is gone, and enabling it fails loudly.
-**Started:** —  **Completed:** —
+**Started:** 2026-08-18 10:44  **Completed:** 2026-08-18 10:58
 
-- [ ] 2.1 — `merging_pipeline_neuron_to_kinect_auto.py`: delete the `if parallel:` submit/collect
+- [x] 2.1 — `merging_pipeline_neuron_to_kinect_auto.py`: delete the `if parallel:` submit/collect
       logic (`:301-316`, `:321-330`) and the `PrefectFuture` import (`:9`).
-- [ ] 2.2 — `preprocess_workflow_kinect_auto.py`: delete the parallel branch (`:678-698`,
+      *The `futures_or_states` accumulator went with it — it was read only by the collect loop.
+      The sequential call and its `try/except` around config loading are unchanged.*
+- [x] 2.2 — `preprocess_workflow_kinect_auto.py`: delete the parallel branch (`:678-698`,
       `:700-704`). It raises `AttributeError` today — the target is undecorated.
-- [ ] 2.3 — `primary_workflow_kinect_auto.py`: delete the parallel branch (`:137-151`, `:153-155`).
+- [x] 2.3 — `primary_workflow_kinect_auto.py`: delete the parallel branch (`:137-151`, `:153-155`).
       Same defect.
-- [ ] 2.4 — `postprocess_workflow_kinect_auto.py`: replace the `pass` stub (`:465-467`).
-- [ ] 2.5 — In all four, **keep reading `parallel_execution`** so existing configs remain valid, but
+- [x] 2.4 — `postprocess_workflow_kinect_auto.py`: replace the `pass` stub (`:465-467`).
+- [x] 2.5 — In all four, **keep reading `parallel_execution`** so existing configs remain valid, but
       `raise NotImplementedError` with a message pointing at this plan when it is `true`. Silently
       processing zero sessions — today's postprocess behaviour — is the failure mode to eliminate.
-- [ ] 2.6 — Leave the `parallel_execution` key in all seven YAML files untouched.
+      *The guard is the first statement of each batch runner, before any config is loaded, so
+      nothing is processed before it fires. Identical message in all four files.*
+- [x] 2.6 — Leave the `parallel_execution` key in all seven YAML files untouched.
+      *Verified: all seven still read `parallel_execution: false`; `git diff -- configs/` shows no
+      change to any of them.*
+
+**Test added:** `code/tests/test_parallel_execution_removed.py` (8 tests). Two layers:
+an `ast` pass asserting the guard is the first statement of each batch runner with the plan
+reference in its message (no third-party imports, so it runs under the stubbed unit-test
+environment), and a behavioural pass that actually calls all four runners with `parallel=True`.
+The behavioural pass runs in a **clean child interpreter** because `conftest.py` stubs the real
+`utils` package that the four entry scripts import; it unwraps a `@flow` via `.fn` so it does not
+drive Prefect, and skips with an explicit reason if a module cannot be imported.
 
 **Files Modified:**
 - `code/scripts/merging_pipeline_neuron_to_kinect_auto.py`
 - `code/scripts/preprocess_workflow_kinect_auto.py`
 - `code/scripts/primary_workflow_kinect_auto.py`
 - `code/scripts/postprocess_workflow_kinect_auto.py`
+- `code/tests/test_parallel_execution_removed.py` — new
 
 **Dependencies:** Phase 1
 
@@ -385,8 +400,8 @@ information in a comment or docstring where it is not already obvious from the f
 
 ### Unit Tests
 - [ ] No test currently references Prefect — confirm the suite is unaffected by construction.
-- [ ] Add a test asserting `parallel_execution: true` raises `NotImplementedError` for each of the
-      four batch runners.
+- [x] Add a test asserting `parallel_execution: true` raises `NotImplementedError` for each of the
+      four batch runners. — `code/tests/test_parallel_execution_removed.py`
 - [ ] Add a guard test that imports all 10 entry-point modules, so a stray Prefect import fails CI
       rather than at runtime.
 

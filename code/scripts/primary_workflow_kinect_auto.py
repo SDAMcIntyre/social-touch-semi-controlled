@@ -126,33 +126,30 @@ def run_batch_primary(
     report_file_path: Path,
     parallel: bool,
 ):
+    # `parallel` is still read from the DAG config so existing YAML stays valid, but
+    # the parallel execution path has been removed; enabling it raises immediately.
+    if parallel:
+        raise NotImplementedError(
+            "parallel_execution is not supported: the parallel batch path was removed "
+            "along with Prefect. It never functioned -- it was disabled in every shipped "
+            "config, unreachable from the GUI, and broken or empty at three of its four "
+            "call sites. Set 'parallel_execution: false' in the DAG config. "
+            "See docs/development/plans/active/remove-prefect-orchestration.md."
+        )
+
     dag_template = DagConfigHandler(dag_config_path)
 
-    submitted_runs = []
     for block_file in block_files:
         config_data = KinectConfigFileHandler.load_and_resolve_config(block_file)
         validated_config = KinectConfig(config_data=config_data, database_path=project_data_root)
         dag_instance = dag_template.copy()
 
-        if parallel:
-            run = run_primary_pipeline_session.submit(
-                config=validated_config,
-                dag_handler=dag_instance,
-                monitor_queue=monitor_queue,
-                report_file_path=report_file_path,
-            )
-            submitted_runs.append(run)
-        else:
-            run_primary_pipeline_session(
-                config=validated_config,
-                dag_handler=dag_instance,
-                monitor_queue=monitor_queue,
-                report_file_path=report_file_path
-            )
-
-    if parallel:
-        for run in submitted_runs:
-            run.wait()
+        run_primary_pipeline_session(
+            config=validated_config,
+            dag_handler=dag_instance,
+            monitor_queue=monitor_queue,
+            report_file_path=report_file_path
+        )
 
 def setup_environment():
     project_data_root = path_tools.get_project_data_root()
