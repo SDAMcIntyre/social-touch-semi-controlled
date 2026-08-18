@@ -372,23 +372,57 @@ All 10 entry scripts import cleanly and `--help` exits 0. Suite: **328 passed, 7
 
 ### Phase 4: Delete the GUI server integration
 **Goal:** The GUI launches with no server lifecycle.
-**Started:** —  **Completed:** —
+**Started:** 2026-08-18 11:05  **Completed:** 2026-08-18 11:12
 
-- [ ] 4.1 — `launcher_window.py`: delete the import (`:31`), construction and start (`:68-70`),
+- [x] 4.1 — `launcher_window.py`: delete the import (`:31`), construction and start (`:68-70`),
       `_wait_for_prefect_server` (`:295-304`), the restart-on-Run block (`:330-336`), the `env=`
       plumbing (`:341`, and `env=env` at `:346`), and `stop()` in `closeEvent` (`:292`). Preserve
       `event.accept()` at `:293`.
-- [ ] 4.2 — Delete `code/src/utils/gui/dag_launcher/prefect_server_manager.py` (144 lines).
-- [ ] 4.3 — Check `code/src/utils/gui/dag_launcher/__init__.py` for a re-export before deleting.
-- [ ] 4.4 — Remove the four Prefect-specific status-bar strings; keep every other message.
-- [ ] 4.5 — Confirm the abort button, console reader, status bar and exit-code handling are untouched
+      *All six sites removed. `env=` was dropped as a kwarg entirely rather than passed as
+      `env=None` — identical semantics (`Popen` inherits the parent environment), with a one-line
+      comment at the call site recording the intent. The Phase-1 `-u` comment lost its trailing
+      clause about surviving "the `env=None` branch a few lines down", which no longer exists.*
+- [x] 4.2 — Delete `code/src/utils/gui/dag_launcher/prefect_server_manager.py` (144 lines).
+      *143 lines by `git diff --stat`.*
+- [x] 4.3 — Check `code/src/utils/gui/dag_launcher/__init__.py` for a re-export before deleting.
+      *It contains only a module docstring — no re-export, nothing to remove.*
+- [x] 4.4 — Remove the four Prefect-specific status-bar strings; keep every other message.
+      *Gone with `_wait_for_prefect_server` and the restart block. `"Running …"`, `"Aborting …"`,
+      `"Aborted"`, `"Finished/Failed (exit code N)"`, `"Loaded …"`, `"Saved …"` all retained.*
+- [x] 4.5 — Confirm the abort button, console reader, status bar and exit-code handling are untouched
       — the investigation found none of them depend on Prefect.
-- [ ] 4.6 — Measure GUI launch-to-interactive before and after. The 30 s readiness wait is gone.
+      *Confirmed by a functional harness driving the real `LauncherWindow`: `_on_run` →
+      `_poll_process` → status bar, with a child script printing on a 0.3 s cadence.
+      Exit 0 → `'Finished (exit code 0)'`; exit 3 → `'Failed (exit code 3)'`; `_on_abort`
+      mid-run → `'Aborted'`. Four console lines arrived spread over 0.93 s, i.e. still line by
+      line, not a burst. `process_output_reader.py` was not touched.*
+- [x] 4.6 — Measure GUI launch-to-interactive before and after. The 30 s readiness wait is gone.
+
+**Measured — launch-to-interactive: 32.40 s → 1.28 s (−96%).**
+Method: build `QApplication` + `LauncherWindow` + `show()` exactly as
+`launch_pipeline_gui.main` does, then pump `processEvents()` until the queue drains — which is
+precisely when the GUI becomes interactive, because the launcher deferred its startup work with
+`QTimer.singleShot(0, …)`. No `exec_()`, so nothing outlives the measurement. Imports account for
+0.25–0.37 s in both runs; the whole 31 s delta is the server wait.
+
+The "before" run reproduced the reported failure verbatim: `Started Prefect server (PID 20812) on
+port 4200`, then 30 s later `Prefect server did not become ready within timeout`, with the status
+bar left reading *"Prefect server unavailable — workflows will use ephemeral mode"* and no
+indication anywhere of *why* (the `DEVNULL` swallowing). "After" reports `_server_manager=None`
+and an empty status bar. Port 4200 was confirmed free before and after both runs; no orphaned
+server survives.
+
+**Note for Phase 5.6** — `code/src/utils/pipeline/dependency_popup.py:14` says "under Prefect
+parallel execution", which is stale as of Phase 2. Deliberately left for the Phase 5 prose sweep;
+it is a comment, not executable. The only other `prefect` mentions under `code/src/` are two
+architecture-boundary docstrings (`merging/contact_depth_field_series.py:41`,
+`preprocessing/motion_analysis/tactile_quantification/io/contact_depth_field_io.py:84`) that
+merely list Prefect among things a module must not know about — still true, and true more cheaply.
 
 **Files Modified:**
-- `code/src/utils/gui/dag_launcher/launcher_window.py`
-- `code/src/utils/gui/dag_launcher/prefect_server_manager.py` — deleted
-- `code/src/utils/gui/dag_launcher/__init__.py` — only if it re-exports
+- `code/src/utils/gui/dag_launcher/launcher_window.py` — 29 lines touched, net −27
+- `code/src/utils/gui/dag_launcher/prefect_server_manager.py` — deleted (143 lines)
+- `code/src/utils/gui/dag_launcher/__init__.py` — unchanged (no re-export existed)
 
 **Dependencies:** Phase 3
 
