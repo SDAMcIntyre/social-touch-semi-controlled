@@ -113,15 +113,19 @@ exclusion is the substance of this task; relocating the file is the incidental p
 - [ ] `clean_task_outputs` removes it, so a failed run leaves no partial artifact.
 - [ ] The merging pipeline starts and completes on at least one real session (currently impossible —
       see Phase 1).
-- [ ] The Neural+Kinect viewer renders contact vertices coloured by penetration depth against a
+- [x] The Neural+Kinect viewer renders contact vertices coloured by penetration depth against a
       **fixed global** colour range — the same frame shows the same colour whether reached by
-      scrubbing forward or back.
-- [ ] The visualisation pipeline resolves both its CSV and its depth field from `blocks_filtered/`,
+      scrubbing forward or back. The fixed-range half is *measured*: over 1,200 real frames driven
+      through the exact actor/mapper calls the viewer makes, the mapper reported exactly one distinct
+      `scalar_range`. The rendering half is verified by code path only — the GUI was not launched
+      (see Phase 6's closing note).
+- [x] The visualisation pipeline resolves both its CSV and its depth field from `blocks_filtered/`,
       so every displayed contact frame has depth data and no frame renders uncoloured by accident.
-- [ ] A missing depth field leaves the viewer running with colouring disabled and an explicit
-      message — never a silent fallback to flat colour.
-- [ ] In registered-frame mode the depth points move with the cloud, hand mesh and stickers, and the
-      depth *values* are unchanged by the rigid transform.
+- [x] A missing depth field leaves the viewer running with colouring disabled and an explicit
+      message — never a silent fallback to flat colour. The message is a required field of
+      `ContactDepthFieldResolution`, so it cannot be omitted.
+- [x] In registered-frame mode the depth points move with the cloud, hand mesh and stickers, and the
+      depth *values* are unchanged by the rigid transform — asserted byte-for-byte, not `allclose`.
 
 ## Definitions
 
@@ -544,7 +548,7 @@ exercised the zero-retained-rows error path on real data (it is covered by unit 
 
 ### Phase 6: Depth field in the Neural+Kinect viewer
 **Goal:** The merged-scene GUI renders contact vertices coloured by penetration depth.
-**Started:** —  **Completed:** —
+**Started:** 2026-08-18 15:00  **Completed:** 2026-08-18 16:20
 
 Added 2026-08-18, after Phases 1-5 shipped. The artifact now exists in `blocks_filtered/` but nothing
 displays it. `ContactDepthFieldViewer`
@@ -560,51 +564,92 @@ with `contact_points` but no depth rows. The visualisation pipeline is therefore
 unusable neural quality no longer appear — which is the correct behaviour for a tool whose purpose is
 inspecting contact *alongside neural data*.
 
-- [ ] 6.1 — Repoint `resolve_visualisation_paths` (or equivalent) in
-      `code/scripts/merging_pipeline_neuron_to_kinect_visualisation.py` at
-      `blocks_filtered/` for the merged CSV, and additionally resolve
-      `<session_id>_semicontrolled_<block_id>_contact_depth_field.parquet` from the same directory.
-      A missing depth field is an explicit absent state, never a silent fallback: the viewer runs
-      without depth colouring and says so at startup.
-- [ ] 6.2 — Load the field with `read_contact_depth_field()` and compute the **global** colour range
-      once over the whole recording, before any frame is drawn. Pass it to the viewer as
-      `clim_penetration_mm`. Per-frame autoscaling is prohibited — it makes the animation lie about
-      relative depth (`contact_depth_field_viewer.py:11-13`, guide 02 §9).
-- [ ] 6.3 — Index the field by `frame_index` into per-frame `(N,3)` points plus `(N,)` penetration
-      depths, where `penetration_depth_mm = -signed_depth_mm` (positive is deeper, matching the PoC's
-      `CONTACT_SCALAR_NAME`). Do this in the pipeline/adapter layer, not inside the viewer.
-- [ ] 6.4 — In `neural_kinect_scene_viewer.py`, attach the scalar array to the existing
-      `contact_points` actor and render with `cmap="inferno"` and the fixed `clim`, plus a scalar bar
-      titled "Penetration depth (mm)". `inferno` is not a preference: `jet` has non-monotonic
-      lightness and invents banding
-      (`docs/development/knowledge-base/investigation-jet-colormap-perceptual-problems.md`).
-- [ ] 6.5 — Add a "Colour by depth" checkbox to the existing **Contact Points** object group, beside
-      its point-size slider, so flat colour stays available for comparison. Default to depth
-      colouring when the field is present.
-- [ ] 6.6 — Registered-frame mode (`view_neural_kinect_scene_transformed`) must transform the depth
-      points with the same per-forearm-key ICP matrix already applied to the cloud, hand mesh and
-      stickers (`neural_kinect_scene_viewer.py:1476-1499`, `apply_rigid_transform`). Depth *values*
-      are invariant under a rigid transform and must not be recomputed.
-- [ ] 6.7 — Honour the viewer's standing invariants: `_update_frame()` must not call
-      `plotter.clear()`, `add_mesh()` or `remove_actor()` — mutate the dataset in place and
-      re-assert `actor.mapper.scalar_range` after each swap, or the mapper silently reverts to
-      per-frame autoscale (`contact_depth_field_viewer.py:49-57`).
-- [ ] 6.8 — Do **not** add a sixth `_parse_contact_points_cell` clone
-      (`per-vertex-contact-depth-poc.md:172`). The depth field is columnar; it needs no string
-      parsing at all.
-- [ ] 6.9 — Tests: frame indexing returns the right `(N,3)`/`(N,)` pair for a synthetic field; the
-      global clim is computed over the whole recording, not per frame; `penetration_depth_mm` is
-      exactly `-signed_depth_mm`; a missing parquet yields the explicit no-depth state rather than a
-      crash or a silent default.
+- [x] 6.1 — `resolve_viewer_paths` now builds both artifacts from
+      `session_merged_output_dir / "blocks_filtered"`, and returns a new
+      `contact_depth_field_path` key alongside `merged_csv_path`. The path is returned whether or not
+      it exists: deciding what an absent sidecar *means* belongs to
+      `resolve_contact_depth_field`, not to path arithmetic. That function returns a
+      `ContactDepthFieldResolution` carrying `series=None` **and a non-empty `message`** which the
+      pipeline prints at startup ("Depth colouring is DISABLED for this block ... run the merging DAG
+      task"). The message is a required field of the type — an empty one raises — so the absent state
+      cannot reach the viewer unannounced. Only *non-existence* is absent: a file that exists but
+      cannot be decoded raises, because a corrupt artifact behind a plausible picture is worse than a
+      crash.
+- [x] 6.2 — `load_contact_depth_field_series()` calls `read_contact_depth_field()`, then computes
+      `clim_penetration_mm` from `np.min/np.max` over **every row in the file** before any frame is
+      drawn. Because negation reverses order the range is `(-max(signed), -min(signed))`, not
+      `(-min, -max)` — asserted by its own test. The value travels to the viewer on the series object
+      and is re-asserted onto the mapper after every dataset swap; nothing downstream recomputes it.
+      Measured on all six real ST14-02 blocks: 0.02-0.18 s to load and index, clims 0 to 14.7-23.3 mm.
+- [x] 6.3 — Done in a new adapter module, `code/src/merging/contact_depth_field_series.py`, which the
+      viewer does not import for logic — only for the DTO type. `np.unique(..., return_index=True,
+      return_counts=True)` over the sorted `frame_index` column gives each frame a contiguous slice,
+      and the per-frame entries are **views** into two arrays, so indexing costs no extra memory.
+      `penetration = -signed_depth` is applied once to the whole column before slicing. A frame with
+      no contact is **absent from the mapping**, never present with zero rows — `frame()` returns
+      `None` for it, which is the zero-versus-absent rule the sidecar is built on. Row order is not
+      promised by the schema, so the table is sorted first (canonicalisation, not error recovery).
+- [x] 6.4 — The `contact_points` actor is registered with `scalars=CONTACT_SCALAR_NAME`,
+      `cmap="inferno"`, the fixed `clim`, and a vertical scalar bar titled "Penetration depth (mm)"
+      in white (the theme default is black and vanishes against this viewer's background). The three
+      constants are **imported from** `contact_depth_field_viewer.py` rather than redeclared, so the
+      two windows cannot drift apart on the array name, the title or the colourmap.
+- [x] 6.5 — "Colour by depth" checkbox added to the **Contact Points** group, below its point-size
+      slider, via a new `extra_widgets` parameter on `_add_object_group`. Checked by default when the
+      field is present; the preference lives on the viewer (not the block) so it survives hot-swaps
+      like the visibility flags and point sizes beside it. The checkbox is created **only** when a
+      field exists — offering a control that could do nothing would imply data that is not there. Its
+      tooltip states the fixed range in mm. No DAG option was added: 6.5 fixes the default at "on
+      when present", so an option would be a knob with one sensible setting (guide 05 §YAGNI).
+- [x] 6.6 — The depth points go through the same `apply_rigid_transform(..., T)` with the same
+      per-forearm-key matrix `T` that section 1/2/3/4 of `_update_frame` already apply to the cloud,
+      forearm, hand mesh and stickers. `penetration_depth_mm` is passed through untouched — verified
+      over 1,200 real frames of `ST14-02/block-order-06` that the depths are byte-identical before
+      and after the transform (`.tobytes()` comparison, not `allclose`). `astype(np.float64)` copies,
+      so transforming does not mutate the adapter's shared view either.
+- [x] 6.7 — `_update_frame()` still calls no `plotter.clear()`, `add_mesh()` or `remove_actor()` on
+      the contact path; the dataset is mutated with `DeepCopy` exactly as before, and
+      `actor.mapper.scalar_range` is re-asserted immediately after every swap. Measured off-screen on
+      PyVista 0.47.1 across 1,200 frames of a real block including empty frames and a
+      single-value frame: the mapper reports **exactly one** distinct range for the whole run. The
+      mode toggle uses `mapper.scalar_visibility` rather than a remove/add cycle, for the same
+      reason. On block hot-swap the previous scalar bar is removed before re-adding, because two
+      blocks have different global ranges and a bar shared between their mappers would label one of
+      them wrongly.
+- [x] 6.8 — No new parser. `_parse_contact_points_cell` is untouched and is not on the depth path at
+      all; when a field is present it is the **sole** source of contact geometry, so the drawn points
+      and the drawn depths cannot disagree. The two sources are never mixed — pairing the CSV blob
+      (quantised to 0.1 mm) with field rows would mean matching by coordinate value, which the
+      sidecar's design record forbids.
+- [x] 6.9 — 27 tests in `code/tests/test_neural_kinect_depth_field_view.py`, all on synthetic
+      sidecars written with the production writer, plus DTO-validation and transform-invariance
+      cases. The four named requirements are covered by
+      `test_frame_returns_the_right_points_and_depths`,
+      `test_clim_is_computed_over_the_whole_recording` (with
+      `test_clim_is_not_any_single_frames_range` as an explicit anti-regression on per-frame
+      autoscale), `test_penetration_is_exactly_the_negated_signed_depth` (byte comparison, not
+      `approx`), and `test_missing_parquet_yields_an_explicit_absent_state` /
+      `test_missing_parquet_does_not_raise`.
 
 **Files Modified:**
 - `code/scripts/merging_pipeline_neuron_to_kinect_visualisation.py` — repoint at `blocks_filtered/`,
-  resolve and load the depth field, compute the global clim
+  resolve and load the depth field, print the present/absent message, pass the series to both specs
+- `code/src/merging/contact_depth_field_series.py` — **new**; the adapter layer named in 6.3.
+  Deliberately a separate leaf rather than code inside the pipeline script: the script imports
+  Prefect, PyQt5 and the whole viewer stack, so logic living there could not be unit-tested, and the
+  architecture contract already separates "resolve and load" from "orchestrate"
 - `code/src/merging/gui/neural_kinect_scene_viewer.py` — scalars on the contact actor, colormap,
   scalar bar, toggle, transform handling
-- `configs/merging_pipeline_neuron_to_kinect_visualisation_dag.yaml` — option for the depth colouring
-  default if one is warranted
 - `code/tests/test_neural_kinect_depth_field_view.py` — new
+- `configs/merging_pipeline_neuron_to_kinect_visualisation_dag.yaml` — **not modified**; see 6.5 for
+  why no option was warranted
+
+**Not verified in this phase (stated plainly):** the GUI itself was not launched — it is interactive
+and blocks. Everything above was verified by unit tests plus off-screen PyVista exercises of the exact
+actor/mapper/scalar-bar calls the viewer makes (add with clim, in-place `DeepCopy` swap, re-assert,
+empty frame, degenerate single-value frame, `scalar_visibility` toggle, scalar-bar removal and
+re-add at a different clim), and by running the adapter over all six real ST14-02 blocks. What
+remains unproven is purely visual: that the rendered colours look right on screen.
 
 **Dependencies:** Phase 3 (the artifact), Phase 4 (it is produced by the DAG)
 
@@ -627,6 +672,24 @@ postprocessing viewers (`postprocessed_scene_viewer.py`, `before_after_step_view
 - [x] NaN `frame_index` values in the CSV are excluded from the surviving set.
 - [x] Zero retained rows raises.
 - [x] A `contact_detected` frame in the CSV but absent from the depth field raises.
+
+#### Phase 6 — viewer adapter (`test_neural_kinect_depth_field_view.py`, 27 tests)
+- [x] Frame indexing returns the right `(N,3)` / `(N,)` pair, with the schema's dtypes preserved
+      (float32 points, float64 depths), including for rows written out of frame order.
+- [x] A frame with no contact is **absent** from the mapping, not present-and-empty; `frame()`
+      returns `None` for it and for any index past the recording.
+- [x] `penetration_depth_mm` is **exactly** `-signed_depth_mm` — asserted on raw bytes — and a
+      positive signed depth becomes a negative penetration rather than being clamped.
+- [x] The global clim is computed over the whole recording: it equals `(-max_signed, -min_signed)`,
+      contains every frame's range, and matches **no** individual frame's range (anti-regression on
+      per-frame autoscale).
+- [x] A missing parquet yields the explicit absent state — `is_present is False`, `series is None`,
+      a message naming the path and saying colouring is DISABLED — and does not raise.
+- [x] A file that exists but cannot be decoded raises rather than reading as absent; so does one
+      that declares no `coordinate_space`.
+- [x] The DTO refuses an empty field, misaligned points/depths, a frame present in only one mapping,
+      an inverted clim, and an empty resolution message.
+- [x] Depth values are byte-identical before and after a rigid transform of the points.
 
 ### Integration Tests
 - [x] Against a real block: retained `x/y/z/signed_depth_mm` are `np.array_equal` to Space 1 —
@@ -755,8 +818,12 @@ postprocessing viewers (`postprocessed_scene_viewer.py`, `before_after_step_view
 - code/scripts/_4_merging/__init__.py
 - code/scripts/_4_merging/filter_contact_depth_field_by_neural_quality.py
 - code/scripts/merging_pipeline_neuron_to_kinect_auto.py
+- code/scripts/merging_pipeline_neuron_to_kinect_visualisation.py
+- code/src/merging/contact_depth_field_series.py
+- code/src/merging/gui/neural_kinect_scene_viewer.py
 - code/src/preprocessing/motion_analysis/tactile_quantification/io/contact_depth_field_io.py
 - code/tests/test_contact_depth_field_io.py
 - code/tests/test_filter_contact_depth_field_by_neural_quality.py
+- code/tests/test_neural_kinect_depth_field_view.py
 - configs/merging_pipeline_neuron_to_kinect_auto_dag.yaml
 - docs/development/plans/active/filter-contact-depth-field-by-neural-quality.md

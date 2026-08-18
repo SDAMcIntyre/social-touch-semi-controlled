@@ -20,6 +20,17 @@ Features:
   - Camera centered on contact region
   - Hot-swap block navigation: all blocks from a batch are presented in ONE
     viewer window; the user switches between them via session / block dropdowns.
+  - Contact vertices coloured by penetration depth from the per-vertex contact
+    depth field sidecar, on a colour scale fixed over the whole recording.
+
+Artifacts come from ``blocks_filtered/``
+----------------------------------------
+Both the merged CSV and the contact depth field are resolved from
+``3_merged/<session>/blocks_filtered/`` — previously the CSV came from
+``blocks_merged/``.  The two directories carry different frame sets (the
+neural-quality filter removes whole trials), so pairing across them would leave
+frames with contact points and no depth rows.  Behaviour change: trials excluded
+for unusable neural quality no longer appear in the scene.
 """
 import argparse
 import sys
@@ -60,6 +71,10 @@ from primary_processing import (
     KinectConfig,
 )
 
+from merging.contact_depth_field_series import (
+    ContactDepthFieldSeries,
+    resolve_contact_depth_field,
+)
 from merging.gui.neural_kinect_scene_viewer import NeuralKinectViewer, NeuralKinectBlockSpec
 from preprocessing.forearm_extraction import (
     ForearmCatalog,
@@ -149,19 +164,42 @@ def resolve_viewer_paths(config: KinectConfig) -> Dict[str, Optional[Path]]:
       - Hand motion      : video_processed_output_dir/kinematics_analysis/<stem>_handmodel_motion.npz
       - Forearm dir      : session_processed_output_dir/forearm_pointclouds/
       - Forearm metadata : <forearm_dir>/<session_id>_arm_roi_metadata.json
-      - Merged CSV       : session_merged_output_dir/blocks_merged/<session_id>_semicontrolled_<block_id>_merged_data.csv
+      - Merged CSV       : session_merged_output_dir/blocks_filtered/<session_id>_semicontrolled_<block_id>_merged_data.csv
+      - Depth field      : session_merged_output_dir/blocks_filtered/<session_id>_semicontrolled_<block_id>_contact_depth_field.parquet
+
+    ``blocks_filtered/``, not ``blocks_merged/``
+    --------------------------------------------
+    Both artifacts are resolved from the *same* directory on purpose.  The
+    neural-quality filter removes whole trials, so ``blocks_merged/`` and
+    ``blocks_filtered/`` carry different frame sets; pairing a merged CSV with a
+    filtered depth field would leave frames showing ``contact_points`` and no
+    depth rows.  The visible consequence is that trials excluded for unusable
+    neural quality no longer appear in the scene — which is the correct
+    behaviour for a tool whose purpose is inspecting contact *alongside neural
+    data*.
+
+    The depth-field path is returned whether or not it exists; deciding what an
+    absent sidecar means is ``resolve_contact_depth_field``'s job, not path
+    arithmetic's.
     """
     stem = config.source_video.stem
     forearm_dir = config.session_processed_output_dir / "forearm_pointclouds"
 
     merged_csv: Optional[Path] = None
+    depth_field: Optional[Path] = None
     if config.session_merged_output_dir:
+        filtered_dir = config.session_merged_output_dir / "blocks_filtered"
         merged_name = f"{config.session_id}_semicontrolled_{config.block_id}_merged_data.csv"
-        candidate = config.session_merged_output_dir / "blocks_merged" / merged_name
+        candidate = filtered_dir / merged_name
         merged_csv = candidate if candidate.exists() else None
+        depth_field = (
+            filtered_dir
+            / f"{config.session_id}_semicontrolled_{config.block_id}_contact_depth_field.parquet"
+        )
 
     return {
         "recording_name": stem,
+        "contact_depth_field_path": depth_field,
         "xyz_csv_path": (
             config.video_processed_output_dir / "handstickers"
             / f"{stem}_handstickers_xyz_tracked.csv"
@@ -180,12 +218,47 @@ def resolve_viewer_paths(config: KinectConfig) -> Dict[str, Optional[Path]]:
 
 
 # ---------------------------------------------------------------------------
+# Contact depth field
+# ---------------------------------------------------------------------------
+
+def load_contact_depth_field(
+    config: KinectConfig,
+    paths: Dict[str, Optional[Path]],
+) -> Optional[ContactDepthFieldSeries]:
+    """Load this block's contact depth field, or report its absence out loud.
+
+    The whole recording is read and the **global** colour range computed here,
+    before any frame is drawn.  That is deliberate: per-frame autoscaling would
+    make the animation lie about relative depth, so the range is a property of
+    the recording and must be fixed before the first render.
+
+    A missing sidecar is an explicit ABSENT state, not a silent fallback — the
+    message printed below is the whole point of returning ``None`` rather than
+    quietly leaving the contact points flat.  A sidecar that exists but cannot
+    be decoded raises, as it should.
+    """
+    depth_path = paths["contact_depth_field_path"]
+    block_name = config.source_video.name
+    if depth_path is None:
+        print(
+            f"[{block_name}] No merged output directory is configured, so no "
+            f"contact depth field can be resolved — depth colouring DISABLED."
+        )
+        return None
+
+    resolution = resolve_contact_depth_field(depth_path)
+    print(f"[{block_name}] {resolution.message}")
+    return resolution.series
+
+
+# ---------------------------------------------------------------------------
 # Block-spec builders
 # ---------------------------------------------------------------------------
 
 def _build_plain_spec(
     config: KinectConfig,
     paths: Dict[str, Optional[Path]],
+    depth_series: Optional[ContactDepthFieldSeries] = None,
 ) -> Optional[NeuralKinectBlockSpec]:
     """
     Validate required paths and return a ``NeuralKinectBlockSpec`` for the
@@ -216,6 +289,7 @@ def _build_plain_spec(
         recording_name=paths["recording_name"],
         merged_csv_path=paths["merged_csv_path"],
         registration_transforms_by_forearm_key=None,
+        contact_depth_field=depth_series,
     )
 
 
@@ -223,6 +297,7 @@ def _build_transformed_spec(
     config: KinectConfig,
     paths: Dict[str, Optional[Path]],
     options: Dict,
+    depth_series: Optional[ContactDepthFieldSeries] = None,
 ) -> Optional[NeuralKinectBlockSpec]:
     """
     Build and validate a ``NeuralKinectBlockSpec`` for the transformed-viewer
@@ -289,6 +364,12 @@ def _build_transformed_spec(
         recording_name=paths["recording_name"],
         merged_csv_path=paths["merged_csv_path"],
         registration_transforms_by_forearm_key=transforms_by_forearm_key,
+        # The same series object is shared with the plain spec.  Registered-frame
+        # mode rotates and translates the depth *points* with the ICP matrix the
+        # cloud, hand mesh and stickers already use; the depth *values* are
+        # invariant under a rigid transform, so nothing is recomputed and no
+        # second copy of the field is needed.
+        contact_depth_field=depth_series,
     )
 
 
@@ -329,14 +410,22 @@ def run_batch_sequentially(
             paths = resolve_viewer_paths(config)
             key: Tuple[str, str] = (config.session_id, config.block_id)
 
+            # Loaded once per block and shared by both specs: the field is
+            # space-invariant under the registration transform, so the two
+            # viewers differ only in where the points are drawn, not in what
+            # they are.
+            depth_series = load_contact_depth_field(config, paths)
+
             if dag_handler_template.can_run(plain_task):
-                spec = _build_plain_spec(config, paths)
+                spec = _build_plain_spec(config, paths, depth_series)
                 if spec is not None:
                     plain_blocks[key] = spec
                     print(f"[{block_file.name}] Plain spec built for {key}.")
 
             if dag_handler_template.can_run(transformed_task):
-                spec = _build_transformed_spec(config, paths, transformed_options)
+                spec = _build_transformed_spec(
+                    config, paths, transformed_options, depth_series
+                )
                 if spec is not None:
                     transformed_blocks[key] = spec
                     print(f"[{block_file.name}] Transformed spec built for {key}.")

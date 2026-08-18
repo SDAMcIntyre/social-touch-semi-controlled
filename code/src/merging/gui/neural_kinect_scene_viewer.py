@@ -24,6 +24,34 @@ recording overlays.  Key design invariants:
 - All merged-CSV features (NeuralDataPanel, StickerVelocityCompass) are
   optional and skipped entirely when merged_csv_path=None.
 
+Contact depth colouring
+~~~~~~~~~~~~~~~~~~~~~~~
+When the block spec carries a ``ContactDepthFieldSeries``, the contact actor is
+driven by that field instead of the CSV's ``contact_points`` blob, and is
+coloured by penetration depth.  This viewer is a **pure sink** for that data:
+
+- The colour range arrives precomputed and **global** over the whole recording
+  (``series.clim_penetration_mm``).  Per-frame autoscaling is prohibited — it
+  would make the animation lie about relative depth, so the same frame would
+  look different depending on whether it was reached by scrubbing forward or
+  back.  Nothing here derives a statistic from the field.
+- ``penetration_depth_mm = -signed_depth_mm`` is applied by the producer, once.
+  No arithmetic is performed on the depths here.
+- ``actor.mapper.scalar_range`` is re-asserted after **every** dataset swap.
+  On PyVista 0.47.1 a mapper with no explicit clim silently reverts to
+  per-frame autoscale (see ``contact_depth_field_viewer.py`` for the measured
+  behaviour), so the assertion is what keeps a given depth the same colour at
+  every frame.
+- The colourmap is ``inferno``, never ``jet``: ``jet`` has non-monotonic
+  lightness, invents boundaries the data does not contain, and is hostile to
+  colour-vision deficiency
+  (``investigation-jet-colormap-perceptual-problems.md``).
+- In registered-frame mode the depth *points* are transformed by the block's
+  ICP matrix exactly like the cloud, hand mesh and stickers; the depth *values*
+  are invariant under a rigid transform and are never recomputed.
+- The field is columnar, so it needs no string parsing:
+  ``_parse_contact_points_cell`` is not involved in this path at all.
+
 Hot-swap navigation
 ~~~~~~~~~~~~~~~~~~~
 ``NeuralKinectViewer`` now accepts an *all_blocks* dict
@@ -122,8 +150,19 @@ from preprocessing.forearm_extraction import (
     get_forearms_with_fallback,
 )
 from preprocessing.motion_analysis import HandMotionManager
+# Imported from the module, not the package facade: the facade resolves this
+# name lazily and the direct import keeps the dependency narrow.  These three
+# constants are shared with the tactile-quantification depth viewer so the
+# scalar array name, the colourbar title and the colourmap have exactly one
+# definition between the two windows.
+from preprocessing.motion_analysis.tactile_quantification.gui.contact_depth_field_viewer import (
+    COLORMAP as CONTACT_DEPTH_COLORMAP,
+    CONTACT_SCALAR_NAME,
+    SCALAR_BAR_TITLE as CONTACT_DEPTH_SCALAR_BAR_TITLE,
+)
 from preprocessing.stickers_analysis import XYZDataFileHandler
 
+from ..contact_depth_field_series import ContactDepthFieldSeries
 from .sticker_velocity_compass import StickerVelocityCompass
 
 
@@ -161,6 +200,12 @@ class NeuralKinectBlockSpec:
     registration_transforms_by_forearm_key:
         Optional mapping ``{forearm_key: 4×4 transform}`` for registered-frame
         display.  ``None`` → identity (no registration applied).
+    contact_depth_field:
+        Optional per-vertex contact depth field, already indexed by frame and
+        carrying its own **global** colour range.  ``None`` is an explicit
+        *absent* state — the producer resolved the sidecar, did not find it, and
+        said so — not a display preference.  When present it becomes the source
+        of the contact geometry, replacing the CSV's ``contact_points`` blob.
     """
     xyz_csv_path: Path
     kinect_mkv_path: Path
@@ -171,6 +216,7 @@ class NeuralKinectBlockSpec:
     recording_name: str
     merged_csv_path: Optional[Path]
     registration_transforms_by_forearm_key: Optional[Dict[int, np.ndarray]] = field(default=None)
+    contact_depth_field: Optional[ContactDepthFieldSeries] = field(default=None)
 
 
 # ---------------------------------------------------------------------------
@@ -211,6 +257,64 @@ def _parse_contact_points_cell(cell) -> Optional[np.ndarray]:
             except ValueError:
                 pass
     return np.array(points, dtype=np.float64) if points else None
+
+
+def _empty_contact_polydata() -> pv.PolyData:
+    """A zero-point contact dataset that still carries the mapped scalar array.
+
+    The array must exist even when empty, or the mapper loses its binding to
+    ``CONTACT_SCALAR_NAME`` the first time a no-contact frame is displayed and
+    the colours never come back.
+    """
+    mesh = pv.PolyData(np.empty((0, 3), dtype=np.float32))
+    mesh[CONTACT_SCALAR_NAME] = np.empty((0,), dtype=np.float64)
+    return mesh
+
+
+def contact_polydata(
+    points: np.ndarray,
+    penetration_depth_mm: Optional[np.ndarray] = None,
+) -> pv.PolyData:
+    """Build the contact-actor dataset from points and optional depth scalars.
+
+    Parameters
+    ----------
+    points:
+        ``(N, 3)`` contact-vertex positions in millimetres.
+    penetration_depth_mm:
+        ``(N,)`` positive-is-deeper penetration depths, already sign-flipped by
+        the producer, or ``None`` when this block has no depth field at all
+        (contact geometry then comes from the CSV and renders flat).
+
+        ``None`` carries no scalar array rather than a zero-filled one: the
+        actor in that configuration was never bound to ``CONTACT_SCALAR_NAME``,
+        and fabricating depths of zero for points whose depth is simply unknown
+        would put invented numbers on screen.
+
+    Raises
+    ------
+    ValueError
+        If *points* is not ``(N, 3)``, or the depths are not index-aligned with
+        it.  A misaligned pair would paint one vertex with another's depth,
+        which is worse than not drawing at all.
+    """
+    pts = np.asarray(points, dtype=np.float32)
+    if pts.ndim != 2 or pts.shape[1] != 3:
+        raise ValueError(f"contact points must be (N, 3), got {pts.shape}.")
+
+    mesh = pv.PolyData(pts)
+    if penetration_depth_mm is None:
+        return mesh
+
+    depths = np.asarray(penetration_depth_mm, dtype=np.float64)
+    if depths.ndim != 1 or len(depths) != len(pts):
+        raise ValueError(
+            f"{len(pts)} contact points vs {depths.shape} penetration depths; "
+            "the field must be index-aligned with the points."
+        )
+    mesh[CONTACT_SCALAR_NAME] = depths
+    mesh.set_active_scalars(CONTACT_SCALAR_NAME)
+    return mesh
 
 
 def extract_touch_boundaries(touch_ids: np.ndarray) -> List[tuple]:
@@ -821,6 +925,18 @@ class NeuralKinectViewer(QMainWindow):
         self._interactive_stride: int = 4
         self._is_interactive: bool = False
 
+        # Depth colouring is ON by default whenever the block carries a field:
+        # the field is the more informative rendering, and flat colour exists
+        # only as a comparison mode.  The preference persists across hot-swaps
+        # like the visibility flags and point sizes beside it.
+        self._colour_contact_by_depth: bool = True
+        # Per-block; re-seeded by _load_block / _init_actors.  Declared here so
+        # that an interim _update_frame fired during a hot-swap (before the new
+        # block's actors exist) cannot hit an undefined attribute.
+        self._depth_series: Optional[ContactDepthFieldSeries] = None
+        self._contact_pts_by_frame: Optional[List[Optional[np.ndarray]]] = None
+        self._contact_clim: Optional[Tuple[float, float]] = None
+
         # ------------------------------------------------------------------
         # Build the Qt UI (plotter + static right panel + frame controls)
         # ------------------------------------------------------------------
@@ -940,6 +1056,16 @@ class NeuralKinectViewer(QMainWindow):
         self.merged_df: Optional[pd.DataFrame] = (
             pd.read_csv(spec.merged_csv_path) if spec.merged_csv_path is not None else None
         )
+
+        # ------------------------------------------------------------------
+        # 4a. Contact depth field (columnar; needs no parsing of any kind)
+        #
+        # Taken verbatim from the spec.  ``None`` means the producer looked for
+        # the sidecar and did not find it; it has already reported that.  When
+        # present this series — not the CSV blob — supplies the contact
+        # geometry, so the drawn points and the drawn depths cannot disagree.
+        # ------------------------------------------------------------------
+        self._depth_series: Optional[ContactDepthFieldSeries] = spec.contact_depth_field
 
         # ------------------------------------------------------------------
         # 4b. Pre-extract contact points indexed by kinect frame
@@ -1161,6 +1287,24 @@ class NeuralKinectViewer(QMainWindow):
         cam_layout.addWidget(self._cam_pos_label)
         self._right_panel_layout.addWidget(cam_box)
 
+    @property
+    def _has_contact_source(self) -> bool:
+        """Whether this block has any source of contact geometry at all.
+
+        Either the depth field sidecar or the merged CSV's ``contact_points``
+        column will do; the field takes precedence when both are present.
+        """
+        return self._depth_series is not None or self._contact_pts_by_frame is not None
+
+    @property
+    def _depth_colouring_active(self) -> bool:
+        """Whether contact vertices are currently coloured by penetration depth.
+
+        Requires both a field to colour by and the user's checkbox.  These are
+        different facts: the first is about the data, the second about the view.
+        """
+        return self._depth_series is not None and self._colour_contact_by_depth
+
     def _build_right_panel_data(self) -> None:
         """
         Populate the data-dependent portion of the right panel.
@@ -1188,7 +1332,13 @@ class NeuralKinectViewer(QMainWindow):
         self._point_sizes.setdefault('contact_points', 15.0)
         self._compass_widgets: Dict[str, StickerVelocityCompass] = {}
 
-        def _add_object_group(label: str, key: str, has_slider: bool = False, point_size: int = 3):
+        def _add_object_group(
+            label: str,
+            key: str,
+            has_slider: bool = False,
+            point_size: int = 3,
+            extra_widgets: Tuple[QWidget, ...] = (),
+        ):
             box = QGroupBox(label)
             box_layout = QVBoxLayout(box)
 
@@ -1214,13 +1364,37 @@ class NeuralKinectViewer(QMainWindow):
                 slider_layout.addWidget(sl)
                 box_layout.addWidget(slider_row)
 
+            for extra in extra_widgets:
+                box_layout.addWidget(extra)
+
             self._right_panel_layout.addWidget(box)
 
         _add_object_group("Kinect Cloud",    "kinect_point_cloud", has_slider=True)
         _add_object_group("Forearms",        "forearms",           has_slider=True)
         _add_object_group("Hand Mesh",       "hand_meshes",        has_slider=False)
-        if self._contact_pts_by_frame is not None:
-            _add_object_group("Contact Points", "contact_points", has_slider=True)
+        if self._has_contact_source:
+            # "Colour by depth" sits beside the point-size slider so flat colour
+            # stays one click away for comparison.  The checkbox is created only
+            # when a field exists: offering a control that could not do anything
+            # would suggest the data is there when it is not.
+            _contact_extras: Tuple[QWidget, ...] = ()
+            if self._depth_series is not None:
+                depth_cb = QCheckBox("Colour by depth")
+                depth_cb.setChecked(self._colour_contact_by_depth)
+                low, high = self._depth_series.clim_penetration_mm
+                depth_cb.setToolTip(
+                    "Colour contact vertices by penetration depth (inferno), on a "
+                    f"colour scale fixed over the whole recording: {low:.2f} to "
+                    f"{high:.2f} mm. Unchecked renders them in flat red."
+                )
+                depth_cb.stateChanged.connect(self._on_contact_depth_colour_changed)
+                _contact_extras = (depth_cb,)
+            _add_object_group(
+                "Contact Points",
+                "contact_points",
+                has_slider=True,
+                extra_widgets=_contact_extras,
+            )
 
         for sticker_name in self._stickers_xyz_dict:
             _add_object_group(sticker_name, sticker_name)
@@ -1326,7 +1500,7 @@ class NeuralKinectViewer(QMainWindow):
         self._mesh_forearm = pv.PolyData(_seed.copy())
         self._mesh_forearm['colors'] = _seed_col.copy()
         self._mesh_hand = pv.PolyData(np.empty((0, 3), dtype=np.float32))
-        self._mesh_contact = pv.PolyData(np.empty((0, 3), dtype=np.float32))
+        self._mesh_contact = _empty_contact_polydata()
         # Force a full DeepCopy on the next _update_frame call so the freshly
         # created PolyData objects (no faces, no points) get populated correctly.
         # Without this reset, an interim _update_frame fired by frame_slider.setValue(0)
@@ -1379,13 +1553,59 @@ class NeuralKinectViewer(QMainWindow):
             point_size=self._point_sizes['forearms'],
         )
         self.plotter.add_mesh(self._mesh_hand, name='hand_meshes', style='wireframe')
-        self._actor_contact = self.plotter.add_mesh(
-            self._mesh_contact,
-            name='contact_points',
-            color='red',
-            render_points_as_spheres=True,
-            point_size=self._point_sizes['contact_points'],
+
+        # --- Contact points -------------------------------------------------
+        # Registered ONCE per block load.  The colour range is the producer's,
+        # computed over the whole recording; nothing here derives it.  The
+        # previous block's scalar bar is removed first: two blocks have
+        # different global ranges, and a bar shared between their mappers would
+        # label one of them wrongly.
+        if CONTACT_DEPTH_SCALAR_BAR_TITLE in self.plotter.scalar_bars:
+            self.plotter.remove_scalar_bar(CONTACT_DEPTH_SCALAR_BAR_TITLE)
+
+        self._contact_clim: Optional[Tuple[float, float]] = (
+            self._depth_series.clim_penetration_mm
+            if self._depth_series is not None else None
         )
+        if self._contact_clim is None:
+            self._actor_contact = self.plotter.add_mesh(
+                self._mesh_contact,
+                name='contact_points',
+                color='red',
+                render_points_as_spheres=True,
+                point_size=self._point_sizes['contact_points'],
+            )
+        else:
+            self._actor_contact = self.plotter.add_mesh(
+                self._mesh_contact,
+                name='contact_points',
+                scalars=CONTACT_SCALAR_NAME,
+                cmap=CONTACT_DEPTH_COLORMAP,
+                clim=self._contact_clim,
+                show_scalar_bar=True,
+                scalar_bar_args={
+                    'title': CONTACT_DEPTH_SCALAR_BAR_TITLE,
+                    'vertical': True,
+                    'n_labels': 6,
+                    'fmt': '%.2f',
+                    'title_font_size': 16,
+                    'label_font_size': 13,
+                    # Explicit white: the theme default is black, which is
+                    # invisible against this viewer's dark background — the bar
+                    # renders but its title and ticks do not.
+                    'color': 'white',
+                    'position_x': 0.88,
+                    'position_y': 0.12,
+                    'width': 0.05,
+                    'height': 0.72,
+                },
+                render_points_as_spheres=True,
+                point_size=self._point_sizes['contact_points'],
+            )
+            # Flat red is what the mapper falls back to when scalar visibility
+            # is switched off, so it must be set even in depth-colouring mode.
+            self._actor_contact.GetProperty().SetColor(1.0, 0.0, 0.0)
+            self._apply_contact_scalar_mode()
 
         # Register ALL stickers and cache actor refs.
         self._sticker_actors: Dict[str, Any] = {}
@@ -1638,15 +1858,22 @@ class NeuralKinectViewer(QMainWindow):
                 if not np.any(np.isnan(prev_pos)) and pos is not None and not np.any(np.isnan(pos)):
                     self._compass_widgets[name].update_velocity(pos - prev_pos)
 
-        # 5. Contact points (kinect-frame-aligned, pre-parsed at load) ------
-        if self._contact_pts_by_frame is not None:
+        # 5. Contact points -------------------------------------------------
+        # Source precedence: the depth field when the block has one, otherwise
+        # the CSV's pre-parsed contact_points.  Never a mix — the two are
+        # different point sets (the CSV blob is quantised to 0.1 mm) and pairing
+        # them would mean matching rows by coordinate value, which the sidecar's
+        # design record explicitly forbids.
+        if self._has_contact_source:
             _cpts: Optional[np.ndarray] = None
+            _cdepths: Optional[np.ndarray] = None
             if self._visibility.get('contact_points', True):
-                _cpts = (
-                    self._contact_pts_by_frame[frame_idx]
-                    if frame_idx < len(self._contact_pts_by_frame)
-                    else None
-                )
+                if self._depth_series is not None:
+                    _pair = self._depth_series.frame(frame_idx)
+                    if _pair is not None:
+                        _cpts, _cdepths = _pair
+                elif frame_idx < len(self._contact_pts_by_frame):
+                    _cpts = self._contact_pts_by_frame[frame_idx]
             _contact_is_empty = _cpts is None or len(_cpts) == 0
 
             if frame_idx == self._last_contact_frame:
@@ -1659,16 +1886,21 @@ class NeuralKinectViewer(QMainWindow):
                 # Data actually changed (or empty↔non-empty transition).
                 if not _contact_is_empty:
                     if T is not None:
+                        # A rigid transform moves the vertices; it cannot change
+                        # a distance, so _cdepths is carried through untouched.
                         _cpts = apply_rigid_transform(
                             _cpts.astype(np.float64), T
                         ).astype(np.float32)
                     self._mesh_contact.DeepCopy(
-                        pv.PolyData(_cpts.astype(np.float32))
+                        contact_polydata(_cpts, _cdepths)
                     )
                 else:
-                    self._mesh_contact.DeepCopy(
-                        pv.PolyData(np.empty((0, 3), dtype=np.float32))
-                    )
+                    self._mesh_contact.DeepCopy(_empty_contact_polydata())
+                # Re-asserted after every dataset swap: without it the mapper
+                # reverts to per-frame autoscale on PyVista 0.47.1 and the same
+                # depth would take a different colour on a different frame.
+                if self._contact_clim is not None:
+                    self._actor_contact.mapper.scalar_range = self._contact_clim
                 dirty = True
                 if _contact_is_empty != self._last_contact_empty:
                     # Bounds changed: empty↔non-empty transition.
@@ -1867,6 +2099,38 @@ class NeuralKinectViewer(QMainWindow):
             else:
                 self._preloader.pause()
         self._update_frame(self.current_index)
+
+    def _apply_contact_scalar_mode(self) -> None:
+        """Switch the contact actor between depth colouring and flat red.
+
+        Deliberately *not* an ``add_mesh`` / ``remove_actor`` cycle: re-adding
+        the mesh re-enters PyVista's scalar-bar range logic, which does not
+        preserve a global ``clim``.  Toggling ``scalar_visibility`` leaves the
+        actor, its mapper and its lookup table exactly where they are, so the
+        colour scale is identical before and after the round trip.
+        """
+        actor = getattr(self, '_actor_contact', None)
+        if actor is None or self._contact_clim is None:
+            return
+
+        show_scalars = self._depth_colouring_active
+        actor.mapper.scalar_visibility = show_scalars
+        # Re-assert on every mode change for the same reason it is re-asserted
+        # after every dataset swap.
+        actor.mapper.scalar_range = self._contact_clim
+
+        if CONTACT_DEPTH_SCALAR_BAR_TITLE in self.plotter.scalar_bars:
+            # A colourbar with nothing mapped to it would claim the flat-red
+            # points mean something on that scale.
+            self.plotter.scalar_bars[CONTACT_DEPTH_SCALAR_BAR_TITLE].SetVisibility(
+                bool(show_scalars)
+            )
+
+    def _on_contact_depth_colour_changed(self, state: int) -> None:
+        """Handle the 'Colour by depth' checkbox."""
+        self._colour_contact_by_depth = state == Qt.Checked
+        self._apply_contact_scalar_mode()
+        self.plotter.render()
 
     def _on_point_size_changed(self, key: str, value: int) -> None:
         self._point_sizes[key] = float(value)
