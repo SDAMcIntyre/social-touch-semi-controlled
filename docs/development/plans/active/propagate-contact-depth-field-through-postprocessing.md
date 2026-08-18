@@ -250,18 +250,58 @@ the Phase 2 reader raising on a recorded-vs-actual mismatch, not a new re-run tr
 
 ### Phase 2: Schema v2 — `vertex_id` and reference-PLY provenance
 **Goal:** The format can carry a vertex id and prove which PLY it indexes.
-**Started:** —  **Completed:** —
+**Started:** 2026-08-18 13:52  **Completed:** 2026-08-18 14:05
 
-- [ ] 2.1 — `SCHEMA_VERSION = "2"`; `SUPPORTED_SCHEMA_VERSIONS = {"1", "2"}` so existing Space-1
-      artifacts still read.
-- [ ] 2.2 — Optional `vertex_id` (`int32`) column, absent before projection and present after.
+- [x] 2.1 — `SCHEMA_VERSION = "2"`; `SUPPORTED_SCHEMA_VERSIONS = {"1", "2"}` so existing Space-1
+      artifacts still read. *Done. v2 is a pure widening — a v1-shaped table is a valid v2 payload —
+      so neither writer needed a change to start stamping it. Verified against the real v1 files under
+      `3_merged/2022-06-14_ST13-01/blocks_filtered/`: all four read back with the v1 column list and
+      `schema_version = "1"`.*
+- [x] 2.2 — Optional `vertex_id` (`int32`) column, absent before projection and present after.
       The current validator demands an exact column list; widen it to accept both shapes and reject
-      anything else.
-- [ ] 2.3 — Metadata keys `reference_ply`, `reference_ply_vertex_count`, `dedup_epsilon`, and the
-      space names listed in Definitions.
-- [ ] 2.4 — A reader helper that raises on a vertex-count mismatch when joining to a PLY.
-- [ ] 2.5 — Tests: v1 files still read; v2 round-trips with and without `vertex_id`; out-of-range
-      `vertex_id` raises; vertex-count mismatch raises; unknown version still raises.
+      anything else. *Done: `_VALID_COLUMN_LAYOUTS` holds exactly two tuples — the required six, and
+      the required six followed by `vertex_id`. `COLUMN_DTYPES` deliberately still means "the columns
+      that are always there" (the merging filter iterates it), with `OPTIONAL_COLUMN_DTYPES` and
+      `ALL_COLUMN_DTYPES` alongside. A misplaced `vertex_id` raises "wrong order"; any other column
+      raises `unexpected=[...]`.*
+- [x] 2.3 — Metadata keys `reference_ply`, `reference_ply_vertex_count`, `dedup_epsilon`, and the
+      space names listed in Definitions. *Done, with three enforcement decisions recorded below.*
+- [x] 2.4 — A reader helper that raises on a vertex-count mismatch when joining to a PLY.
+      *Done: `validate_vertex_ids_against_reference(table, metadata, *, reference_vertex_count,
+      reference_description)`. It takes a **count**, never a mesh, so the module stays Open3D-free;
+      the count check runs before the range check because in-range ids against the wrong mesh are the
+      dangerous case, and its message quotes the recorded `reference_ply` and `dedup_epsilon` so the
+      failure points at the epsilon change rather than at the symptom.*
+- [x] 2.5 — Tests: v1 files still read; v2 round-trips with and without `vertex_id`; out-of-range
+      `vertex_id` raises; vertex-count mismatch raises; unknown version still raises. *Done — 34 new
+      tests. Also: `vertex_id` in the wrong position, an arbitrary extra column, `int64` instead of
+      `int32`, a misspelled coordinate space, a malformed count/epsilon, and a purity assertion that
+      the module imports no geometry engine. The pre-existing "rejects an extra column" test used
+      `vertex_id` as its example and was retargeted to an arbitrary column, with a second case
+      proving the widening did not open the schema to anything else.*
+
+**Schema decisions taken in this phase:**
+
+1. **Space names are validated against a closed set**, at write time only. `COORDINATE_SPACES` =
+   {`kinect_space_1`, `icp_registered`, `pca_calibrated`, `rf_centered`}. A free-text space would let
+   `"rf_centred"` reach disk and read back as an unrecognised-but-accepted string, at which point a
+   consumer guesses the frame or skips the file; a rejected write is the cheaper failure. Validation
+   is *not* applied on read: the name does not affect decoding, and refusing an old name would break
+   backward compatibility over a string the reader never uses.
+2. **`vertex_id` requires its full provenance triple and a version that knows the column.** Writing
+   the column with any of `reference_ply` / `reference_ply_vertex_count` / `dedup_epsilon` missing
+   raises, and so does writing it under `schema_version = "1"`. The second rule is what catches the
+   projection stage carrying its input's metadata through verbatim instead of restamping — the exact
+   mistake the merging task's `CARRIED_METADATA_KEYS` pattern invites. The reader mirrors it: a file
+   whose columns contradict its declared version is refused rather than half-believed.
+3. **Numeric metadata is parsed, not just present.** `reference_ply_vertex_count` must round-trip to
+   a positive int and `dedup_epsilon` to a finite positive float, both still stored as `str` per the
+   existing writer contract.
+
+**Compatibility confirmed:** `code/scripts/_4_merging/filter_contact_depth_field_by_neural_quality.py`
+is unaffected. It iterates `COLUMN_DTYPES` (still the six required columns) for its bitwise
+preservation assertion, and carries `schema_version` through verbatim, so a v1 input still yields a
+v1 output. Its test file passes unchanged.
 
 **Files Modified:** `.../tactile_quantification/io/contact_depth_field_io.py`,
 `code/tests/test_contact_depth_field_io.py`

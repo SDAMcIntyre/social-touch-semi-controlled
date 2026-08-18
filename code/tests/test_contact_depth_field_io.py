@@ -30,13 +30,19 @@ import pyarrow as pa  # noqa: E402
 import pyarrow.parquet as pq  # noqa: E402
 
 from preprocessing.motion_analysis.tactile_quantification.io.contact_depth_field_io import (  # noqa: E402
+    ALL_COLUMN_DTYPES,
     COLUMN_DTYPES,
     COORDINATE_SPACE,
+    COORDINATE_SPACES,
     PRODUCED_BY,
+    REFERENCE_PLY_METADATA_KEYS,
     SCHEMA_VERSION,
     SIGN_CONVENTION,
+    SUPPORTED_SCHEMA_VERSIONS,
     UNITS,
+    VERTEX_ID_COLUMN,
     read_contact_depth_field,
+    validate_vertex_ids_against_reference,
     write_contact_depth_field,
     write_contact_depth_field_table,
 )
@@ -475,6 +481,43 @@ def _standard_metadata(**overrides) -> dict:
     return metadata
 
 
+#: A reference forearm small enough to write ids against by hand.
+_REFERENCE_VERTEX_COUNT = 5000
+
+
+def _vertex_id_metadata(**overrides) -> dict:
+    """Schema-v2 metadata for a table carrying ``vertex_id``."""
+    metadata = _standard_metadata(
+        coordinate_space="icp_registered",
+        reference_ply="ST14-01_forearm_deduped.ply",
+        reference_ply_vertex_count=str(_REFERENCE_VERTEX_COUNT),
+        dedup_epsilon="0.5",
+    )
+    metadata.update(overrides)
+    return metadata
+
+
+def _vertex_id_table(vertex_ids=None) -> pd.DataFrame:
+    """A four-row schema-v2 table: the six required columns then ``vertex_id``."""
+    if vertex_ids is None:
+        vertex_ids = [0, 17, 2499, _REFERENCE_VERTEX_COUNT - 1]
+    n = len(vertex_ids)
+    return pd.DataFrame(
+        {
+            "frame_index": np.arange(n, dtype=np.int32),
+            "time_s": np.arange(n, dtype=np.float64) / 30.0,
+            "x": np.linspace(-10.0, 10.0, n, dtype=np.float32),
+            "y": np.linspace(0.0, 5.0, n, dtype=np.float32),
+            "z": np.linspace(3.0, -3.0, n, dtype=np.float32),
+            "signed_depth_mm": np.array(
+                [-0.1234567890123456, -1.5, -12.345678901234567, -0.0009765625][:n],
+                dtype=np.float64,
+            ),
+            "vertex_id": np.asarray(vertex_ids, dtype=np.int32),
+        }
+    )
+
+
 def _written_sample_table(tmp_path: Path):
     """Read back a freshly written sidecar — the shape a downstream stage sees."""
     source = tmp_path / "rec_contact_depth_field.parquet"
@@ -643,13 +686,26 @@ def test_table_writer_rejects_a_missing_column(tmp_path):
         )
 
 
-def test_table_writer_rejects_an_extra_column(tmp_path):
+def test_table_writer_rejects_an_arbitrary_extra_column(tmp_path):
+    """Exactness is the feature: only the two declared layouts are accepted."""
     frame, metadata = _written_sample_table(tmp_path)
-    widened = frame.assign(vertex_id=np.arange(len(frame), dtype=np.int32))
+    widened = frame.assign(patch_area_mm2=np.ones(len(frame), dtype=np.float64))
 
-    with pytest.raises(ValueError, match="unexpected=\\['vertex_id'\\]"):
+    with pytest.raises(ValueError, match="unexpected=\\['patch_area_mm2'\\]"):
         write_contact_depth_field_table(
             widened, tmp_path / "filtered.parquet", metadata=metadata
+        )
+
+
+def test_table_writer_rejects_an_extra_column_alongside_vertex_id(tmp_path):
+    """Widening for ``vertex_id`` did not open the schema to anything else."""
+    table = _vertex_id_table().assign(
+        patch_area_mm2=np.ones(4, dtype=np.float64)
+    )
+
+    with pytest.raises(ValueError, match="unexpected=\\['patch_area_mm2'\\]"):
+        write_contact_depth_field_table(
+            table, tmp_path / "widened.parquet", metadata=_vertex_id_metadata()
         )
 
 
@@ -735,7 +791,495 @@ def test_table_writer_rejects_non_string_metadata_values(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# 7. Integration against a real recording
+# 7. Schema v2 — vertex_id and reference-PLY provenance
+# ---------------------------------------------------------------------------
+# Two things are being defended here.  Backward compatibility: ~99 v1 files
+# exist in production and this reader is the only way anything opens them.  And
+# exactness: widening the validator to a second layout must not have widened it
+# to "anything with the right six columns somewhere in it".
+
+
+def _write_v1_file(path: Path, *, metadata_overrides=None) -> Path:
+    """Write a genuine v1 file — six columns, ``schema_version="1"`` — via bare pyarrow.
+
+    Constructed here rather than by the current writer on purpose: the point is
+    to prove the reader opens a file written before v2 existed, and a file the
+    current writer produced would prove only that it can read itself.
+    """
+    metadata = {
+        "schema_version": "1",
+        "coordinate_space": "kinect_space_1",
+        "units": "mm",
+        "sign_convention": "negative_is_penetrating",
+        "source_recording": "legacy_rec",
+        "produced_by": "compute_somatosensory_characteristics",
+    }
+    metadata.update(metadata_overrides or {})
+
+    schema = pa.schema(
+        [
+            pa.field("frame_index", pa.int32()),
+            pa.field("time_s", pa.float64()),
+            pa.field("x", pa.float32()),
+            pa.field("y", pa.float32()),
+            pa.field("z", pa.float32()),
+            pa.field("signed_depth_mm", pa.float64()),
+        ]
+    ).with_metadata(metadata)
+
+    table = pa.Table.from_arrays(
+        [
+            pa.array(np.array([3, 3, 97], dtype=np.int32), type=pa.int32()),
+            pa.array(np.array([0.1, 0.1, 3.2333], dtype=np.float64), type=pa.float64()),
+            pa.array(np.array([1.5, 2.5, 3.5], dtype=np.float32), type=pa.float32()),
+            pa.array(np.array([-1.0, -2.0, -3.0], dtype=np.float32), type=pa.float32()),
+            pa.array(np.array([0.25, 0.5, 0.75], dtype=np.float32), type=pa.float32()),
+            pa.array(
+                np.array([-0.1234567890123456, -2.0, -12.5], dtype=np.float64),
+                type=pa.float64(),
+            ),
+        ],
+        schema=schema,
+    )
+    pq.write_table(table, path)
+    return path
+
+
+# --- backward compatibility -------------------------------------------------
+
+
+def test_schema_version_is_two_and_one_is_still_supported():
+    assert SCHEMA_VERSION == "2"
+    assert SUPPORTED_SCHEMA_VERSIONS == frozenset({"1", "2"})
+
+
+def test_a_v1_file_still_reads(tmp_path):
+    """The ~99 Space-1 artifacts on disk are v1 files; they must keep opening."""
+    path = _write_v1_file(tmp_path / "legacy_contact_depth_field.parquet")
+
+    frame, metadata = read_contact_depth_field(path)
+
+    assert metadata["schema_version"] == "1"
+    assert metadata["coordinate_space"] == "kinect_space_1"
+    assert list(frame.columns) == list(COLUMN_DTYPES)
+    for column, dtype in COLUMN_DTYPES.items():
+        assert frame[column].dtype == dtype, column
+    assert frame["frame_index"].tolist() == [3, 3, 97]
+    assert frame["signed_depth_mm"].iloc[0] == -0.1234567890123456
+
+
+def test_a_v1_table_can_still_be_rewritten_as_v1(tmp_path):
+    """Merging carries ``schema_version`` through verbatim; that must still work."""
+    path = _write_v1_file(tmp_path / "legacy.parquet")
+    frame, metadata = read_contact_depth_field(path)
+
+    out = tmp_path / "filtered.parquet"
+    write_contact_depth_field_table(
+        frame[frame["frame_index"] == 3],
+        out,
+        metadata={**metadata, "pipeline_stage": "merging"},
+    )
+
+    recovered, recovered_metadata = read_contact_depth_field(out)
+    assert recovered_metadata["schema_version"] == "1"
+    assert list(recovered.columns) == list(COLUMN_DTYPES)
+    assert len(recovered) == 2
+
+
+def test_an_unknown_schema_version_still_raises(tmp_path):
+    """Widening the supported set to two versions did not widen it to all."""
+    path = _write_v1_file(
+        tmp_path / "future.parquet", metadata_overrides={"schema_version": "3"}
+    )
+
+    with pytest.raises(ValueError, match="schema_version"):
+        read_contact_depth_field(path)
+
+
+# --- the two legal layouts --------------------------------------------------
+
+
+def test_v2_round_trips_without_vertex_id(tmp_path):
+    """v2 is a widening, not a replacement: the narrow layout stays legal."""
+    frame, metadata = _written_sample_table(tmp_path)
+    assert metadata["schema_version"] == "2"
+    assert VERTEX_ID_COLUMN not in frame.columns
+
+    out = tmp_path / "narrow.parquet"
+    write_contact_depth_field_table(frame, out, metadata=metadata)
+    recovered, recovered_metadata = read_contact_depth_field(out)
+
+    assert list(recovered.columns) == list(COLUMN_DTYPES)
+    assert recovered_metadata["schema_version"] == "2"
+    for column in COLUMN_DTYPES:
+        assert np.array_equal(
+            recovered[column].to_numpy(), frame[column].to_numpy()
+        ), column
+
+
+def test_v2_round_trips_with_vertex_id(tmp_path):
+    table = _vertex_id_table()
+    out = tmp_path / "projected.parquet"
+
+    write_contact_depth_field_table(table, out, metadata=_vertex_id_metadata())
+    recovered, metadata = read_contact_depth_field(out)
+
+    assert list(recovered.columns) == list(ALL_COLUMN_DTYPES)
+    for column, dtype in ALL_COLUMN_DTYPES.items():
+        assert recovered[column].dtype == dtype, column
+        assert np.array_equal(
+            recovered[column].to_numpy(), table[column].to_numpy()
+        ), column
+
+    assert metadata["reference_ply"] == "ST14-01_forearm_deduped.ply"
+    assert metadata["reference_ply_vertex_count"] == str(_REFERENCE_VERTEX_COUNT)
+    assert metadata["dedup_epsilon"] == "0.5"
+    assert metadata["coordinate_space"] == "icp_registered"
+
+
+def test_a_v2_file_with_vertex_id_is_self_describing(tmp_path):
+    """A bare pyarrow reader recovers the reference-PLY identity."""
+    out = tmp_path / "projected.parquet"
+    write_contact_depth_field_table(
+        _vertex_id_table(), out, metadata=_vertex_id_metadata()
+    )
+
+    raw = pq.read_table(out)
+    decoded = {k.decode(): v.decode() for k, v in raw.schema.metadata.items()}
+
+    assert raw.column_names == list(ALL_COLUMN_DTYPES)
+    assert raw.schema.field(VERTEX_ID_COLUMN).type == pa.int32()
+    for key in REFERENCE_PLY_METADATA_KEYS:
+        assert decoded[key]
+
+
+def test_vertex_id_in_the_wrong_position_raises(tmp_path):
+    """The optional column is a suffix, not a member of an unordered set."""
+    table = _vertex_id_table()
+    misordered = table[
+        [
+            "frame_index",
+            "vertex_id",
+            "time_s",
+            "x",
+            "y",
+            "z",
+            "signed_depth_mm",
+        ]
+    ]
+
+    out = tmp_path / "misordered.parquet"
+    with pytest.raises(ValueError, match="wrong order"):
+        write_contact_depth_field_table(
+            misordered, out, metadata=_vertex_id_metadata()
+        )
+
+    assert not out.exists()
+
+
+def test_vertex_id_must_be_int32_not_int64(tmp_path):
+    """int64 is what a careless pandas round-trip produces; it is refused."""
+    table = _vertex_id_table()
+    widened = table.assign(vertex_id=table["vertex_id"].astype(np.int64))
+
+    out = tmp_path / "widened.parquet"
+    with pytest.raises(ValueError, match="vertex_id"):
+        write_contact_depth_field_table(widened, out, metadata=_vertex_id_metadata())
+
+    assert not out.exists()
+
+
+# --- vertex_id demands its provenance ---------------------------------------
+
+
+@pytest.mark.parametrize("omitted", REFERENCE_PLY_METADATA_KEYS)
+def test_vertex_id_without_its_full_provenance_raises(tmp_path, omitted):
+    """All three keys or none: a partly-identified index is not partly useful."""
+    metadata = {
+        k: v for k, v in _vertex_id_metadata().items() if k != omitted
+    }
+
+    out = tmp_path / "unprovenanced.parquet"
+    with pytest.raises(ValueError, match=omitted):
+        write_contact_depth_field_table(_vertex_id_table(), out, metadata=metadata)
+
+    assert not out.exists()
+
+
+def test_vertex_id_under_schema_version_1_raises(tmp_path):
+    """A stage that adds the column must restamp the version, not carry v1 through."""
+    metadata = _vertex_id_metadata(schema_version="1")
+
+    out = tmp_path / "mislabelled.parquet"
+    with pytest.raises(ValueError, match="schema_version"):
+        write_contact_depth_field_table(_vertex_id_table(), out, metadata=metadata)
+
+    assert not out.exists()
+
+
+def test_reading_a_v1_file_that_carries_vertex_id_raises(tmp_path):
+    """The reader mirrors the writer: a file contradicting itself is refused."""
+    schema = pa.schema(
+        [
+            pa.field("frame_index", pa.int32()),
+            pa.field("time_s", pa.float64()),
+            pa.field("x", pa.float32()),
+            pa.field("y", pa.float32()),
+            pa.field("z", pa.float32()),
+            pa.field("signed_depth_mm", pa.float64()),
+            pa.field("vertex_id", pa.int32()),
+        ]
+    ).with_metadata({"schema_version": "1", "units": "mm"})
+    table = _vertex_id_table()
+    contradictory = pa.Table.from_arrays(
+        [pa.array(table[f.name].to_numpy(), type=f.type) for f in schema],
+        schema=schema,
+    )
+    out = tmp_path / "contradictory.parquet"
+    pq.write_table(contradictory, out)
+
+    with pytest.raises(ValueError, match="contradicts its own declared schema"):
+        read_contact_depth_field(out)
+
+
+def test_a_file_missing_a_required_column_raises(tmp_path):
+    schema = pa.schema([pa.field("frame_index", pa.int32())]).with_metadata(
+        {"schema_version": "2"}
+    )
+    out = tmp_path / "truncated.parquet"
+    pq.write_table(
+        pa.Table.from_arrays(
+            [pa.array(np.array([0], dtype=np.int32), type=pa.int32())], schema=schema
+        ),
+        out,
+    )
+
+    with pytest.raises(ValueError, match="required column"):
+        read_contact_depth_field(out)
+
+
+# --- the coordinate-space vocabulary ----------------------------------------
+
+
+def test_every_declared_coordinate_space_is_writable(tmp_path):
+    """The four names in the vocabulary are the four postprocessing frames."""
+    assert COORDINATE_SPACES == frozenset(
+        {"kinect_space_1", "icp_registered", "pca_calibrated", "rf_centered"}
+    )
+
+    frame, metadata = _written_sample_table(tmp_path)
+    for space in sorted(COORDINATE_SPACES):
+        out = tmp_path / f"{space}.parquet"
+        write_contact_depth_field_table(
+            frame, out, metadata={**metadata, "coordinate_space": space}
+        )
+        _, recovered = read_contact_depth_field(out)
+        assert recovered["coordinate_space"] == space
+
+
+def test_a_misspelled_coordinate_space_raises(tmp_path):
+    """A typo'd space is worse than a rejected write, so the write is rejected."""
+    frame, metadata = _written_sample_table(tmp_path)
+
+    out = tmp_path / "typo.parquet"
+    with pytest.raises(ValueError, match="coordinate_space"):
+        write_contact_depth_field_table(
+            frame, out, metadata={**metadata, "coordinate_space": "rf_centred"}
+        )
+
+    assert not out.exists()
+
+
+def test_a_malformed_reference_ply_vertex_count_raises(tmp_path):
+    out = tmp_path / "bad_count.parquet"
+    with pytest.raises(ValueError, match="reference_ply_vertex_count"):
+        write_contact_depth_field_table(
+            _vertex_id_table(),
+            out,
+            metadata=_vertex_id_metadata(reference_ply_vertex_count="lots"),
+        )
+
+
+def test_a_malformed_dedup_epsilon_raises(tmp_path):
+    out = tmp_path / "bad_epsilon.parquet"
+    with pytest.raises(ValueError, match="dedup_epsilon"):
+        write_contact_depth_field_table(
+            _vertex_id_table(),
+            out,
+            metadata=_vertex_id_metadata(dedup_epsilon="0"),
+        )
+
+
+# --- validate_vertex_ids_against_reference ----------------------------------
+
+
+def test_validation_passes_when_the_reference_matches():
+    table = _vertex_id_table()
+    validate_vertex_ids_against_reference(
+        table,
+        _vertex_id_metadata(),
+        reference_vertex_count=_REFERENCE_VERTEX_COUNT,
+    )
+
+
+def test_validation_raises_on_a_vertex_count_mismatch():
+    """The epsilon-drift guard: a renumbered forearm is a different mesh."""
+    with pytest.raises(ValueError, match="provenance mismatch"):
+        validate_vertex_ids_against_reference(
+            _vertex_id_table(),
+            _vertex_id_metadata(),
+            reference_vertex_count=_REFERENCE_VERTEX_COUNT - 1,
+            reference_description="forearm_rf_centered/ST14-01.ply",
+        )
+
+
+def test_the_mismatch_message_names_the_epsilon_and_the_ply():
+    """The message must point at the cause, not merely at the symptom."""
+    with pytest.raises(ValueError) as excinfo:
+        validate_vertex_ids_against_reference(
+            _vertex_id_table(),
+            _vertex_id_metadata(),
+            reference_vertex_count=4321,
+            reference_description="forearm_rf_centered/ST14-01.ply",
+        )
+
+    message = str(excinfo.value)
+    assert "0.5" in message
+    assert "ST14-01_forearm_deduped.ply" in message
+    assert "4321" in message
+    assert str(_REFERENCE_VERTEX_COUNT) in message
+
+
+def test_validation_raises_on_an_out_of_range_vertex_id():
+    table = _vertex_id_table([0, 5, _REFERENCE_VERTEX_COUNT])
+
+    with pytest.raises(ValueError, match="outside"):
+        validate_vertex_ids_against_reference(
+            table,
+            _vertex_id_metadata(),
+            reference_vertex_count=_REFERENCE_VERTEX_COUNT,
+        )
+
+
+def test_validation_raises_on_a_negative_vertex_id():
+    table = _vertex_id_table([0, -1, 5])
+
+    with pytest.raises(ValueError, match="outside"):
+        validate_vertex_ids_against_reference(
+            table,
+            _vertex_id_metadata(),
+            reference_vertex_count=_REFERENCE_VERTEX_COUNT,
+        )
+
+
+def test_the_last_valid_index_is_accepted_and_the_next_is_not():
+    """``n_vertices - 1`` is in range; ``n_vertices`` is the classic off-by-one."""
+    validate_vertex_ids_against_reference(
+        _vertex_id_table([_REFERENCE_VERTEX_COUNT - 1]),
+        _vertex_id_metadata(),
+        reference_vertex_count=_REFERENCE_VERTEX_COUNT,
+    )
+
+    with pytest.raises(ValueError, match="outside"):
+        validate_vertex_ids_against_reference(
+            _vertex_id_table([_REFERENCE_VERTEX_COUNT]),
+            _vertex_id_metadata(),
+            reference_vertex_count=_REFERENCE_VERTEX_COUNT,
+        )
+
+
+def test_the_count_check_runs_before_the_range_check():
+    """In-range ids against the wrong mesh are the dangerous case, so count first."""
+    table = _vertex_id_table([0, 1, 2])
+
+    with pytest.raises(ValueError, match="provenance mismatch"):
+        validate_vertex_ids_against_reference(
+            table,
+            _vertex_id_metadata(),
+            reference_vertex_count=10,
+        )
+
+
+def test_validation_raises_when_the_table_has_no_vertex_id(tmp_path):
+    frame, _ = _written_sample_table(tmp_path)
+
+    with pytest.raises(ValueError, match="no 'vertex_id' column"):
+        validate_vertex_ids_against_reference(
+            frame,
+            _vertex_id_metadata(),
+            reference_vertex_count=_REFERENCE_VERTEX_COUNT,
+        )
+
+
+def test_validation_raises_when_the_metadata_records_no_vertex_count():
+    metadata = {
+        k: v
+        for k, v in _vertex_id_metadata().items()
+        if k != "reference_ply_vertex_count"
+    }
+
+    with pytest.raises(ValueError, match="reference_ply_vertex_count"):
+        validate_vertex_ids_against_reference(
+            _vertex_id_table(),
+            metadata,
+            reference_vertex_count=_REFERENCE_VERTEX_COUNT,
+        )
+
+
+def test_validation_raises_on_an_int64_vertex_id_column():
+    table = _vertex_id_table()
+    widened = table.assign(vertex_id=table["vertex_id"].astype(np.int64))
+
+    with pytest.raises(ValueError, match="int32"):
+        validate_vertex_ids_against_reference(
+            widened,
+            _vertex_id_metadata(),
+            reference_vertex_count=_REFERENCE_VERTEX_COUNT,
+        )
+
+
+@pytest.mark.parametrize("bad_count", [0, -1])
+def test_validation_raises_on_a_non_positive_reference_count(bad_count):
+    with pytest.raises(ValueError, match="reference_vertex_count"):
+        validate_vertex_ids_against_reference(
+            _vertex_id_table(),
+            _vertex_id_metadata(),
+            reference_vertex_count=bad_count,
+        )
+
+
+def test_validation_raises_when_handed_something_other_than_a_count():
+    """Purity: this helper takes a number, never a mesh or a path."""
+    with pytest.raises(ValueError, match="must be an integer"):
+        validate_vertex_ids_against_reference(
+            _vertex_id_table(),
+            _vertex_id_metadata(),
+            reference_vertex_count="forearm.ply",
+        )
+
+
+def test_the_io_module_imports_no_geometry_engine():
+    """The purity contract, asserted rather than trusted.
+
+    2.4 takes a vertex *count* precisely so that validating a ``vertex_id``
+    against a PLY does not drag a mesh loader behind the serialisation seam.
+    """
+    import inspect
+    import re
+
+    from preprocessing.motion_analysis.tactile_quantification.io import (
+        contact_depth_field_io,
+    )
+
+    source = inspect.getsource(contact_depth_field_io)
+    for banned in ("open3d", "prefect", "ruamel", "sklearn"):
+        assert (
+            re.search(rf"^\s*(import|from)\s+{banned}", source, re.MULTILINE) is None
+        ), banned
+
+
+# ---------------------------------------------------------------------------
+# 8. Integration against a real recording
 # ---------------------------------------------------------------------------
 # Shares the reference bundle documented in ``test_contact_depth_field.py``:
 # point SOCIAL_TOUCH_CONTACT_REFERENCE_DIR at a directory holding
