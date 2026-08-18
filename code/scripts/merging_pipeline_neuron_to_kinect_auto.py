@@ -8,6 +8,10 @@ from multiprocessing import freeze_support
 from prefect import flow, task, get_run_logger
 from prefect.futures import PrefectFuture
 
+# Setup a basic logger
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
 import utils.path_tools as path_tools
 from utils import DagConfigHandler
 

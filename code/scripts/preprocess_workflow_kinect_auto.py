@@ -7,7 +7,7 @@ import time
 import traceback
 from multiprocessing import Queue, freeze_support
 
-from prefect import flow, get_run_logger
+from prefect import flow
 
 # Setup a basic logger
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')

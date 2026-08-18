@@ -5,7 +5,7 @@
 **Approved:** —
 **Completed:** —
 **Author:** Basil Duvernoy
-**Status:** Draft
+**Status:** In Progress
 **Base Branch:** `feature/filter-contact-depth-field-by-neural-quality`
 **Branch:** `feature/remove-prefect-orchestration`
 
@@ -207,20 +207,50 @@ environment.yml                     # MODIFIED — drop prefect>=3.4 and its sec
 ### Phase 1: Harden logging and output buffering
 **Goal:** The two silent-degradation hazards are fixed while Prefect is still present, so later
 phases cannot hide behind them.
-**Started:** —  **Completed:** —
+**Started:** 2026-08-18 10:45  **Completed:** 2026-08-18 11:05
 
-- [ ] 1.1 — Add the repo-standard
+- [x] 1.1 — Add the repo-standard
       `logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')`
       and a module-level `logger = logging.getLogger(__name__)` to
       `code/scripts/preprocess_pipeline_nerve_auto.py` and
       `code/scripts/merging_pipeline_neuron_to_kinect_auto.py`, matching the four sibling scripts.
-- [ ] 1.2 — Verify with Prefect **still in place** that narration is unchanged: capture a run's
+- [x] 1.2 — Verify with Prefect **still in place** that narration is unchanged: capture a run's
       output before and after 1.1 and diff the set of INFO lines.
-- [ ] 1.3 — Add `-u` to the workflow subprocess command at
+      *Done as the targeted import-and-call substitute (a full workflow run needs session data):
+      both modules imported, root-logger state inspected, and `logging.getLogger(<module>).info(...)`
+      emitted before and after. Prefect narration via `get_run_logger()` is byte-for-byte unchanged.
+      See the finding below — the `basicConfig` is currently inert and only takes effect in Phase 3.*
+- [x] 1.3 — Add `-u` to the workflow subprocess command at
       `code/src/utils/gui/dag_launcher/launcher_window.py:338` (or set `PYTHONUNBUFFERED=1` in the
       child env). Prints outside flows already block-buffer today, so this is a fix on its own merits.
-- [ ] 1.4 — Verify console output arrives line by line in the GUI on a workflow that prints steadily.
-- [ ] 1.5 — Remove the dead `get_run_logger` import at `preprocess_workflow_kinect_auto.py:10`.
+      *Chose `-u`: it keeps the decision visible at the call site and survives the `env=None` branch
+      two lines below, which `PYTHONUNBUFFERED` in a constructed env would not.*
+- [x] 1.4 — Verify console output arrives line by line in the GUI on a workflow that prints steadily.
+      *Done with a `subprocess.Popen` harness mimicking `_on_run` + `process_output_reader`'s
+      `for raw_line in process.stdout`, not by launching the GUI. A child printing 8 lines at 0.4 s
+      intervals: without `-u` all 8 arrive together at +3.30 s (process exit); with `-u` they arrive
+      at +0.05 s … +2.89 s, one per interval.*
+- [x] 1.5 — Remove the dead `get_run_logger` import at `preprocess_workflow_kinect_auto.py:10`.
+
+**Finding — `basicConfig` in every entry script is inert while Prefect is imported.**
+`from prefect import ...` triggers `prefect/main.py:50 → setup_logging() → logging.config.dictConfig`
+with `root: {level: WARNING, handlers: [console]}`. Because that import sits *above* the
+`basicConfig` line in all six entry scripts, `basicConfig` then sees a non-empty `root.handlers` and
+returns as a no-op (verified: root stays `WARNING` with a `PrefectConsoleHandler`). This is
+pre-existing and affects the four sibling scripts equally — it is **not** introduced by 1.1.
+
+Consequences:
+- Nothing regresses now. `get_run_logger()` narration is untouched, and module-level `logger.info`
+  was already silent before 1.1.
+- The fix lands automatically in **Phase 3/5**: with the `prefect` import gone, `root.handlers` is
+  empty and `basicConfig` sets `INFO` + a stderr `StreamHandler` (verified directly).
+- **Phase 3 ordering constraint:** the `logger = get_run_logger()` lines in a file must not be
+  deleted while that file — or anything it imports — still pulls in `prefect`, or its narration
+  goes silent in the window between. Delete the `prefect` import in the same edit.
+- `basicConfig(..., force=True)` would make it effective immediately, but it was **not** applied:
+  it deviates from the sibling pattern and changes behaviour today — measured, it un-suppresses
+  `httpx` INFO, adding ~10 `HTTP Request: POST .../api/flow_runs/` lines per flow run to the console.
+  That noise disappears with Prefect, so waiting for Phase 3 is the cheaper path.
 
 **Files Modified:**
 - `code/scripts/preprocess_pipeline_nerve_auto.py` — add logging config

@@ -335,7 +335,13 @@ class LauncherWindow(QMainWindow):
                     "Prefect server unavailable — falling back to ephemeral mode"
                 )
         project_root = self._configs_dir.parent
-        cmd = [sys.executable, str(self._current_entry.script)]
+        # -u forces unbuffered stdout/stderr in the child. Its stdout is a pipe,
+        # so CPython would otherwise block-buffer it (~8 KB) and the console below
+        # would show long silences followed by bursts instead of live progress.
+        # Chosen over PYTHONUNBUFFERED=1 because the flag keeps the decision
+        # visible at this call site rather than hidden in inherited environment
+        # state -- and it survives the `env=None` branch a few lines down.
+        cmd = [sys.executable, "-u", str(self._current_entry.script)]
         if self._current_entry.dag_config is not None:
             cmd += ["--dag-config", str(self._current_entry.dag_config)]
         env = self._server_manager.get_env() if self._server_manager.is_running() else None
