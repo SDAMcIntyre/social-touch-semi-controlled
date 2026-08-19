@@ -99,10 +99,14 @@ class LivePlotter:
     def __init__(self, data_queue: Queue):
         self._queue = data_queue
         self._plot_process: Optional[multiprocessing.Process] = None
+        self._stopped = False
+        self._reported_dead = False
 
     def start(self):
         if self._plot_process and self._plot_process.is_alive():
             return
+        self._stopped = False
+        self._reported_dead = False
         self._plot_process = multiprocessing.Process(target=_plot_process_target, args=(self._queue,))
         try:
             self._plot_process.start()
@@ -111,7 +115,36 @@ class LivePlotter:
                   "Pipeline will continue — status is saved to the Excel report.")
             self._plot_process = None
 
+    def report_if_dead(self) -> None:
+        """Announce a dashboard child that died *after* a successful ``start()``.
+
+        ``start()``'s own ``except`` only covers failures raised in this process
+        while spawning.  The child can instead die during its own bootstrap, well
+        after ``start()`` has returned: on Windows, unpickling the queue's pipe
+        handle raises ``PermissionError: [WinError 5] Access is denied`` from
+        ``DuplicateHandle`` whenever a debugger has patched ``multiprocessing``
+        (debugpy does this by default via its ``subProcess`` option).  That path
+        leaves a raw child traceback on the console, no dashboard, and nothing
+        here any the wiser — including the message above, which names exactly
+        this situation but cannot fire in it.
+
+        Reported once, then the plotter stands itself down so the pipeline runs
+        on without it.  Deliberately not raising: the dashboard is an optional
+        convenience and the authoritative status is the Excel report.  A
+        terminate() from :meth:`stop` is not a death and is not reported.
+        """
+        if self._plot_process is None or self._stopped or self._reported_dead:
+            return
+        if self._plot_process.is_alive():
+            return
+        exitcode = self._plot_process.exitcode
+        self._reported_dead = True
+        self._plot_process = None
+        print(f"Live dashboard stopped unexpectedly (child exit code {exitcode}). "
+              "Pipeline will continue — status is saved to the Excel report.")
+
     def stop(self, block: bool = False):
+        self._stopped = True
         if not self.is_running():
             return
         self._plot_process.terminate()
