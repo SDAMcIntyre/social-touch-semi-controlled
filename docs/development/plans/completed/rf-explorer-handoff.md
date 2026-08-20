@@ -1,8 +1,17 @@
 # Handoff: RF Explorer — Mouse Event Bug
 
+**Status:** Completed
+**Completed:** 2026-05-04 14:43
 **Branch:** `feature/rf-explorer-event-and-scalar-fix`
 **Base branch:** `feature/rf-explorer-layout-bugfix-cache`
 **Key file:** `code/src/analysis/receptive_field_mapping/gui/rf_feature_space_explorer.py`
+
+
+> Merged into `dev` on 2026-05-04 14:43 by `e52a8ec`, via `feature/rf-explorer-layout-bugfix-cache` (`5b2bbe7`, 14:25) ->
+> `feature/rf-explorer-independent-dag-flow` (`0d750a5`, 14:36) -> `feature/rf-feature-space-explorer` (`9cb3502`, 14:40).
+> The branch itself no longer exists, and the key file left this repo on 2026-08-06 with
+> `a1dbf8f refactor(remove-analysis-package): delete analysis package` — the code it fixes now
+> lives in `social-touch-semi-controlled-analysis`.
 
 ---
 
