@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-12
 **Author:** Basil Duvernoy
-**Status:** In Progress
+**Status:** Completed
 **Base Branch:** `dev`
 **Branch:** `feature/per-vertex-contact-depth-poc`
 
@@ -300,7 +300,7 @@ Per the project mandate, and guide 02 §8. Each of these currently has no check:
 behaviour is unchanged.
 
 **Started:** 2026-08-12
-**Completed:** 2026-08-12
+**Completed:** 2026-08-20 14:39
 
 - [x] 1.1 — Create `contact_depth_field.py` with `ContactDepthFrame` and `signed_contact_depth_mm()`,
       lifting the AABB broad phase + `RaycastingScene` narrow phase + triangle mask verbatim from

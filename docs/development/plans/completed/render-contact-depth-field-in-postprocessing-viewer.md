@@ -2,7 +2,8 @@
 
 **Date:** 2026-08-19
 **Author:** Basil Duvernoy
-**Status:** In Progress
+**Status:** Completed
+**Completed:** 2026-08-20 14:39
 **Base Branch:** `feature/depth-field-postprocessing`
 **Branch:** `feature/depth-field-stage-viewer`
 

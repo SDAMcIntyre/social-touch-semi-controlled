@@ -3,9 +3,9 @@
 **Date:** 2026-08-18
 **Created:** 2026-08-18 19:00
 **Approved:** —
-**Completed:** —
+**Completed:** 2026-08-20 14:39
 **Author:** Basil Duvernoy
-**Status:** In Progress
+**Status:** Completed
 **Base Branch:** `feature/remove-prefect-orchestration`
 **Branch:** `feature/depth-field-postprocessing`
 
