@@ -649,40 +649,102 @@ def test_resolving_a_stage_reads_exactly_once(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 4b. The one legitimate second space -- and the asymmetry that keeps it one
+# 4b. The legitimate second spaces -- and the asymmetry that keeps them few
 # ---------------------------------------------------------------------------
 #
-# ``center_on_receptive_field`` cannot always estimate a receptive-field centre.
-# When it cannot it copies the CSV *and* the sidecar through byte-for-byte and
-# leaves ``coordinate_space`` at ``pca_calibrated``, because that is the space
-# the points are genuinely still in -- restamping them ``rf_centered`` would
-# assert a translation that never happened.  Whole sessions land there:
-# ``2022-06-14_ST13-01`` does, on all four of its blocks, and before this the
-# viewer could not open their stage 5 at all.
+# Two of the pipeline's transforms are conditional, and when the condition does
+# not hold the producing task copies the CSV *and* the sidecar through
+# byte-for-byte, leaving ``coordinate_space`` at whatever the input declared.
+# Restamping would assert a transform that never happened, so in both cases the
+# producer is right and the viewer is what has to accommodate it.
 #
-# The fix is a *stage-5-only* widening, and the obvious way to get it wrong is a
+# * ``center_on_receptive_field`` cannot always estimate a receptive-field
+#   centre.  When it cannot, stage 5's sidecar keeps ``pca_calibrated`` --
+#   ``2022-06-14_ST13-01`` lands there on all four of its blocks.
+# * ``apply_icp_registration`` applies a *schedule*, and the schedule can be
+#   empty -- ``apply_transform_schedule_to_field`` documents that as "the
+#   explicit passthrough the ICP stage takes when a block has no registration
+#   snapshot", and the same branch is taken for a whole session with no
+#   ``registration_transforms.json``.  Stage 1's sidecar then keeps
+#   ``kinect_space_1``, and because dedup and projection move no points, stages
+#   2 and 3 inherit it.  ``2022-06-22_ST18-01`` lands there on all sixteen of
+#   its blocks: its ``blocks_registered/`` sidecar is bitwise identical to its
+#   ``blocks_filtered/`` input -- 747209 rows in, 747209 out, max |delta|
+#   0.000000 mm -- while ``2022-06-15_ST14-02`` moved by up to 2.050193 mm and
+#   declares ``icp_registered``.
+#
+# The fix is a *per-stage* widening, and the obvious way to get it wrong is a
 # map that quietly widens the rest.  Everything below is written to catch that:
 # the accepted sets are asserted exactly, stage 4 is shown still refusing
 # ``rf_centered`` (a field that moved past the stage being displayed as though
-# it had not), stages 1-3 still refuse ``pca_calibrated``, and stage 5 itself
-# still refuses the two spaces that are neither of its own.
+# it had not) and still refusing ``kinect_space_1``, stage 5 still refusing
+# ``kinect_space_1``, and stages 1-3 still refusing both spaces ahead of them.
 
 
-def test_stage_five_accepts_exactly_two_spaces_and_no_other_stage_does() -> None:
+def test_the_accepted_sets_are_exactly_these_and_no_wider() -> None:
     """The accepted sets, stated exactly. Anything wider is the bug this guards."""
-    assert ACCEPTED_SPACES_BY_STAGE[1] == frozenset({COORDINATE_SPACE_ICP_REGISTERED})
-    assert ACCEPTED_SPACES_BY_STAGE[2] == frozenset({COORDINATE_SPACE_ICP_REGISTERED})
-    assert ACCEPTED_SPACES_BY_STAGE[3] == frozenset({COORDINATE_SPACE_ICP_REGISTERED})
+    icp_or_kinect = frozenset(
+        {COORDINATE_SPACE_ICP_REGISTERED, COORDINATE_SPACE_KINECT_1}
+    )
+    assert ACCEPTED_SPACES_BY_STAGE[1] == icp_or_kinect
+    assert ACCEPTED_SPACES_BY_STAGE[2] == icp_or_kinect
+    assert ACCEPTED_SPACES_BY_STAGE[3] == icp_or_kinect
     assert ACCEPTED_SPACES_BY_STAGE[4] == frozenset({COORDINATE_SPACE_PCA_CALIBRATED})
     assert ACCEPTED_SPACES_BY_STAGE[5] == frozenset(
         {COORDINATE_SPACE_RF_CENTERED, COORDINATE_SPACE_PCA_CALIBRATED}
     )
-    assert sorted(PASSTHROUGH_SPACE_BY_STAGE) == [5]
+    assert sorted(PASSTHROUGH_SPACE_BY_STAGE) == [1, 2, 3, 5]
+    assert PASSTHROUGH_SPACE_BY_STAGE[1] == COORDINATE_SPACE_KINECT_1
+    assert PASSTHROUGH_SPACE_BY_STAGE[2] == COORDINATE_SPACE_KINECT_1
+    assert PASSTHROUGH_SPACE_BY_STAGE[3] == COORDINATE_SPACE_KINECT_1
     assert PASSTHROUGH_SPACE_BY_STAGE[5] == COORDINATE_SPACE_PCA_CALIBRATED
-    # Every stage but 5 accepts exactly one space -- the one its own transform
-    # produces.  This is the assertion a blanket widening fails.
+    # Stage 4 is the one stage with no passthrough branch in its producer, and
+    # it accepts exactly one space.  This is the assertion a blanket widening
+    # fails: a map that widened "every stage" would give stage 4 a second space
+    # too.
+    assert 4 not in PASSTHROUGH_SPACE_BY_STAGE
     for stage_idx, spaces in ACCEPTED_SPACES_BY_STAGE.items():
-        assert len(spaces) == (2 if stage_idx == 5 else 1)
+        assert len(spaces) == (1 if stage_idx == 4 else 2)
+
+
+def test_no_stage_accepts_a_space_produced_after_it() -> None:
+    """Every passthrough points backwards, never forwards.
+
+    A passthrough names a space the field never *left*.  A space some later
+    stage produces is the opposite -- a field that already moved past the stage
+    being displayed -- and accepting one would draw the patch a transform away
+    from the geometry beside it while calling it a passthrough.
+    """
+    for stage_idx, passthrough in PASSTHROUGH_SPACE_BY_STAGE.items():
+        # Stages 1-3 share one canonical space, so "produced by a later stage"
+        # has to exclude this stage's own -- otherwise stage 1's ``icp_registered``
+        # would read as stage 2's output rather than as its own.
+        own = CANONICAL_SPACE_BY_STAGE[stage_idx]
+        ahead = {
+            space
+            for later_idx, space in CANONICAL_SPACE_BY_STAGE.items()
+            if later_idx > stage_idx and space != own
+        }
+        assert passthrough not in ahead, (
+            f"stage {stage_idx}'s passthrough '{passthrough}' is produced by a "
+            "later stage"
+        )
+
+
+def test_kinect_space_reaches_exactly_the_registration_carrying_stages() -> None:
+    """``kinect_space_1`` must not leak past the stages that can still be in it.
+
+    The ICP passthrough is inherited by dedup and projection because neither
+    moves a point.  PCA calibration always transforms, so nothing downstream of
+    stage 3 can legitimately still be in Kinect space -- and a map that let it
+    would show pre-registration geometry under a calibrated label.
+    """
+    carrying = {
+        stage_idx
+        for stage_idx, spaces in ACCEPTED_SPACES_BY_STAGE.items()
+        if COORDINATE_SPACE_KINECT_1 in spaces
+    }
+    assert carrying == {1, 2, 3}
 
 
 def _resolve_with_space(tmp_path: Path, stage_idx: int, declared_space: str):
@@ -782,25 +844,119 @@ def test_stage_four_still_refuses_the_rf_centered_space(tmp_path: Path) -> None:
     assert STAGE_LABELS[4] in message
 
 
-@pytest.mark.parametrize("stage_idx", [1, 2, 3])
-def test_stages_one_to_three_still_refuse_the_pca_space(
-    tmp_path: Path, stage_idx: int
-) -> None:
-    """Widening stage 5 must not have reached the three stages that share a space."""
+def test_stage_four_refuses_the_kinect_space(tmp_path: Path) -> None:
+    """The ICP passthrough must stop at stage 3.
+
+    PCA calibration always transforms -- ``calibrate_pca_xyz`` has no
+    passthrough branch -- so a ``kinect_space_1`` field in
+    ``blocks_pca_calibrated/`` is unregistered, uncalibrated geometry under a
+    calibrated label, not a passthrough.
+    """
     with pytest.raises(ValueError) as excinfo:
-        _resolve_with_space(tmp_path, stage_idx, COORDINATE_SPACE_PCA_CALIBRATED)
+        _resolve_with_space(tmp_path, 4, COORDINATE_SPACE_KINECT_1)
+
+    message = str(excinfo.value)
+    assert COORDINATE_SPACE_KINECT_1 in message
+    assert COORDINATE_SPACE_PCA_CALIBRATED in message
+    assert STAGE_LABELS[4] in message
+
+
+@pytest.mark.parametrize(
+    "declared_space",
+    [COORDINATE_SPACE_PCA_CALIBRATED, COORDINATE_SPACE_RF_CENTERED],
+)
+@pytest.mark.parametrize("stage_idx", [1, 2, 3])
+def test_stages_one_to_three_still_refuse_every_space_ahead_of_them(
+    tmp_path: Path, stage_idx: int, declared_space: str
+) -> None:
+    """Two spaces, not "anything".
+
+    Accepting ``kinect_space_1`` on these three stages is a claim about a
+    transform that did *not* run.  A field in a space produced *later* is the
+    opposite claim, and must still be refused by all three.
+    """
+    with pytest.raises(ValueError) as excinfo:
+        _resolve_with_space(tmp_path, stage_idx, declared_space)
 
     message = str(excinfo.value)
     assert COORDINATE_SPACE_ICP_REGISTERED in message
-    assert COORDINATE_SPACE_PCA_CALIBRATED in message
+    assert COORDINATE_SPACE_KINECT_1 in message
+    assert declared_space in message
     assert STAGE_LABELS[stage_idx] in message
 
 
+@pytest.mark.parametrize("stage_idx", [1, 2, 3])
+def test_stages_one_to_three_accept_the_registered_case(
+    tmp_path: Path, stage_idx: int
+) -> None:
+    """``icp_registered``: the schedule ran, and nothing extra is announced.
+
+    This is ``2022-06-15_ST14-02``, whose coordinates moved by up to 2.050193 mm
+    through registration.
+    """
+    resolved, _ = _resolve_with_space(
+        tmp_path, stage_idx, COORDINATE_SPACE_ICP_REGISTERED
+    )
+
+    assert resolved.is_present
+    assert resolved.series.coordinate_space == COORDINATE_SPACE_ICP_REGISTERED
+    assert resolved.is_passthrough is False
+    assert resolved.passthrough_note is None
+    assert "PASSTHROUGH" not in resolved.message
+
+
+@pytest.mark.parametrize("stage_idx", [1, 2, 3])
+def test_stages_one_to_three_accept_the_icp_passthrough_case(
+    tmp_path: Path, stage_idx: int
+) -> None:
+    """``kinect_space_1`` in the three registration-carrying directories.
+
+    The producer is right and this is why: the ICP schedule was empty, so
+    nothing moved and the points really are still in Kinect space.  The previous
+    expectation refused an entire session over three files that were telling the
+    truth -- ``2022-06-22_ST18-01``, on all sixteen of its blocks, whose stage-1
+    sidecar is bitwise identical to its ``blocks_filtered/`` input.
+    """
+    resolved, sidecar = _resolve_with_space(
+        tmp_path, stage_idx, COORDINATE_SPACE_KINECT_1
+    )
+
+    assert resolved.is_present
+    assert resolved.series.coordinate_space == COORDINATE_SPACE_KINECT_1
+    assert str(sidecar) in resolved.message
+
+
+@pytest.mark.parametrize("stage_idx", [1, 2, 3])
+def test_the_icp_passthrough_is_reported_as_one(
+    tmp_path: Path, stage_idx: int
+) -> None:
+    """Accepted is not the same as unremarked.
+
+    Drawing unregistered points under a label that says "ICP Registered" without
+    saying so is the same misstatement as restamping the file, made quieter.
+    """
+    resolved, _ = _resolve_with_space(tmp_path, stage_idx, COORDINATE_SPACE_KINECT_1)
+
+    assert resolved.is_passthrough is True
+    note = resolved.passthrough_note
+    assert note is not None and note.strip()
+    assert COORDINATE_SPACE_KINECT_1 in note
+    assert COORDINATE_SPACE_ICP_REGISTERED in note
+    assert PRODUCING_TASK_BY_STAGE[stage_idx] in note
+    assert STAGE_LABELS[stage_idx] in note
+    assert note in resolved.message
+
+
 @pytest.mark.parametrize("stage_idx, _dir, _csv, expected", _SIDECAR_BEARING)
-def test_no_stage_but_five_reports_a_passthrough(
+def test_a_stage_in_its_own_space_never_reports_a_passthrough(
     tmp_path: Path, stage_idx: int, _dir: str, _csv: str, expected: str
 ) -> None:
-    """A stage resolving in its own space is never announced as a passthrough."""
+    """A stage resolving in its own space is never announced as a passthrough.
+
+    ``_SIDECAR_BEARING`` carries each stage's *canonical* space, so this is the
+    normally-transformed session on every stage at once -- including stages 1-3,
+    where ``2022-06-15_ST14-02`` must stay unannounced.
+    """
     resolved, _ = _resolve_with_space(tmp_path, stage_idx, expected)
 
     assert resolved.is_present

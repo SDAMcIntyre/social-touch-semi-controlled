@@ -1383,6 +1383,141 @@ so its contact centroid is elsewhere) is code, not an observation.
 `code/tests/test_stage_selection.py` *(new)*, `code/tests/test_stage_depth_field.py` *(a pointer to
 the session-scale half of the laziness assertions)*, this plan.
 
+
+---
+
+### Defect fix: the ICP passthrough space, on stages 1-3 *(out of scope — not a phase)*
+
+**Found:** 2026-08-20, opening `2022-06-22_ST18-01` in the session-level viewer. Stages 1, 2 and 3
+could not be opened at all — `resolve_stage_depth_field` raised on every one of the session's 16
+blocks. This is the **same defect class** as Phase 7 above, one stage-group earlier in the pipeline,
+and it is fixed with the machinery Phase 7 already built rather than with anything new.
+
+**The defect.** The sidecars in `blocks_registered/`, `blocks_deduped/` and `blocks_projected/`
+declare `coordinate_space: kinect_space_1`. `ACCEPTED_SPACES_BY_STAGE` derived `icp_registered` alone
+for those three stages, so every block was refused.
+
+**The producer is right, and this is the measurement that settles it.** Comparing each
+`blocks_registered/` sidecar against the `blocks_filtered/` sidecar it was produced from:
+
+| Session | Blocks | Rows in → out | Coordinates | max abs delta | `blocks_registered/` declares |
+|---|---|---|---|---|---|
+| `2022-06-22_ST18-01` | 16 | 18 773 020 → 18 773 020 | **bitwise identical** | **0.000000 mm** | `kinect_space_1` |
+| `2022-06-15_ST14-02` | 6 | 9 284 464 → 9 284 464 | moved | **2.050193 mm** | `icp_registered` |
+
+(Per block-order-01 alone: 747 209 → 747 209 rows for ST18-01, 647 169 → 647 169 for ST14-02 — the
+figures the defect was first reported with, reproduced here and extended session-wide.)
+
+So ICP was a **passthrough** for ST18-01: nothing moved, the points genuinely are still in Kinect
+Space 1, and `kinect_space_1` is the honest declaration. Restamping it `icp_registered` would assert
+a registration that never ran.
+
+**The branch is the pipeline's own, documented, and reached two ways.** `apply_icp_registration`
+calls `_copy_field_unchanged` — whose docstring reads "the points did not move, so the declared
+`coordinate_space` — `kinect_space_1` — is still the truth and is carried through untouched;
+restamping it would be a lie" — when `ForearmRegistrator.load_transforms` returns `None` (no
+`forearm_pointclouds/<session_id>_registration_transforms.json` at all) *or* when a block's
+`get_transform_schedule` comes back empty. The leaf agrees: `apply_transform_schedule_to_field`
+documents an empty schedule as "the explicit passthrough the ICP stage takes when a block has no
+registration snapshot".
+
+**Which of the two ST18-01 took, from the artifacts and nothing else:**
+`2_processed/kinect/2022-06-22_ST18-01/forearm_pointclouds/` exists but contains **no**
+`2022-06-22_ST18-01_registration_transforms.json`, while 13 other sessions' directories do (ST18-04's
+included). That is the `transforms_data is None` branch. The passthrough note in the viewer still
+names the file rather than asserting a cause, exactly as stage 5's note names `rf_center_origin.json`
+rather than choosing between its two no-centre outcomes.
+
+**Why stages 2 and 3 inherit it, and why that is not a second claim.** `deduplicate_xy` removes rows
+and `project_contacts_onto_forearm` snaps points onto the reference surface *within* the space they
+were already in. Both carry `coordinate_space` through verbatim — their own docstrings say so — so
+they declare whatever stage 1 handed them. All three stages therefore declare `kinect_space_1`
+together, or none of them does.
+
+**What changed.** No new mechanism; Phase 7's is extended.
+
+1. `PASSTHROUGH_SPACE_BY_STAGE` gains `1, 2, 3 → kinect_space_1`, and `PASSTHROUGH_REASON_BY_STAGE`
+   gains a reason for each — stage 1's naming its own two branches and the file that distinguishes
+   them, stages 2-3's stating only that they move no points and so report the space registration left
+   the field in.
+2. `ACCEPTED_SPACES_BY_STAGE` is **untouched**: it stays derived per stage from the two maps, so the
+   non-contagion property Phase 7 established still holds — stage 4 gains nothing, and stage 5's
+   second space is still `pca_calibrated` alone.
+3. A **fourth** module-level consistency check: a stage's passthrough space may never be a space some
+   *later* stage produces. A passthrough names a space the field never *left*; a space produced later
+   is a field that already moved past the stage being displayed, and accepting one would draw the
+   patch a transform away from the geometry beside it while calling it a passthrough. (Stages 1-3
+   share one canonical space, so "produced later" excludes the stage's own.)
+4. `_passthrough_note`'s closing sentence was generalised. It read "the stage label is the only thing
+   here that claims a transform which did not happen" — true of stages 1 and 5, but stages 2 and 3
+   *did* deduplicate and *did* project. It now says only that the coordinate space the stage's name
+   implies is overstated and that nothing in the geometry is, which is accurate for all four.
+
+The viewer needed **no change at all**: its amber banner and both tooltips already read
+`passthrough_note` generically.
+
+**Anti-widening tests** — the real acceptance criterion, mirroring Phase 7's:
+
+- `test_the_accepted_sets_are_exactly_these_and_no_wider` — all five sets stated literally; stage 4
+  asserted to have no passthrough entry, and to be the *only* stage accepting one space.
+- `test_no_stage_accepts_a_space_produced_after_it` — the new backwards-only invariant, at test level
+  too.
+- `test_kinect_space_reaches_exactly_the_registration_carrying_stages` — the carrying set is exactly
+  `{1, 2, 3}`.
+- `test_stages_one_to_three_still_refuse_every_space_ahead_of_them` — `pca_calibrated` **and**
+  `rf_centered`, on all three stages.
+- `test_stage_four_refuses_the_kinect_space` — `calibrate_pca_xyz` has no passthrough branch, so a
+  Kinect-space field there is unregistered, uncalibrated geometry under a calibrated label.
+- `test_stage_five_still_refuses_every_other_space` (existing) already parametrises `kinect_space_1`;
+  stage 5 must not gain it.
+- `test_stages_one_to_three_accept_the_icp_passthrough_case` and
+  `test_the_icp_passthrough_is_reported_as_one` — accepted, and *announced*, on all three stages.
+- `test_a_stage_in_its_own_space_never_reports_a_passthrough` — a normally-registered session is
+  never announced as a passthrough, on every sidecar-bearing stage.
+
+**Verified on real data — the full 11-session × 5-stage sweep**, every block of every session driven
+through the real `make_contact_depth_field_loader` and the real `resolve_stage_depth_field`. 99
+blocks, 495 (session, stage) resolutions, **0 raises and 0 absent sidecars**. **P** marks a
+resolution reported as a passthrough; every cell is unanimous across that session's blocks.
+
+| Session | Blocks | 1 ICP Registered | 2 Deduplicated | 3 Contact Projected | 4 PCA Calibrated | 5 RF Centered |
+|---|---|---|---|---|---|---|
+| `2022-06-14_ST13-01` | 4  | `icp_registered` | `icp_registered` | `icp_registered` | `pca_calibrated` | `pca_calibrated` **P** |
+| `2022-06-14_ST13-02` | 8  | `icp_registered` | `icp_registered` | `icp_registered` | `pca_calibrated` | `pca_calibrated` **P** |
+| `2022-06-14_ST13-03` | 10 | `icp_registered` | `icp_registered` | `icp_registered` | `pca_calibrated` | `rf_centered` |
+| `2022-06-15_ST14-01` | 9  | `icp_registered` | `icp_registered` | `icp_registered` | `pca_calibrated` | `pca_calibrated` **P** |
+| `2022-06-15_ST14-02` | 6  | `icp_registered` | `icp_registered` | `icp_registered` | `pca_calibrated` | `rf_centered` |
+| `2022-06-15_ST14-04` | 3  | `icp_registered` | `icp_registered` | `icp_registered` | `pca_calibrated` | `pca_calibrated` **P** |
+| `2022-06-17_ST16-02` | 15 | `icp_registered` | `icp_registered` | `icp_registered` | `pca_calibrated` | `pca_calibrated` **P** |
+| `2022-06-17_ST16-03` | 5  | `icp_registered` | `icp_registered` | `icp_registered` | `pca_calibrated` | `pca_calibrated` **P** |
+| `2022-06-17_ST16-05` | 16 | `icp_registered` | `icp_registered` | `icp_registered` | `pca_calibrated` | `rf_centered` |
+| `2022-06-22_ST18-01` | 16 | `kinect_space_1` **P** | `kinect_space_1` **P** | `kinect_space_1` **P** | `pca_calibrated` | `pca_calibrated` **P** |
+| `2022-06-22_ST18-04` | 7  | `icp_registered` | `icp_registered` | `icp_registered` | `pca_calibrated` | `rf_centered` |
+
+**What the sweep answers, which was the point of running it.** Only **four** of the 20 (stage, space)
+combinations the vocabulary allows occur across those 495 resolutions, and all four are now handled:
+
+| Kind | Stage(s) | Space | Sessions |
+|---|---|---|---|
+| canonical | 1-3 | `icp_registered` | 10 of 11 |
+| **passthrough** | 1-3 | `kinect_space_1` | ST18-01 only, 16/16 blocks |
+| canonical | 4 | `pca_calibrated` | 11 of 11 — no session has ever passed PCA through |
+| canonical / **passthrough** | 5 | `rf_centered` / `pca_calibrated` | 4 / 7 |
+
+**There is no third passthrough case in this dataset.** Stage 4 is `pca_calibrated` on all 99 blocks,
+matching `calibrate_pca_xyz` having no passthrough branch to take. ST18-01 is the only session that
+is a passthrough at *both* ends — Kinect-space on stages 1-3 and PCA-calibrated on stage 5 — and it
+now opens on all six stages, with three amber banners it previously could not reach.
+
+**Not verified:** nothing was *seen*. `QtInteractor` still cannot initialise here (`0xC00000FD`), and
+no viewer was driven for this fix — the change is confined to the Qt-free policy leaf, and the banner
+and tooltips that surface `passthrough_note` were left byte-identical. The claim is that the three
+stages now *resolve* and report a passthrough, measured through the real loader on the real files; it
+is not a claim that the banner was observed on screen.
+
+**Files Modified:** `code/src/postprocessing/gui/stage_depth_field.py`,
+`code/tests/test_stage_depth_field.py`, this plan.
+
 ---
 
 ## Testing Plan

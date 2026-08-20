@@ -46,25 +46,49 @@ refuses.  A field drawn in the wrong space would land the patch somewhere
 plausible-looking and wrong — a defect that first surfaces as a wrong scientific
 result, downstream, in another repository.  Fail fast instead.
 
-One stage accepts two spaces, and it is not a widening
+Four stages accept two spaces, and it is not a widening
 ------------------------------------------------------
-``center_on_receptive_field`` cannot always estimate a receptive-field centre.
-When it cannot, it copies the CSV *and* the sidecar through byte-for-byte and
-deliberately leaves ``coordinate_space`` at ``pca_calibrated``, because that is
-what the points are still in; restamping them ``rf_centered`` would assert a
-translation that never happened.  The producer is right, and whole sessions land
-there — ``2022-06-14_ST13-01`` does, on all four of its blocks.  So stage 5
-accepts ``rf_centered`` **or** ``pca_calibrated`` and nothing else, expressed as
-:data:`CANONICAL_SPACE_BY_STAGE` plus :data:`PASSTHROUGH_SPACE_BY_STAGE` rather
-than as a hand-written set, so that widening one stage cannot widen another.
-The asymmetry is load-bearing: stage 4 must still refuse ``rf_centered`` (a
-field that moved *past* the stage being shown as though it had not), and stages
-1-3 must still refuse everything but ``icp_registered``.
+Two of the six stages' transforms are conditional, and when the condition does
+not hold the producing task copies the CSV *and* the sidecar through
+byte-for-byte, deliberately leaving ``coordinate_space`` at whatever the input
+declared.  Restamping it would assert a transform that never happened, so the
+producer is right in both cases and the viewer is what has to accommodate them.
+
+* **Stage 5.**  ``center_on_receptive_field`` cannot always estimate a
+  receptive-field centre.  When it cannot it takes ``_copy_field_unchanged`` and
+  the file keeps ``pca_calibrated``, because that is what the points are still
+  in.  Whole sessions land there — ``2022-06-14_ST13-01`` does, on all four of
+  its blocks.
+* **Stages 1-3.**  ``apply_icp_registration`` applies a *schedule*, and the
+  schedule can be empty: ``apply_transform_schedule_to_field`` documents the
+  empty schedule as "the explicit passthrough the ICP stage takes when a block
+  has no registration snapshot", and the stage takes the same branch for a whole
+  session that has no ``registration_transforms.json`` at all.  Its own
+  ``_copy_field_unchanged`` then keeps ``kinect_space_1`` — "the points did not
+  move, so the declared ``coordinate_space`` ... is still the truth".  Because
+  deduplication and projection move no points and carry their input's space
+  through verbatim, stages 2 and 3 inherit whatever stage 1 produced, so all
+  three declare ``kinect_space_1`` together or none of them does.
+  ``2022-06-22_ST18-01`` lands there on all sixteen of its blocks, and its
+  ``blocks_registered/`` sidecar is bitwise identical to its ``blocks_filtered/``
+  input — 747209 rows in, 747209 out, max |delta| 0.000000 mm.
+
+So stage 5 accepts ``rf_centered`` **or** ``pca_calibrated``, stages 1-3 accept
+``icp_registered`` **or** ``kinect_space_1``, and stage 4 accepts exactly one
+space — all of it expressed as :data:`CANONICAL_SPACE_BY_STAGE` plus
+:data:`PASSTHROUGH_SPACE_BY_STAGE` rather than as a hand-written set, so that
+widening one stage cannot widen another.  The asymmetry is load-bearing: stage 4
+must still refuse ``rf_centered`` (a field that moved *past* the stage being
+shown as though it had not) and must not gain ``kinect_space_1``; stage 5 must
+not gain ``kinect_space_1`` either; and stages 1-3 must still refuse
+``pca_calibrated`` and ``rf_centered``.  Every passthrough space is the space
+*immediately before* its stage's own, never one further back and never one ahead.
 
 And the passthrough is announced, never absorbed.  Showing ``pca_calibrated``
-data on a stage labelled "RF Centered" without saying so is a quieter version of
-the lie the restamp would have told, so :attr:`StageDepthField.passthrough_note`
-carries the fact up to a surface the user is already looking at.
+data on a stage labelled "RF Centered", or ``kinect_space_1`` data on one
+labelled "ICP Registered", without saying so is a quieter version of the lie the
+restamp would have told, so :attr:`StageDepthField.passthrough_note` carries the
+fact up to a surface the user is already looking at.
 
 Absent, corrupt, and no-contact are three different facts
 ---------------------------------------------------------
@@ -105,6 +129,7 @@ from merging.contact_depth_field_series import (
 )
 from preprocessing.motion_analysis.tactile_quantification.io.contact_depth_field_io import (
     COORDINATE_SPACE_ICP_REGISTERED,
+    COORDINATE_SPACE_KINECT_1,
     COORDINATE_SPACE_PCA_CALIBRATED,
     COORDINATE_SPACE_RF_CENTERED,
     VERTEX_ID_COLUMN,
@@ -191,31 +216,79 @@ CANONICAL_SPACE_BY_STAGE: Mapping[int, str] = MappingProxyType(
     }
 )
 
-#: The space a stage's sidecar declares when its producing task ran but applied
-#: **no transform at all** — that task's documented passthrough branch.
+#: The space a stage's sidecar declares when the transform its stage is named
+#: for applied **nothing at all** — the pipeline's documented passthrough
+#: branches, and the space the points are consequently still in.
 #:
-#: Exactly one stage has one, and it is a property of the *producer*, recorded
-#: here rather than negotiated: ``center_on_receptive_field`` writes the
-#: passthrough with ``_copy_field_unchanged``, a byte copy whose docstring
-#: states the reason — "the points did not move, so the file's declared
-#: ``coordinate_space`` — ``pca_calibrated`` — is still the truth".  A stage
-#: with no entry here accepts exactly one space; adding an entry is a claim
-#: about one named task's branch, not a relaxation of the check.
+#: Every entry is a property of a *producer*, recorded here rather than
+#: negotiated, and every one names a byte-copy the pipeline already performs:
+#:
+#: * Stage 5 — ``center_on_receptive_field._copy_field_unchanged``, whose
+#:   docstring states the reason: "the points did not move, so the declared
+#:   ``coordinate_space`` — ``pca_calibrated`` — is still the truth".
+#: * Stage 1 — ``apply_icp_registration._copy_field_unchanged``, whose docstring
+#:   says the same of ``kinect_space_1``.  It is reached from two places: a
+#:   session with no ``registration_transforms.json``, and a block whose
+#:   schedule comes back empty, which ``apply_transform_schedule_to_field``
+#:   documents as "the explicit passthrough the ICP stage takes when a block has
+#:   no registration snapshot".
+#: * Stages 2-3 — no copy of their own is needed.  ``deduplicate_xy`` removes
+#:   rows and ``project_contacts_onto_forearm`` snaps points *within* the space
+#:   they were already in; both carry ``coordinate_space`` through verbatim, so
+#:   they declare whatever stage 1 handed them.
+#:
+#: A stage with no entry here accepts exactly one space; adding an entry is a
+#: claim about one named task's branch, not a relaxation of the check.  Stage 4
+#: has no entry because ``calibrate_pca_xyz`` has no passthrough branch — it
+#: always applies its calibration.
 PASSTHROUGH_SPACE_BY_STAGE: Mapping[int, str] = MappingProxyType(
     {
+        1: COORDINATE_SPACE_KINECT_1,
+        2: COORDINATE_SPACE_KINECT_1,
+        3: COORDINATE_SPACE_KINECT_1,
         5: COORDINATE_SPACE_PCA_CALIBRATED,
     }
 )
 
-#: Why a passthrough stage's producing task may have applied no transform.
+#: Why a passthrough stage's field is not in the space its stage is named for.
 #:
-#: Kept to what the artifacts support.  The branch that copies the field through
-#: is entered on exactly one condition — ``rf_center is None`` — which covers
-#: two recorded outcomes (``no_cluster_found`` and ``no_contact_points``); the
-#: sidecar distinguishes neither, so the note names the file that does rather
-#: than guessing between them.
+#: Kept to what the artifacts support, which is why none of these asserts a
+#: *cause*.  Stage 5's branch is entered on exactly one condition —
+#: ``rf_center is None`` — covering two recorded outcomes (``no_cluster_found``
+#: and ``no_contact_points``) that the sidecar distinguishes neither of, so the
+#: note names the file that does.  Stage 1's is likewise entered from two
+#: places — an absent ``registration_transforms.json``, or a block with no
+#: preceding forearm snapshot — and the sidecar records neither, so again the
+#: note points at the file rather than choosing.  Stages 2-3 make no claim about
+#: their own inputs beyond the one their producers' docstrings already make:
+#: they move no points, so they report the space, and only the space, that
+#: registration left the field in.
 PASSTHROUGH_REASON_BY_STAGE: Mapping[int, str] = MappingProxyType(
     {
+        1: (
+            "it applied no transform at all and copied its input through "
+            "unchanged, which is its documented passthrough branch — taken when "
+            "the session carries no "
+            "'forearm_pointclouds/<session_id>_registration_transforms.json', "
+            "and taken per block when that file holds no snapshot preceding the "
+            "block, the two cases that file is what distinguishes"
+        ),
+        2: (
+            "registration applied no transform and passed the field through "
+            "unchanged; deduplication then drops rows without moving any point, "
+            "so the space it declares is the one registration left it in (the "
+            "session's "
+            "'forearm_pointclouds/<session_id>_registration_transforms.json' is "
+            "where the absence of a transform is recorded)"
+        ),
+        3: (
+            "registration applied no transform and passed the field through "
+            "unchanged; projection then snaps points onto the reference forearm "
+            "within the space they were already in, so the space it declares is "
+            "the one registration left it in (the session's "
+            "'forearm_pointclouds/<session_id>_registration_transforms.json' is "
+            "where the absence of a transform is recorded)"
+        ),
         5: (
             "it could not estimate a receptive-field centre, so it copied its "
             "input through unchanged instead of translating it (the session's "
@@ -240,6 +313,24 @@ for _stage_idx, _passthrough in PASSTHROUGH_SPACE_BY_STAGE.items():
         raise ValueError(
             f"Stage {_stage_idx}'s passthrough space equals its canonical space "
             f"('{_passthrough}'), so the passthrough could never be detected."
+        )
+    # A passthrough always points *backwards*: it is the space the field was
+    # still in because this stage's transform did not run.  A space that a
+    # *later* stage produces is the opposite — a field that moved past the stage
+    # being displayed — and accepting one would draw a translation away from the
+    # geometry beside it while calling it a passthrough.  Stages 1-3 share one
+    # canonical space, so "produced later" excludes this stage's own; otherwise
+    # stage 1's ``icp_registered`` would read as stage 2's output.
+    _ahead = {
+        _later
+        for _later_idx, _later in CANONICAL_SPACE_BY_STAGE.items()
+        if _later_idx > _stage_idx and _later != CANONICAL_SPACE_BY_STAGE[_stage_idx]
+    }
+    if _passthrough in _ahead:
+        raise ValueError(
+            f"Stage {_stage_idx}'s passthrough space '{_passthrough}' is a space "
+            "produced by a later stage. A passthrough names the space the field "
+            "never left, never one it has already moved on to."
         )
 
 #: The closed set of coordinate spaces each stage's sidecar may declare.
@@ -423,10 +514,11 @@ def _passthrough_note(stage_idx: int, label: str) -> str:
     """State that a stage is showing its passthrough space, and why.
 
     Deliberately says nothing the artifacts do not support: the space it is in,
-    the space it is not, the task that skipped its transform, and where the
+    the space it is not, the task whose transform did not run, and where the
     reason is recorded.  The geometry is correct — the CSV beside the sidecar
-    was copied through the same branch, so the two still agree; it is the stage
-    *label* that overstates what happened, which is the whole of what this says.
+    was copied through the same branch, so the two still agree; what overstates
+    the case is only the coordinate space the stage's *name* implies, which is
+    the whole of what this says.
     """
     canonical = CANONICAL_SPACE_BY_STAGE[stage_idx]
     passthrough = PASSTHROUGH_SPACE_BY_STAGE[stage_idx]
@@ -435,10 +527,10 @@ def _passthrough_note(stage_idx: int, label: str) -> str:
     return (
         f"PASSTHROUGH: these coordinates are in '{passthrough}', not "
         f"'{canonical}'. Stage {stage_idx} ('{label}') is showing the output of "
-        f"'{task}' on a session where {reason}. The points and the CSV beside "
+        f"'{task}' on a block where {reason}. The points and the CSV beside "
         "them went through the same branch, so the picture is consistent; the "
-        "stage label is the only thing here that claims a transform which did "
-        "not happen."
+        "only thing overstated here is the coordinate space this stage's name "
+        "implies, and nothing in the geometry is."
     )
 
 
@@ -464,8 +556,9 @@ def resolve_stage_depth_field(
     space as well as its own, and the returned
     :attr:`StageDepthField.passthrough_note` says which of the two it got.  The
     acceptance is per stage and derived, so it cannot leak sideways: stage 4
-    still refuses ``rf_centered`` and stages 1-3 still refuse everything but
-    ``icp_registered``.
+    still refuses every space but ``pca_calibrated``, stage 5 still refuses
+    ``kinect_space_1``, and stages 1-3 still refuse ``pca_calibrated`` and
+    ``rf_centered``.
 
     Args:
         stage_idx: Index into :data:`STAGE_LABELS`.
