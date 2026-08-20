@@ -203,6 +203,11 @@ class PostprocessingStageViewer(QMainWindow):
         self.current_index: int = 0
         self._initial_render_done = False
         self._bounds_proxy_active = False
+        # The view preference, deliberately NOT the same attribute as the data
+        # fact (``self._depth_series is not None``).  It lives on the viewer, not
+        # on the stage, so switching to a stage without a sidecar leaves it
+        # untouched and the next stage that has one opens coloured again.
+        self._colour_contact_by_depth: bool = True
 
         self.setWindowTitle(f"Postprocessing Stage Viewer | {recording_name}")
 
@@ -219,6 +224,17 @@ class PostprocessingStageViewer(QMainWindow):
         self._pending_drag_frame: Optional[int] = None
         self._slider_dragging = False
         self._stage_switch_generation: int = 0
+
+    @property
+    def _depth_colouring_active(self) -> bool:
+        """Whether contact vertices are currently coloured by penetration depth.
+
+        Both facts must hold, and they are different facts: the first is about
+        this stage's data (a sidecar exists and decoded), the second about the
+        user's view preference.  Collapsing them into one flag would make an
+        absent field indistinguishable from an unchecked box.
+        """
+        return self._depth_series is not None and self._colour_contact_by_depth
 
     # ------------------------------------------------------------------
     # Data loading
@@ -395,7 +411,13 @@ class PostprocessingStageViewer(QMainWindow):
         self._visibility = {}
         self._point_sizes = {"forearm": 5.0, "contact_points": 15.0}
 
-        def _add_group(label: str, key: str, has_slider: bool, default_size: float) -> None:
+        def _add_group(
+            label: str,
+            key: str,
+            has_slider: bool,
+            default_size: float,
+            extra_widgets: Tuple[QWidget, ...] = (),
+        ) -> None:
             self._visibility[key] = True
             box = QGroupBox(label)
             box_layout = QVBoxLayout(box)
@@ -415,11 +437,49 @@ class PostprocessingStageViewer(QMainWindow):
                 sl.valueChanged.connect(lambda val, k=key: self._on_point_size_changed(k, val))
                 rl.addWidget(sl)
                 box_layout.addWidget(row)
+            for extra in extra_widgets:
+                box_layout.addWidget(extra)
             self._right_panel_layout.addWidget(box)
 
         _add_group("Forearm", "forearm", has_slider=True, default_size=5.0)
         if self._has_contact_source:
-            _add_group("Contact Points", "contact_points", has_slider=True, default_size=15.0)
+            # "Colour by depth" sits beside the point-size slider so flat red
+            # stays one click away for comparison.
+            #
+            # The checkbox is always created and enabled/disabled per stage,
+            # never omitted: a control that is absent reads as "this viewer
+            # cannot do that", while a greyed-out one with a tooltip states the
+            # actual fact -- that *this* stage has no field, and which task
+            # produces one.
+            _has_field = self._depth_field.is_present
+            depth_cb = QCheckBox("Colour by depth")
+            depth_cb.setEnabled(_has_field)
+            # blockSignals: seeding the widget must not be mistaken for the user
+            # clicking it.  Without this, a fieldless stage would write ``False``
+            # back over the persisted preference on every switch through it, and
+            # the next stage that does have a field would open in flat red.
+            depth_cb.blockSignals(True)
+            depth_cb.setChecked(self._colour_contact_by_depth and _has_field)
+            depth_cb.blockSignals(False)
+            if _has_field:
+                low, high = self._depth_series.clim_penetration_mm
+                depth_cb.setToolTip(
+                    "Colour contact vertices by penetration depth (inferno), on a "
+                    f"colour scale fixed over the whole recording: {low:.2f} to "
+                    f"{high:.2f} mm. Unchecked renders them in flat red."
+                )
+            else:
+                # The leaf's message already names the producing DAG task; a
+                # second wording here would be a second place to keep true.
+                depth_cb.setToolTip(self._depth_field.message)
+            depth_cb.stateChanged.connect(self._on_contact_depth_colour_changed)
+            _add_group(
+                "Contact Points",
+                "contact_points",
+                has_slider=True,
+                default_size=15.0,
+                extra_widgets=(depth_cb,),
+            )
         self._right_panel_layout.addStretch()
 
     def _build_frame_controls(self) -> QWidget:
@@ -545,6 +605,13 @@ class PostprocessingStageViewer(QMainWindow):
             # Flat red is what the mapper falls back to when scalar visibility
             # is switched off, so it is set even in depth-colouring mode.
             self._actor_contact.GetProperty().SetColor(1.0, 0.0, 0.0)
+
+        # The actor is always built in depth mode when a field exists; the user's
+        # preference is applied afterwards, so a stage entered with the box
+        # unchecked opens flat-red with its bar hidden rather than flashing
+        # coloured for one frame.  Neither mode introduces a new actor, so
+        # ``_on_point_size_changed``'s actor map needs no new entry.
+        self._apply_contact_scalar_mode()
 
         if self._total_frames == 0:
             self.plotter.add_text(
@@ -828,6 +895,39 @@ class PostprocessingStageViewer(QMainWindow):
             self.plotter.render()
         else:
             self._update_frame(self.current_index)
+
+    def _apply_contact_scalar_mode(self) -> None:
+        """Switch the contact actor between depth colouring and flat red.
+
+        Deliberately *not* an ``add_mesh`` / ``remove_actor`` cycle: re-adding
+        the mesh re-enters PyVista's scalar-bar range logic, which does not
+        preserve a global ``clim``.  Toggling ``scalar_visibility`` leaves the
+        actor, its mapper and its lookup table exactly where they are, so the
+        colour scale is identical before and after the round trip.
+        """
+        actor = getattr(self, "_actor_contact", None)
+        if actor is None or self._contact_clim is None:
+            return
+
+        show_scalars = self._depth_colouring_active
+        actor.mapper.scalar_visibility = show_scalars
+        # Re-asserted on every mode change for the same reason it is re-asserted
+        # after every dataset swap: PyVista 0.47.1 otherwise reverts the mapper
+        # to per-frame autoscale.
+        actor.mapper.scalar_range = self._contact_clim
+
+        if SCALAR_BAR_TITLE in self.plotter.scalar_bars:
+            # A colourbar with nothing mapped to it would claim the flat-red
+            # points mean something on that scale.
+            self.plotter.scalar_bars[SCALAR_BAR_TITLE].SetVisibility(
+                bool(show_scalars)
+            )
+
+    def _on_contact_depth_colour_changed(self, state: int) -> None:
+        """Handle the 'Colour by depth' checkbox."""
+        self._colour_contact_by_depth = state == Qt.Checked
+        self._apply_contact_scalar_mode()
+        self.plotter.render()
 
     def _on_neural_frame_requested(self, frame: int) -> None:
         if 0 <= frame < self._total_frames:

@@ -104,8 +104,12 @@ result, downstream, in the other repository.
 - [x] Switching stages replaces the scalar bar and its range; no bar from a previous stage survives,
       and `plotter.scalar_bars` contains exactly one depth bar at any time. *(Phase 3: 1 → 1 → 0 → 1
       across stages 5 → 1 → 0 → 4.)*
-- [ ] Stage 0 (`blocks_merged/`) shows a disabled "Colour by depth" checkbox whose tooltip names the
-      producing task, and renders flat-red contact points without error.
+- [x] Stage 0 (`blocks_merged/`) shows a disabled "Colour by depth" checkbox whose tooltip names the
+      producing task, and renders flat-red contact points without error. *(Phase 4: box disabled and
+      unchecked; tooltip byte-identical to `StageDepthField.message`, which names
+      `filter_contact_depth_field_by_neural_quality`'s output directory and points at stage 1; the
+      contact actor is in flat-red mode with no scalar bar; no exception. The word "flat-red" here is
+      `scalar_visibility == False` with `GetProperty()` colour `(1, 0, 0)` — seeing it is Phase 6.)*
 - [x] A frame's drawn depth values equal `series.frame(kinect_df["frame_index"].iloc[pos])[1]`
       exactly — verified by a headless test on a synthetic sidecar whose `frame_index` values are
       deliberately non-contiguous and not equal to row position.
@@ -428,23 +432,68 @@ legibility, playback frame rate, and the render check itself.
 ### Phase 4: The "Colour by depth" control
 **Goal:** User control, and honest absence.
 
-- [ ] 4.1 — Extend `_add_group` with an `extra_widgets` parameter, matching the merging viewer's
+**Started:** 2026-08-20T07:56Z  **Completed:** 2026-08-20T08:20Z
+
+- [x] 4.1 — Extend `_add_group` with an `extra_widgets` parameter, matching the merging viewer's
       `_add_object_group` signature so the two panels stay recognisably the same.
-- [ ] 4.2 — Add the `QCheckBox("Colour by depth")` to the Contact Points group;
+- [x] 4.2 — Add the `QCheckBox("Colour by depth")` to the Contact Points group;
       `setEnabled(self._depth_field.is_present)`; tooltip = the stage's actual `low..high` mm when
       present, else `StageDepthField.message`.
-- [ ] 4.3 — Seed `setChecked(...)` inside `blockSignals(True)` so a stage without a field does not
+- [x] 4.3 — Seed `setChecked(...)` inside `blockSignals(True)` so a stage without a field does not
       clear the preference on switch.
-- [ ] 4.4 — Handler toggles `mapper.scalar_visibility` and the bar's visibility without re-adding
+- [x] 4.4 — Handler toggles `mapper.scalar_visibility` and the bar's visibility without re-adding
       actors (`_apply_contact_scalar_mode`, `neural_kinect_scene_viewer.py:2324-2339`); re-assert
       `scalar_range` on the way through.
-- [ ] 4.5 — Register the layer in the `actor_map` at `:652` if a new actor is introduced (it should
+- [x] 4.5 — Register the layer in the `actor_map` at `:652` if a new actor is introduced (it should
       not be — the same contact actor is recoloured).
-- [ ] 4.6 — Persist the preference across stage switches as a plain attribute.
+- [x] 4.6 — Persist the preference across stage switches as a plain attribute.
+
+**4.5 required no change, and that was measured rather than assumed.** Both modes drive the *same*
+contact actor, so `_on_point_size_changed`'s actor map needs no new entry; the smoke drive asserts
+`len(plotter.renderer.actors)` is unchanged across a full off → on round trip.
+
+**The two facts are two attributes.** `self._colour_contact_by_depth` (the view preference, set in
+`__init__` and never touched by `_load_stage_data`) is conjoined with `self._depth_series is not None`
+(the data fact) in a new `_depth_colouring_active` property, mirroring
+`neural_kinect_scene_viewer.py:1484-1491`. A stage with no sidecar and a stage the user unchecked are
+therefore distinguishable, and neither can overwrite the other.
+
+**`_init_actors` applies the preference after adding the actor.** The actor is still built in depth
+mode whenever a field exists — the `clim`, the cmap and the bar are registered exactly as Phase 3 left
+them — and `_apply_contact_scalar_mode()` then switches scalar visibility off if the user's preference
+says so. Entering a stage with the box unchecked therefore opens flat-red with the bar hidden, rather
+than flashing coloured for a frame. `_update_frame` continues to re-assert only `scalar_range`, as the
+merging viewer does: `DeepCopy` replaces the *dataset*, and `scalar_visibility` lives on the mapper,
+so it survives untouched — asserted after a frame change in the off state.
+
+**Headless verification.** The same substitution Phase 3 used (an off-screen `pv.Plotter` for the
+`QtInteractor` class only; `QtInteractor` still cannot initialise offscreen here) drove the real
+`__init__` → `_build_right_panel_controls` → `_init_actors` → checkbox → `_on_stage_changed` path on a
+synthetic six-stage session. The checkbox was located by walking the panel *layout* rather than
+`findChildren`, because a stage switch `deleteLater()`s the previous boxes and they stay children
+until the DeferredDelete is delivered — `findChildren` hands back the previous stage's widget and
+quietly tests nothing.
+
+| Property | Measured |
+|----------|----------|
+| Stage 5 on open | box enabled, checked; `scalar_visibility` on; bar visible; range `(0.25, 9.5)` |
+| Tooltip, field present | names the stage's own `0.25` to `9.50` mm range |
+| Tooltip, field absent (stage 0) | byte-identical to `StageDepthField.message`; box disabled, unchecked |
+| Unchecked | `scalar_visibility` off, bar `SetVisibility(0)`, range still `(0.25, 9.5)` |
+| Re-checked | `scalar_visibility` on, bar visible, range still `(0.25, 9.5)` |
+| Actor count across the off → on round trip | unchanged — no `remove_actor` / `add_mesh` cycle |
+| Frame change while unchecked | stays off; range still `(0.25, 9.5)` |
+| Preference OFF, walked 5 → 0 → 4 | still off on stage 4; bar hidden — stage 0 did not clobber it |
+| Preference ON, walked 4 → 0 → 1 | still on on stage 1; exactly one bar; range `(0.25, 9.5)` |
+
+Not verified here, and left to Phase 6: anything requiring a real window — that the points are
+*visibly* flat red when off and *visibly* inferno-ramped when on, and that the bar is legible.
 
 **Files Modified:**
-- `code/src/postprocessing/gui/postprocessing_stage_viewer.py` — `_build_right_panel_controls`,
-  `_add_group`, new handler
+- `code/src/postprocessing/gui/postprocessing_stage_viewer.py` — `__init__`
+  (`_colour_contact_by_depth`), `_depth_colouring_active`, `_add_group`,
+  `_build_right_panel_controls`, `_init_actors`, `_apply_contact_scalar_mode`,
+  `_on_contact_depth_colour_changed`
 
 **Dependencies:** Phase 3
 
