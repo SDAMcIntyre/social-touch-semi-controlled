@@ -54,6 +54,10 @@ class PipelineMonitor:
         self._save_interval = save_interval
         self._running = True
         
+        # Bound before the coordinator thread starts: the loop reads _plotter on
+        # its first pass, which can happen before the assignment below.
+        self._plotter = None
+
         # Start the Coordinator Thread (Handles logic & persistence)
         self._coordinator_thread = threading.Thread(target=self._coordinator_loop, daemon=True)
         self._coordinator_thread.start()
@@ -112,6 +116,12 @@ class PipelineMonitor:
                     # Push copy to plotter (fire and forget)
                     if self._plot_queue:
                          self._plot_queue.put(current_df)
+                    # The push above is fire-and-forget, so a dashboard process
+                    # that died after starting would otherwise go unnoticed for
+                    # the whole run.  This is the only place that observes the
+                    # plotter often enough to say so once.
+                    if self._plotter:
+                        self._plotter.report_if_dead()
 
                 # 3. Throttled Disk Write
                 now = time.time()
