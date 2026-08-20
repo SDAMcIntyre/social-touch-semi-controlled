@@ -1280,6 +1280,111 @@ fix's scope and neither was measured here.
 
 ---
 
+### Owner request: session-level viewer, numbered stages, last stage by default *(beyond the original scope)*
+
+**Requested:** 2026-08-20, after every phase of this plan had completed and been verified. None of the
+three items below is in the plan's Goals; they are recorded here because they land in the same files
+the plan owns and because item 3 puts the plan's central laziness invariant under a load it was never
+sized for.
+
+#### 1. The final stage is now the default
+
+`postprocess_visualization.py` constructed the viewer without `initial_stage`, so it defaulted to `0`
+— "Merged (Raw)", which is the one stage that carries no depth-field sidecar *by construction* (it
+reads `blocks_merged/`, written before `filter_contact_depth_field_by_neural_quality`). Every launch
+therefore opened onto a disabled "Colour by depth" control. The viewer now opens on the last stage
+that has a CSV: the final stage when it exists, the last stage that does when it does not, and `0`
+only when none do — one rule, `default_stage_index`, walking backwards.
+
+#### 2. The dropdown is numbered
+
+`1. Merged (Raw)` … `6. RF Centered`, so the processing order is readable off the control. This is a
+**display concern only**: `stage_display_label(idx)` prefixes the ordinal, and `STAGE_LABELS` is
+untouched. It has to be, because it keys `PRODUCING_TASK_BY_STAGE` and `ACCEPTED_SPACES_BY_STAGE` and
+names the stage in every space-mismatch error — those messages still say `ICP Registered`, not
+`2. ICP Registered`. `test_the_canonical_labels_are_not_renumbered` asserts the canonical list
+verbatim, because a renumbering that edited `STAGE_LABELS` in place would satisfy a formatter-only
+test perfectly.
+
+#### 3. `view_postprocessing_stages` is now session-level
+
+It was per-block: the batch loop called it once per block config, opening 99 windows sequentially for
+the full 11-session DAG, with no way to compare one stage across two blocks without closing the
+first. It now follows the in-repo precedent of `run_forearm_stage_inspector` — called once, before
+the per-block loop, with the session map — and the window carries three dropdowns: session, block,
+stage.
+
+**What changed.**
+
+1. New Qt-free leaf `code/src/postprocessing/gui/stage_selection.py`, beside `stage_depth_field.py`
+   and for the same reason: `QtInteractor` cannot initialise in this environment (`0xC00000FD`), so
+   logic that lives in a slot is logic no test reaches. It holds `stage_display_label`,
+   `default_stage_index`, `stage_index_for_block`, `BlockEntry`, `SessionBlockIndex` and
+   `build_session_block_index`. A **separate** module from `stage_depth_field.py` because that one is
+   depth-field policy — which coordinate space a stage's sidecar may declare — and this one is
+   selection policy; neither needs the other's subject. The same static AST purity check now covers
+   it.
+2. `PostprocessingStageViewer.__init__` takes `(block_index, stage_paths_resolver)` instead of
+   `(stage_paths, recording_name, initial_stage)`. All three dropdowns funnel into one `_switch_to`,
+   which funnels into one `_load_selection`, which calls the existing `_load_stage_data` — so the
+   passthrough-space validation, the depth-field resolution and the anchor-row construction run
+   identically whichever dropdown moved.
+3. `_revert_to_loaded_stage` (the sanctioned catch from `272520e`) now reverts **all three**
+   dropdowns, rebuilding the block list from the *loaded* session so a failure part-way through a
+   session change cannot leave another session's blocks listed. It reuses the loaded block's stage
+   paths rather than re-resolving them — they were never discarded, and re-resolving would reload a
+   forearm point cloud to obtain what is already in hand.
+4. `resolve_stage_paths(config, depth_field_cache)` — the cache is now a **required** parameter, not
+   a per-call construction. One `BoundedContactDepthFieldCache(maxsize=STAGE_DEPTH_FIELD_CACHE_SIZE)`
+   is created at the single call site and shared by every block the window visits.
+
+**Both eager traps, and how each is held shut.**
+
+| Trap | Why it is a trap | What holds it shut |
+|---|---|---|
+| `resolve_stage_paths` calls `_load_per_video_forearm`, which returns an in-memory `o3d.geometry.PointCloud` | Resolving all 99 blocks up front = 99 forearm point clouds before the first pixel | `SessionBlockIndex` holds identifiers only and never calls a resolver; the viewer resolves the block it is *selecting* |
+| 99 blocks × 6 stages = 594 depth-field sidecars, ~12 MB each | A cache per block makes residency a property of how much the user browsed | One shared cache, `maxsize = len(STAGE_LABELS) = 6` — sized to the *stages*, not the blocks |
+
+**Measured, driving the real widget offscreen over the REAL 11-session / 99-block batch**
+(`QtInteractor` substituted by an off-screen `pv.Plotter` for that class alone, as the cursor fix
+did):
+
+| Measurement | Result |
+|---|---|
+| Index built over 99 blocks | 11 sessions, 99 blocks, **0** resolver calls |
+| Blocks resolved after opening the window | **1** (the opening block) |
+| Stage switch within a block | **0** further resolves |
+| Block switch / session switch | **1** resolve each, exactly |
+| 13 selections across the whole batch | **14** resolves total, for 99 indexed blocks |
+| Depth-field cache after the full walk | **6** entries, bound 6 — flat, not 1-per-block |
+| Opening stage | **5** ("RF Centered"), depth field present, 3 186 frames |
+| Dropdown items | `['1. Merged (Raw)', … , '6. RF Centered']`; block list repopulates per session |
+| Stage preserved across block and session changes | yes, on every one of the 13 |
+| Session / block / stage combos vs. loaded state | in sync at **every** step, including after a revert |
+
+**The revert guard fired on real data, and held.** Selecting `2022-06-22_ST18-01` while stage 1 was
+on screen raised — its `blocks_registered`, `blocks_deduped` and `blocks_projected` sidecars declare
+`kinect_space_1`, not `icp_registered`. That is a pre-existing artifact condition in one session, not
+a regression from this change: a survey of all 11 sessions × 5 sidecar-bearing stages found ST18-01
+to be the only one, and its stages 4-5 are correct. The viewer stayed on
+`2022-06-17_ST16-05 / block-order-01 / stage 1` with all three dropdowns still naming it, and raised
+exactly one dialog. Note that item 1 makes this session *reachable* rather than less so: opening on
+stage 5 loads it fine, where the old stage-0 default put the failing stage one click away.
+
+**Not verified:** nothing was *seen*. `QtInteractor` still cannot initialise here, so no claim is made
+about layout, about the block dropdown's on-screen width with 8 entries, or about how a repopulating
+combo behaves under a real mouse. The camera reset on a block change (a new block is a new recording,
+so its contact centroid is elsewhere) is code, not an observation.
+
+**Files Modified:** `code/src/postprocessing/gui/stage_selection.py` *(new)*,
+`code/src/postprocessing/gui/postprocessing_stage_viewer.py`,
+`code/src/postprocessing/gui/__init__.py`, `code/scripts/postprocess_visualization.py`,
+`configs/postprocess_visualization_dag.yaml` *(the `view_postprocessing_stages` description only)*,
+`code/tests/test_stage_selection.py` *(new)*, `code/tests/test_stage_depth_field.py` *(a pointer to
+the session-scale half of the laziness assertions)*, this plan.
+
+---
+
 ## Testing Plan
 
 ### Unit Tests (headless — no Qt, no VTK, no Open3D)

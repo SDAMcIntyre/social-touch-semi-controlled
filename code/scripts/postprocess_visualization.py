@@ -61,6 +61,10 @@ from postprocessing.gui import (
     STAGE_LABELS,
 )
 from postprocessing.gui.forearm_stage_inspector import resolve_all_session_stage_paths
+from postprocessing.gui.stage_selection import (
+    BlockEntry,
+    build_session_block_index,
+)
 from postprocessing.xyz_reference_from_gestures.calibration_pca_engine import CalibrationResult
 from postprocessing.depth_field_stage_io import depth_field_path_for_csv
 
@@ -334,7 +338,10 @@ def _build_stage_depth_field_loader(
     return make_contact_depth_field_loader(sidecar_path, report, cache)
 
 
-def resolve_stage_paths(config: KinectConfig) -> List[StagePaths]:
+def resolve_stage_paths(
+    config: KinectConfig,
+    depth_field_cache: BoundedContactDepthFieldCache,
+) -> List[StagePaths]:
     """Return one StagePaths instance per postprocessing stage.
 
     Always returns a list of exactly 6 entries (one per label in STAGE_LABELS).
@@ -348,6 +355,18 @@ def resolve_stage_paths(config: KinectConfig) -> List[StagePaths]:
     one of its own, yet a wrong-space or absent field has to be able to name the
     file it is about.  The six loaders share one bounded cache, and building
     them reads nothing.
+
+    Args:
+        config: The block to resolve.  **This call is not free**: it loads the
+            block's reference forearm as an in-memory Open3D point cloud, which
+            is why the session-level viewer calls it for the selected block only.
+        depth_field_cache: The bounded cache the six loaders close over.
+            **Required, not defaulted.**  The viewer walks up to 99 blocks x 6
+            stages, so a cache created per call would mean the ceiling on
+            resident depth fields was one-per-visited-block rather than a
+            property of ``STAGE_DEPTH_FIELD_CACHE_SIZE``; making the caller pass
+            one makes that sharing visible at the single call site instead of
+            depending on a default nobody reads.
     """
     base = config.session_merged_output_dir
     session_id = config.session_id
@@ -377,11 +396,6 @@ def resolve_stage_paths(config: KinectConfig) -> List[StagePaths]:
         base / "blocks_rf_centered" / pca_name if base is not None else None,
     ]
 
-    # One cache for all six stages; the loaders are closures over it and read
-    # nothing until the viewer opens the stage they belong to.
-    depth_field_cache = BoundedContactDepthFieldCache(
-        maxsize=STAGE_DEPTH_FIELD_CACHE_SIZE
-    )
     block_name = config.source_video.name
 
     def _report(message: str) -> None:
@@ -660,35 +674,55 @@ def run_single_session_pipeline_before_after(
     dag_handler.mark_completed(task_name)
 
 
-def run_single_session_pipeline_stage_viewer(
-    config: KinectConfig,
+# ---------------------------------------------------------------------------
+# Session-level viewers
+# ---------------------------------------------------------------------------
+
+
+def run_postprocessing_stage_viewer(
+    session_map: Dict[str, List[KinectConfig]],
     dag_handler: DagConfigHandler,
 ) -> None:
-    """Launch PostprocessingStageViewer for one block."""
+    """Launch PostprocessingStageViewer once for the whole batch.
+
+    Session-level, like ``run_forearm_stage_inspector`` beside it: one window
+    with session, block and stage dropdowns, rather than one window per block
+    opened sequentially (99 of them for the full 11-session DAG).
+
+    **Nothing is read here.**  The index carries identifiers only; a block's
+    stage paths — including the Open3D load of its reference forearm — are
+    resolved by the closure below when the user selects that block, and the six
+    depth-field loaders it builds still read nothing until a stage is opened.
+    """
     task_name = "view_postprocessing_stages"
-    block_name = config.source_video.name
-    print(f"[{block_name}] ==> Checking task: {task_name}")
+    print(f"==> Checking task: {task_name}")
     if not dag_handler.can_run(task_name):
-        print(f"[{block_name}] Task disabled — skipping.")
+        print(f"Task '{task_name}' disabled — skipping.")
         return
-    stage_paths = resolve_stage_paths(config)
-    available = [sp for sp in stage_paths if sp.csv_path is not None and sp.csv_path.exists()]
-    if not available:
-        print(f"[{block_name}] No stage CSV files found — skipping.")
-        return
-    recording_name = config.source_video.stem
-    print(f"[{block_name}] Launching PostprocessingStageViewer ({len(available)}/6 stages with data)...")
+
+    block_index = build_session_block_index(session_map)
+
+    # ONE bounded cache for the whole window, sized to the number of *stages*.
+    # Deliberately not one per block: 99 blocks x 6 stages is 594 sidecars at
+    # ~12 MB each, and a per-block cache would make residency a property of how
+    # many blocks the user browsed rather than of this constant.
+    depth_field_cache = BoundedContactDepthFieldCache(
+        maxsize=STAGE_DEPTH_FIELD_CACHE_SIZE
+    )
+
+    def _resolve_selected_block(entry: BlockEntry) -> List[StagePaths]:
+        return resolve_stage_paths(entry.config, depth_field_cache)
+
+    print(
+        f"Launching PostprocessingStageViewer for {block_index.n_sessions} "
+        f"session(s), {len(block_index)} block(s)..."
+    )
     app = QApplication.instance() or QApplication(sys.argv)
-    viewer = PostprocessingStageViewer(stage_paths, recording_name=recording_name)
+    viewer = PostprocessingStageViewer(block_index, _resolve_selected_block)
     viewer.show()
     app.exec_()
     QCoreApplication.processEvents()
     dag_handler.mark_completed(task_name)
-
-
-# ---------------------------------------------------------------------------
-# Session-level viewers
-# ---------------------------------------------------------------------------
 
 
 def run_forearm_stage_inspector(
@@ -744,8 +778,9 @@ def run_batch_sequentially(
         except Exception as exc:
             print(f"Failed to initialise session {block_file.name}: {exc}")
 
-    # Session-level stage inspector (one window for all sessions)
+    # Session-level viewers (one window each, for all sessions)
     run_forearm_stage_inspector(dict(session_map), dag_handler_template)
+    run_postprocessing_stage_viewer(dict(session_map), dag_handler_template)
 
     # Per-block viewers
     for block_file, config in loaded_configs:
@@ -754,7 +789,6 @@ def run_batch_sequentially(
         run_single_session_pipeline(config, dag_handler_instance)
         run_single_session_pipeline_advanced(config, dag_handler_instance)
         run_single_session_pipeline_before_after(config, dag_handler_instance)
-        run_single_session_pipeline_stage_viewer(config, dag_handler_instance)
 
     print("All postprocessed viewer sessions completed.")
 

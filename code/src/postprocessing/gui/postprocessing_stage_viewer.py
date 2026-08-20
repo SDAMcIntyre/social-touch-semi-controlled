@@ -1,8 +1,9 @@
 """
 postprocessing_stage_viewer.py
 -------------------------------
-Single-window PyQt5+PyVista viewer for postprocessed data with a stage
-dropdown that switches between all 5 postprocessing coordinate stages.
+Single-window PyQt5+PyVista viewer for postprocessed data with session, block
+and stage dropdowns that switch between every block of every session and all 6
+postprocessing coordinate stages.
 """
 
 from __future__ import annotations
@@ -11,7 +12,7 @@ import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Tuple, Union
+from typing import Callable, List, Optional, Tuple, Union
 
 import numpy as np
 import open3d as o3d
@@ -68,8 +69,27 @@ from .stage_depth_field import (
     resolve_stage_depth_field,
 )
 
+# Which triple the window opens on, what a dropdown change lands on, and how a
+# stage is numbered on screen are decided in the Qt-free selection leaf beside
+# this module, for the same reason the depth-field policy is: a decision made
+# inside a Qt slot is a decision no test can reach.
+from .stage_selection import (
+    BlockEntry,
+    SessionBlockIndex,
+    stage_display_label,
+    stage_display_labels,
+    stage_index_for_block,
+)
+
 
 logger = logging.getLogger(__name__)
+
+#: Signature of the callable the viewer resolves a block's stage paths with.
+#: It is handed a :class:`~postprocessing.gui.stage_selection.BlockEntry` and
+#: returns that block's six :class:`StagePaths`.  A *callable*, never a
+#: pre-built table: resolving a block loads its reference forearm as an
+#: in-memory point cloud, and a batch is 99 blocks.
+StagePathsResolver = Callable[[BlockEntry], List["StagePaths"]]
 
 
 # ---------------------------------------------------------------------------
@@ -90,7 +110,13 @@ class StagePaths:
     """Paths and metadata for one postprocessing stage.
 
     Attributes:
-        stage_label: The dropdown entry this stage is shown under.
+        stage_label: This stage's **canonical** name — one of
+            :data:`~postprocessing.gui.stage_depth_field.STAGE_LABELS`, which is
+            what every validation error calls it.  Deliberately not what the
+            dropdown shows: the dropdown shows the ordinal-prefixed
+            :func:`~postprocessing.gui.stage_selection.stage_display_label`, and
+            a message that repeated the ordinal would stop matching the
+            vocabulary the rest of the pipeline is keyed on.
         csv_path: The stage's merged-data CSV, or ``None`` when the session has
             no merged output directory.
         forearm: The forearm surface for this stage — a PLY path or an
@@ -172,44 +198,63 @@ def _empty_contact_polydata(with_depth_scalars: bool) -> pv.PolyData:
 
 
 class PostprocessingStageViewer(QMainWindow):
-    """Single-window viewer with a stage dropdown for the 5 postprocessing stages.
+    """One window, three dropdowns: session, block, and postprocessing stage.
+
+    Session-level, not per-block.  The batch it serves is 11 sessions and 99
+    blocks; opening one window per block meant 99 windows, sequentially, with no
+    way to compare a stage across two blocks without closing the first.
+
+    Nothing about a block is read until that block is selected.  The viewer
+    holds an index of *identifiers* and a resolver, and calls the resolver for
+    exactly one block at a time — see
+    :mod:`postprocessing.gui.stage_selection` for why an index that resolved
+    everything up front would be the eager-loading regression the depth-field
+    work exists to prevent, reintroduced one level up.
 
     Parameters
     ----------
-    stage_paths:
-        One ``StagePaths`` per stage (length must equal ``len(STAGE_LABELS)``).
-    recording_name:
-        Displayed in the 3D scene text label and window title.
-    initial_stage:
-        Index of the stage to display on launch (default: 0).
+    block_index:
+        Every selectable ``(session, block)``, identifiers only.
+    stage_paths_resolver:
+        Called with one ``BlockEntry`` to produce that block's six
+        ``StagePaths``.  Called on selection, never in bulk.
     parent:
         Optional Qt parent widget.
     """
 
     def __init__(
         self,
-        stage_paths: List[StagePaths],
-        recording_name: str,
-        initial_stage: int = 0,
+        block_index: SessionBlockIndex,
+        stage_paths_resolver: StagePathsResolver,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
 
-        if len(stage_paths) != len(STAGE_LABELS):
-            raise ValueError(
-                f"stage_paths must have {len(STAGE_LABELS)} entries, "
-                f"got {len(stage_paths)}"
+        if not isinstance(block_index, SessionBlockIndex):
+            raise TypeError(
+                f"block_index must be a SessionBlockIndex, got "
+                f"{type(block_index).__name__}."
             )
-        if not (0 <= initial_stage < len(stage_paths)):
-            raise ValueError(
-                f"initial_stage {initial_stage} out of range [0, {len(stage_paths)})"
+        if not callable(stage_paths_resolver):
+            raise TypeError(
+                "stage_paths_resolver must be callable. It is a callable rather "
+                "than a pre-built table precisely so that resolving a block — "
+                "which loads its reference forearm — happens once, for the block "
+                "on screen."
             )
 
         pv.global_theme.allow_empty_mesh = True
 
-        self._stage_paths = stage_paths
-        self._recording_name = recording_name
-        self._current_stage_idx: int = initial_stage
+        self._block_index = block_index
+        self._stage_paths_resolver = stage_paths_resolver
+        # The selection the widget actually *holds*, as opposed to the one the
+        # dropdowns show.  The two differ only inside a failed switch, which is
+        # what ``_revert_to_loaded_stage`` puts back in step.
+        self._loaded_entry: Optional[BlockEntry] = None
+        self._loaded_stage_paths: Optional[List[StagePaths]] = None
+        self._stage_paths: List[StagePaths] = []
+        self._recording_name: str = ""
+        self._current_stage_idx: Optional[int] = None
         self.current_index: int = 0
         self._initial_render_done = False
         self._bounds_proxy_active = False
@@ -226,9 +271,13 @@ class PostprocessingStageViewer(QMainWindow):
         # default rather than on request.
         self._colour_forearm_by_depth: bool = False
 
-        self.setWindowTitle(f"Postprocessing Stage Viewer | {recording_name}")
+        self.setWindowTitle("Postprocessing Stage Viewer")
 
-        self._load_stage_data(initial_stage)
+        # The opening selection: the first block of the first session, at the
+        # stage ``stage_index_for_block`` chooses — with no preference yet, the
+        # last stage that has data.  Deliberately not stage 0, which is the one
+        # stage that carries no depth field by construction.
+        self._load_selection(block_index.first_entry(), None)
         self._build_ui()
         self._init_actors()
 
@@ -275,6 +324,76 @@ class PostprocessingStageViewer(QMainWindow):
     def _forearm_depth_colouring_active(self) -> bool:
         """Whether the forearm is currently painted by penetration depth."""
         return self._forearm_depth_available and self._colour_forearm_by_depth
+
+    # ------------------------------------------------------------------
+    # Selection
+    # ------------------------------------------------------------------
+
+    def _load_selection(
+        self, entry: BlockEntry, stage_idx: Optional[int]
+    ) -> None:
+        """Load one ``(block, stage)`` selection, or raise leaving nothing committed.
+
+        The single path all three dropdowns take, and the only place a block's
+        stage paths are resolved.  A block is resolved when it is *selected* and
+        not before: resolving loads the block's reference forearm as an in-memory
+        point cloud, so resolving the batch would hold 99 of them.  Re-selecting
+        the block already on screen reuses what is in hand rather than resolving
+        it a second time.
+
+        Nothing is committed until :meth:`_load_stage_data` has returned.  The
+        attributes it assigns are the widget's whole data state, and it assigns
+        them in sequence, so a raise part-way through leaves a mixture of two
+        stages behind — but ``_loaded_entry``, ``_loaded_stage_paths`` and
+        ``_current_stage_idx`` still describe the selection that *was* loaded,
+        which is exactly what :meth:`_revert_to_loaded_stage` needs to get back
+        to a coherent widget.
+
+        Args:
+            entry: The block to show.
+            stage_idx: The stage to show, or ``None`` to let
+                :func:`~postprocessing.gui.stage_selection.stage_index_for_block`
+                choose — keeping the stage on screen where the new block has it,
+                and falling back to the last stage that does otherwise.
+
+        Raises:
+            ValueError: If the resolver returns the wrong number of stages, or
+                if *stage_idx* names no stage.
+            Exception: Whatever the resolver or :meth:`_load_stage_data` raises.
+                Deliberately not caught here; the caller is a Qt slot and owns
+                the revert.
+        """
+        if self._loaded_entry is not None and entry.key == self._loaded_entry.key:
+            stage_paths = self._loaded_stage_paths
+        else:
+            stage_paths = self._stage_paths_resolver(entry)
+            if len(stage_paths) != len(STAGE_LABELS):
+                raise ValueError(
+                    f"The stage-paths resolver returned {len(stage_paths)} "
+                    f"entries for block {entry.key}; the viewer shows "
+                    f"{len(STAGE_LABELS)} stages and every one of them must be "
+                    "accounted for."
+                )
+
+        if stage_idx is None:
+            stage_idx = stage_index_for_block(
+                self._current_stage_idx, [sp.csv_path for sp in stage_paths]
+            )
+        elif not 0 <= stage_idx < len(stage_paths):
+            raise ValueError(
+                f"stage_idx {stage_idx} out of range [0, {len(stage_paths)})"
+            )
+
+        self._stage_paths = stage_paths
+        self._load_stage_data(stage_idx)
+
+        # Committed only now, all together: everything above either succeeded or
+        # raised, and a partial commit is what would let the dropdowns claim a
+        # selection the widget does not hold.
+        self._loaded_entry = entry
+        self._loaded_stage_paths = stage_paths
+        self._current_stage_idx = stage_idx
+        self._recording_name = entry.recording_name
 
     # ------------------------------------------------------------------
     # Data loading
@@ -415,18 +534,42 @@ class PostprocessingStageViewer(QMainWindow):
         self.setCentralWidget(central)
         self._outer_layout = QVBoxLayout(central)
 
-        # --- Top bar: stage selector ---
+        # --- Top bar: session / block / stage selectors ---
         top_bar = QWidget()
         top_bar_layout = QHBoxLayout(top_bar)
         top_bar_layout.setContentsMargins(4, 4, 4, 4)
+
+        top_bar_layout.addWidget(QLabel("Session:"))
+        self._session_combo = QComboBox()
+        self._session_combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+        self._session_combo.addItems(self._block_index.sessions)
+        top_bar_layout.addWidget(self._session_combo)
+
+        top_bar_layout.addSpacing(12)
+        top_bar_layout.addWidget(QLabel("Block:"))
+        self._block_combo = QComboBox()
+        self._block_combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+        top_bar_layout.addWidget(self._block_combo)
+
+        top_bar_layout.addSpacing(12)
         top_bar_layout.addWidget(QLabel("Stage:"))
         self._stage_combo = QComboBox()
-        self._stage_combo.addItems([sp.stage_label for sp in self._stage_paths])
-        self._stage_combo.setCurrentIndex(self._current_stage_idx)
-        self._stage_combo.currentIndexChanged.connect(self._on_stage_changed)
+        # The *display* labels — ordinal-prefixed so the processing order is
+        # readable off the dropdown.  ``StagePaths.stage_label`` stays the
+        # canonical name and is what every error message keeps using.
+        self._stage_combo.addItems(stage_display_labels())
         top_bar_layout.addWidget(self._stage_combo)
+
         top_bar_layout.addStretch()
         self._outer_layout.addWidget(top_bar)
+
+        # Seeded from the loaded selection, with signals blocked, *before* the
+        # slots are connected: populating the block dropdown is not the user
+        # choosing a block.
+        self._sync_selection_widgets()
+        self._session_combo.currentIndexChanged.connect(self._on_session_changed)
+        self._block_combo.currentIndexChanged.connect(self._on_block_changed)
+        self._stage_combo.currentIndexChanged.connect(self._on_stage_changed)
 
         # --- 3D area + right panel ---
         mid_widget = QWidget()
@@ -916,41 +1059,89 @@ class PostprocessingStageViewer(QMainWindow):
             self.frame_label.setText("0 / 0")
 
     # ------------------------------------------------------------------
-    # Stage switching
+    # Selection switching
     # ------------------------------------------------------------------
 
+    def _on_session_changed(self, index: int) -> None:
+        """Handle the session dropdown: open that session's first block."""
+        session_id = self._session_combo.itemText(index)
+        if session_id == self._loaded_entry.session_id:
+            return
+        # The stage is not chosen here: ``_switch_to`` passes ``None`` and lets
+        # the selection leaf keep the current stage where the new block has it.
+        block_id = self._block_index.blocks(session_id)[0]
+        self._switch_to(self._block_index.entry(session_id, block_id), None)
+
+    def _on_block_changed(self, index: int) -> None:
+        """Handle the block dropdown: open that block of the current session."""
+        block_id = self._block_combo.itemText(index)
+        session_id = self._loaded_entry.session_id
+        if (session_id, block_id) == self._loaded_entry.key:
+            return
+        self._switch_to(self._block_index.entry(session_id, block_id), None)
+
     def _on_stage_changed(self, index: int) -> None:
+        """Handle the stage dropdown: show that stage of the current block.
+
+        The requested stage is honoured exactly, including when it has no CSV —
+        the user asked for that stage, and "No data available" is the truthful
+        answer.  Only a *block* change is allowed to choose a different stage.
+        """
         if index == self._current_stage_idx:
             return
+        self._switch_to(self._loaded_entry, index)
 
+    def _switch_to(self, entry: BlockEntry, stage_idx: Optional[int]) -> None:
+        """Move the whole window to one ``(block, stage)`` selection.
+
+        Every one of the three dropdowns funnels through here, so the
+        passthrough-space validation, the depth-field resolution and the
+        anchor-row construction in :meth:`_load_stage_data` run identically
+        whichever dropdown moved — and so a failed load reverts the same way
+        whichever one it was.
+        """
         if self._play_timer.isActive():
             self._play_timer.stop()
             self.play_button.setText("▶ Play")
 
         saved_frame = self.current_index
+        loaded_entry = self._loaded_entry
         loaded_stage_idx = self._current_stage_idx
         old_frame = self._stage_paths[loaded_stage_idx].coordinate_frame
-        new_frame = self._stage_paths[index].coordinate_frame
-        frame_changed = old_frame != new_frame
 
-        # The index is committed only *after* the new stage's data is in hand.
+        # The selection is committed only *after* the new data is in hand.
         # Assigning it first -- as this slot used to -- leaves the viewer
         # claiming stage N while displaying stage N-1's geometry whenever the
-        # load raises, and every later `_on_stage_changed` then computes
-        # `frame_changed` from a stage that was never loaded.
+        # load raises, and every later switch then computes `frame_changed` from
+        # a stage that was never loaded.
         #
         # The except is not a licence to continue: the error is re-surfaced to
         # the user and logged with its traceback, and the only thing suppressed
         # is the propagation out of a Qt slot, which PyQt5 turns into an
         # `abort()` of the whole application.  A crash is not a better report
         # than a dialog, and it is a far worse one than a dialog plus a viewer
-        # still showing the stage it actually holds.
+        # still showing the selection it actually holds.
         try:
-            self._load_stage_data(index)
+            self._load_selection(entry, stage_idx)
         except Exception as exc:  # noqa: BLE001 -- re-surfaced, never swallowed
-            self._revert_to_loaded_stage(loaded_stage_idx, index, exc)
+            self._revert_to_loaded_stage(
+                loaded_entry, loaded_stage_idx, entry, stage_idx, exc
+            )
             return
-        self._current_stage_idx = index
+
+        index = self._current_stage_idx
+        new_frame = self._stage_paths[index].coordinate_frame
+        # A new block is a new recording: its contact centroid is somewhere else
+        # even when the coordinate frame is nominally the same one, so the camera
+        # is recomputed for a block change as well as for a frame change.
+        frame_changed = (
+            old_frame != new_frame or entry.key != loaded_entry.key
+        )
+
+        # All three dropdowns are put back in step with what is now loaded --
+        # the block list belongs to the new session, and the stage the leaf
+        # chose may not be the stage the user's click implied.
+        self._sync_selection_widgets()
 
         self.plotter.clear()
         self.plotter.set_background("black")
@@ -996,53 +1187,121 @@ class PostprocessingStageViewer(QMainWindow):
         QTimer.singleShot(0, _deferred_stage_init)
 
     def _revert_to_loaded_stage(
-        self, loaded_stage_idx: int, failed_stage_idx: int, error: Exception
+        self,
+        loaded_entry: BlockEntry,
+        loaded_stage_idx: int,
+        failed_entry: BlockEntry,
+        failed_stage_idx: Optional[int],
+        error: Exception,
     ) -> None:
-        """Put the widget back on the stage it actually holds, then report.
+        """Put the widget back on the selection it actually holds, then report.
 
         ``_load_stage_data`` assigns a dozen attributes in sequence, so a raise
         part-way through leaves a mixture of two stages behind -- the new
         stage's depth field beside the old stage's rows, say.  Re-running it for
-        the stage that *was* loaded is the only way back to a coherent widget;
-        it succeeded once already, so a second failure there is genuinely fatal
-        and is deliberately left to propagate.
+        the selection that *was* loaded is the only way back to a coherent
+        widget; it succeeded once already, so a second failure there is genuinely
+        fatal and is deliberately left to propagate.
 
-        The dropdown is reverted with signals blocked, because setting it back
-        would otherwise re-enter this slot and attempt a switch that is already
-        in effect.
+        All three dropdowns are reverted, with signals blocked.  Reverting only
+        the one the user touched would leave the other two claiming a block or a
+        stage the widget is not showing, which is a worse state than the one the
+        failed switch was trying to reach -- and setting a combo back without
+        blocking would re-enter its slot and attempt a switch already in effect.
+        The block dropdown is rebuilt from the *loaded* session, so a failure
+        part-way through a session change cannot leave another session's blocks
+        listed.
+
+        The loaded selection's stage paths are reused rather than re-resolved:
+        they are still in hand, and resolving them again would reload the
+        block's forearm point cloud to obtain what was never discarded.
 
         Args:
+            loaded_entry: The block whose data the widget still holds.
             loaded_stage_idx: The stage whose data the widget still holds.
-            failed_stage_idx: The stage the user asked for and did not get.
-            error: What ``_load_stage_data`` raised.  Shown verbatim: it names
-                the file and the coordinate spaces, which no summary here could.
+            failed_entry: The block the user asked for and did not get.
+            failed_stage_idx: The stage they asked for, or ``None`` when the
+                switch was a block change that had not yet chosen one.
+            error: What the load raised.  Shown verbatim: it names the file and
+                the coordinate spaces, which no summary here could.
         """
+        # The *canonical* stage names, never the ordinal-prefixed display ones:
+        # this text is what a user greps against the pipeline's own vocabulary.
+        failed_stage_label = (
+            "<none chosen>"
+            if failed_stage_idx is None
+            else STAGE_LABELS[failed_stage_idx]
+        )
+        failed_stage_text = (
+            "no stage in particular"
+            if failed_stage_idx is None
+            else f"stage {failed_stage_idx} ('{failed_stage_label}')"
+        )
         logger.error(
-            "Stage %d ('%s') could not be opened; staying on stage %d ('%s').",
-            failed_stage_idx,
-            self._stage_paths[failed_stage_idx].stage_label,
+            "Block %s, %s could not be opened; staying on block %s, stage %d "
+            "('%s').",
+            failed_entry.key,
+            failed_stage_text,
+            loaded_entry.key,
             loaded_stage_idx,
-            self._stage_paths[loaded_stage_idx].stage_label,
+            STAGE_LABELS[loaded_stage_idx],
             exc_info=error,
         )
 
+        self._stage_paths = self._loaded_stage_paths
+        self._recording_name = loaded_entry.recording_name
         self._load_stage_data(loaded_stage_idx)
+        self._loaded_entry = loaded_entry
         self._current_stage_idx = loaded_stage_idx
 
-        combo = getattr(self, "_stage_combo", None)
-        if combo is not None:
-            combo.blockSignals(True)
-            combo.setCurrentIndex(loaded_stage_idx)
-            combo.blockSignals(False)
+        self._sync_selection_widgets()
 
         QMessageBox.critical(
             self,
-            "Stage could not be opened",
-            f"Stage {failed_stage_idx} "
-            f"('{self._stage_paths[failed_stage_idx].stage_label}') could not "
-            f"be opened:\n\n{type(error).__name__}: {error}\n\n"
-            f"The viewer is still showing stage {loaded_stage_idx} "
-            f"('{self._stage_paths[loaded_stage_idx].stage_label}').",
+            "Selection could not be opened",
+            f"Block {failed_entry.session_id} / {failed_entry.block_id}, "
+            f"{failed_stage_text} could not be opened:\n\n"
+            f"{type(error).__name__}: {error}\n\n"
+            f"The viewer is still showing block {loaded_entry.session_id} / "
+            f"{loaded_entry.block_id}, stage {loaded_stage_idx} "
+            f"('{STAGE_LABELS[loaded_stage_idx]}').",
+        )
+
+    def _sync_selection_widgets(self) -> None:
+        """Put the three dropdowns and the titles back in step with what is loaded.
+
+        Called after every successful switch and after every reverted one, so
+        there is exactly one expression of "what the dropdowns should say" and
+        it is driven by the widget's data state rather than by whichever slot
+        happened to fire.  Signals are blocked throughout: repopulating the
+        block list and correcting the stage index are the viewer agreeing with
+        itself, not the user selecting anything.
+        """
+        entry = self._loaded_entry
+        combos = (self._session_combo, self._block_combo, self._stage_combo)
+        for combo in combos:
+            combo.blockSignals(True)
+        try:
+            self._session_combo.setCurrentIndex(
+                self._block_index.sessions.index(entry.session_id)
+            )
+            blocks = self._block_index.blocks(entry.session_id)
+            listed = [
+                self._block_combo.itemText(i)
+                for i in range(self._block_combo.count())
+            ]
+            if listed != blocks:
+                self._block_combo.clear()
+                self._block_combo.addItems(blocks)
+            self._block_combo.setCurrentIndex(blocks.index(entry.block_id))
+            self._stage_combo.setCurrentIndex(self._current_stage_idx)
+        finally:
+            for combo in combos:
+                combo.blockSignals(False)
+
+        self.setWindowTitle(
+            f"Postprocessing Stage Viewer | {entry.session_id} / "
+            f"{entry.block_id} | {stage_display_label(self._current_stage_idx)}"
         )
 
     # ------------------------------------------------------------------

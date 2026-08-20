@@ -279,6 +279,12 @@ def test_a_non_conforming_csv_name_refuses_to_be_paired(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # 2. Laziness — building the six loaders reads nothing
 # ---------------------------------------------------------------------------
+#
+# Per *block*.  The same guarantee at the scale the session-level viewer
+# operates at — 99 blocks x 6 stages behind one bounded cache, plus the block's
+# stage-path resolution itself, which loads a forearm point cloud — is in
+# ``test_stage_selection.py`` section 5.  Both halves are asserted; neither
+# follows from the other.
 
 
 def test_building_the_six_stage_loaders_reads_nothing(tmp_path: Path) -> None:

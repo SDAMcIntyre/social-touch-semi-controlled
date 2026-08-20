@@ -14,6 +14,15 @@ from .stage_depth_field import (
     StageDepthField,
     resolve_stage_depth_field,
 )
+from .stage_selection import (
+    BlockEntry,
+    SessionBlockIndex,
+    build_session_block_index,
+    default_stage_index,
+    stage_display_label,
+    stage_display_labels,
+    stage_index_for_block,
+)
 from .postprocessing_stage_viewer import PostprocessingStageViewer, StagePaths
 
 __all__ = [
@@ -22,6 +31,13 @@ __all__ = [
     "ForearmStageInspector",
     "PostprocessingStageViewer",
     "StagePaths",
+    "BlockEntry",
+    "SessionBlockIndex",
+    "build_session_block_index",
+    "default_stage_index",
+    "stage_display_label",
+    "stage_display_labels",
+    "stage_index_for_block",
     "STAGE_LABELS",
     "StageDepthField",
     "ACCEPTED_SPACES_BY_STAGE",
