@@ -2,7 +2,8 @@
 
 **Date:** 2026-08-12
 **Author:** Basil Duvernoy
-**Status:** Implemented (2026-08-12) — awaiting the real-recording verification run
+**Status:** Completed
+**Completed:** 2026-08-20 14:51
 **Base Branch:** `dev`
 **Branch:** `feature/per-vertex-contact-depth-poc` *(continue on the existing branch — do NOT create a new one; invoke with `implement here`)*
 
