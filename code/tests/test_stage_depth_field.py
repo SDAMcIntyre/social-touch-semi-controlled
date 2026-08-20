@@ -30,6 +30,16 @@ carried the declared space "so a caller can refuse to draw a wrong-space field";
 ``resolve_stage_depth_field`` is the first caller that actually refuses, so every
 mismatched (stage, space) pair is exercised here rather than trusted.
 
+**The one legitimate second space.**  ``center_on_receptive_field`` copies its
+input through unchanged when it can estimate no receptive-field centre, and
+deliberately leaves the sidecar declaring ``pca_calibrated`` -- the space the
+points are genuinely still in.  Stage 5 therefore accepts two spaces and only
+two, and the obvious way to implement that is a widening that quietly reaches
+every other stage as well, so section 4b tests the *asymmetry*: stage 4 must
+still refuse ``rf_centered``, stages 1-3 must still refuse everything but
+``icp_registered``, and the passthrough must be reported as one while the
+translating case must not.
+
 **The frame join.**  The sidecar is keyed by Kinect ``frame_index`` and the
 viewer's slider walks row positions; the merged CSV is upsampled ~33x to the
 nerve rate and a block does not start at frame 0, so the two coincide almost
@@ -66,6 +76,7 @@ if str(_SRC) not in sys.path:
 
 from preprocessing.motion_analysis.tactile_quantification.io.contact_depth_field_io import (  # noqa: E402
     COORDINATE_SPACE_ICP_REGISTERED,
+    COORDINATE_SPACE_KINECT_1,
     COORDINATE_SPACE_PCA_CALIBRATED,
     COORDINATE_SPACE_RF_CENTERED,
     PRODUCED_BY,
@@ -84,9 +95,11 @@ from merging.contact_depth_field_series import (  # noqa: E402
     make_contact_depth_field_loader,
 )
 from postprocessing.gui.stage_depth_field import (  # noqa: E402
-    EXPECTED_SPACE_BY_STAGE,
+    ACCEPTED_SPACES_BY_STAGE,
+    CANONICAL_SPACE_BY_STAGE,
     FOREARM_DEPTH_SCALAR_NAME,
     FRAME_INDEX_COLUMN,
+    PASSTHROUGH_SPACE_BY_STAGE,
     PRODUCING_TASK_BY_STAGE,
     STAGE_LABELS,
     StageDepthField,
@@ -379,16 +392,23 @@ def test_stage_zero_loader_reports_an_announced_absence(tmp_path: Path) -> None:
 _SIDECAR_BEARING = [row for row in _STAGES if row[3] is not None]
 
 #: Every (stage, declared space) pair that must be refused: each sidecar-bearing
-#: stage crossed with the two spaces it is *not*.
+#: stage crossed with every space it accepts *neither* as its own output nor as
+#: a passthrough.  Derived from the production mapping rather than restated, so
+#: that a stage gaining a second accepted space is subtracted from this matrix
+#: automatically instead of turning into a spurious failure -- and so that a
+#: stage gaining one it should not have keeps failing here.
+_ALL_SPACES = (
+    COORDINATE_SPACE_KINECT_1,
+    COORDINATE_SPACE_ICP_REGISTERED,
+    COORDINATE_SPACE_PCA_CALIBRATED,
+    COORDINATE_SPACE_RF_CENTERED,
+)
+
 _MISMATCHES = [
     (stage_idx, wrong)
-    for stage_idx, _, _, expected in _SIDECAR_BEARING
-    for wrong in (
-        COORDINATE_SPACE_ICP_REGISTERED,
-        COORDINATE_SPACE_PCA_CALIBRATED,
-        COORDINATE_SPACE_RF_CENTERED,
-    )
-    if wrong != expected
+    for stage_idx, _, _, _expected in _SIDECAR_BEARING
+    for wrong in _ALL_SPACES
+    if wrong not in ACCEPTED_SPACES_BY_STAGE[stage_idx]
 ]
 
 
@@ -420,11 +440,14 @@ def test_the_expected_space_map_omits_stage_zero_and_covers_the_rest() -> None:
     Stage 0 is absent by construction, not by oversight; repairing the absence
     would point the stage at another directory's file, in another space.
     """
-    assert 0 not in EXPECTED_SPACE_BY_STAGE
-    assert sorted(EXPECTED_SPACE_BY_STAGE) == [s[0] for s in _SIDECAR_BEARING]
-    assert sorted(PRODUCING_TASK_BY_STAGE) == sorted(EXPECTED_SPACE_BY_STAGE)
+    assert 0 not in CANONICAL_SPACE_BY_STAGE
+    assert 0 not in ACCEPTED_SPACES_BY_STAGE
+    assert sorted(CANONICAL_SPACE_BY_STAGE) == [s[0] for s in _SIDECAR_BEARING]
+    assert sorted(PRODUCING_TASK_BY_STAGE) == sorted(CANONICAL_SPACE_BY_STAGE)
+    assert sorted(ACCEPTED_SPACES_BY_STAGE) == sorted(CANONICAL_SPACE_BY_STAGE)
     for stage_idx, _, _, expected in _SIDECAR_BEARING:
-        assert EXPECTED_SPACE_BY_STAGE[stage_idx] == expected
+        assert CANONICAL_SPACE_BY_STAGE[stage_idx] == expected
+        assert expected in ACCEPTED_SPACES_BY_STAGE[stage_idx]
     assert len(STAGE_LABELS) == len(_STAGES)
 
 
@@ -454,7 +477,7 @@ def test_a_wrong_space_field_is_refused(
     it renders as a plausible patch somewhere it does not belong — the one class
     of defect a picture cannot be relied on to reveal.
     """
-    expected_space = EXPECTED_SPACE_BY_STAGE[stage_idx]
+    expected_space = CANONICAL_SPACE_BY_STAGE[stage_idx]
     _, directory, csv_name, _ = _STAGES[stage_idx]
     sidecar = depth_field_path_for_csv(tmp_path / directory / csv_name)
     sidecar.parent.mkdir(parents=True, exist_ok=True)
@@ -615,6 +638,180 @@ def test_resolving_a_stage_reads_exactly_once(tmp_path: Path) -> None:
     assert resolved.is_present
     assert reporter.calls == 1
     assert len(cache) == 1
+
+
+# ---------------------------------------------------------------------------
+# 4b. The one legitimate second space -- and the asymmetry that keeps it one
+# ---------------------------------------------------------------------------
+#
+# ``center_on_receptive_field`` cannot always estimate a receptive-field centre.
+# When it cannot it copies the CSV *and* the sidecar through byte-for-byte and
+# leaves ``coordinate_space`` at ``pca_calibrated``, because that is the space
+# the points are genuinely still in -- restamping them ``rf_centered`` would
+# assert a translation that never happened.  Whole sessions land there:
+# ``2022-06-14_ST13-01`` does, on all four of its blocks, and before this the
+# viewer could not open their stage 5 at all.
+#
+# The fix is a *stage-5-only* widening, and the obvious way to get it wrong is a
+# map that quietly widens the rest.  Everything below is written to catch that:
+# the accepted sets are asserted exactly, stage 4 is shown still refusing
+# ``rf_centered`` (a field that moved past the stage being displayed as though
+# it had not), stages 1-3 still refuse ``pca_calibrated``, and stage 5 itself
+# still refuses the two spaces that are neither of its own.
+
+
+def test_stage_five_accepts_exactly_two_spaces_and_no_other_stage_does() -> None:
+    """The accepted sets, stated exactly. Anything wider is the bug this guards."""
+    assert ACCEPTED_SPACES_BY_STAGE[1] == frozenset({COORDINATE_SPACE_ICP_REGISTERED})
+    assert ACCEPTED_SPACES_BY_STAGE[2] == frozenset({COORDINATE_SPACE_ICP_REGISTERED})
+    assert ACCEPTED_SPACES_BY_STAGE[3] == frozenset({COORDINATE_SPACE_ICP_REGISTERED})
+    assert ACCEPTED_SPACES_BY_STAGE[4] == frozenset({COORDINATE_SPACE_PCA_CALIBRATED})
+    assert ACCEPTED_SPACES_BY_STAGE[5] == frozenset(
+        {COORDINATE_SPACE_RF_CENTERED, COORDINATE_SPACE_PCA_CALIBRATED}
+    )
+    assert sorted(PASSTHROUGH_SPACE_BY_STAGE) == [5]
+    assert PASSTHROUGH_SPACE_BY_STAGE[5] == COORDINATE_SPACE_PCA_CALIBRATED
+    # Every stage but 5 accepts exactly one space -- the one its own transform
+    # produces.  This is the assertion a blanket widening fails.
+    for stage_idx, spaces in ACCEPTED_SPACES_BY_STAGE.items():
+        assert len(spaces) == (2 if stage_idx == 5 else 1)
+
+
+def _resolve_with_space(tmp_path: Path, stage_idx: int, declared_space: str):
+    """Resolve one stage against a sidecar written in *declared_space*."""
+    _, directory, csv_name, _ = _STAGES[stage_idx]
+    sidecar = depth_field_path_for_csv(tmp_path / directory / csv_name)
+    sidecar.parent.mkdir(parents=True, exist_ok=True)
+    write_contact_depth_field_table(
+        _table(_ROWS), sidecar, metadata=_metadata(declared_space)
+    )
+    cache = BoundedContactDepthFieldCache(maxsize=len(_STAGES))
+    loader = make_contact_depth_field_loader(sidecar, _CountingReporter(), cache)
+    return resolve_stage_depth_field(stage_idx, loader, sidecar), sidecar
+
+
+def test_stage_five_accepts_the_translating_case(tmp_path: Path) -> None:
+    """``rf_centered``: the transform ran, and nothing extra is announced."""
+    resolved, _ = _resolve_with_space(tmp_path, 5, COORDINATE_SPACE_RF_CENTERED)
+
+    assert resolved.is_present
+    assert resolved.series.coordinate_space == COORDINATE_SPACE_RF_CENTERED
+    assert resolved.is_passthrough is False
+    assert resolved.passthrough_note is None
+    assert "PASSTHROUGH" not in resolved.message
+
+
+def test_stage_five_accepts_the_passthrough_case(tmp_path: Path) -> None:
+    """``pca_calibrated`` in ``blocks_rf_centered/``: accepted, and drawable.
+
+    The producer is right and this is why: no translation was applied, so the
+    points really are still PCA calibrated, and the previous expectation refused
+    an entire class of session (all four blocks of ``2022-06-14_ST13-01``) over
+    a file that was telling the truth.
+    """
+    resolved, sidecar = _resolve_with_space(
+        tmp_path, 5, COORDINATE_SPACE_PCA_CALIBRATED
+    )
+
+    assert resolved.is_present
+    assert resolved.series.coordinate_space == COORDINATE_SPACE_PCA_CALIBRATED
+    assert str(sidecar) in resolved.message
+
+
+def test_the_passthrough_is_reported_as_one(tmp_path: Path) -> None:
+    """Accepted is not the same as unremarked.
+
+    Drawing ``pca_calibrated`` points under a label that says "RF Centered"
+    without saying so is the same misstatement as restamping the file, made
+    quieter.  The note names both spaces and the task that skipped its
+    transform, and it is folded into ``message`` too, so a caller that surfaces
+    only the message still surfaces the passthrough.
+    """
+    resolved, _ = _resolve_with_space(tmp_path, 5, COORDINATE_SPACE_PCA_CALIBRATED)
+
+    assert resolved.is_passthrough is True
+    note = resolved.passthrough_note
+    assert note is not None and note.strip()
+    assert COORDINATE_SPACE_PCA_CALIBRATED in note
+    assert COORDINATE_SPACE_RF_CENTERED in note
+    assert PRODUCING_TASK_BY_STAGE[5] in note
+    assert STAGE_LABELS[5] in note
+    assert note in resolved.message
+
+
+@pytest.mark.parametrize(
+    "declared_space", [COORDINATE_SPACE_ICP_REGISTERED, COORDINATE_SPACE_KINECT_1]
+)
+def test_stage_five_still_refuses_every_other_space(
+    tmp_path: Path, declared_space: str
+) -> None:
+    """Two spaces, not "anything". The refusal keeps its quality of message."""
+    with pytest.raises(ValueError) as excinfo:
+        _resolve_with_space(tmp_path, 5, declared_space)
+
+    message = str(excinfo.value)
+    assert declared_space in message
+    assert COORDINATE_SPACE_RF_CENTERED in message
+    assert COORDINATE_SPACE_PCA_CALIBRATED in message
+    assert STAGE_LABELS[5] in message
+
+
+def test_stage_four_still_refuses_the_rf_centered_space(tmp_path: Path) -> None:
+    """The asymmetry, in the direction that matters most.
+
+    Stage 5's second space is ``pca_calibrated`` -- the space *before* it.  The
+    reverse is not symmetric and must never become so: a ``rf_centered`` field
+    in ``blocks_pca_calibrated/`` is a field that moved past the stage being
+    displayed, and drawing it would put the patch a translation away from the
+    geometry beside it.
+    """
+    with pytest.raises(ValueError) as excinfo:
+        _resolve_with_space(tmp_path, 4, COORDINATE_SPACE_RF_CENTERED)
+
+    message = str(excinfo.value)
+    assert COORDINATE_SPACE_RF_CENTERED in message
+    assert COORDINATE_SPACE_PCA_CALIBRATED in message
+    assert STAGE_LABELS[4] in message
+
+
+@pytest.mark.parametrize("stage_idx", [1, 2, 3])
+def test_stages_one_to_three_still_refuse_the_pca_space(
+    tmp_path: Path, stage_idx: int
+) -> None:
+    """Widening stage 5 must not have reached the three stages that share a space."""
+    with pytest.raises(ValueError) as excinfo:
+        _resolve_with_space(tmp_path, stage_idx, COORDINATE_SPACE_PCA_CALIBRATED)
+
+    message = str(excinfo.value)
+    assert COORDINATE_SPACE_ICP_REGISTERED in message
+    assert COORDINATE_SPACE_PCA_CALIBRATED in message
+    assert STAGE_LABELS[stage_idx] in message
+
+
+@pytest.mark.parametrize("stage_idx, _dir, _csv, expected", _SIDECAR_BEARING)
+def test_no_stage_but_five_reports_a_passthrough(
+    tmp_path: Path, stage_idx: int, _dir: str, _csv: str, expected: str
+) -> None:
+    """A stage resolving in its own space is never announced as a passthrough."""
+    resolved, _ = _resolve_with_space(tmp_path, stage_idx, expected)
+
+    assert resolved.is_present
+    assert resolved.is_passthrough is False
+    assert resolved.passthrough_note is None
+
+
+def test_a_passthrough_note_without_a_series_is_refused() -> None:
+    """A passthrough is a claim about a loaded field's space, not about absence."""
+    with pytest.raises(ValueError, match="without a series"):
+        StageDepthField(series=None, message="absent", passthrough_note="note")
+
+
+def test_a_blank_passthrough_note_is_refused(tmp_path: Path) -> None:
+    """It exists only to be shown; a blank one announces the passthrough to nobody."""
+    series = _rf_centered_series(tmp_path)
+
+    with pytest.raises(ValueError, match="passthrough_note is blank"):
+        StageDepthField(series=series, message="loaded", passthrough_note="  ")
 
 
 # ---------------------------------------------------------------------------

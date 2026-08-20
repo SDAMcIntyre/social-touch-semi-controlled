@@ -7,7 +7,9 @@ from .postprocessed_scene_viewer import PostprocessedSceneViewer
 from .before_after_step_viewer import BeforeAfterStepViewer
 from .forearm_stage_inspector import ForearmStageInspector
 from .stage_depth_field import (
-    EXPECTED_SPACE_BY_STAGE,
+    ACCEPTED_SPACES_BY_STAGE,
+    CANONICAL_SPACE_BY_STAGE,
+    PASSTHROUGH_SPACE_BY_STAGE,
     STAGE_LABELS,
     StageDepthField,
     resolve_stage_depth_field,
@@ -22,6 +24,8 @@ __all__ = [
     "StagePaths",
     "STAGE_LABELS",
     "StageDepthField",
-    "EXPECTED_SPACE_BY_STAGE",
+    "ACCEPTED_SPACES_BY_STAGE",
+    "CANONICAL_SPACE_BY_STAGE",
+    "PASSTHROUGH_SPACE_BY_STAGE",
     "resolve_stage_depth_field",
 ]

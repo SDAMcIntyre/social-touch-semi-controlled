@@ -155,8 +155,21 @@ result, downstream, in the other repository.
 - **Depth colouring active** — `self._depth_series is not None and self._colour_contact_by_depth`; a
   data fact conjoined with a view preference, kept as separate attributes per
   `neural_kinect_scene_viewer.py:1484-1491`.
-- **Wrong-space** — `series.coordinate_space != EXPECTED_SPACE_BY_STAGE[idx]`. The expected map is
-  stages 1, 2, 3 → `icp_registered`; stage 4 → `pca_calibrated`; stage 5 → `rf_centered`.
+- **Canonical space** — `CANONICAL_SPACE_BY_STAGE[idx]`: the space a stage's *own transform*
+  produces, and therefore the space its sidecar declares whenever that transform ran. Stages 1, 2,
+  3 → `icp_registered`; stage 4 → `pca_calibrated`; stage 5 → `rf_centered`.
+- **Passthrough space** — `PASSTHROUGH_SPACE_BY_STAGE[idx]`: the space a stage's sidecar declares
+  when its producing task ran but applied **no transform at all**. Exactly one stage has one —
+  stage 5 → `pca_calibrated` — because `center_on_receptive_field` copies its input through
+  byte-for-byte when it can estimate no RF centre, and leaves the declared space alone because the
+  points genuinely did not move. See Phase 7.
+- **Wrong-space** — `series.coordinate_space not in ACCEPTED_SPACES_BY_STAGE[idx]`, where the
+  accepted set is *derived* per stage as `{canonical} ∪ {passthrough if any}` and never
+  hand-written. Concretely: stages 1-3 accept `icp_registered` alone, stage 4 accepts
+  `pca_calibrated` alone, and stage 5 accepts `rf_centered` **or** `pca_calibrated` and nothing
+  else. The asymmetry is deliberate and tested: stage 5's second space is the space *before* it, and
+  the reverse — an `rf_centered` field shown at stage 4 — is still refused, because that is a field
+  which moved past the stage being displayed.
 
 ---
 
@@ -257,6 +270,8 @@ StagePaths (postprocessing_stage_viewer.py:61-68) gains one field:
         # Default None keeps every existing construction site valid.
 
 New leaf — code/src/postprocessing/gui/stage_depth_field.py:
+(as designed; `EXPECTED_SPACE_BY_STAGE` was superseded in Phase 7 by
+ `CANONICAL_SPACE_BY_STAGE` + `PASSTHROUGH_SPACE_BY_STAGE` -> `ACCEPTED_SPACES_BY_STAGE`)
 
     EXPECTED_SPACE_BY_STAGE: Mapping[int, str]
         # {1,2,3: icp_registered, 4: pca_calibrated, 5: rf_centered}
@@ -315,7 +330,9 @@ that makes `contact_depth_field_series.py` testable while sitting next to viewer
 **Started:** 2026-08-20T06:41Z  **Completed:** 2026-08-20T06:51Z
 
 - [x] 2.1 — Create `code/src/postprocessing/gui/stage_depth_field.py` with
-      `EXPECTED_SPACE_BY_STAGE`, `StageDepthField`, `resolve_stage_depth_field`.
+      `EXPECTED_SPACE_BY_STAGE`, `StageDepthField`, `resolve_stage_depth_field`. *(Phase 7 renamed
+      the map — see that phase and the `## Definitions` entries for **Canonical space**,
+      **Passthrough space** and **Wrong-space**.)*
 - [x] 2.2 — Space validation: raise `ValueError` naming the stage label, the expected space, the
       declared space and the file path. Stage 0 is absent from the map — resolving it returns the
       absent state without consulting a loader.
@@ -637,8 +654,10 @@ render check itself.
 - [ ] 6.3 — **The render check.** Confirm the RF-centred depth patch sits on the RF-centred forearm
       surface, on the anatomically correct side, and tracks the hand across the block. Tick the
       corresponding box in `propagate-contact-depth-field-through-postprocessing.md`.
-- [ ] 6.4 — Drive `2022-06-14_ST13-01` (the no-cluster passthrough) and confirm stage 5 behaves
-      correctly when RF-centring is a passthrough copy.
+- [x] 6.4 — Drive `2022-06-14_ST13-01` (the no-cluster passthrough) and confirm stage 5 behaves
+      correctly when RF-centring is a passthrough copy. *(Found a defect — stage 5 could not be
+      opened at all; recorded in 6.4 below. **Fixed and re-verified in Phase 7**: all four blocks now
+      resolve, and are reported as passthrough. Only the headless half; nothing was seen.)*
 - [ ] 6.5 — Confirm stage 0's disabled control and its message on both sessions.
 - [x] 6.6 — Record peak memory across a full six-stage walk, to confirm the cache bound holds.
 - [x] 6.7 — Full suite; record pass/skip counts against the current 585 passed / 7 skipped baseline.
@@ -804,6 +823,11 @@ after the failure the viewer's idea of the current stage disagrees with the data
 
 Option 2 is the only one that keeps both branches' stated invariants; it is also the only one that
 adds a new input to the leaf. This belongs in its own change with its own plan.
+
+> **Superseded by Phase 7.** The adjudication went the producer's way, and none of the three options
+> above survived unchanged: the accepted set for stage 5 was widened to exactly two spaces, with no
+> new input to the leaf and no `rf_center_origin.json` read (option 2's cost was avoidable — the
+> declared space is itself sufficient to detect the passthrough). See Phase 7 below.
 
 ##### 6.5 (headless half) — stage 0 resolves to the ordinary absent state on both real sessions
 
@@ -999,13 +1023,177 @@ stage 5 with both depth layers on. Record the observed frame rate here.
 update back on the table.
 
 **Step 7 — 6.4 visual, ST13-01.** Point `kinect_configs` at
-`kinect_configs/valid_configs_ST13-01` and walk stages 0-4. **Stage 5 will raise** — that is the
-defect recorded in 6.4 above, it is expected until that contract collision is resolved, and reaching
-it will take the window down. Do not select stage 5 unless you want to see the failure mode.
+`kinect_configs/valid_configs_ST13-01` and walk stages 0-5. Since Phase 7, **stage 5 opens**: confirm
+that the "Contact Points" group carries the amber `PASSTHROUGH: …` line stating that the coordinates
+are in `pca_calibrated`, not `rf_centered`, and that the patch is seated on the forearm exactly as
+stage 4's is — the two stages are byte-identical for this session, so any visible difference between
+them is a defect.
 
 **Files Modified:** none (verification only); results recorded in this plan
 
 **Dependencies:** Phase 5
+
+---
+
+### Phase 7: Passthrough space acceptance *(amendment — the Phase 6.4 defect)*
+**Goal:** Stop the viewer calling a truthful artifact a liar, and stop a raise desyncing the widget.
+
+**Started / Completed:** 2026-08-20
+
+#### The defect
+
+Phase 6.4 above records it in full. In one line: stage 5 of `2022-06-14_ST13-01` raised on **all four
+blocks**, because `center_on_receptive_field` had taken its no-cluster passthrough branch and the
+sidecar in `blocks_rf_centered/` still declares `pca_calibrated`, which
+`EXPECTED_SPACE_BY_STAGE[5]` refused.
+
+#### The adjudication — the producer is right
+
+`_copy_field_unchanged` (`center_on_receptive_field.py:370`) is correct, and this plan's map was
+wrong. The argument is short and it decides the whole change:
+
+- The passthrough branch is entered on exactly one condition, `rf_center is None`. On that branch **no
+  translation is applied to anything** — not to the CSV, not to the forearm PLY, not to the sidecar.
+- A `coordinate_space` field is a claim about which frame the coordinates are expressed in. Stamping
+  `rf_centered` on points that were never translated asserts a transform that did not happen. That
+  claim would then be *carried out of this repository* by the sidecar's own metadata, into the
+  analysis repo, where nothing can check it against the file it came from.
+- The counter-argument — "whatever sits in `blocks_rf_centered/` declares `rf_centered`" — is an
+  invariant about a **directory name**, not about the data. A directory is where a task wrote its
+  output; it is not evidence that the task transformed anything.
+- Therefore the truthful artifact is the byte copy, and the map that refused it is the defect. It did
+  not account for the passthrough branch at all, which affects a whole class of sessions rather than
+  one file.
+
+#### What changed
+
+**1. Stage 5 accepts exactly two spaces — and no other stage moved.**
+`EXPECTED_SPACE_BY_STAGE: Mapping[int, str]` is gone, replaced by three mappings in
+`stage_depth_field.py`:
+
+| Name | Meaning |
+|------|---------|
+| `CANONICAL_SPACE_BY_STAGE` | the space a stage's own transform produces (unchanged values) |
+| `PASSTHROUGH_SPACE_BY_STAGE` | `{5: pca_calibrated}` — the one documented no-transform branch |
+| `ACCEPTED_SPACES_BY_STAGE` | `Mapping[int, frozenset[str]]`, **derived** as `{canonical} ∪ {passthrough if any}` |
+
+The derivation is the point: the accepted set is built per stage from that stage's own two entries,
+so widening stage 5 cannot widen stage 4 or stages 1-3. Three module-level checks fail the import if
+a passthrough is declared for a stage that has no canonical space, without a reason, or equal to its
+canonical space. Space constants are still imported from `contact_depth_field_io.py`; no literal is
+restated.
+
+**2. The passthrough is announced, not absorbed.** `StageDepthField` gained
+`passthrough_note: Optional[str]` and an `is_passthrough` property. When stage 5 resolves to
+`pca_calibrated` the note states which space the points are in, which they are not, the task that
+skipped its transform, and where the reason is recorded — and it is folded into `message` as well, so
+a caller that surfaces only the message still surfaces the passthrough. The DTO refuses a blank note
+and refuses a note without a series.
+
+The wording claims nothing the artifacts do not support. The branch is entered on `rf_center is None`,
+which covers **two** recorded statuses (`no_cluster_found` and `no_contact_points`); the sidecar
+distinguishes neither, so the note names `rf_center_origin.json` as the place that does instead of
+guessing between them. The viewer does not read that file — the declared space alone is sufficient to
+detect the passthrough, so Phase 6.4's option 2 was implemented without option 2's cost.
+
+The viewer surfaces it twice: appended to both "Colour by depth" tooltips (contact and forearm), and
+as a word-wrapped amber line inside the "Contact Points" group — built in
+`_build_right_panel_controls`, which is torn down and rebuilt on every stage switch, so it cannot
+outlive the stage it describes.
+
+**3. The stage-switch slot can no longer desync.** `_on_stage_changed` used to assign
+`self._current_stage_idx = index` *before* calling `_load_stage_data`, so a raise left the viewer
+claiming a stage it was not displaying. Now the load runs first and the index is committed only on
+success.
+
+Reordering alone is not sufficient, because `_load_stage_data` assigns a dozen attributes in sequence
+and a raise part-way through leaves a mixture of two stages behind. So the call is wrapped, and the
+handler `_revert_to_loaded_stage` **re-surfaces rather than swallows**: it logs the exception with its
+traceback, reloads the stage that was actually held, reverts the dropdown with signals blocked, and
+shows a `QMessageBox.critical` quoting the exception verbatim — the message names the file and the
+spaces, which no summary could. The only thing suppressed is propagation out of a Qt slot, which
+PyQt5 converts into an `abort()` of the whole application; a crash is not a better report than a
+dialog, and it is a far worse one than a dialog plus a viewer still showing coherent data. A second
+failure while reloading the previously-held stage is genuinely fatal and is left to propagate.
+
+**4. Tests** (`test_stage_depth_field.py`, new section 4b). Stage 5 accepts `rf_centered`
+(translating, not reported as passthrough) and `pca_calibrated` (passthrough, reported as one, note
+contained in `message`); stage 5 still raises on `icp_registered` and on `kinect_space_1`; stage 4
+still raises on `rf_centered`; stages 1-3 still raise on `pca_calibrated`; the accepted sets are
+asserted exactly, and every stage but 5 must accept exactly one space — the assertion a blanket
+widening fails. The refusal matrix is now derived from `ACCEPTED_SPACES_BY_STAGE` and crossed with
+all four spaces, `kinect_space_1` included.
+
+#### Re-verification on REAL data
+
+Same environment as Phase 6 (`MKL_THREADING_LAYER=TBB`, `PYTHONUTF8=1`, off-screen `pv.Plotter`
+substituted for the `QtInteractor` **class only**). Both the data path
+(`resolve_stage_paths` → `resolve_stage_depth_field` → `kinect_frame_indices` →
+`depth_frame_at_position`) and the real widget `__init__` were driven, at stage 5, on **every block of
+both sessions**.
+
+**`2022-06-14_ST13-01` — the passthrough session (`rf_center_origin.json`:
+`{"status": "no_cluster_found", "rf_center": null, "total_points_evaluated": 1506,
+"points_above_threshold": 2}`).** Before: 4 of 4 blocks raised. After: **4 of 4 resolve.**
+
+| Block | Stage 5 | Declared space | `is_passthrough` | Banner labels | Kinect rows | Frames with contact | Contact points drawn | clim (mm) |
+|-------|---------|----------------|------------------|---------------|-------------|---------------------|----------------------|-----------|
+| block-order-01 | opens | `pca_calibrated` | **True** | 1 | 3 186 | 1 030 | 83 492 | 0.0000 – 6.5102 |
+| block-order-02 | opens | `pca_calibrated` | **True** | 1 | 3 146 | 1 900 | 389 724 | -0.0000 – 9.9591 |
+| block-order-03 | opens | `pca_calibrated` | **True** | 1 | 2 993 | 2 790 | 335 528 | 0.0001 – 7.4885 |
+| block-order-04 | opens | `pca_calibrated` | **True** | 1 | 1 321 | 1 014 | 174 170 | -0.0000 – 9.1093 |
+
+On `block-order-01`, opened at stage 5 through the real widget: contact mapper bound to
+`penetration_depth_mm`, `scalar_range == contact_clim == (0.0, 6.5102)`, one scalar bar titled
+"Penetration depth (mm)", 3 points drawn at the first contact-bearing slider position (168), the
+passthrough note present in **both** "Colour by depth" tooltips and in the amber banner, and a full
+5 → 4 → 3 → 2 → 1 → 0 → 5 stage walk with no exception. Stage 4 and stage 5 report the same clim, as
+they must: the two sidecars are md5-identical for this session.
+
+**`2022-06-15_ST14-02` — the translating session (`rf_center_origin.json`: `status: "ok"`,
+`rf_center = [19.95, 355.0375, 400.3875]`).** No regression: **6 of 6 blocks** still resolve as
+`rf_centered`, and **none** is reported as passthrough (`is_passthrough == False`,
+`passthrough_note is None`, zero banner labels, no note in either tooltip).
+
+| Block | Stage 5 | Declared space | `is_passthrough` | Banner labels | Kinect rows | Frames with contact | Contact points drawn | clim (mm) |
+|-------|---------|----------------|------------------|---------------|-------------|---------------------|----------------------|-----------|
+| block-order-01 | opens | `rf_centered` | False | 0 | 2 193 | 983 | 423 111 | -0.0000 – 18.6208 |
+| block-order-02 | opens | `rf_centered` | False | 0 | 2 895 | 1 534 | 1 413 058 | -0.0000 – 23.2533 |
+| block-order-04 | opens | `rf_centered` | False | 0 | 2 985 | 2 750 | 1 086 204 | -0.0000 – 20.4142 |
+| block-order-05 | opens | `rf_centered` | False | 0 | 2 963 | 2 678 | 2 273 340 | -0.0000 – 22.5615 |
+| block-order-06 | opens | `rf_centered` | False | 0 | 2 451 | 1 103 | 202 167 | -0.0000 – 14.7255 |
+| block-order-08 | opens | `rf_centered` | False | 0 | 1 383 | 1 151 | 285 646 | -0.0000 – 14.7664 |
+
+**The stage-switch guard, measured.** On ST14-02 `block-order-01`, opened at stage 1, with
+`_load_stage_data` made to raise for stage 4 once, driven through the **dropdown** (not the slot):
+
+| Property | Before | After the failed switch | After retrying the same switch |
+|----------|--------|-------------------------|--------------------------------|
+| `_current_stage_idx` | 1 | **1** | 4 |
+| `_stage_combo.currentIndex()` | 1 | **1** | 4 |
+| `_depth_series.coordinate_space` | `icp_registered` | **`icp_registered`** | `pca_calibrated` |
+| `_total_frames` | 2 193 | **2 193** | — |
+| Dialogs raised to the user | — | **1** — "Stage could not be opened: … The viewer is still showing stage 1 ('ICP Registered')." | — |
+
+Index, dropdown and data agree before, during and after; the error reached the user; and the viewer
+recovered fully once the underlying cause was removed.
+
+**Suite:** `MKL_THREADING_LAYER=TBB pytest -q` → **695 passed, 7 skipped in 23.94s** (Phase 6
+baseline 674/7; +21 from section 4b). The Phase 2 static AST purity test still passes — the leaf
+gained no Qt, VTK, PyVista or Open3D import, and the viewer's new `QMessageBox` import is in the
+widget, where Qt already lives.
+
+#### Still not verified
+
+Nothing above was **seen**. `QtInteractor` still cannot initialise here (`0xC00000FD`), so the amber
+banner, the tooltips and the patch itself remain measured-not-observed. Step 7 of "Remaining for a
+real window" is updated accordingly.
+
+**Files Modified:** `code/src/postprocessing/gui/stage_depth_field.py`,
+`code/src/postprocessing/gui/postprocessing_stage_viewer.py`,
+`code/src/postprocessing/gui/__init__.py`, `code/tests/test_stage_depth_field.py`, this plan.
+
+**Dependencies:** Phase 6
 
 ---
 
@@ -1017,7 +1205,16 @@ it will take the window down. Do not select stage 5 unless you want to see the f
 - [x] Building six loaders reads zero bytes (counting reporter, per
       `test_neural_kinect_depth_field_view.py:441`).
 - [x] `resolve_stage_depth_field` returns the series for each correct (stage, space) pair.
-- [x] Every wrong (stage, space) pair raises `ValueError` naming both spaces.
+- [x] Every wrong (stage, space) pair raises `ValueError` naming both spaces. *(Phase 7: the matrix
+      is now derived from `ACCEPTED_SPACES_BY_STAGE` and crossed with all **four** spaces, so
+      `kinect_space_1` is refused explicitly too.)*
+- [x] *(Ph.7)* Stage 5 accepts `rf_centered` **and** `pca_calibrated`, and nothing else; stage 4
+      still refuses `rf_centered`; stages 1-3 still refuse `pca_calibrated`. The accepted sets are
+      asserted exactly, and every stage but 5 must accept exactly one space — the assertion a blanket
+      widening fails.
+- [x] *(Ph.7)* The passthrough is reported as one (`is_passthrough`, a non-empty `passthrough_note`
+      naming both spaces and the producing task, folded into `message`); the translating case is
+      **not**. A blank note, and a note without a series, are both refused by the DTO.
 - [x] Stage 0 returns absent without calling a loader.
 - [x] Missing sidecar → absent with a non-empty message; corrupt sidecar → raises.
 - [x] A loader returning a non-series raises `TypeError`.

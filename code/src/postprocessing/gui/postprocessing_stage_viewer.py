@@ -7,6 +7,7 @@ dropdown that switches between all 5 postprocessing coordinate stages.
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,6 +26,7 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QMessageBox,
     QPushButton,
     QScrollArea,
     QSlider,
@@ -63,6 +65,9 @@ from .stage_depth_field import (
     kinect_frame_indices,
     resolve_stage_depth_field,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -489,12 +494,14 @@ class PostprocessingStageViewer(QMainWindow):
             forearm_depth_cb.blockSignals(False)
             low, high = self._depth_series.clim_penetration_mm
             forearm_depth_cb.setToolTip(
-                "Paint each forearm vertex with the penetration depth of "
-                "whatever touched it on this frame, joined by the sidecar's "
-                "vertex_id. Untouched vertices stay flat grey -- that is "
-                "'nothing touched here', which is not the same as 0.00 mm. "
-                f"Same fixed colour scale as the contact points: {low:.2f} to "
-                f"{high:.2f} mm."
+                self._with_passthrough_note(
+                    "Paint each forearm vertex with the penetration depth of "
+                    "whatever touched it on this frame, joined by the sidecar's "
+                    "vertex_id. Untouched vertices stay flat grey -- that is "
+                    "'nothing touched here', which is not the same as 0.00 mm. "
+                    f"Same fixed colour scale as the contact points: {low:.2f} "
+                    f"to {high:.2f} mm."
+                )
             )
             forearm_depth_cb.stateChanged.connect(
                 self._on_forearm_depth_colour_changed
@@ -530,23 +537,52 @@ class PostprocessingStageViewer(QMainWindow):
             if _has_field:
                 low, high = self._depth_series.clim_penetration_mm
                 depth_cb.setToolTip(
-                    "Colour contact vertices by penetration depth (inferno), on a "
-                    f"colour scale fixed over the whole recording: {low:.2f} to "
-                    f"{high:.2f} mm. Unchecked renders them in flat red."
+                    self._with_passthrough_note(
+                        "Colour contact vertices by penetration depth (inferno), "
+                        "on a colour scale fixed over the whole recording: "
+                        f"{low:.2f} to {high:.2f} mm. Unchecked renders them in "
+                        "flat red."
+                    )
                 )
             else:
                 # The leaf's message already names the producing DAG task; a
                 # second wording here would be a second place to keep true.
                 depth_cb.setToolTip(self._depth_field.message)
             depth_cb.stateChanged.connect(self._on_contact_depth_colour_changed)
+            # A tooltip has to be hunted for, and the passthrough is a statement
+            # about what the stage label means -- it has to be readable without
+            # hovering anything.  The label is built here, inside the panel that
+            # is torn down and rebuilt on every stage switch, so it cannot
+            # outlive the stage it describes.
+            _contact_extras: Tuple[QWidget, ...] = (depth_cb,)
+            _note = self._depth_field.passthrough_note
+            if _note is not None:
+                note_label = QLabel(_note)
+                note_label.setWordWrap(True)
+                note_label.setStyleSheet("color: #c8a000;")
+                note_label.setToolTip(_note)
+                _contact_extras = (depth_cb, note_label)
             _add_group(
                 "Contact Points",
                 "contact_points",
                 has_slider=True,
                 default_size=15.0,
-                extra_widgets=(depth_cb,),
+                extra_widgets=_contact_extras,
             )
         self._right_panel_layout.addStretch()
+
+    def _with_passthrough_note(self, tooltip: str) -> str:
+        """Append this stage's passthrough note to *tooltip*, if it has one.
+
+        The wording is the leaf's, never restated here: a second copy is a
+        second place that has to stay true.  On the ordinary path the tooltip is
+        returned unchanged, so the only stages that say anything extra are the
+        ones where the stage label overstates what the producing task did.
+        """
+        note = self._depth_field.passthrough_note
+        if note is None:
+            return tooltip
+        return f"{tooltip}\n\n{note}"
 
     def _build_frame_controls(self) -> QWidget:
         widget = QWidget()
@@ -856,12 +892,29 @@ class PostprocessingStageViewer(QMainWindow):
             self.play_button.setText("▶ Play")
 
         saved_frame = self.current_index
-        old_frame = self._stage_paths[self._current_stage_idx].coordinate_frame
+        loaded_stage_idx = self._current_stage_idx
+        old_frame = self._stage_paths[loaded_stage_idx].coordinate_frame
         new_frame = self._stage_paths[index].coordinate_frame
         frame_changed = old_frame != new_frame
 
+        # The index is committed only *after* the new stage's data is in hand.
+        # Assigning it first -- as this slot used to -- leaves the viewer
+        # claiming stage N while displaying stage N-1's geometry whenever the
+        # load raises, and every later `_on_stage_changed` then computes
+        # `frame_changed` from a stage that was never loaded.
+        #
+        # The except is not a licence to continue: the error is re-surfaced to
+        # the user and logged with its traceback, and the only thing suppressed
+        # is the propagation out of a Qt slot, which PyQt5 turns into an
+        # `abort()` of the whole application.  A crash is not a better report
+        # than a dialog, and it is a far worse one than a dialog plus a viewer
+        # still showing the stage it actually holds.
+        try:
+            self._load_stage_data(index)
+        except Exception as exc:  # noqa: BLE001 -- re-surfaced, never swallowed
+            self._revert_to_loaded_stage(loaded_stage_idx, index, exc)
+            return
         self._current_stage_idx = index
-        self._load_stage_data(index)
 
         self.plotter.clear()
         self.plotter.set_background("black")
@@ -905,6 +958,56 @@ class PostprocessingStageViewer(QMainWindow):
             self._update_frame(restored_frame)
 
         QTimer.singleShot(0, _deferred_stage_init)
+
+    def _revert_to_loaded_stage(
+        self, loaded_stage_idx: int, failed_stage_idx: int, error: Exception
+    ) -> None:
+        """Put the widget back on the stage it actually holds, then report.
+
+        ``_load_stage_data`` assigns a dozen attributes in sequence, so a raise
+        part-way through leaves a mixture of two stages behind -- the new
+        stage's depth field beside the old stage's rows, say.  Re-running it for
+        the stage that *was* loaded is the only way back to a coherent widget;
+        it succeeded once already, so a second failure there is genuinely fatal
+        and is deliberately left to propagate.
+
+        The dropdown is reverted with signals blocked, because setting it back
+        would otherwise re-enter this slot and attempt a switch that is already
+        in effect.
+
+        Args:
+            loaded_stage_idx: The stage whose data the widget still holds.
+            failed_stage_idx: The stage the user asked for and did not get.
+            error: What ``_load_stage_data`` raised.  Shown verbatim: it names
+                the file and the coordinate spaces, which no summary here could.
+        """
+        logger.error(
+            "Stage %d ('%s') could not be opened; staying on stage %d ('%s').",
+            failed_stage_idx,
+            self._stage_paths[failed_stage_idx].stage_label,
+            loaded_stage_idx,
+            self._stage_paths[loaded_stage_idx].stage_label,
+            exc_info=error,
+        )
+
+        self._load_stage_data(loaded_stage_idx)
+        self._current_stage_idx = loaded_stage_idx
+
+        combo = getattr(self, "_stage_combo", None)
+        if combo is not None:
+            combo.blockSignals(True)
+            combo.setCurrentIndex(loaded_stage_idx)
+            combo.blockSignals(False)
+
+        QMessageBox.critical(
+            self,
+            "Stage could not be opened",
+            f"Stage {failed_stage_idx} "
+            f"('{self._stage_paths[failed_stage_idx].stage_label}') could not "
+            f"be opened:\n\n{type(error).__name__}: {error}\n\n"
+            f"The viewer is still showing stage {loaded_stage_idx} "
+            f"('{self._stage_paths[loaded_stage_idx].stage_label}').",
+        )
 
     # ------------------------------------------------------------------
     # Camera helpers

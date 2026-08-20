@@ -33,7 +33,7 @@ module exists to make impossible:
   ``filter_contact_depth_field_by_neural_quality``, whose sidecar lands in
   ``blocks_filtered/``.  Stage 0's absence is a fact about the pipeline, not a
   gap to be papered over by pointing it at another directory's file — hence it
-  is absent from :data:`EXPECTED_SPACE_BY_STAGE` by construction, and resolving
+  is absent from :data:`CANONICAL_SPACE_BY_STAGE` by construction, and resolving
   it never consults a loader at all.
 
 Refusing a wrong-space field
@@ -45,6 +45,26 @@ sees four across six stages, so this module is the first caller that actually
 refuses.  A field drawn in the wrong space would land the patch somewhere
 plausible-looking and wrong — a defect that first surfaces as a wrong scientific
 result, downstream, in another repository.  Fail fast instead.
+
+One stage accepts two spaces, and it is not a widening
+------------------------------------------------------
+``center_on_receptive_field`` cannot always estimate a receptive-field centre.
+When it cannot, it copies the CSV *and* the sidecar through byte-for-byte and
+deliberately leaves ``coordinate_space`` at ``pca_calibrated``, because that is
+what the points are still in; restamping them ``rf_centered`` would assert a
+translation that never happened.  The producer is right, and whole sessions land
+there — ``2022-06-14_ST13-01`` does, on all four of its blocks.  So stage 5
+accepts ``rf_centered`` **or** ``pca_calibrated`` and nothing else, expressed as
+:data:`CANONICAL_SPACE_BY_STAGE` plus :data:`PASSTHROUGH_SPACE_BY_STAGE` rather
+than as a hand-written set, so that widening one stage cannot widen another.
+The asymmetry is load-bearing: stage 4 must still refuse ``rf_centered`` (a
+field that moved *past* the stage being shown as though it had not), and stages
+1-3 must still refuse everything but ``icp_registered``.
+
+And the passthrough is announced, never absorbed.  Showing ``pca_calibrated``
+data on a stage labelled "RF Centered" without saying so is a quieter version of
+the lie the restamp would have told, so :attr:`StageDepthField.passthrough_note`
+carries the fact up to a surface the user is already looking at.
 
 Absent, corrupt, and no-contact are three different facts
 ---------------------------------------------------------
@@ -92,9 +112,12 @@ from preprocessing.motion_analysis.tactile_quantification.io.contact_depth_field
 )
 
 __all__ = [
-    "EXPECTED_SPACE_BY_STAGE",
+    "ACCEPTED_SPACES_BY_STAGE",
+    "CANONICAL_SPACE_BY_STAGE",
     "FOREARM_DEPTH_SCALAR_NAME",
     "FRAME_INDEX_COLUMN",
+    "PASSTHROUGH_REASON_BY_STAGE",
+    "PASSTHROUGH_SPACE_BY_STAGE",
     "PRODUCING_TASK_BY_STAGE",
     "STAGE_LABELS",
     "StageDepthField",
@@ -136,7 +159,8 @@ STAGE_LABELS: List[str] = [
     "RF Centered",
 ]
 
-#: The coordinate space each stage's sidecar **must** declare.
+#: The coordinate space each stage's **own transform** produces, and therefore
+#: the space its sidecar declares whenever that transform actually ran.
 #:
 #: Stages 1-3 share :data:`COORDINATE_SPACE_ICP_REGISTERED` because
 #: deduplication and projection consume an index mapping rather than applying a
@@ -146,13 +170,88 @@ STAGE_LABELS: List[str] = [
 #: **Stage 0 is absent from this mapping by construction** — see the module
 #: docstring.  Membership in this mapping is therefore the definition of
 #: "sidecar-bearing stage", and the absence must not be repaired.
-EXPECTED_SPACE_BY_STAGE: Mapping[int, str] = MappingProxyType(
+CANONICAL_SPACE_BY_STAGE: Mapping[int, str] = MappingProxyType(
     {
         1: COORDINATE_SPACE_ICP_REGISTERED,
         2: COORDINATE_SPACE_ICP_REGISTERED,
         3: COORDINATE_SPACE_ICP_REGISTERED,
         4: COORDINATE_SPACE_PCA_CALIBRATED,
         5: COORDINATE_SPACE_RF_CENTERED,
+    }
+)
+
+#: The space a stage's sidecar declares when its producing task ran but applied
+#: **no transform at all** — that task's documented passthrough branch.
+#:
+#: Exactly one stage has one, and it is a property of the *producer*, recorded
+#: here rather than negotiated: ``center_on_receptive_field`` writes the
+#: passthrough with ``_copy_field_unchanged``, a byte copy whose docstring
+#: states the reason — "the points did not move, so the file's declared
+#: ``coordinate_space`` — ``pca_calibrated`` — is still the truth".  A stage
+#: with no entry here accepts exactly one space; adding an entry is a claim
+#: about one named task's branch, not a relaxation of the check.
+PASSTHROUGH_SPACE_BY_STAGE: Mapping[int, str] = MappingProxyType(
+    {
+        5: COORDINATE_SPACE_PCA_CALIBRATED,
+    }
+)
+
+#: Why a passthrough stage's producing task may have applied no transform.
+#:
+#: Kept to what the artifacts support.  The branch that copies the field through
+#: is entered on exactly one condition — ``rf_center is None`` — which covers
+#: two recorded outcomes (``no_cluster_found`` and ``no_contact_points``); the
+#: sidecar distinguishes neither, so the note names the file that does rather
+#: than guessing between them.
+PASSTHROUGH_REASON_BY_STAGE: Mapping[int, str] = MappingProxyType(
+    {
+        5: (
+            "it could not estimate a receptive-field centre, so it copied its "
+            "input through unchanged instead of translating it (the session's "
+            "'rf_center_origin.json' records which no-centre outcome occurred)"
+        ),
+    }
+)
+
+if set(PASSTHROUGH_SPACE_BY_STAGE) - set(CANONICAL_SPACE_BY_STAGE):
+    raise ValueError(
+        "PASSTHROUGH_SPACE_BY_STAGE names a stage with no canonical space: "
+        f"{sorted(set(PASSTHROUGH_SPACE_BY_STAGE) - set(CANONICAL_SPACE_BY_STAGE))}."
+    )
+if set(PASSTHROUGH_SPACE_BY_STAGE) != set(PASSTHROUGH_REASON_BY_STAGE):
+    raise ValueError(
+        "Every passthrough stage must carry the reason its transform was "
+        "skipped. A passthrough the viewer cannot explain is one it must not "
+        "silently accept."
+    )
+for _stage_idx, _passthrough in PASSTHROUGH_SPACE_BY_STAGE.items():
+    if _passthrough == CANONICAL_SPACE_BY_STAGE[_stage_idx]:
+        raise ValueError(
+            f"Stage {_stage_idx}'s passthrough space equals its canonical space "
+            f"('{_passthrough}'), so the passthrough could never be detected."
+        )
+
+#: The closed set of coordinate spaces each stage's sidecar may declare.
+#:
+#: **Derived, never hand-written.**  A hand-written set is how one stage's
+#: legitimate second space becomes every stage's, which is precisely the
+#: failure this arrangement exists to prevent: the union is taken per stage,
+#: from that stage's own two mappings, so stage 5 gaining ``pca_calibrated``
+#: leaves stage 4 accepting ``pca_calibrated`` alone and stages 1-3 accepting
+#: ``icp_registered`` alone.
+ACCEPTED_SPACES_BY_STAGE: Mapping[int, frozenset] = MappingProxyType(
+    {
+        stage_idx: frozenset(
+            (
+                canonical,
+                *(
+                    (PASSTHROUGH_SPACE_BY_STAGE[stage_idx],)
+                    if stage_idx in PASSTHROUGH_SPACE_BY_STAGE
+                    else ()
+                ),
+            )
+        )
+        for stage_idx, canonical in CANONICAL_SPACE_BY_STAGE.items()
     }
 )
 
@@ -171,7 +270,7 @@ PRODUCING_TASK_BY_STAGE: Mapping[int, str] = MappingProxyType(
 
 #: The first stage that carries a depth field, pointed at from stage 0's message
 #: so the user is told where to look rather than only what is missing.
-_FIRST_SIDECAR_BEARING_STAGE: int = min(EXPECTED_SPACE_BY_STAGE)
+_FIRST_SIDECAR_BEARING_STAGE: int = min(CANONICAL_SPACE_BY_STAGE)
 
 
 @dataclass(frozen=True)
@@ -188,14 +287,26 @@ class StageDepthField:
             has no sidecar.  When present, its ``coordinate_space`` has already
             been checked against the stage.
         message: Non-empty human-readable text.  States either what was loaded
-            or that depth colouring is unavailable for this stage and why.
+            or that depth colouring is unavailable for this stage and why.  When
+            *passthrough_note* is set it is part of this text too, so a caller
+            that surfaces only the message still surfaces the passthrough.
+        passthrough_note: ``None`` on the ordinary path.  Non-empty text when
+            this stage's producing task took its documented no-transform branch,
+            so the field sits in :data:`PASSTHROUGH_SPACE_BY_STAGE` rather than
+            in :data:`CANONICAL_SPACE_BY_STAGE` — accepted, but not silently.
+            Showing ``pca_calibrated`` points on a stage labelled "RF Centered"
+            without saying so is the same misstatement as restamping the file,
+            made quieter; this is the field that stops it.
 
     Raises:
-        ValueError: If *message* is empty.
+        ValueError: If *message* is empty, if *passthrough_note* is present but
+            blank, or if a passthrough is claimed without a series to claim it
+            about.
     """
 
     series: Optional[ContactDepthFieldSeries]
     message: str
+    passthrough_note: Optional[str] = None
 
     def __post_init__(self) -> None:
         if not self.message.strip():
@@ -203,11 +314,35 @@ class StageDepthField:
                 "message is empty. Both outcomes must be announceable; a silent "
                 "absent state is exactly what this type exists to prevent."
             )
+        if self.passthrough_note is not None:
+            if not self.passthrough_note.strip():
+                raise ValueError(
+                    "passthrough_note is blank. It exists only to be shown; an "
+                    "empty one announces the passthrough to nobody, which is "
+                    "the state it was added to make impossible."
+                )
+            if self.series is None:
+                raise ValueError(
+                    "passthrough_note was set without a series. A passthrough "
+                    "is a statement about the space a *loaded* field declares; "
+                    "there is no such statement to make about an absent one."
+                )
 
     @property
     def is_present(self) -> bool:
         """Whether this stage has a depth field to draw."""
         return self.series is not None
+
+    @property
+    def is_passthrough(self) -> bool:
+        """Whether this stage resolved to its passthrough space, not its own.
+
+        ``True`` means the field is real, validated and drawable, and that the
+        producing task applied no transform — so the coordinates belong to the
+        previous stage's space.  Callers must say so rather than quietly drawing
+        it under this stage's label.
+        """
+        return self.passthrough_note is not None
 
 
 def _stage_label(stage_idx: int) -> str:
@@ -258,6 +393,44 @@ def _absent_message(stage_idx: int, label: str, sidecar_path: Optional[Path]) ->
     )
 
 
+def _accepted_spaces_phrase(stage_idx: int) -> str:
+    """Name a stage's accepted spaces, canonical first, for an error message.
+
+    Canonical first, and never sorted alphabetically: the first space named is
+    the one the stage's own transform produces, and any second is a passthrough.
+    Reordering them would put a stage's exceptional case ahead of its normal
+    one in the one sentence a user reads when the check fires.
+    """
+    canonical = CANONICAL_SPACE_BY_STAGE[stage_idx]
+    passthrough = PASSTHROUGH_SPACE_BY_STAGE.get(stage_idx)
+    if passthrough is None:
+        return f"'{canonical}'"
+    return f"'{canonical}' or '{passthrough}'"
+
+
+def _passthrough_note(stage_idx: int, label: str) -> str:
+    """State that a stage is showing its passthrough space, and why.
+
+    Deliberately says nothing the artifacts do not support: the space it is in,
+    the space it is not, the task that skipped its transform, and where the
+    reason is recorded.  The geometry is correct — the CSV beside the sidecar
+    was copied through the same branch, so the two still agree; it is the stage
+    *label* that overstates what happened, which is the whole of what this says.
+    """
+    canonical = CANONICAL_SPACE_BY_STAGE[stage_idx]
+    passthrough = PASSTHROUGH_SPACE_BY_STAGE[stage_idx]
+    reason = PASSTHROUGH_REASON_BY_STAGE[stage_idx]
+    task = PRODUCING_TASK_BY_STAGE[stage_idx]
+    return (
+        f"PASSTHROUGH: these coordinates are in '{passthrough}', not "
+        f"'{canonical}'. Stage {stage_idx} ('{label}') is showing the output of "
+        f"'{task}' on a session where {reason}. The points and the CSV beside "
+        "them went through the same branch, so the picture is consistent; the "
+        "stage label is the only thing here that claims a transform which did "
+        "not happen."
+    )
+
+
 def resolve_stage_depth_field(
     stage_idx: int,
     loader: Optional[ContactDepthFieldLoader],
@@ -270,11 +443,18 @@ def resolve_stage_depth_field(
     what came back, and validates the declared coordinate space against the
     stage the user selected.
 
-    Stage 0 short-circuits: it is absent from :data:`EXPECTED_SPACE_BY_STAGE`,
+    Stage 0 short-circuits: it is absent from :data:`ACCEPTED_SPACES_BY_STAGE`,
     so no loader is consulted for it even if one was wired.  There is no
     coordinate space it could legitimately declare, so there is nothing to
     validate a series against, and reading a file to then refuse it would be
     worse than not reading it.
+
+    A stage that has a :data:`PASSTHROUGH_SPACE_BY_STAGE` entry accepts that
+    space as well as its own, and the returned
+    :attr:`StageDepthField.passthrough_note` says which of the two it got.  The
+    acceptance is per stage and derived, so it cannot leak sideways: stage 4
+    still refuses ``rf_centered`` and stages 1-3 still refuse everything but
+    ``icp_registered``.
 
     Args:
         stage_idx: Index into :data:`STAGE_LABELS`.
@@ -296,7 +476,8 @@ def resolve_stage_depth_field(
     Raises:
         ValueError: If *stage_idx* names no stage; if a loader was supplied
             without the path it was built from; or if the loaded field declares
-            a coordinate space other than the one this stage produces.
+            a coordinate space this stage accepts neither as its own output nor
+            as its passthrough.
         TypeError: If the loader returns something that is neither a
             :class:`~merging.contact_depth_field_series.ContactDepthFieldSeries`
             nor ``None``.
@@ -307,8 +488,8 @@ def resolve_stage_depth_field(
     """
     label = _stage_label(stage_idx)
 
-    expected_space = EXPECTED_SPACE_BY_STAGE.get(stage_idx)
-    if expected_space is None:
+    accepted_spaces = ACCEPTED_SPACES_BY_STAGE.get(stage_idx)
+    if accepted_spaces is None:
         return StageDepthField(series=None, message=_stage_zero_message())
 
     if loader is None:
@@ -339,22 +520,31 @@ def resolve_stage_depth_field(
             "in the scene."
         )
 
-    if series.coordinate_space != expected_space:
+    if series.coordinate_space not in accepted_spaces:
         raise ValueError(
             f"Stage {stage_idx} ('{label}') expects a contact depth field in "
-            f"coordinate space '{expected_space}', but '{sidecar_path}' declares "
-            f"'{series.coordinate_space}'. Refusing to draw it: the depth values "
-            "would be correct and the positions would not, which renders as a "
-            "plausible patch in the wrong place rather than as an error."
+            f"coordinate space {_accepted_spaces_phrase(stage_idx)}, but "
+            f"'{sidecar_path}' declares '{series.coordinate_space}'. Refusing to "
+            "draw it: the depth values would be correct and the positions would "
+            "not, which renders as a plausible patch in the wrong place rather "
+            "than as an error."
         )
 
-    return StageDepthField(
-        series=series,
-        message=(
-            f"Contact depth field for stage {stage_idx} ('{label}') loaded from "
-            f"'{sidecar_path}': {series.summary()}."
-        ),
+    note = (
+        _passthrough_note(stage_idx, label)
+        if series.coordinate_space == PASSTHROUGH_SPACE_BY_STAGE.get(stage_idx)
+        else None
     )
+    message = (
+        f"Contact depth field for stage {stage_idx} ('{label}') loaded from "
+        f"'{sidecar_path}': {series.summary()}."
+    )
+    if note is not None:
+        # Folded into the message as well as carried separately, so a caller
+        # that only ever surfaces ``message`` still surfaces the passthrough.
+        message = f"{message} {note}"
+
+    return StageDepthField(series=series, message=message, passthrough_note=note)
 
 
 # ---------------------------------------------------------------------------
