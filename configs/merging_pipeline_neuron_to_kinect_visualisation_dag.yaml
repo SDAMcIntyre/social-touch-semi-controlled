@@ -6,10 +6,13 @@
 # ==============================================================================
 
 parameters:
-  kinect_configs: valid_configs_ST14-02
+  kinect_configs: [valid_configs_ST13-01, valid_configs_ST13-02, 
+      valid_configs_ST13-03, valid_configs_ST14-01, valid_configs_ST14-02, 
+      valid_configs_ST14-04, valid_configs_ST16-02, valid_configs_ST16-03, 
+      valid_configs_ST16-05, valid_configs_ST18-01, valid_configs_ST18-04]
 tasks:
   view_neural_kinect_scene:
-    enabled: false
+    enabled: true
     description: "Launch the NeuralKinectViewer for the merged neural + Kinect 3D
       scene."
     options:
@@ -17,7 +20,7 @@ tasks:
     depends_on: []
 
   view_neural_kinect_scene_transformed:
-    enabled: true
+    enabled: false
     description: "Launch the NeuralKinectViewer in registered-frame mode.  Shows the
       unified forearm PLY and applies the per-block ICP transform to the MKV cloud,
       hand mesh, and stickers.  Skipped automatically for single-forearm sessions

@@ -1,16 +1,18 @@
 """
 postprocessing_stage_viewer.py
 -------------------------------
-Single-window PyQt5+PyVista viewer for postprocessed data with a stage
-dropdown that switches between all 5 postprocessing coordinate stages.
+Single-window PyQt5+PyVista viewer for postprocessed data with session, block
+and stage dropdowns that switch between every block of every session and all 6
+postprocessing coordinate stages.
 """
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import Callable, List, Optional, Tuple, Union
 
 import numpy as np
 import open3d as o3d
@@ -25,6 +27,7 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QMessageBox,
     QPushButton,
     QScrollArea,
     QSlider,
@@ -33,21 +36,65 @@ from PyQt5.QtWidgets import (
 )
 from pyvistaqt import QtInteractor
 
-from merging.gui.neural_kinect_scene_viewer import NeuralDataPanel
+from merging.contact_depth_field_series import ContactDepthFieldLoader
+from merging.gui.neural_kinect_scene_viewer import NeuralDataPanel, contact_polydata
+
+# The scalar array name, the colourbar title and the colourmap have exactly one
+# definition in the tree, shared with the tactile-quantification depth viewer
+# and the Neural+Kinect viewer.  Restating any of them here would let this
+# window disagree with the other two about what it is showing.
+from preprocessing.motion_analysis.tactile_quantification.gui.contact_depth_field_viewer import (
+    COLORMAP,
+    CONTACT_SCALAR_NAME,
+    SCALAR_BAR_TITLE,
+)
+
+# Re-exported: the labels are defined in the Qt-free policy leaf beside this
+# module, because that leaf names stages in its validation errors and a second
+# copy of the six strings would drift from this one.
+from .stage_depth_field import STAGE_LABELS  # noqa: F401
+
+# All depth-field policy — which space a stage must declare, what to say when
+# there is none, and how a slider position becomes a frame index — lives in that
+# same leaf, and is testable without a window because of it.
+from .stage_depth_field import (
+    FOREARM_DEPTH_SCALAR_NAME,
+    KINECT_ANCHOR_COLUMN,
+    StageDepthField,
+    depth_frame_at_position,
+    forearm_depth_scalars,
+    kinect_anchor_rows,
+    kinect_frame_at_position,
+    kinect_frame_indices,
+    resolve_stage_depth_field,
+)
+
+# Which triple the window opens on, what a dropdown change lands on, and how a
+# stage is numbered on screen are decided in the Qt-free selection leaf beside
+# this module, for the same reason the depth-field policy is: a decision made
+# inside a Qt slot is a decision no test can reach.
+from .stage_selection import (
+    BlockEntry,
+    SessionBlockIndex,
+    stage_display_label,
+    stage_display_labels,
+    stage_index_for_block,
+)
+
+
+logger = logging.getLogger(__name__)
+
+#: Signature of the callable the viewer resolves a block's stage paths with.
+#: It is handed a :class:`~postprocessing.gui.stage_selection.BlockEntry` and
+#: returns that block's six :class:`StagePaths`.  A *callable*, never a
+#: pre-built table: resolving a block loads its reference forearm as an
+#: in-memory point cloud, and a batch is 99 blocks.
+StagePathsResolver = Callable[[BlockEntry], List["StagePaths"]]
 
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-
-STAGE_LABELS: List[str] = [
-    "Merged (Raw)",
-    "ICP Registered",
-    "Deduplicated",
-    "Contact Projected",
-    "PCA Calibrated",
-    "RF Centered",
-]
 
 _CAMERA_FRAME_STAGES = {0, 1, 2, 3}
 _PCA_FRAME_STAGES = {4, 5}
@@ -60,12 +107,46 @@ _PCA_FRAME_STAGES = {4, 5}
 
 @dataclass
 class StagePaths:
-    """Paths and metadata for one postprocessing stage."""
+    """Paths and metadata for one postprocessing stage.
+
+    Attributes:
+        stage_label: This stage's **canonical** name — one of
+            :data:`~postprocessing.gui.stage_depth_field.STAGE_LABELS`, which is
+            what every validation error calls it.  Deliberately not what the
+            dropdown shows: the dropdown shows the ordinal-prefixed
+            :func:`~postprocessing.gui.stage_selection.stage_display_label`, and
+            a message that repeated the ordinal would stop matching the
+            vocabulary the rest of the pipeline is keyed on.
+        csv_path: The stage's merged-data CSV, or ``None`` when the session has
+            no merged output directory.
+        forearm: The forearm surface for this stage — a PLY path or an
+            already-loaded point cloud.
+        coordinate_frame: ``"camera"`` or ``"pca"``.
+        depth_field_loader: Zero-argument callable returning this stage's
+            :class:`~merging.contact_depth_field_series.ContactDepthFieldSeries`,
+            or ``None`` when the sidecar is absent.  A **loader**, never a path
+            and never a loaded table: the caller resolves six of these before
+            the window exists, and reading six stages of 10^5-10^6 vertices
+            before the first pixel is exactly the regression the lazy contract
+            was introduced to prevent.  The field itself defaults to ``None``
+            so every existing construction site stays valid; ``None`` means the
+            caller wired no depth field at all, which is indistinguishable from
+            an absent sidecar as far as this widget is concerned.
+        depth_field_path: Where ``depth_field_loader`` was built to look.  Used
+            **only** to name the file in messages and errors — nothing in this
+            module opens it, and the widget derives no parquet path of its own.
+            It travels beside the loader because a loader deliberately hides its
+            path and the loaded series carries none either, yet "wrong
+            coordinate space" without "in which file" is not actionable.  The
+            two fields are set together or not at all.
+    """
 
     stage_label: str
     csv_path: Optional[Path]
     forearm: Optional[Union[Path, "o3d.geometry.PointCloud"]]
     coordinate_frame: str  # "camera" or "pca"
+    depth_field_loader: Optional[ContactDepthFieldLoader] = None
+    depth_field_path: Optional[Path] = None
 
 
 # ---------------------------------------------------------------------------
@@ -91,57 +172,112 @@ def _parse_contact_points_cell(cell) -> Optional[np.ndarray]:
     return np.array(points, dtype=np.float64) if points else None
 
 
+def _empty_contact_polydata(with_depth_scalars: bool) -> pv.PolyData:
+    """A zero-point contact dataset for a frame with no contact.
+
+    Args:
+        with_depth_scalars: Whether the dataset must carry the depth array.
+            When the actor is mapped to :data:`CONTACT_SCALAR_NAME`, the array
+            has to exist even at zero length, or the mapper loses its binding
+            the first time a no-contact frame is shown and the colours never
+            come back.  When the actor renders flat, the array must be absent
+            rather than zero-filled: no depth is not depth zero.
+
+    Returns:
+        An empty :class:`pyvista.PolyData`, built by the same function that
+        builds the non-empty ones so the two cannot drift apart.
+    """
+    points = np.empty((0, 3), dtype=np.float32)
+    depths = np.empty((0,), dtype=np.float64) if with_depth_scalars else None
+    return contact_polydata(points, depths)
+
+
 # ---------------------------------------------------------------------------
 # Viewer
 # ---------------------------------------------------------------------------
 
 
 class PostprocessingStageViewer(QMainWindow):
-    """Single-window viewer with a stage dropdown for the 5 postprocessing stages.
+    """One window, three dropdowns: session, block, and postprocessing stage.
+
+    Session-level, not per-block.  The batch it serves is 11 sessions and 99
+    blocks; opening one window per block meant 99 windows, sequentially, with no
+    way to compare a stage across two blocks without closing the first.
+
+    Nothing about a block is read until that block is selected.  The viewer
+    holds an index of *identifiers* and a resolver, and calls the resolver for
+    exactly one block at a time — see
+    :mod:`postprocessing.gui.stage_selection` for why an index that resolved
+    everything up front would be the eager-loading regression the depth-field
+    work exists to prevent, reintroduced one level up.
 
     Parameters
     ----------
-    stage_paths:
-        One ``StagePaths`` per stage (length must equal ``len(STAGE_LABELS)``).
-    recording_name:
-        Displayed in the 3D scene text label and window title.
-    initial_stage:
-        Index of the stage to display on launch (default: 0).
+    block_index:
+        Every selectable ``(session, block)``, identifiers only.
+    stage_paths_resolver:
+        Called with one ``BlockEntry`` to produce that block's six
+        ``StagePaths``.  Called on selection, never in bulk.
     parent:
         Optional Qt parent widget.
     """
 
     def __init__(
         self,
-        stage_paths: List[StagePaths],
-        recording_name: str,
-        initial_stage: int = 0,
+        block_index: SessionBlockIndex,
+        stage_paths_resolver: StagePathsResolver,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
 
-        if len(stage_paths) != len(STAGE_LABELS):
-            raise ValueError(
-                f"stage_paths must have {len(STAGE_LABELS)} entries, "
-                f"got {len(stage_paths)}"
+        if not isinstance(block_index, SessionBlockIndex):
+            raise TypeError(
+                f"block_index must be a SessionBlockIndex, got "
+                f"{type(block_index).__name__}."
             )
-        if not (0 <= initial_stage < len(stage_paths)):
-            raise ValueError(
-                f"initial_stage {initial_stage} out of range [0, {len(stage_paths)})"
+        if not callable(stage_paths_resolver):
+            raise TypeError(
+                "stage_paths_resolver must be callable. It is a callable rather "
+                "than a pre-built table precisely so that resolving a block — "
+                "which loads its reference forearm — happens once, for the block "
+                "on screen."
             )
 
         pv.global_theme.allow_empty_mesh = True
 
-        self._stage_paths = stage_paths
-        self._recording_name = recording_name
-        self._current_stage_idx: int = initial_stage
+        self._block_index = block_index
+        self._stage_paths_resolver = stage_paths_resolver
+        # The selection the widget actually *holds*, as opposed to the one the
+        # dropdowns show.  The two differ only inside a failed switch, which is
+        # what ``_revert_to_loaded_stage`` puts back in step.
+        self._loaded_entry: Optional[BlockEntry] = None
+        self._loaded_stage_paths: Optional[List[StagePaths]] = None
+        self._stage_paths: List[StagePaths] = []
+        self._recording_name: str = ""
+        self._current_stage_idx: Optional[int] = None
         self.current_index: int = 0
         self._initial_render_done = False
         self._bounds_proxy_active = False
+        # The view preference, deliberately NOT the same attribute as the data
+        # fact (``self._depth_series is not None``).  It lives on the viewer, not
+        # on the stage, so switching to a stage without a sidecar leaves it
+        # untouched and the next stage that has one opens coloured again.
+        self._colour_contact_by_depth: bool = True
+        # The forearm's own layer preference, and a separate attribute for the
+        # same reason: it is a view preference, not a data fact.  Default OFF,
+        # unlike the contact layer -- the PLY's own vertex colours are the
+        # anatomical context the contact patch has to be judged against, and a
+        # surface repainted on every frame would replace that context by
+        # default rather than on request.
+        self._colour_forearm_by_depth: bool = False
 
-        self.setWindowTitle(f"Postprocessing Stage Viewer | {recording_name}")
+        self.setWindowTitle("Postprocessing Stage Viewer")
 
-        self._load_stage_data(initial_stage)
+        # The opening selection: the first block of the first session, at the
+        # stage ``stage_index_for_block`` chooses — with no preference yet, the
+        # last stage that has data.  Deliberately not stage 0, which is the one
+        # stage that carries no depth field by construction.
+        self._load_selection(block_index.first_entry(), None)
         self._build_ui()
         self._init_actors()
 
@@ -155,6 +291,110 @@ class PostprocessingStageViewer(QMainWindow):
         self._slider_dragging = False
         self._stage_switch_generation: int = 0
 
+    @property
+    def _depth_colouring_active(self) -> bool:
+        """Whether contact vertices are currently coloured by penetration depth.
+
+        Both facts must hold, and they are different facts: the first is about
+        this stage's data (a sidecar exists and decoded), the second about the
+        user's view preference.  Collapsing them into one flag would make an
+        absent field indistinguishable from an unchecked box.
+        """
+        return self._depth_series is not None and self._colour_contact_by_depth
+
+    @property
+    def _forearm_depth_available(self) -> bool:
+        """Whether this stage *could* paint penetration depth on the forearm.
+
+        Three independent facts, all required: a depth field, a ``vertex_id``
+        column in it, and a forearm with vertices for the index to address.
+        The middle one is why the control is absent rather than disabled before
+        the projection stage -- there is no index there, and the only way to
+        invent one is a nearest-vertex snap that picks different vertices than
+        the projection stage did.
+        """
+        return (
+            self._depth_series is not None
+            and self._depth_series.has_vertex_ids
+            and self._forearm_pv is not None
+            and self._forearm_pv.n_points > 0
+        )
+
+    @property
+    def _forearm_depth_colouring_active(self) -> bool:
+        """Whether the forearm is currently painted by penetration depth."""
+        return self._forearm_depth_available and self._colour_forearm_by_depth
+
+    # ------------------------------------------------------------------
+    # Selection
+    # ------------------------------------------------------------------
+
+    def _load_selection(
+        self, entry: BlockEntry, stage_idx: Optional[int]
+    ) -> None:
+        """Load one ``(block, stage)`` selection, or raise leaving nothing committed.
+
+        The single path all three dropdowns take, and the only place a block's
+        stage paths are resolved.  A block is resolved when it is *selected* and
+        not before: resolving loads the block's reference forearm as an in-memory
+        point cloud, so resolving the batch would hold 99 of them.  Re-selecting
+        the block already on screen reuses what is in hand rather than resolving
+        it a second time.
+
+        Nothing is committed until :meth:`_load_stage_data` has returned.  The
+        attributes it assigns are the widget's whole data state, and it assigns
+        them in sequence, so a raise part-way through leaves a mixture of two
+        stages behind — but ``_loaded_entry``, ``_loaded_stage_paths`` and
+        ``_current_stage_idx`` still describe the selection that *was* loaded,
+        which is exactly what :meth:`_revert_to_loaded_stage` needs to get back
+        to a coherent widget.
+
+        Args:
+            entry: The block to show.
+            stage_idx: The stage to show, or ``None`` to let
+                :func:`~postprocessing.gui.stage_selection.stage_index_for_block`
+                choose — keeping the stage on screen where the new block has it,
+                and falling back to the last stage that does otherwise.
+
+        Raises:
+            ValueError: If the resolver returns the wrong number of stages, or
+                if *stage_idx* names no stage.
+            Exception: Whatever the resolver or :meth:`_load_stage_data` raises.
+                Deliberately not caught here; the caller is a Qt slot and owns
+                the revert.
+        """
+        if self._loaded_entry is not None and entry.key == self._loaded_entry.key:
+            stage_paths = self._loaded_stage_paths
+        else:
+            stage_paths = self._stage_paths_resolver(entry)
+            if len(stage_paths) != len(STAGE_LABELS):
+                raise ValueError(
+                    f"The stage-paths resolver returned {len(stage_paths)} "
+                    f"entries for block {entry.key}; the viewer shows "
+                    f"{len(STAGE_LABELS)} stages and every one of them must be "
+                    "accounted for."
+                )
+
+        if stage_idx is None:
+            stage_idx = stage_index_for_block(
+                self._current_stage_idx, [sp.csv_path for sp in stage_paths]
+            )
+        elif not 0 <= stage_idx < len(stage_paths):
+            raise ValueError(
+                f"stage_idx {stage_idx} out of range [0, {len(stage_paths)})"
+            )
+
+        self._stage_paths = stage_paths
+        self._load_stage_data(stage_idx)
+
+        # Committed only now, all together: everything above either succeeded or
+        # raised, and a partial commit is what would let the dropdowns claim a
+        # selection the widget does not hold.
+        self._loaded_entry = entry
+        self._loaded_stage_paths = stage_paths
+        self._current_stage_idx = stage_idx
+        self._recording_name = entry.recording_name
+
     # ------------------------------------------------------------------
     # Data loading
     # ------------------------------------------------------------------
@@ -162,11 +402,33 @@ class PostprocessingStageViewer(QMainWindow):
     def _load_stage_data(self, stage_idx: int) -> None:
         sp = self._stage_paths[stage_idx]
 
+        # --- Depth field ---
+        # Resolved before the CSV because it is a fact about the stage, not
+        # about this stage's rows: which coordinate space it must declare, and
+        # what to say when it is absent, are decided in the Qt-free policy leaf.
+        # Nothing about parquet, schema versions, sign convention or path
+        # derivation enters this widget — only a series and a message do.
+        self._depth_field: StageDepthField = resolve_stage_depth_field(
+            stage_idx, sp.depth_field_loader, sp.depth_field_path
+        )
+        self._depth_series = self._depth_field.series
+        # The producer's global colour range, taken whole.  The one number this
+        # widget must never compute: a range derived from a frame's own data
+        # would recolour the same depth differently on every frame.
+        self._contact_clim: Optional[Tuple[float, float]] = (
+            None
+            if self._depth_series is None
+            else self._depth_series.clim_penetration_mm
+        )
+
         # --- CSV ---
         if sp.csv_path is None or not sp.csv_path.exists():
             self._full_df = pd.DataFrame()
             self._kinect_df = pd.DataFrame()
             self._contact_pts_by_frame: List[Optional[np.ndarray]] = []
+            self._frame_indices: Optional[np.ndarray] = None
+            self._anchor_rows: np.ndarray = np.zeros(0, dtype=np.int64)
+            self._has_contact_source = False
             self._total_frames = 0
             self._forearm_pv = None
             self._contact_centroid = np.zeros(3, dtype=np.float64)
@@ -174,8 +436,27 @@ class PostprocessingStageViewer(QMainWindow):
 
         full_df = pd.read_csv(sp.csv_path)
         self._full_df = full_df
-        self._kinect_df = full_df.dropna(subset=["time_kinect"]).reset_index(drop=True)
+        self._kinect_df = full_df.dropna(
+            subset=[KINECT_ANCHOR_COLUMN]
+        ).reset_index(drop=True)
         self._total_frames = len(self._kinect_df)
+
+        # --- Slider position -> row of the *full* CSV ---
+        # The neural panel plots ``full_df`` against ``np.arange(len(full_df))``
+        # while the slider walks ``_kinect_df``'s positions, and the two are not
+        # proportional: the CSV is upsampled to the nerve rate at 33-34 rows per
+        # frame, not exactly 33, and the tail runs past the last anchor.  Built
+        # here, from this stage's own frame, so switching stage rebuilds it with
+        # the data it describes; a failure lands in _on_stage_changed's revert.
+        # See stage_depth_field.kinect_anchor_rows for the measured damage the
+        # scale this replaces was doing.
+        self._anchor_rows = kinect_anchor_rows(full_df, sp.csv_path)
+        if self._anchor_rows.size != self._total_frames:
+            raise ValueError(
+                f"'{sp.csv_path}' yielded {self._anchor_rows.size} anchor row(s) "
+                f"for {self._total_frames} displayable frame(s). The two are the "
+                f"same '{KINECT_ANCHOR_COLUMN}' test and must agree exactly."
+            )
 
         if "contact_points" in self._kinect_df.columns:
             self._contact_pts_by_frame = [
@@ -183,6 +464,21 @@ class PostprocessingStageViewer(QMainWindow):
             ]
         else:
             self._contact_pts_by_frame = []
+
+        # --- Slider position -> Kinect frame ---
+        # Built only when there is a depth field to join, and then it must
+        # succeed: the sidecar is keyed by Kinect frame_index while the slider
+        # walks row positions, and the CSV is upsampled to the nerve rate, so a
+        # positional join would draw another frame's depths at every position.
+        # See stage_depth_field.kinect_frame_indices for why this raises.
+        self._frame_indices = (
+            None
+            if self._depth_series is None
+            else kinect_frame_indices(self._kinect_df, sp.csv_path)
+        )
+        self._has_contact_source = (
+            bool(self._contact_pts_by_frame) or self._depth_series is not None
+        )
 
         # --- Forearm ---
         self._forearm_pv = self._load_forearm(sp.forearm)
@@ -238,18 +534,42 @@ class PostprocessingStageViewer(QMainWindow):
         self.setCentralWidget(central)
         self._outer_layout = QVBoxLayout(central)
 
-        # --- Top bar: stage selector ---
+        # --- Top bar: session / block / stage selectors ---
         top_bar = QWidget()
         top_bar_layout = QHBoxLayout(top_bar)
         top_bar_layout.setContentsMargins(4, 4, 4, 4)
+
+        top_bar_layout.addWidget(QLabel("Session:"))
+        self._session_combo = QComboBox()
+        self._session_combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+        self._session_combo.addItems(self._block_index.sessions)
+        top_bar_layout.addWidget(self._session_combo)
+
+        top_bar_layout.addSpacing(12)
+        top_bar_layout.addWidget(QLabel("Block:"))
+        self._block_combo = QComboBox()
+        self._block_combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+        top_bar_layout.addWidget(self._block_combo)
+
+        top_bar_layout.addSpacing(12)
         top_bar_layout.addWidget(QLabel("Stage:"))
         self._stage_combo = QComboBox()
-        self._stage_combo.addItems([sp.stage_label for sp in self._stage_paths])
-        self._stage_combo.setCurrentIndex(self._current_stage_idx)
-        self._stage_combo.currentIndexChanged.connect(self._on_stage_changed)
+        # The *display* labels — ordinal-prefixed so the processing order is
+        # readable off the dropdown.  ``StagePaths.stage_label`` stays the
+        # canonical name and is what every error message keeps using.
+        self._stage_combo.addItems(stage_display_labels())
         top_bar_layout.addWidget(self._stage_combo)
+
         top_bar_layout.addStretch()
         self._outer_layout.addWidget(top_bar)
+
+        # Seeded from the loaded selection, with signals blocked, *before* the
+        # slots are connected: populating the block dropdown is not the user
+        # choosing a block.
+        self._sync_selection_widgets()
+        self._session_combo.currentIndexChanged.connect(self._on_session_changed)
+        self._block_combo.currentIndexChanged.connect(self._on_block_changed)
+        self._stage_combo.currentIndexChanged.connect(self._on_stage_changed)
 
         # --- 3D area + right panel ---
         mid_widget = QWidget()
@@ -282,7 +602,6 @@ class PostprocessingStageViewer(QMainWindow):
 
         # --- Neural panel ---
         self._neural_panel: Optional[NeuralDataPanel] = None
-        self._neural_scale: float = 1.0
         self._maybe_create_neural_panel()
 
     def _build_right_panel_controls(self) -> None:
@@ -294,7 +613,13 @@ class PostprocessingStageViewer(QMainWindow):
         self._visibility = {}
         self._point_sizes = {"forearm": 5.0, "contact_points": 15.0}
 
-        def _add_group(label: str, key: str, has_slider: bool, default_size: float) -> None:
+        def _add_group(
+            label: str,
+            key: str,
+            has_slider: bool,
+            default_size: float,
+            extra_widgets: Tuple[QWidget, ...] = (),
+        ) -> None:
             self._visibility[key] = True
             box = QGroupBox(label)
             box_layout = QVBoxLayout(box)
@@ -314,12 +639,114 @@ class PostprocessingStageViewer(QMainWindow):
                 sl.valueChanged.connect(lambda val, k=key: self._on_point_size_changed(k, val))
                 rl.addWidget(sl)
                 box_layout.addWidget(row)
+            for extra in extra_widgets:
+                box_layout.addWidget(extra)
             self._right_panel_layout.addWidget(box)
 
-        _add_group("Forearm", "forearm", has_slider=True, default_size=5.0)
-        if self._contact_pts_by_frame:
-            _add_group("Contact Points", "contact_points", has_slider=True, default_size=15.0)
+        # The forearm's depth layer is offered only where the sidecar carries a
+        # ``vertex_id``, i.e. from the projection stage onward.  The control is
+        # *absent* on the earlier stages rather than greyed out, because a
+        # disabled box states "not for this stage yet" while its absence states
+        # the truth -- there is no index, and no honest thing to show.
+        _forearm_extras: Tuple[QWidget, ...] = ()
+        if self._forearm_depth_available:
+            forearm_depth_cb = QCheckBox("Colour by depth")
+            # blockSignals for the same reason the contact box uses it: seeding
+            # the widget must not be mistaken for the user clicking it.
+            forearm_depth_cb.blockSignals(True)
+            forearm_depth_cb.setChecked(self._colour_forearm_by_depth)
+            forearm_depth_cb.blockSignals(False)
+            low, high = self._depth_series.clim_penetration_mm
+            forearm_depth_cb.setToolTip(
+                self._with_passthrough_note(
+                    "Paint each forearm vertex with the penetration depth of "
+                    "whatever touched it on this frame, joined by the sidecar's "
+                    "vertex_id. Untouched vertices stay flat grey -- that is "
+                    "'nothing touched here', which is not the same as 0.00 mm. "
+                    f"Same fixed colour scale as the contact points: {low:.2f} "
+                    f"to {high:.2f} mm."
+                )
+            )
+            forearm_depth_cb.stateChanged.connect(
+                self._on_forearm_depth_colour_changed
+            )
+            _forearm_extras = (forearm_depth_cb,)
+
+        _add_group(
+            "Forearm",
+            "forearm",
+            has_slider=True,
+            default_size=5.0,
+            extra_widgets=_forearm_extras,
+        )
+        if self._has_contact_source:
+            # "Colour by depth" sits beside the point-size slider so flat red
+            # stays one click away for comparison.
+            #
+            # The checkbox is always created and enabled/disabled per stage,
+            # never omitted: a control that is absent reads as "this viewer
+            # cannot do that", while a greyed-out one with a tooltip states the
+            # actual fact -- that *this* stage has no field, and which task
+            # produces one.
+            _has_field = self._depth_field.is_present
+            depth_cb = QCheckBox("Colour by depth")
+            depth_cb.setEnabled(_has_field)
+            # blockSignals: seeding the widget must not be mistaken for the user
+            # clicking it.  Without this, a fieldless stage would write ``False``
+            # back over the persisted preference on every switch through it, and
+            # the next stage that does have a field would open in flat red.
+            depth_cb.blockSignals(True)
+            depth_cb.setChecked(self._colour_contact_by_depth and _has_field)
+            depth_cb.blockSignals(False)
+            if _has_field:
+                low, high = self._depth_series.clim_penetration_mm
+                depth_cb.setToolTip(
+                    self._with_passthrough_note(
+                        "Colour contact vertices by penetration depth (inferno), "
+                        "on a colour scale fixed over the whole recording: "
+                        f"{low:.2f} to {high:.2f} mm. Unchecked renders them in "
+                        "flat red."
+                    )
+                )
+            else:
+                # The leaf's message already names the producing DAG task; a
+                # second wording here would be a second place to keep true.
+                depth_cb.setToolTip(self._depth_field.message)
+            depth_cb.stateChanged.connect(self._on_contact_depth_colour_changed)
+            # A tooltip has to be hunted for, and the passthrough is a statement
+            # about what the stage label means -- it has to be readable without
+            # hovering anything.  The label is built here, inside the panel that
+            # is torn down and rebuilt on every stage switch, so it cannot
+            # outlive the stage it describes.
+            _contact_extras: Tuple[QWidget, ...] = (depth_cb,)
+            _note = self._depth_field.passthrough_note
+            if _note is not None:
+                note_label = QLabel(_note)
+                note_label.setWordWrap(True)
+                note_label.setStyleSheet("color: #c8a000;")
+                note_label.setToolTip(_note)
+                _contact_extras = (depth_cb, note_label)
+            _add_group(
+                "Contact Points",
+                "contact_points",
+                has_slider=True,
+                default_size=15.0,
+                extra_widgets=_contact_extras,
+            )
         self._right_panel_layout.addStretch()
+
+    def _with_passthrough_note(self, tooltip: str) -> str:
+        """Append this stage's passthrough note to *tooltip*, if it has one.
+
+        The wording is the leaf's, never restated here: a second copy is a
+        second place that has to stay true.  On the ordinary path the tooltip is
+        returned unchanged, so the only stages that say anything extra are the
+        ones where the stage label overstates what the producing task did.
+        """
+        note = self._depth_field.passthrough_note
+        if note is None:
+            return tooltip
+        return f"{tooltip}\n\n{note}"
 
     def _build_frame_controls(self) -> QWidget:
         widget = QWidget()
@@ -355,26 +782,42 @@ class PostprocessingStageViewer(QMainWindow):
             len(self._full_df) > 0 and "Nerve_freq" in self._full_df.columns
         )
         if has_neural:
-            self._neural_panel = NeuralDataPanel(self._full_df, self._total_frames)
+            # The anchors make the panel's cursor a lookup in both directions:
+            # ``update_cursor`` reads the row for the frame on screen, and a
+            # click resolves to the nearest anchor, which is the slider position
+            # ``_on_neural_frame_requested`` receives.  Rebuilt with the panel on
+            # every stage switch because ``_load_stage_data`` rebuilt them first.
+            self._neural_panel = NeuralDataPanel(
+                self._full_df,
+                self._total_frames,
+                kinect_anchor_rows=self._anchor_rows,
+            )
             self._neural_panel.frame_requested.connect(self._on_neural_frame_requested)
             self._outer_layout.addWidget(self._neural_panel)
-            self._neural_scale = (
-                len(self._full_df) / self._total_frames if self._total_frames > 0 else 1.0
-            )
         else:
             self._neural_panel = None
-            self._neural_scale = 1.0
 
     # ------------------------------------------------------------------
     # VTK actors
     # ------------------------------------------------------------------
 
-    def _init_actors(self) -> None:
-        _seed = np.zeros((1, 3), dtype=np.float32)
-        _seed_col = np.full((1, 3), 128, dtype=np.uint8)
+    def _add_forearm_actor(self):
+        """Add (or replace) the forearm actor in whichever colour mode is on.
 
-        if self._forearm_pv is not None and self._visibility.get("forearm", True):
-            self._actor_forearm = self.plotter.add_mesh(
+        Two mutually exclusive modes, and the switch between them is the one
+        place ``add_mesh`` is re-entered for this actor.  Direct-RGB and
+        mapped-scalar colouring are different mapper configurations, not
+        different arrays, so they cannot be toggled by swapping the active
+        scalars the way the contact actor's on/off is.  Per-*frame* updates do
+        not come through here: they overwrite the existing array in place, so
+        playback never cycles ``remove_actor`` / ``add_mesh``.
+
+        Returns:
+            The forearm actor, already registered under the name ``"forearm"``
+            so this call replaces any previous one.
+        """
+        if not self._forearm_depth_colouring_active:
+            return self.plotter.add_mesh(
                 self._forearm_pv,
                 scalars="colors",
                 rgb=True,
@@ -382,6 +825,41 @@ class PostprocessingStageViewer(QMainWindow):
                 render_points_as_spheres=True,
                 point_size=self._point_sizes["forearm"],
             )
+
+        # Seeded all-NaN: at this point no frame has been drawn, and NaN is
+        # "untouched", which is the truthful state of every vertex until one is.
+        self._forearm_pv[FOREARM_DEPTH_SCALAR_NAME] = np.full(
+            self._forearm_pv.n_points, np.nan, dtype=np.float64
+        )
+        self._forearm_pv.set_active_scalars(FOREARM_DEPTH_SCALAR_NAME)
+        return self.plotter.add_mesh(
+            self._forearm_pv,
+            scalars=FOREARM_DEPTH_SCALAR_NAME,
+            cmap=COLORMAP,
+            # The contact layer's range, taken whole and unmodified: the two
+            # layers paint the same field and a second scale would make the
+            # same depth two colours in one scene.
+            clim=self._contact_clim,
+            # Untouched vertices are NaN, and NaN needs its own flat colour or
+            # the LUT clamps it to the bottom of the ramp -- which would render
+            # "nobody touched this" identically to "touched at the shallowest
+            # depth in the recording".  The grey is the same neutral this module
+            # already paints a colourless PLY with.
+            nan_color="#a0a0a0",
+            nan_opacity=1.0,
+            # One bar for both layers; the contact actor registers it.
+            show_scalar_bar=False,
+            name="forearm",
+            render_points_as_spheres=True,
+            point_size=self._point_sizes["forearm"],
+        )
+
+    def _init_actors(self) -> None:
+        _seed = np.zeros((1, 3), dtype=np.float32)
+        _seed_col = np.full((1, 3), 128, dtype=np.uint8)
+
+        if self._forearm_pv is not None and self._visibility.get("forearm", True):
+            self._actor_forearm = self._add_forearm_actor()
         else:
             _empty_forearm = pv.PolyData(_seed.copy())
             _empty_forearm["colors"] = _seed_col.copy()
@@ -394,14 +872,63 @@ class PostprocessingStageViewer(QMainWindow):
                 point_size=self._point_sizes["forearm"],
             )
 
-        self._mesh_contact = pv.PolyData(np.empty((0, 3), dtype=np.float32))
-        self._actor_contact = self.plotter.add_mesh(
-            self._mesh_contact,
-            name="contact_points",
-            color="red",
-            render_points_as_spheres=True,
-            point_size=self._point_sizes["contact_points"],
+        # --- Contact points -------------------------------------------------
+        # Registered once per stage load.  The colour range is the producer's,
+        # computed over the whole recording for this stage; nothing here derives
+        # it.  The previous stage's scalar bar needs no explicit removal: the
+        # `plotter.clear()` in `_on_stage_changed` destroys it before this runs,
+        # measured on the installed PyVista 0.47.1.
+        self._mesh_contact = _empty_contact_polydata(
+            with_depth_scalars=self._contact_clim is not None
         )
+        if self._contact_clim is None:
+            self._actor_contact = self.plotter.add_mesh(
+                self._mesh_contact,
+                name="contact_points",
+                color="red",
+                render_points_as_spheres=True,
+                point_size=self._point_sizes["contact_points"],
+            )
+        else:
+            self._actor_contact = self.plotter.add_mesh(
+                self._mesh_contact,
+                name="contact_points",
+                scalars=CONTACT_SCALAR_NAME,
+                cmap=COLORMAP,
+                # Explicit and global.  Without it the mapper reverts to
+                # per-frame autoscale on PyVista 0.47.1, which makes the
+                # animation lie about relative depth.
+                clim=self._contact_clim,
+                show_scalar_bar=True,
+                scalar_bar_args={
+                    "title": SCALAR_BAR_TITLE,
+                    "vertical": True,
+                    "n_labels": 6,
+                    "fmt": "%.2f",
+                    "title_font_size": 16,
+                    "label_font_size": 13,
+                    # Explicit white: the theme default is black, which is
+                    # invisible against this viewer's black background — the bar
+                    # renders but its title and ticks do not.
+                    "color": "white",
+                    "position_x": 0.85,
+                    "position_y": 0.12,
+                    "width": 0.05,
+                    "height": 0.72,
+                },
+                render_points_as_spheres=True,
+                point_size=self._point_sizes["contact_points"],
+            )
+            # Flat red is what the mapper falls back to when scalar visibility
+            # is switched off, so it is set even in depth-colouring mode.
+            self._actor_contact.GetProperty().SetColor(1.0, 0.0, 0.0)
+
+        # The actor is always built in depth mode when a field exists; the user's
+        # preference is applied afterwards, so a stage entered with the box
+        # unchecked opens flat-red with its bar hidden rather than flashing
+        # coloured for one frame.  Neither mode introduces a new actor, so
+        # ``_on_point_size_changed``'s actor map needs no new entry.
+        self._apply_contact_scalar_mode()
 
         if self._total_frames == 0:
             self.plotter.add_text(
@@ -449,6 +976,10 @@ class PostprocessingStageViewer(QMainWindow):
 
         if self._bounds_proxy_active and (
             self._forearm_pv is not None
+            # A depth field is real geometry too, and on a stage whose CSV
+            # carries no contact_points blob it is the only geometry — without
+            # this the invisible proxy would never be retired.
+            or self._depth_series is not None
             or (
                 self._contact_pts_by_frame
                 and any(
@@ -463,18 +994,42 @@ class PostprocessingStageViewer(QMainWindow):
             except Exception:
                 pass
 
-        if self._contact_pts_by_frame:
-            _cpts = None
+        if self._has_contact_source:
+            # Source precedence: the depth field when this stage has one,
+            # otherwise the CSV's pre-parsed contact_points.  Never a mix — the
+            # two are different point sets.  The CSV blob is `%.1f` text, the
+            # sidecar float32, so the same vertex differs between them by up to
+            # 0.05 mm per axis and pairing the two would mean matching rows by
+            # coordinate value, which the sidecar's design record forbids.
+            _cpts: Optional[np.ndarray] = None
+            _cdepths: Optional[np.ndarray] = None
             if self._visibility.get("contact_points", True):
-                _cpts = (
-                    self._contact_pts_by_frame[frame_idx]
-                    if frame_idx < len(self._contact_pts_by_frame)
-                    else None
-                )
+                if self._depth_series is not None:
+                    _pair = depth_frame_at_position(
+                        self._depth_series, self._frame_indices, frame_idx
+                    )
+                    if _pair is not None:
+                        _cpts, _cdepths = _pair
+                elif frame_idx < len(self._contact_pts_by_frame):
+                    _cpts = self._contact_pts_by_frame[frame_idx]
+
             if _cpts is not None and len(_cpts) > 0:
-                self._mesh_contact.DeepCopy(pv.PolyData(_cpts.astype(np.float32)))
+                self._mesh_contact.DeepCopy(
+                    contact_polydata(_cpts.astype(np.float32), _cdepths)
+                )
             else:
-                self._mesh_contact.DeepCopy(pv.PolyData(np.empty((0, 3), dtype=np.float32)))
+                self._mesh_contact.DeepCopy(
+                    _empty_contact_polydata(
+                        with_depth_scalars=self._contact_clim is not None
+                    )
+                )
+            # Re-asserted after every dataset swap: without it the mapper
+            # reverts to per-frame autoscale on PyVista 0.47.1 and the same
+            # depth would take a different colour on a different frame.
+            if self._contact_clim is not None:
+                self._actor_contact.mapper.scalar_range = self._contact_clim
+
+        self._update_forearm_depth_scalars(frame_idx)
 
         if hasattr(self, "_actor_forearm") and self._actor_forearm is not None:
             if self._visibility.get("forearm", True):
@@ -486,7 +1041,17 @@ class PostprocessingStageViewer(QMainWindow):
         self.plotter.render()
 
         if self._neural_panel is not None:
-            self._neural_panel.update_cursor(int(frame_idx * self._neural_scale))
+            # A lookup, never a scale: the panel is told the row this frame
+            # actually occupies in the CSV it is plotting.  The bound is checked
+            # rather than left to numpy, whose negative wraparound would place
+            # the cursor near the end of the block without complaining.
+            if not 0 <= frame_idx < self._anchor_rows.size:
+                raise IndexError(
+                    f"Frame {frame_idx} is outside this stage's "
+                    f"0..{self._anchor_rows.size - 1} frames; it has no row in "
+                    "the CSV the neural panel is plotting."
+                )
+            self._neural_panel.update_cursor(int(self._anchor_rows[frame_idx]))
 
         if self._total_frames > 0:
             self.frame_label.setText(f"{frame_idx + 1} / {self._total_frames}")
@@ -494,24 +1059,89 @@ class PostprocessingStageViewer(QMainWindow):
             self.frame_label.setText("0 / 0")
 
     # ------------------------------------------------------------------
-    # Stage switching
+    # Selection switching
     # ------------------------------------------------------------------
 
+    def _on_session_changed(self, index: int) -> None:
+        """Handle the session dropdown: open that session's first block."""
+        session_id = self._session_combo.itemText(index)
+        if session_id == self._loaded_entry.session_id:
+            return
+        # The stage is not chosen here: ``_switch_to`` passes ``None`` and lets
+        # the selection leaf keep the current stage where the new block has it.
+        block_id = self._block_index.blocks(session_id)[0]
+        self._switch_to(self._block_index.entry(session_id, block_id), None)
+
+    def _on_block_changed(self, index: int) -> None:
+        """Handle the block dropdown: open that block of the current session."""
+        block_id = self._block_combo.itemText(index)
+        session_id = self._loaded_entry.session_id
+        if (session_id, block_id) == self._loaded_entry.key:
+            return
+        self._switch_to(self._block_index.entry(session_id, block_id), None)
+
     def _on_stage_changed(self, index: int) -> None:
+        """Handle the stage dropdown: show that stage of the current block.
+
+        The requested stage is honoured exactly, including when it has no CSV —
+        the user asked for that stage, and "No data available" is the truthful
+        answer.  Only a *block* change is allowed to choose a different stage.
+        """
         if index == self._current_stage_idx:
             return
+        self._switch_to(self._loaded_entry, index)
 
+    def _switch_to(self, entry: BlockEntry, stage_idx: Optional[int]) -> None:
+        """Move the whole window to one ``(block, stage)`` selection.
+
+        Every one of the three dropdowns funnels through here, so the
+        passthrough-space validation, the depth-field resolution and the
+        anchor-row construction in :meth:`_load_stage_data` run identically
+        whichever dropdown moved — and so a failed load reverts the same way
+        whichever one it was.
+        """
         if self._play_timer.isActive():
             self._play_timer.stop()
             self.play_button.setText("▶ Play")
 
         saved_frame = self.current_index
-        old_frame = self._stage_paths[self._current_stage_idx].coordinate_frame
-        new_frame = self._stage_paths[index].coordinate_frame
-        frame_changed = old_frame != new_frame
+        loaded_entry = self._loaded_entry
+        loaded_stage_idx = self._current_stage_idx
+        old_frame = self._stage_paths[loaded_stage_idx].coordinate_frame
 
-        self._current_stage_idx = index
-        self._load_stage_data(index)
+        # The selection is committed only *after* the new data is in hand.
+        # Assigning it first -- as this slot used to -- leaves the viewer
+        # claiming stage N while displaying stage N-1's geometry whenever the
+        # load raises, and every later switch then computes `frame_changed` from
+        # a stage that was never loaded.
+        #
+        # The except is not a licence to continue: the error is re-surfaced to
+        # the user and logged with its traceback, and the only thing suppressed
+        # is the propagation out of a Qt slot, which PyQt5 turns into an
+        # `abort()` of the whole application.  A crash is not a better report
+        # than a dialog, and it is a far worse one than a dialog plus a viewer
+        # still showing the selection it actually holds.
+        try:
+            self._load_selection(entry, stage_idx)
+        except Exception as exc:  # noqa: BLE001 -- re-surfaced, never swallowed
+            self._revert_to_loaded_stage(
+                loaded_entry, loaded_stage_idx, entry, stage_idx, exc
+            )
+            return
+
+        index = self._current_stage_idx
+        new_frame = self._stage_paths[index].coordinate_frame
+        # A new block is a new recording: its contact centroid is somewhere else
+        # even when the coordinate frame is nominally the same one, so the camera
+        # is recomputed for a block change as well as for a frame change.
+        frame_changed = (
+            old_frame != new_frame or entry.key != loaded_entry.key
+        )
+
+        # All three dropdowns are put back in step with what is now loaded --
+        # the block list belongs to the new session, and the stage the leaf
+        # chose may not be the stage the user's click implied.
+        self._sync_selection_widgets()
 
         self.plotter.clear()
         self.plotter.set_background("black")
@@ -555,6 +1185,124 @@ class PostprocessingStageViewer(QMainWindow):
             self._update_frame(restored_frame)
 
         QTimer.singleShot(0, _deferred_stage_init)
+
+    def _revert_to_loaded_stage(
+        self,
+        loaded_entry: BlockEntry,
+        loaded_stage_idx: int,
+        failed_entry: BlockEntry,
+        failed_stage_idx: Optional[int],
+        error: Exception,
+    ) -> None:
+        """Put the widget back on the selection it actually holds, then report.
+
+        ``_load_stage_data`` assigns a dozen attributes in sequence, so a raise
+        part-way through leaves a mixture of two stages behind -- the new
+        stage's depth field beside the old stage's rows, say.  Re-running it for
+        the selection that *was* loaded is the only way back to a coherent
+        widget; it succeeded once already, so a second failure there is genuinely
+        fatal and is deliberately left to propagate.
+
+        All three dropdowns are reverted, with signals blocked.  Reverting only
+        the one the user touched would leave the other two claiming a block or a
+        stage the widget is not showing, which is a worse state than the one the
+        failed switch was trying to reach -- and setting a combo back without
+        blocking would re-enter its slot and attempt a switch already in effect.
+        The block dropdown is rebuilt from the *loaded* session, so a failure
+        part-way through a session change cannot leave another session's blocks
+        listed.
+
+        The loaded selection's stage paths are reused rather than re-resolved:
+        they are still in hand, and resolving them again would reload the
+        block's forearm point cloud to obtain what was never discarded.
+
+        Args:
+            loaded_entry: The block whose data the widget still holds.
+            loaded_stage_idx: The stage whose data the widget still holds.
+            failed_entry: The block the user asked for and did not get.
+            failed_stage_idx: The stage they asked for, or ``None`` when the
+                switch was a block change that had not yet chosen one.
+            error: What the load raised.  Shown verbatim: it names the file and
+                the coordinate spaces, which no summary here could.
+        """
+        # The *canonical* stage names, never the ordinal-prefixed display ones:
+        # this text is what a user greps against the pipeline's own vocabulary.
+        failed_stage_label = (
+            "<none chosen>"
+            if failed_stage_idx is None
+            else STAGE_LABELS[failed_stage_idx]
+        )
+        failed_stage_text = (
+            "no stage in particular"
+            if failed_stage_idx is None
+            else f"stage {failed_stage_idx} ('{failed_stage_label}')"
+        )
+        logger.error(
+            "Block %s, %s could not be opened; staying on block %s, stage %d "
+            "('%s').",
+            failed_entry.key,
+            failed_stage_text,
+            loaded_entry.key,
+            loaded_stage_idx,
+            STAGE_LABELS[loaded_stage_idx],
+            exc_info=error,
+        )
+
+        self._stage_paths = self._loaded_stage_paths
+        self._recording_name = loaded_entry.recording_name
+        self._load_stage_data(loaded_stage_idx)
+        self._loaded_entry = loaded_entry
+        self._current_stage_idx = loaded_stage_idx
+
+        self._sync_selection_widgets()
+
+        QMessageBox.critical(
+            self,
+            "Selection could not be opened",
+            f"Block {failed_entry.session_id} / {failed_entry.block_id}, "
+            f"{failed_stage_text} could not be opened:\n\n"
+            f"{type(error).__name__}: {error}\n\n"
+            f"The viewer is still showing block {loaded_entry.session_id} / "
+            f"{loaded_entry.block_id}, stage {loaded_stage_idx} "
+            f"('{STAGE_LABELS[loaded_stage_idx]}').",
+        )
+
+    def _sync_selection_widgets(self) -> None:
+        """Put the three dropdowns and the titles back in step with what is loaded.
+
+        Called after every successful switch and after every reverted one, so
+        there is exactly one expression of "what the dropdowns should say" and
+        it is driven by the widget's data state rather than by whichever slot
+        happened to fire.  Signals are blocked throughout: repopulating the
+        block list and correcting the stage index are the viewer agreeing with
+        itself, not the user selecting anything.
+        """
+        entry = self._loaded_entry
+        combos = (self._session_combo, self._block_combo, self._stage_combo)
+        for combo in combos:
+            combo.blockSignals(True)
+        try:
+            self._session_combo.setCurrentIndex(
+                self._block_index.sessions.index(entry.session_id)
+            )
+            blocks = self._block_index.blocks(entry.session_id)
+            listed = [
+                self._block_combo.itemText(i)
+                for i in range(self._block_combo.count())
+            ]
+            if listed != blocks:
+                self._block_combo.clear()
+                self._block_combo.addItems(blocks)
+            self._block_combo.setCurrentIndex(blocks.index(entry.block_id))
+            self._stage_combo.setCurrentIndex(self._current_stage_idx)
+        finally:
+            for combo in combos:
+                combo.blockSignals(False)
+
+        self.setWindowTitle(
+            f"Postprocessing Stage Viewer | {entry.session_id} / "
+            f"{entry.block_id} | {stage_display_label(self._current_stage_idx)}"
+        )
 
     # ------------------------------------------------------------------
     # Camera helpers
@@ -659,6 +1407,90 @@ class PostprocessingStageViewer(QMainWindow):
             self.plotter.render()
         else:
             self._update_frame(self.current_index)
+
+    def _apply_contact_scalar_mode(self) -> None:
+        """Switch the contact actor between depth colouring and flat red.
+
+        Deliberately *not* an ``add_mesh`` / ``remove_actor`` cycle: re-adding
+        the mesh re-enters PyVista's scalar-bar range logic, which does not
+        preserve a global ``clim``.  Toggling ``scalar_visibility`` leaves the
+        actor, its mapper and its lookup table exactly where they are, so the
+        colour scale is identical before and after the round trip.
+        """
+        actor = getattr(self, "_actor_contact", None)
+        if actor is None or self._contact_clim is None:
+            return
+
+        show_scalars = self._depth_colouring_active
+        actor.mapper.scalar_visibility = show_scalars
+        # Re-asserted on every mode change for the same reason it is re-asserted
+        # after every dataset swap: PyVista 0.47.1 otherwise reverts the mapper
+        # to per-frame autoscale.
+        actor.mapper.scalar_range = self._contact_clim
+
+        self._apply_depth_scalar_bar_visibility()
+
+    def _update_forearm_depth_scalars(self, frame_idx: int) -> None:
+        """Repaint the forearm with this frame's per-vertex penetration depths.
+
+        The array is overwritten in place under the name the mapper was bound
+        to, so this is a value update and not an actor cycle -- the same
+        discipline the contact mesh's ``DeepCopy`` follows, and for the same
+        playback-cost reason.
+
+        The join itself is not done here.  ``forearm_depth_scalars`` validates
+        the sidecar's reference-PLY provenance against this forearm's vertex
+        count *before* scattering anything, which is what stands between a
+        re-deduplicated forearm and a silently mis-coloured surface.  It raises
+        on a mismatch, and that exception is deliberately not caught: a wrong
+        picture here is indistinguishable from a right one.
+        """
+        if not self._forearm_depth_colouring_active:
+            return
+
+        scalars = forearm_depth_scalars(
+            self._depth_series,
+            kinect_frame_at_position(self._frame_indices, frame_idx),
+            self._forearm_pv.n_points,
+        )
+        self._forearm_pv[FOREARM_DEPTH_SCALAR_NAME] = scalars
+        self._forearm_pv.set_active_scalars(FOREARM_DEPTH_SCALAR_NAME)
+        # Re-asserted after every array swap, exactly as the contact actor's is:
+        # PyVista 0.47.1 otherwise reverts the mapper to per-frame autoscale and
+        # the same depth takes a different colour on a different frame.
+        actor = getattr(self, "_actor_forearm", None)
+        if actor is not None and self._contact_clim is not None:
+            actor.mapper.scalar_range = self._contact_clim
+
+    def _apply_depth_scalar_bar_visibility(self) -> None:
+        """Show the depth colourbar while *either* layer is mapped to it.
+
+        One bar serves the contact patch and the forearm: they paint the same
+        field on the same fixed scale.  It must therefore be hidden only when
+        neither layer is using it -- a bar with nothing mapped to it claims the
+        flat-coloured points and the plain forearm mean something on that scale.
+        """
+        if SCALAR_BAR_TITLE not in self.plotter.scalar_bars:
+            return
+        visible = self._depth_colouring_active or self._forearm_depth_colouring_active
+        self.plotter.scalar_bars[SCALAR_BAR_TITLE].SetVisibility(bool(visible))
+
+    def _on_forearm_depth_colour_changed(self, state: int) -> None:
+        """Handle the Forearm group's 'Colour by depth' checkbox."""
+        self._colour_forearm_by_depth = state == Qt.Checked
+        if self._forearm_pv is not None and self._visibility.get("forearm", True):
+            # A colour *mode* change, so the actor is re-added -- see
+            # ``_add_forearm_actor``.  ``_update_frame`` then refills the array
+            # for the frame currently on screen.
+            self._actor_forearm = self._add_forearm_actor()
+        self._apply_depth_scalar_bar_visibility()
+        self._update_frame(self.current_index)
+
+    def _on_contact_depth_colour_changed(self, state: int) -> None:
+        """Handle the 'Colour by depth' checkbox."""
+        self._colour_contact_by_depth = state == Qt.Checked
+        self._apply_contact_scalar_mode()
+        self.plotter.render()
 
     def _on_neural_frame_requested(self, frame: int) -> None:
         if 0 <= frame < self._total_frames:

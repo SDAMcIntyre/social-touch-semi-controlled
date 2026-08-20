@@ -7,10 +7,10 @@ parameters:
   parallel_execution: false
   # valid_configs_ST15-01 excluded: reclassified as _NOT_ENOUGH_DATA_valid_configs_ST15-01,
   # so the directory no longer resolves and would abort the pipeline at startup.
-  kinect_configs: [valid_configs_ST14-01, valid_configs_ST14-02,
-      valid_configs_ST14-04, valid_configs_ST16-02,
-      valid_configs_ST16-03, valid_configs_ST16-05, valid_configs_ST18-01,
-      valid_configs_ST18-04]
+  kinect_configs: [valid_configs_ST13-01, valid_configs_ST13-02, 
+      valid_configs_ST13-03, valid_configs_ST14-01, valid_configs_ST14-02, 
+      valid_configs_ST14-04, valid_configs_ST16-02, valid_configs_ST16-03, 
+      valid_configs_ST16-05, valid_configs_ST18-01, valid_configs_ST18-04]
   # Path to the experimenter-maintained xlsx file that annotates unusable trials.
   # Relative paths are resolved from the project data root.
   neural_quality_xlsx: "F:/liu-onedrive-nospecial-carac/_Teams/Social touch Kinect

@@ -22,7 +22,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 from PyQt5.QtWidgets import QApplication
@@ -61,7 +61,18 @@ from postprocessing.gui import (
     STAGE_LABELS,
 )
 from postprocessing.gui.forearm_stage_inspector import resolve_all_session_stage_paths
+from postprocessing.gui.stage_selection import (
+    BlockEntry,
+    build_session_block_index,
+)
 from postprocessing.xyz_reference_from_gestures.calibration_pca_engine import CalibrationResult
+from postprocessing.depth_field_stage_io import depth_field_path_for_csv
+
+from merging.contact_depth_field_series import (
+    BoundedContactDepthFieldCache,
+    ContactDepthFieldLoader,
+    make_contact_depth_field_loader,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -249,13 +260,113 @@ def _resolve_source_forearm(config: KinectConfig) -> Optional[Path]:
     return source_ply if source_ply.exists() else None
 
 
-def resolve_stage_paths(config: KinectConfig) -> List[StagePaths]:
+# ---------------------------------------------------------------------------
+# Contact depth field
+# ---------------------------------------------------------------------------
+
+# One block's six stages are wired together and the user walks them back and
+# forth from the stage dropdown, so the cache is sized to hold a full sweep:
+# every stage the user returns to is then one read, not two.  It is a *bound*
+# rather than an unlimited memo because a stage's sidecar is ~12 MB on disk
+# (Phase 9 sizing table of propagate-contact-depth-field-through-postprocessing)
+# and appreciably larger once parsed into per-frame arrays — residency has to be
+# a property of this constant, not of how long the window stays open.
+STAGE_DEPTH_FIELD_CACHE_SIZE = len(STAGE_LABELS)
+
+
+def _resolve_stage_sidecar_path(
+    stage_label: str,
+    csv_path: Optional[Path],
+) -> Optional[Path]:
+    """Return where one stage's depth-field sidecar would live.
+
+    **Nothing is read here**, and nothing is checked for existence: the path is
+    derived from the stage CSV by name, and whether the file is there is the
+    loader's business.
+
+    A CSV *name* that cannot be paired with a sidecar is a broken pipeline
+    naming contract, so the resolver's ``ValueError`` is re-raised with the
+    stage that produced it, never swallowed.
+
+    Args:
+        stage_label: The dropdown label, used only to locate a naming failure.
+        csv_path: The stage CSV, or ``None`` when no merged output dir exists.
+
+    Returns:
+        The sidecar path, or ``None`` when there is no CSV to pair with.
+
+    Raises:
+        ValueError: If *csv_path* does not conform to the stage-CSV naming
+            contract that pairs it with its sidecar.
+    """
+    if csv_path is None:
+        return None
+    try:
+        return depth_field_path_for_csv(csv_path)
+    except ValueError as exc:
+        raise ValueError(
+            f"Stage {stage_label!r}: cannot pair {csv_path} with its contact "
+            f"depth field sidecar. {exc}"
+        ) from exc
+
+
+def _build_stage_depth_field_loader(
+    sidecar_path: Optional[Path],
+    cache: BoundedContactDepthFieldCache,
+    report: Callable[[str], None],
+) -> Optional[ContactDepthFieldLoader]:
+    """Return the lazy depth-field loader for one stage's sidecar path.
+
+    **Nothing is read here.**  Building the loader is a closure over the path;
+    the parquet is opened only when the viewer opens that stage.
+
+    A stage whose sidecar simply does not exist is not an error: stage 0 reads
+    ``blocks_merged/``, written *before* the depth field is filtered by neural
+    quality, so its sidecar legitimately never exists and the loader resolves to
+    the ordinary absent state.
+
+    Args:
+        sidecar_path: From :func:`_resolve_stage_sidecar_path`.
+        cache: Shared bounded cache; see ``STAGE_DEPTH_FIELD_CACHE_SIZE``.
+        report: Where the resolution message goes when a read happens.
+
+    Returns:
+        A zero-argument loader, or ``None`` when there is no sidecar path.
+    """
+    if sidecar_path is None:
+        return None
+    return make_contact_depth_field_loader(sidecar_path, report, cache)
+
+
+def resolve_stage_paths(
+    config: KinectConfig,
+    depth_field_cache: BoundedContactDepthFieldCache,
+) -> List[StagePaths]:
     """Return one StagePaths instance per postprocessing stage.
 
     Always returns a list of exactly 6 entries (one per label in STAGE_LABELS).
     CSV paths are set to None when config.session_merged_output_dir is None;
     otherwise the path is set regardless of whether the file exists yet —
     the viewer handles missing files gracefully.
+
+    Each stage also carries a lazy contact-depth-field loader derived from its
+    own CSV path, and the sidecar path that loader was built from.  The path is
+    carried alongside because the loader hides it and the viewer must not derive
+    one of its own, yet a wrong-space or absent field has to be able to name the
+    file it is about.  The six loaders share one bounded cache, and building
+    them reads nothing.
+
+    Args:
+        config: The block to resolve.  **This call is not free**: it loads the
+            block's reference forearm as an in-memory Open3D point cloud, which
+            is why the session-level viewer calls it for the selected block only.
+        depth_field_cache: The bounded cache the six loaders close over.
+            **Required, not defaulted.**  The viewer walks up to 99 blocks x 6
+            stages, so a cache created per call would mean the ceiling on
+            resident depth fields was one-per-visited-block rather than a
+            property of ``STAGE_DEPTH_FIELD_CACHE_SIZE``; making the caller pass
+            one makes that sharing visible at the single call site instead of
+            depending on a default nobody reads.
     """
     base = config.session_merged_output_dir
     session_id = config.session_id
@@ -276,42 +387,79 @@ def resolve_stage_paths(config: KinectConfig) -> List[StagePaths]:
         forearm_pca_ply = None
         forearm_rf_ply = None
 
+    stage_csv_paths: List[Optional[Path]] = [
+        base / "blocks_merged" / raw_name if base is not None else None,
+        base / "blocks_registered" / raw_name if base is not None else None,
+        base / "blocks_deduped" / raw_name if base is not None else None,
+        base / "blocks_projected" / raw_name if base is not None else None,
+        base / "blocks_pca_calibrated" / pca_name if base is not None else None,
+        base / "blocks_rf_centered" / pca_name if base is not None else None,
+    ]
+
+    block_name = config.source_video.name
+
+    def _report(message: str) -> None:
+        # Same console channel the rest of this script prints on, so an absent
+        # sidecar announces itself once, where the user is already looking.
+        print(f"[{block_name}] {message}")
+
+    depth_field_paths: List[Optional[Path]] = [
+        _resolve_stage_sidecar_path(label, csv)
+        for label, csv in zip(STAGE_LABELS, stage_csv_paths)
+    ]
+    depth_field_loaders: List[Optional[ContactDepthFieldLoader]] = [
+        _build_stage_depth_field_loader(sidecar, depth_field_cache, _report)
+        for sidecar in depth_field_paths
+    ]
+
     return [
         StagePaths(
             stage_label=STAGE_LABELS[0],
-            csv_path=base / "blocks_merged" / raw_name if base is not None else None,
+            csv_path=stage_csv_paths[0],
             forearm=per_video_forearm,
             coordinate_frame="camera",
+            depth_field_loader=depth_field_loaders[0],
+            depth_field_path=depth_field_paths[0],
         ),
         StagePaths(
             stage_label=STAGE_LABELS[1],
-            csv_path=base / "blocks_registered" / raw_name if base is not None else None,
+            csv_path=stage_csv_paths[1],
             forearm=unified_forearm_ply,
             coordinate_frame="camera",
+            depth_field_loader=depth_field_loaders[1],
+            depth_field_path=depth_field_paths[1],
         ),
         StagePaths(
             stage_label=STAGE_LABELS[2],
-            csv_path=base / "blocks_deduped" / raw_name if base is not None else None,
+            csv_path=stage_csv_paths[2],
             forearm=deduped_forearm or unified_forearm_ply,
             coordinate_frame="camera",
+            depth_field_loader=depth_field_loaders[2],
+            depth_field_path=depth_field_paths[2],
         ),
         StagePaths(
             stage_label=STAGE_LABELS[3],
-            csv_path=base / "blocks_projected" / raw_name if base is not None else None,
+            csv_path=stage_csv_paths[3],
             forearm=deduped_forearm or unified_forearm_ply,
             coordinate_frame="camera",
+            depth_field_loader=depth_field_loaders[3],
+            depth_field_path=depth_field_paths[3],
         ),
         StagePaths(
             stage_label=STAGE_LABELS[4],
-            csv_path=base / "blocks_pca_calibrated" / pca_name if base is not None else None,
+            csv_path=stage_csv_paths[4],
             forearm=forearm_pca_ply,
             coordinate_frame="pca",
+            depth_field_loader=depth_field_loaders[4],
+            depth_field_path=depth_field_paths[4],
         ),
         StagePaths(
             stage_label=STAGE_LABELS[5],
-            csv_path=base / "blocks_rf_centered" / pca_name if base is not None else None,
+            csv_path=stage_csv_paths[5],
             forearm=forearm_rf_ply,
             coordinate_frame="pca",
+            depth_field_loader=depth_field_loaders[5],
+            depth_field_path=depth_field_paths[5],
         ),
     ]
 
@@ -526,35 +674,55 @@ def run_single_session_pipeline_before_after(
     dag_handler.mark_completed(task_name)
 
 
-def run_single_session_pipeline_stage_viewer(
-    config: KinectConfig,
+# ---------------------------------------------------------------------------
+# Session-level viewers
+# ---------------------------------------------------------------------------
+
+
+def run_postprocessing_stage_viewer(
+    session_map: Dict[str, List[KinectConfig]],
     dag_handler: DagConfigHandler,
 ) -> None:
-    """Launch PostprocessingStageViewer for one block."""
+    """Launch PostprocessingStageViewer once for the whole batch.
+
+    Session-level, like ``run_forearm_stage_inspector`` beside it: one window
+    with session, block and stage dropdowns, rather than one window per block
+    opened sequentially (99 of them for the full 11-session DAG).
+
+    **Nothing is read here.**  The index carries identifiers only; a block's
+    stage paths — including the Open3D load of its reference forearm — are
+    resolved by the closure below when the user selects that block, and the six
+    depth-field loaders it builds still read nothing until a stage is opened.
+    """
     task_name = "view_postprocessing_stages"
-    block_name = config.source_video.name
-    print(f"[{block_name}] ==> Checking task: {task_name}")
+    print(f"==> Checking task: {task_name}")
     if not dag_handler.can_run(task_name):
-        print(f"[{block_name}] Task disabled — skipping.")
+        print(f"Task '{task_name}' disabled — skipping.")
         return
-    stage_paths = resolve_stage_paths(config)
-    available = [sp for sp in stage_paths if sp.csv_path is not None and sp.csv_path.exists()]
-    if not available:
-        print(f"[{block_name}] No stage CSV files found — skipping.")
-        return
-    recording_name = config.source_video.stem
-    print(f"[{block_name}] Launching PostprocessingStageViewer ({len(available)}/6 stages with data)...")
+
+    block_index = build_session_block_index(session_map)
+
+    # ONE bounded cache for the whole window, sized to the number of *stages*.
+    # Deliberately not one per block: 99 blocks x 6 stages is 594 sidecars at
+    # ~12 MB each, and a per-block cache would make residency a property of how
+    # many blocks the user browsed rather than of this constant.
+    depth_field_cache = BoundedContactDepthFieldCache(
+        maxsize=STAGE_DEPTH_FIELD_CACHE_SIZE
+    )
+
+    def _resolve_selected_block(entry: BlockEntry) -> List[StagePaths]:
+        return resolve_stage_paths(entry.config, depth_field_cache)
+
+    print(
+        f"Launching PostprocessingStageViewer for {block_index.n_sessions} "
+        f"session(s), {len(block_index)} block(s)..."
+    )
     app = QApplication.instance() or QApplication(sys.argv)
-    viewer = PostprocessingStageViewer(stage_paths, recording_name=recording_name)
+    viewer = PostprocessingStageViewer(block_index, _resolve_selected_block)
     viewer.show()
     app.exec_()
     QCoreApplication.processEvents()
     dag_handler.mark_completed(task_name)
-
-
-# ---------------------------------------------------------------------------
-# Session-level viewers
-# ---------------------------------------------------------------------------
 
 
 def run_forearm_stage_inspector(
@@ -610,8 +778,9 @@ def run_batch_sequentially(
         except Exception as exc:
             print(f"Failed to initialise session {block_file.name}: {exc}")
 
-    # Session-level stage inspector (one window for all sessions)
+    # Session-level viewers (one window each, for all sessions)
     run_forearm_stage_inspector(dict(session_map), dag_handler_template)
+    run_postprocessing_stage_viewer(dict(session_map), dag_handler_template)
 
     # Per-block viewers
     for block_file, config in loaded_configs:
@@ -620,7 +789,6 @@ def run_batch_sequentially(
         run_single_session_pipeline(config, dag_handler_instance)
         run_single_session_pipeline_advanced(config, dag_handler_instance)
         run_single_session_pipeline_before_after(config, dag_handler_instance)
-        run_single_session_pipeline_stage_viewer(config, dag_handler_instance)
 
     print("All postprocessed viewer sessions completed.")
 

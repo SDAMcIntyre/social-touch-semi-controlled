@@ -66,3 +66,10 @@ _stub_package("preprocessing.motion_analysis")
 _stub_package("utils")
 _stub_package("utils.pipeline")
 _stub_package("utils.pipeline.monitoring")
+
+# postprocessing/gui/__init__.py imports the four PyQt5 + PyVista + Open3D
+# viewers.  Stub the root so the Qt-free policy leaf beside them —
+# postprocessing.gui.stage_depth_field, numpy/pandas and the parquet reader only
+# — can be imported on its own.  Keeping that leaf headlessly testable is the
+# reason it exists as a separate module rather than as methods on the widget.
+_stub_package("postprocessing.gui")
