@@ -63,7 +63,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import List, Mapping, Optional
+from typing import Any, List, Mapping, Optional, Tuple
+
+import numpy as np
 
 from merging.contact_depth_field_series import (
     ContactDepthFieldLoader,
@@ -77,11 +79,20 @@ from preprocessing.motion_analysis.tactile_quantification.io.contact_depth_field
 
 __all__ = [
     "EXPECTED_SPACE_BY_STAGE",
+    "FRAME_INDEX_COLUMN",
     "PRODUCING_TASK_BY_STAGE",
     "STAGE_LABELS",
     "StageDepthField",
+    "depth_frame_at_position",
+    "kinect_frame_indices",
     "resolve_stage_depth_field",
 ]
+
+
+#: The merged-CSV column carrying the Kinect frame each row belongs to.  The
+#: depth-field sidecar is keyed by the same number, which is what makes the two
+#: joinable at all.
+FRAME_INDEX_COLUMN: str = "frame_index"
 
 
 #: The postprocessing stages the viewer's dropdown offers, in order.
@@ -319,3 +330,121 @@ def resolve_stage_depth_field(
             f"'{sidecar_path}': {series.summary()}."
         ),
     )
+
+
+# ---------------------------------------------------------------------------
+# The frame join
+# ---------------------------------------------------------------------------
+#
+# The single most dangerous shortcut available to a consumer of this data is to
+# index the depth field by the slider's position.  It is dangerous precisely
+# because it *works*: it produces a smooth, plausible animation of the right
+# shape, in the right place, of the wrong frames.
+#
+# The two sides are keyed differently.  A depth-field sidecar is keyed by Kinect
+# ``frame_index``, and only frames that carry contact appear in it at all.  The
+# merged CSV is upsampled to the nerve sampling rate (~33 rows per Kinect
+# frame); the viewer's ``_kinect_df`` keeps only the anchor rows, so its row
+# *positions* are a dense 0..N-1 enumeration of the frames that survived, which
+# equals ``frame_index`` only when the block starts at frame 0 and no frame was
+# ever dropped.  Neither is guaranteed, and neither is checkable from the shape
+# of the data — a positional join is silent when it is wrong.
+#
+# So the join goes through the column, always, and its absence raises.
+
+
+def kinect_frame_indices(
+    kinect_df: Any,
+    source: Any = "<stage CSV>",
+) -> np.ndarray:
+    """Return the Kinect frame index of every displayable row, in slider order.
+
+    The returned array is positional: element *p* is the Kinect frame the viewer
+    shows at slider position *p*.  It is the only bridge between a slider
+    position and a depth-field lookup key, and building it is the reason a
+    missing column has to be fatal rather than papered over.
+
+    Args:
+        kinect_df: The stage's frame-anchor rows (``time_kinect`` non-NaN), in
+            display order.  Duck-typed: anything with ``columns`` and
+            ``__getitem__`` returning a ``to_numpy``-able column.
+        source: Names the offending artifact in error messages only.
+
+    Returns:
+        ``(len(kinect_df),)`` int64 Kinect frame indices.
+
+    Raises:
+        ValueError: If the column is absent, holds a missing value, or holds a
+            non-integral value.  Every one of these means the row's frame is
+            unknown, and the only alternative to raising is a positional join
+            that draws another frame's data without saying so.
+    """
+    if FRAME_INDEX_COLUMN not in kinect_df.columns:
+        raise ValueError(
+            f"'{source}' has no '{FRAME_INDEX_COLUMN}' column, so no row can be "
+            "matched to a Kinect frame. The contact depth field is keyed by "
+            f"'{FRAME_INDEX_COLUMN}'; joining it by row position instead would "
+            "draw a different frame's depths at every position and would look "
+            f"entirely plausible while doing it. Columns found: "
+            f"{list(kinect_df.columns)}"
+        )
+
+    values = np.asarray(kinect_df[FRAME_INDEX_COLUMN].to_numpy(dtype=np.float64))
+    if values.size and not np.all(np.isfinite(values)):
+        missing = int(np.count_nonzero(~np.isfinite(values)))
+        raise ValueError(
+            f"'{source}' has {missing} row(s) whose '{FRAME_INDEX_COLUMN}' is "
+            "missing or non-finite, among the rows the viewer treats as Kinect "
+            "frames. A frame with no index cannot be looked up in the depth "
+            "field."
+        )
+    if values.size and not np.all(values == np.floor(values)):
+        bad = values[values != np.floor(values)][:5]
+        raise ValueError(
+            f"'{source}' has non-integral '{FRAME_INDEX_COLUMN}' values (e.g. "
+            f"{bad.tolist()}). A fractional frame addresses nothing."
+        )
+    return values.astype(np.int64)
+
+
+def depth_frame_at_position(
+    series: ContactDepthFieldSeries,
+    frame_indices: np.ndarray,
+    position: int,
+) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+    """Return the depth field of the frame shown at slider *position*.
+
+    This is the join, in one place, so that it is testable without a window and
+    so there is exactly one expression in the codebase that turns a slider
+    position into a depth-field key.
+
+    Args:
+        series: The stage's depth field.
+        frame_indices: The map from :func:`kinect_frame_indices`.
+        position: Slider position — a *row position*, not a frame index.
+
+    Returns:
+        ``(points, penetration_depth_mm)`` for the frame at *position*, or
+        ``None`` when that frame carries no contact.  ``None`` is a fact about
+        the recording, not a lookup failure.
+
+    Raises:
+        TypeError: If *series* is ``None``.  A caller that has no series must
+            not reach the join at all; arriving here with one missing means the
+            "is depth colouring active" test was skipped somewhere.
+        IndexError: If *position* is outside *frame_indices*.  Clamping it would
+            silently repeat an end frame.
+    """
+    if series is None:
+        raise TypeError(
+            "depth_frame_at_position was called without a depth field. Check "
+            "StageDepthField.is_present before joining; there is nothing to "
+            "look up and nothing sensible to return."
+        )
+    if not 0 <= position < len(frame_indices):
+        raise IndexError(
+            f"slider position {position} is outside the {len(frame_indices)} "
+            "frames this stage has. It cannot be clamped: the neighbouring "
+            "frame's depths are not this frame's."
+        )
+    return series.frame(int(frame_indices[position]))

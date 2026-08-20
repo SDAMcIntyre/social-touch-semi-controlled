@@ -1,11 +1,13 @@
 """Tests for the contact-depth-field wiring behind the postprocessing stage viewer.
 
-Two phases of ``render-contact-depth-field-in-postprocessing-viewer`` are
+Three phases of ``render-contact-depth-field-in-postprocessing-viewer`` are
 covered here.  Phase 1 makes the six postprocessing stages *carry* a depth-field
 loader: nothing renders and, crucially, nothing reads.  Phase 2 adds the
 stage-aware policy leaf that turns ``(stage, loader, path)`` into either a
-space-validated series or an announced absence.  These tests guard the
-properties that make both worth doing at all.
+space-validated series or an announced absence.  Phase 3 draws the field, and
+contributes the one piece of its render path that is not rendering: the join
+from a slider position to a Kinect frame.  These tests guard the properties that
+make all three worth doing at all.
 
 **Path pairing.**  A stage's sidecar is found by name, from the stage CSV the
 resolver has already computed.  Four stages write their CSV under the merging
@@ -27,6 +29,15 @@ than as an error.  ``ContactDepthFieldSeries.coordinate_space`` has always
 carried the declared space "so a caller can refuse to draw a wrong-space field";
 ``resolve_stage_depth_field`` is the first caller that actually refuses, so every
 mismatched (stage, space) pair is exercised here rather than trusted.
+
+**The frame join.**  The sidecar is keyed by Kinect ``frame_index`` and the
+viewer's slider walks row positions; the merged CSV is upsampled ~33x to the
+nerve rate and a block does not start at frame 0, so the two coincide almost
+nowhere.  A positional join is the one shortcut here that fails *silently* — it
+animates smoothly, in the right place, showing the wrong frames — so the join is
+a pure function in the leaf rather than an expression inside the widget, and it
+is tested against frame indices that are deliberately non-contiguous and unequal
+to row position.
 
 Everything here runs against synthetic parquet sidecars written to ``tmp_path``
 with the production writer.  No Qt, no VTK, no Open3D — the read path, the path
@@ -67,13 +78,17 @@ from postprocessing.depth_field_stage_io import depth_field_path_for_csv  # noqa
 from merging.contact_depth_field_series import (  # noqa: E402
     BoundedContactDepthFieldCache,
     ContactDepthFieldSeries,
+    load_contact_depth_field_series,
     make_contact_depth_field_loader,
 )
 from postprocessing.gui.stage_depth_field import (  # noqa: E402
     EXPECTED_SPACE_BY_STAGE,
+    FRAME_INDEX_COLUMN,
     PRODUCING_TASK_BY_STAGE,
     STAGE_LABELS,
     StageDepthField,
+    depth_frame_at_position,
+    kinect_frame_indices,
     resolve_stage_depth_field,
 )
 
@@ -598,7 +613,199 @@ def test_resolving_a_stage_reads_exactly_once(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 5. Purity — the leaf stays headless
+# 5. The frame join — a slider position is not a frame index
+# ---------------------------------------------------------------------------
+#
+# This is the section Phase 3.2 exists for.  The sidecar is keyed by Kinect
+# ``frame_index``; the slider walks *row positions* of the viewer's frame-anchor
+# table.  The merged CSV is upsampled ~33x to the nerve rate and a block does
+# not begin at frame 0, so the two coincide almost nowhere — yet a positional
+# join fails silently, producing a smooth animation of the wrong frames.  Every
+# test below is written so that a positional join could only pass it by
+# coincidence, and ``test_a_positional_join_would_give_a_different_answer``
+# asserts that the coincidence has not crept in.
+
+#: The Kinect frames the viewer shows, in slider order.  Non-contiguous (frames
+#: were dropped) and offset from zero (the block starts mid-recording), so row
+#: position *p* never equals ``frame_index[p]``.
+_KINECT_FRAME_INDICES = [5, 7, 11, 19, 23, 24]
+
+#: What each slider position must resolve to, given ``_ROWS`` above: frames 7,
+#: 19 and 23 carry contact, the rest carry none.  Depths are penetration, i.e.
+#: ``-signed_depth_mm``, negated exactly once by the adapter.
+_EXPECTED_DEPTHS_BY_POSITION = {
+    0: None,                # frame 5  — no contact
+    1: [0.25, 0.50],        # frame 7  — two vertices
+    2: None,                # frame 11 — no contact
+    3: [4.00],              # frame 19
+    4: [9.50],              # frame 23
+    5: None,                # frame 24 — no contact
+}
+
+
+def _kinect_df(frame_indices: Sequence, **extra) -> pd.DataFrame:
+    """A minimal stand-in for the viewer's ``_kinect_df``: one row per frame."""
+    data = {
+        "time_kinect": np.arange(len(frame_indices), dtype=np.float64) / 30.0,
+        FRAME_INDEX_COLUMN: list(frame_indices),
+    }
+    data.update(extra)
+    return pd.DataFrame(data)
+
+
+def _rf_centered_series(tmp_path: Path) -> ContactDepthFieldSeries:
+    """A real sidecar, written by the production writer, read by the adapter."""
+    sidecar = depth_field_path_for_csv(_stage_csv_paths(tmp_path)[5])
+    sidecar.parent.mkdir(parents=True, exist_ok=True)
+    write_contact_depth_field_table(
+        _table(_ROWS), sidecar, metadata=_metadata(COORDINATE_SPACE_RF_CENTERED)
+    )
+    return load_contact_depth_field_series(sidecar)
+
+
+def test_kinect_frame_indices_preserves_row_order() -> None:
+    """Element *p* is the frame shown at slider position *p*; nothing is sorted."""
+    indices = kinect_frame_indices(_kinect_df(_KINECT_FRAME_INDICES))
+
+    assert indices.dtype == np.int64
+    assert indices.tolist() == _KINECT_FRAME_INDICES
+
+
+@pytest.mark.parametrize("position", sorted(_EXPECTED_DEPTHS_BY_POSITION))
+def test_the_depths_at_a_position_are_those_of_that_rows_frame(
+    tmp_path: Path, position: int
+) -> None:
+    """The whole point of Phase 3.2: join by ``frame_index``, never by position."""
+    series = _rf_centered_series(tmp_path)
+    indices = kinect_frame_indices(_kinect_df(_KINECT_FRAME_INDICES))
+
+    resolved = depth_frame_at_position(series, indices, position)
+    expected = _EXPECTED_DEPTHS_BY_POSITION[position]
+
+    if expected is None:
+        assert resolved is None, (
+            f"slider position {position} shows Kinect frame "
+            f"{_KINECT_FRAME_INDICES[position]}, which carries no contact"
+        )
+        return
+
+    points, depths = resolved
+    assert depths.tolist() == expected
+    assert len(points) == len(expected)
+    # Identical to going through the series with the row's own frame index.
+    direct = series.frame(_KINECT_FRAME_INDICES[position])
+    assert direct is not None
+    np.testing.assert_array_equal(depths, direct[1])
+    np.testing.assert_array_equal(points, direct[0])
+
+
+def test_a_positional_join_would_give_a_different_answer(tmp_path: Path) -> None:
+    """Guards the guard: the fixture must be able to tell the two joins apart.
+
+    If the synthetic frame indices ever drifted into agreeing with row position,
+    every test above would keep passing while testing nothing.
+    """
+    series = _rf_centered_series(tmp_path)
+    indices = kinect_frame_indices(_kinect_df(_KINECT_FRAME_INDICES))
+
+    assert not any(int(indices[p]) == p for p in range(len(indices))), (
+        "no slider position may coincide with its frame index, or the join is "
+        "untested"
+    )
+
+    by_position = [
+        depth_frame_at_position(series, indices, p) for p in range(len(indices))
+    ]
+    positional = [series.frame(p) for p in range(len(indices))]
+
+    assert any(entry is not None for entry in by_position)
+    assert all(entry is None for entry in positional), (
+        "a positional join happens to find contact here, so this fixture can no "
+        "longer distinguish the correct join from the dangerous one"
+    )
+
+
+def test_a_kinect_table_without_a_frame_index_column_raises() -> None:
+    """No positional fallback: an unjoinable table is fatal, not flat-coloured."""
+    df = pd.DataFrame({"time_kinect": [0.0, 0.033], "contact_points": ["[]", "[]"]})
+
+    with pytest.raises(ValueError, match=f"no '{FRAME_INDEX_COLUMN}' column"):
+        kinect_frame_indices(df, "blocks_rf_centered/whatever.csv")
+
+
+def test_the_unjoinable_error_names_the_artifact_and_its_columns() -> None:
+    """An unjoinable CSV must be identifiable from the message alone."""
+    df = pd.DataFrame({"time_kinect": [0.0], "contact_points": ["[]"]})
+
+    with pytest.raises(ValueError) as excinfo:
+        kinect_frame_indices(df, "blocks_rf_centered/block-order01.csv")
+
+    message = str(excinfo.value)
+    assert "blocks_rf_centered/block-order01.csv" in message
+    assert "contact_points" in message
+
+
+def test_a_missing_frame_index_value_raises() -> None:
+    """A displayed row whose frame is unknown cannot be looked up."""
+    df = _kinect_df([5.0, np.nan, 11.0])
+
+    with pytest.raises(ValueError, match="missing or non-finite"):
+        kinect_frame_indices(df)
+
+
+def test_a_fractional_frame_index_raises() -> None:
+    """Half a frame addresses nothing."""
+    df = _kinect_df([5.0, 7.5, 11.0])
+
+    with pytest.raises(ValueError, match="non-integral"):
+        kinect_frame_indices(df)
+
+
+@pytest.mark.parametrize("position", [-1, 6, 99])
+def test_a_position_outside_the_stage_raises(tmp_path: Path, position: int) -> None:
+    """Clamping would silently repeat an end frame."""
+    series = _rf_centered_series(tmp_path)
+    indices = kinect_frame_indices(_kinect_df(_KINECT_FRAME_INDICES))
+
+    with pytest.raises(IndexError, match="outside the 6 frames"):
+        depth_frame_at_position(series, indices, position)
+
+
+def test_joining_without_a_series_raises() -> None:
+    """Reaching the join with no field means an is-present check was skipped."""
+    indices = kinect_frame_indices(_kinect_df(_KINECT_FRAME_INDICES))
+
+    with pytest.raises(TypeError, match="without a depth field"):
+        depth_frame_at_position(None, indices, 0)
+
+
+def test_the_join_is_reachable_from_a_resolved_stage(tmp_path: Path) -> None:
+    """End to end, headless: loader -> policy leaf -> frame join.
+
+    This is the call sequence the viewer performs per frame, minus the actor
+    update — which is the only part that needs a window.
+    """
+    sidecars = _write_stage_sidecars(tmp_path)
+    cache = BoundedContactDepthFieldCache(maxsize=len(_STAGES))
+    reporter = _CountingReporter()
+    loader = make_contact_depth_field_loader(sidecars[5], reporter, cache)
+
+    resolved = resolve_stage_depth_field(5, loader, sidecars[5])
+    assert resolved.is_present
+
+    indices = kinect_frame_indices(_kinect_df(_KINECT_FRAME_INDICES))
+    drawn = [
+        depth_frame_at_position(resolved.series, indices, p)
+        for p in range(len(indices))
+    ]
+
+    assert [None if d is None else d[1].tolist() for d in drawn] == [
+        _EXPECTED_DEPTHS_BY_POSITION[p] for p in range(len(indices))
+    ]
+
+
+# ---------------------------------------------------------------------------
+# 6. Purity — the leaf stays headless
 # ---------------------------------------------------------------------------
 
 #: The toolkits that would make this module untestable without a display.  The

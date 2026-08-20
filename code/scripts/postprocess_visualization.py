@@ -270,33 +270,26 @@ def _resolve_source_forearm(config: KinectConfig) -> Optional[Path]:
 STAGE_DEPTH_FIELD_CACHE_SIZE = len(STAGE_LABELS)
 
 
-def _build_stage_depth_field_loader(
+def _resolve_stage_sidecar_path(
     stage_label: str,
     csv_path: Optional[Path],
-    cache: BoundedContactDepthFieldCache,
-    report: Callable[[str], None],
-) -> Optional[ContactDepthFieldLoader]:
-    """Return the lazy depth-field loader belonging to one stage CSV.
+) -> Optional[Path]:
+    """Return where one stage's depth-field sidecar would live.
 
-    **Nothing is read here.**  Building the loader is a closure over a derived
-    path; the parquet is opened only when the viewer opens that stage.
+    **Nothing is read here**, and nothing is checked for existence: the path is
+    derived from the stage CSV by name, and whether the file is there is the
+    loader's business.
 
-    A stage whose sidecar simply does not exist is not an error: stage 0 reads
-    ``blocks_merged/``, written *before* the depth field is filtered by neural
-    quality, so its sidecar legitimately never exists and the loader resolves to
-    the ordinary absent state.  A CSV *name* that cannot be paired with a
-    sidecar is a different matter — it means the pipeline's naming contract has
-    been broken — so the resolver's ``ValueError`` is re-raised with the stage
-    that produced it, never swallowed.
+    A CSV *name* that cannot be paired with a sidecar is a broken pipeline
+    naming contract, so the resolver's ``ValueError`` is re-raised with the
+    stage that produced it, never swallowed.
 
     Args:
         stage_label: The dropdown label, used only to locate a naming failure.
         csv_path: The stage CSV, or ``None`` when no merged output dir exists.
-        cache: Shared bounded cache; see ``STAGE_DEPTH_FIELD_CACHE_SIZE``.
-        report: Where the resolution message goes when a read happens.
 
     Returns:
-        A zero-argument loader, or ``None`` when there is no CSV to pair with.
+        The sidecar path, or ``None`` when there is no CSV to pair with.
 
     Raises:
         ValueError: If *csv_path* does not conform to the stage-CSV naming
@@ -305,12 +298,39 @@ def _build_stage_depth_field_loader(
     if csv_path is None:
         return None
     try:
-        sidecar_path = depth_field_path_for_csv(csv_path)
+        return depth_field_path_for_csv(csv_path)
     except ValueError as exc:
         raise ValueError(
             f"Stage {stage_label!r}: cannot pair {csv_path} with its contact "
             f"depth field sidecar. {exc}"
         ) from exc
+
+
+def _build_stage_depth_field_loader(
+    sidecar_path: Optional[Path],
+    cache: BoundedContactDepthFieldCache,
+    report: Callable[[str], None],
+) -> Optional[ContactDepthFieldLoader]:
+    """Return the lazy depth-field loader for one stage's sidecar path.
+
+    **Nothing is read here.**  Building the loader is a closure over the path;
+    the parquet is opened only when the viewer opens that stage.
+
+    A stage whose sidecar simply does not exist is not an error: stage 0 reads
+    ``blocks_merged/``, written *before* the depth field is filtered by neural
+    quality, so its sidecar legitimately never exists and the loader resolves to
+    the ordinary absent state.
+
+    Args:
+        sidecar_path: From :func:`_resolve_stage_sidecar_path`.
+        cache: Shared bounded cache; see ``STAGE_DEPTH_FIELD_CACHE_SIZE``.
+        report: Where the resolution message goes when a read happens.
+
+    Returns:
+        A zero-argument loader, or ``None`` when there is no sidecar path.
+    """
+    if sidecar_path is None:
+        return None
     return make_contact_depth_field_loader(sidecar_path, report, cache)
 
 
@@ -323,8 +343,11 @@ def resolve_stage_paths(config: KinectConfig) -> List[StagePaths]:
     the viewer handles missing files gracefully.
 
     Each stage also carries a lazy contact-depth-field loader derived from its
-    own CSV path.  The six loaders share one bounded cache, and building them
-    reads nothing.
+    own CSV path, and the sidecar path that loader was built from.  The path is
+    carried alongside because the loader hides it and the viewer must not derive
+    one of its own, yet a wrong-space or absent field has to be able to name the
+    file it is about.  The six loaders share one bounded cache, and building
+    them reads nothing.
     """
     base = config.session_merged_output_dir
     session_id = config.session_id
@@ -366,9 +389,13 @@ def resolve_stage_paths(config: KinectConfig) -> List[StagePaths]:
         # sidecar announces itself once, where the user is already looking.
         print(f"[{block_name}] {message}")
 
-    depth_field_loaders: List[Optional[ContactDepthFieldLoader]] = [
-        _build_stage_depth_field_loader(label, csv, depth_field_cache, _report)
+    depth_field_paths: List[Optional[Path]] = [
+        _resolve_stage_sidecar_path(label, csv)
         for label, csv in zip(STAGE_LABELS, stage_csv_paths)
+    ]
+    depth_field_loaders: List[Optional[ContactDepthFieldLoader]] = [
+        _build_stage_depth_field_loader(sidecar, depth_field_cache, _report)
+        for sidecar in depth_field_paths
     ]
 
     return [
@@ -378,6 +405,7 @@ def resolve_stage_paths(config: KinectConfig) -> List[StagePaths]:
             forearm=per_video_forearm,
             coordinate_frame="camera",
             depth_field_loader=depth_field_loaders[0],
+            depth_field_path=depth_field_paths[0],
         ),
         StagePaths(
             stage_label=STAGE_LABELS[1],
@@ -385,6 +413,7 @@ def resolve_stage_paths(config: KinectConfig) -> List[StagePaths]:
             forearm=unified_forearm_ply,
             coordinate_frame="camera",
             depth_field_loader=depth_field_loaders[1],
+            depth_field_path=depth_field_paths[1],
         ),
         StagePaths(
             stage_label=STAGE_LABELS[2],
@@ -392,6 +421,7 @@ def resolve_stage_paths(config: KinectConfig) -> List[StagePaths]:
             forearm=deduped_forearm or unified_forearm_ply,
             coordinate_frame="camera",
             depth_field_loader=depth_field_loaders[2],
+            depth_field_path=depth_field_paths[2],
         ),
         StagePaths(
             stage_label=STAGE_LABELS[3],
@@ -399,6 +429,7 @@ def resolve_stage_paths(config: KinectConfig) -> List[StagePaths]:
             forearm=deduped_forearm or unified_forearm_ply,
             coordinate_frame="camera",
             depth_field_loader=depth_field_loaders[3],
+            depth_field_path=depth_field_paths[3],
         ),
         StagePaths(
             stage_label=STAGE_LABELS[4],
@@ -406,6 +437,7 @@ def resolve_stage_paths(config: KinectConfig) -> List[StagePaths]:
             forearm=forearm_pca_ply,
             coordinate_frame="pca",
             depth_field_loader=depth_field_loaders[4],
+            depth_field_path=depth_field_paths[4],
         ),
         StagePaths(
             stage_label=STAGE_LABELS[5],
@@ -413,6 +445,7 @@ def resolve_stage_paths(config: KinectConfig) -> List[StagePaths]:
             forearm=forearm_rf_ply,
             coordinate_frame="pca",
             depth_field_loader=depth_field_loaders[5],
+            depth_field_path=depth_field_paths[5],
         ),
     ]
 

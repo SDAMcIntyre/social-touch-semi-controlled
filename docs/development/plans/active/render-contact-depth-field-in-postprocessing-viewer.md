@@ -97,19 +97,21 @@ result, downstream, in the other repository.
 
 - [ ] Opening any of the five sidecar-bearing stages colours the contact points by penetration depth,
       with a scalar bar titled "Penetration depth (mm)".
-- [ ] The colour range for a given stage is identical on every frame of that stage — asserted by
+- [x] The colour range for a given stage is identical on every frame of that stage — asserted by
       reading `actor.mapper.scalar_range` on at least three frames including one with no contact and
-      one immediately after a stage switch.
-- [ ] Switching stages replaces the scalar bar and its range; no bar from a previous stage survives,
-      and `plotter.scalar_bars` contains exactly one depth bar at any time.
+      one immediately after a stage switch. *(Phase 3: six frames, three of them empty, plus one
+      post-switch; all `(0.25, 9.5)`.)*
+- [x] Switching stages replaces the scalar bar and its range; no bar from a previous stage survives,
+      and `plotter.scalar_bars` contains exactly one depth bar at any time. *(Phase 3: 1 → 1 → 0 → 1
+      across stages 5 → 1 → 0 → 4.)*
 - [ ] Stage 0 (`blocks_merged/`) shows a disabled "Colour by depth" checkbox whose tooltip names the
       producing task, and renders flat-red contact points without error.
-- [ ] A frame's drawn depth values equal `series.frame(kinect_df["frame_index"].iloc[pos])[1]`
+- [x] A frame's drawn depth values equal `series.frame(kinect_df["frame_index"].iloc[pos])[1]`
       exactly — verified by a headless test on a synthetic sidecar whose `frame_index` values are
       deliberately non-contiguous and not equal to row position.
-- [ ] A sidecar whose `coordinate_space` disagrees with the selected stage raises `ValueError` naming
+- [x] A sidecar whose `coordinate_space` disagrees with the selected stage raises `ValueError` naming
       both spaces and the file.
-- [ ] A present-but-undecodable sidecar raises; it does not fall back to flat colour.
+- [x] A present-but-undecodable sidecar raises; it does not fall back to flat colour.
 - [x] Constructing the six stage loaders reads zero bytes — asserted with a counting reporter, as
       `test_neural_kinect_depth_field_view.py:441` does for blocks.
 - [ ] *(Phase 5)* On stages 3-5, the forearm PLY colours by the current frame's `vertex_id` join, and
@@ -346,31 +348,80 @@ derives no parquet path of its own.
 ### Phase 3: Depth-coloured contact points
 **Goal:** The feature, visible.
 
-- [ ] 3.1 — In `_load_stage_data`, call `resolve_stage_depth_field(stage_idx, sp.depth_field_loader)`
+**Started:** 2026-08-20T07:05Z  **Completed:** 2026-08-20T07:55Z
+
+- [x] 3.1 — In `_load_stage_data`, call
+      `resolve_stage_depth_field(stage_idx, sp.depth_field_loader, sp.depth_field_path)`
       and store `self._depth_field`. No parquet knowledge enters the widget.
-- [ ] 3.2 — Build the **frame_index map**: `self._frame_indices = self._kinect_df["frame_index"]`,
+- [x] 3.2 — Build the **frame_index map**: `self._frame_indices = self._kinect_df["frame_index"]`,
       and look up `series.frame(int(self._frame_indices.iloc[pos]))`. Raise if the column is missing
       rather than falling back to positional indexing — this is the single most dangerous shortcut
       available here.
-- [ ] 3.3 — In `_init_actors`, when depth colouring is active, add the contact actor with
+- [x] 3.3 — In `_init_actors`, when depth colouring is active, add the contact actor with
       `scalars=CONTACT_SCALAR_NAME`, `cmap=COLORMAP`, `clim=series.clim_penetration_mm`,
       `show_scalar_bar=True` and the `scalar_bar_args` shape from
       `contact_depth_field_viewer.py:506-522` (white text on the black background). Keep
       `GetProperty().SetColor(1,0,0)` so the flat-red off state is intact.
-- [ ] 3.4 — In `_update_frame`, set the scalar array on the replacement PolyData before `DeepCopy`,
+- [x] 3.4 — In `_update_frame`, set the scalar array on the replacement PolyData before `DeepCopy`,
       `set_active_scalars`, then re-assert `actor.mapper.scalar_range = clim`.
-- [ ] 3.5 — Empty-frame handling: an `_empty_contact_polydata()` equivalent that still carries the
+- [x] 3.5 — Empty-frame handling: an `_empty_contact_polydata()` equivalent that still carries the
       scalar array; keep `allow_empty_mesh`.
-- [ ] 3.6 — Verify the scalar bar does not survive a stage switch, and that exactly one exists after
+- [x] 3.6 — Verify the scalar bar does not survive a stage switch, and that exactly one exists after
       each switch. If `plotter.clear()` turns out not to remove it, add the explicit
       `remove_scalar_bar` guard from `neural_kinect_scene_viewer.py:1769-1770`.
-- [ ] 3.7 — Confirm the depth series replaces the CSV blob as the geometry source when active (as
+- [x] 3.7 — Confirm the depth series replaces the CSV blob as the geometry source when active (as
       `neural_kinect_scene_viewer.py:2075-2086` does), so the drawn points are the parquet's float32
       coordinates, not the `%.1f` CSV ones — and note in a comment that the two differ.
 
+**The join was extracted, not written inline.** Task 3.2's expression lives in the Phase 2 leaf as
+two pure functions — `kinect_frame_indices(kinect_df, source)` and
+`depth_frame_at_position(series, frame_indices, position)` — because the viewer cannot be
+constructed headlessly in this environment (see below) and the positional-join hazard is precisely
+the thing that must be tested rather than argued. The widget calls both and holds no join logic of
+its own. `kinect_frame_indices` raises on a missing column, on a missing/non-finite value and on a
+non-integral one; `depth_frame_at_position` raises `IndexError` rather than clamping a position and
+`TypeError` when called without a series. There is no positional path anywhere.
+
+**The sidecar path is now a `StagePaths` field**, per the Phase 2 contract correction:
+`depth_field_path` is derived in `resolve_stage_paths` beside the loader (new
+`_resolve_stage_sidecar_path`, split out of `_build_stage_depth_field_loader`) and forwarded
+verbatim. The widget derives no parquet path.
+
+**3.6 measured, not assumed:** `plotter.clear()` **does** destroy the scalar bar on the installed
+PyVista 0.47.1 — after a switch to stage 0 `plotter.scalar_bars` is empty, and after a switch to any
+sidecar-bearing stage it holds exactly one `"Penetration depth (mm)"` bar. The
+`remove_scalar_bar` guard from `neural_kinect_scene_viewer.py:1769-1770` is therefore **not**
+added; adding it would be dead code. A comment in `_init_actors` records why.
+
+**Headless verification of the render path.** `QtInteractor` cannot initialise under
+`QT_QPA_PLATFORM=offscreen` in this environment — VTK's `RenderWindowInteractor.initialize` blows
+the stack (`0xC00000FD`). Substituting an off-screen `pv.Plotter` for the `QtInteractor` class only
+(every other line executed is the viewer's own) drove the real
+`_load_stage_data` → `_init_actors` → `_update_frame` → `_on_stage_changed` path on a synthetic
+six-stage session and measured:
+
+| Property | Measured |
+|----------|----------|
+| Global clim, stage 5 | `(0.25, 9.5)` = `series.clim_penetration_mm`, never recomputed |
+| `mapper.scalar_range` over 6 frames (3 of them empty) | `(0.25, 9.5)` on every one |
+| `mapper.scalar_range` immediately after a stage switch | `(0.25, 9.5)` |
+| `plotter.scalar_bars` on stages 5 → 1 → 0 → 4 | 1 → 1 → 0 → 1 bar |
+| Geometry source, stage 5 frame 7 | `(1.53, 2.57, 3.51)` — the parquet float32, not the CSV's `%.1f` `(1.5, 2.6, 3.5)` |
+| Stage 0 | flat red, CSV blob geometry, no bar, absent-message present |
+| Reads performed across the four stage visits | 3 — one per sidecar-bearing stage opened |
+
+Not verified here, and left to Phase 6: anything requiring a real window — visible colour, bar
+legibility, playback frame rate, and the render check itself.
+
 **Files Modified:**
-- `code/src/postprocessing/gui/postprocessing_stage_viewer.py` — `_load_stage_data`, `_init_actors`,
-  `_update_frame`, new imports of `CONTACT_SCALAR_NAME` / `SCALAR_BAR_TITLE` / `COLORMAP`
+- `code/src/postprocessing/gui/postprocessing_stage_viewer.py` — `StagePaths.depth_field_path`,
+  `_load_stage_data`, `_init_actors`, `_update_frame`, `_empty_contact_polydata`, new imports of
+  `CONTACT_SCALAR_NAME` / `SCALAR_BAR_TITLE` / `COLORMAP` and of `contact_polydata`
+- `code/src/postprocessing/gui/stage_depth_field.py` — `FRAME_INDEX_COLUMN`,
+  `kinect_frame_indices`, `depth_frame_at_position`
+- `code/scripts/postprocess_visualization.py` — `_resolve_stage_sidecar_path`; the six
+  `StagePaths` carry their sidecar path
+- `code/tests/test_stage_depth_field.py` — the frame-join section
 
 **Dependencies:** Phases 1, 2
 
@@ -466,11 +517,12 @@ the core value without it.
       after the DTO widening.
 
 ### Integration Tests
-- [ ] Frame join: a synthetic sidecar with non-contiguous `frame_index` values that differ from row
+- [x] Frame join: a synthetic sidecar with non-contiguous `frame_index` values that differ from row
       position; assert the depths drawn at slider position *p* are those of `frame_index.iloc[p]`,
       not of frame *p*. **This test is the whole point of Phase 3.2** — it is the one that fails if
-      the positional shortcut is taken.
-- [ ] A `_kinect_df` without a `frame_index` column raises rather than falling back.
+      the positional shortcut is taken. *(Plus a guard-the-guard test asserting the fixture can still
+      tell the two joins apart.)*
+- [x] A `_kinect_df` without a `frame_index` column raises rather than falling back.
 - [ ] Six `StagePaths` built by `resolve_stage_paths` against a synthetic session tree carry the
       expected loaders, with stage 0's resolving to a non-existent path.
 
@@ -485,8 +537,8 @@ the core value without it.
 - [ ] Screenshots recorded for stages 1-5 on ST14-02.
 
 ### Edge Cases
-- [ ] A frame with no contact — draws nothing, does not corrupt the LUT, does not raise.
-- [ ] The first frame of a stage having no contact (mapper binding on an empty PolyData).
+- [x] A frame with no contact — draws nothing, does not corrupt the LUT, does not raise.
+- [x] The first frame of a stage having no contact (mapper binding on an empty PolyData).
 - [ ] A stage whose sidecar exists but whose CSV does not, and the reverse.
 - [ ] A single-depth-value recording → degenerate but valid clim (covered upstream at
       `test_neural_kinect_depth_field_view.py:263`).

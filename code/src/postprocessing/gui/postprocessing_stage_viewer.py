@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import List, Optional, Tuple, Union
 
 import numpy as np
 import open3d as o3d
@@ -34,12 +34,32 @@ from PyQt5.QtWidgets import (
 from pyvistaqt import QtInteractor
 
 from merging.contact_depth_field_series import ContactDepthFieldLoader
-from merging.gui.neural_kinect_scene_viewer import NeuralDataPanel
+from merging.gui.neural_kinect_scene_viewer import NeuralDataPanel, contact_polydata
+
+# The scalar array name, the colourbar title and the colourmap have exactly one
+# definition in the tree, shared with the tactile-quantification depth viewer
+# and the Neural+Kinect viewer.  Restating any of them here would let this
+# window disagree with the other two about what it is showing.
+from preprocessing.motion_analysis.tactile_quantification.gui.contact_depth_field_viewer import (
+    COLORMAP,
+    CONTACT_SCALAR_NAME,
+    SCALAR_BAR_TITLE,
+)
 
 # Re-exported: the labels are defined in the Qt-free policy leaf beside this
 # module, because that leaf names stages in its validation errors and a second
 # copy of the six strings would drift from this one.
 from .stage_depth_field import STAGE_LABELS  # noqa: F401
+
+# All depth-field policy — which space a stage must declare, what to say when
+# there is none, and how a slider position becomes a frame index — lives in that
+# same leaf, and is testable without a window because of it.
+from .stage_depth_field import (
+    StageDepthField,
+    depth_frame_at_position,
+    kinect_frame_indices,
+    resolve_stage_depth_field,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -76,6 +96,13 @@ class StagePaths:
             so every existing construction site stays valid; ``None`` means the
             caller wired no depth field at all, which is indistinguishable from
             an absent sidecar as far as this widget is concerned.
+        depth_field_path: Where ``depth_field_loader`` was built to look.  Used
+            **only** to name the file in messages and errors — nothing in this
+            module opens it, and the widget derives no parquet path of its own.
+            It travels beside the loader because a loader deliberately hides its
+            path and the loaded series carries none either, yet "wrong
+            coordinate space" without "in which file" is not actionable.  The
+            two fields are set together or not at all.
     """
 
     stage_label: str
@@ -83,6 +110,7 @@ class StagePaths:
     forearm: Optional[Union[Path, "o3d.geometry.PointCloud"]]
     coordinate_frame: str  # "camera" or "pca"
     depth_field_loader: Optional[ContactDepthFieldLoader] = None
+    depth_field_path: Optional[Path] = None
 
 
 # ---------------------------------------------------------------------------
@@ -106,6 +134,26 @@ def _parse_contact_points_cell(cell) -> Optional[np.ndarray]:
             except ValueError:
                 pass
     return np.array(points, dtype=np.float64) if points else None
+
+
+def _empty_contact_polydata(with_depth_scalars: bool) -> pv.PolyData:
+    """A zero-point contact dataset for a frame with no contact.
+
+    Args:
+        with_depth_scalars: Whether the dataset must carry the depth array.
+            When the actor is mapped to :data:`CONTACT_SCALAR_NAME`, the array
+            has to exist even at zero length, or the mapper loses its binding
+            the first time a no-contact frame is shown and the colours never
+            come back.  When the actor renders flat, the array must be absent
+            rather than zero-filled: no depth is not depth zero.
+
+    Returns:
+        An empty :class:`pyvista.PolyData`, built by the same function that
+        builds the non-empty ones so the two cannot drift apart.
+    """
+    points = np.empty((0, 3), dtype=np.float32)
+    depths = np.empty((0,), dtype=np.float64) if with_depth_scalars else None
+    return contact_polydata(points, depths)
 
 
 # ---------------------------------------------------------------------------
@@ -179,11 +227,32 @@ class PostprocessingStageViewer(QMainWindow):
     def _load_stage_data(self, stage_idx: int) -> None:
         sp = self._stage_paths[stage_idx]
 
+        # --- Depth field ---
+        # Resolved before the CSV because it is a fact about the stage, not
+        # about this stage's rows: which coordinate space it must declare, and
+        # what to say when it is absent, are decided in the Qt-free policy leaf.
+        # Nothing about parquet, schema versions, sign convention or path
+        # derivation enters this widget — only a series and a message do.
+        self._depth_field: StageDepthField = resolve_stage_depth_field(
+            stage_idx, sp.depth_field_loader, sp.depth_field_path
+        )
+        self._depth_series = self._depth_field.series
+        # The producer's global colour range, taken whole.  The one number this
+        # widget must never compute: a range derived from a frame's own data
+        # would recolour the same depth differently on every frame.
+        self._contact_clim: Optional[Tuple[float, float]] = (
+            None
+            if self._depth_series is None
+            else self._depth_series.clim_penetration_mm
+        )
+
         # --- CSV ---
         if sp.csv_path is None or not sp.csv_path.exists():
             self._full_df = pd.DataFrame()
             self._kinect_df = pd.DataFrame()
             self._contact_pts_by_frame: List[Optional[np.ndarray]] = []
+            self._frame_indices: Optional[np.ndarray] = None
+            self._has_contact_source = False
             self._total_frames = 0
             self._forearm_pv = None
             self._contact_centroid = np.zeros(3, dtype=np.float64)
@@ -200,6 +269,21 @@ class PostprocessingStageViewer(QMainWindow):
             ]
         else:
             self._contact_pts_by_frame = []
+
+        # --- Slider position -> Kinect frame ---
+        # Built only when there is a depth field to join, and then it must
+        # succeed: the sidecar is keyed by Kinect frame_index while the slider
+        # walks row positions, and the CSV is upsampled to the nerve rate, so a
+        # positional join would draw another frame's depths at every position.
+        # See stage_depth_field.kinect_frame_indices for why this raises.
+        self._frame_indices = (
+            None
+            if self._depth_series is None
+            else kinect_frame_indices(self._kinect_df, sp.csv_path)
+        )
+        self._has_contact_source = (
+            bool(self._contact_pts_by_frame) or self._depth_series is not None
+        )
 
         # --- Forearm ---
         self._forearm_pv = self._load_forearm(sp.forearm)
@@ -334,7 +418,7 @@ class PostprocessingStageViewer(QMainWindow):
             self._right_panel_layout.addWidget(box)
 
         _add_group("Forearm", "forearm", has_slider=True, default_size=5.0)
-        if self._contact_pts_by_frame:
+        if self._has_contact_source:
             _add_group("Contact Points", "contact_points", has_slider=True, default_size=15.0)
         self._right_panel_layout.addStretch()
 
@@ -411,14 +495,56 @@ class PostprocessingStageViewer(QMainWindow):
                 point_size=self._point_sizes["forearm"],
             )
 
-        self._mesh_contact = pv.PolyData(np.empty((0, 3), dtype=np.float32))
-        self._actor_contact = self.plotter.add_mesh(
-            self._mesh_contact,
-            name="contact_points",
-            color="red",
-            render_points_as_spheres=True,
-            point_size=self._point_sizes["contact_points"],
+        # --- Contact points -------------------------------------------------
+        # Registered once per stage load.  The colour range is the producer's,
+        # computed over the whole recording for this stage; nothing here derives
+        # it.  The previous stage's scalar bar needs no explicit removal: the
+        # `plotter.clear()` in `_on_stage_changed` destroys it before this runs,
+        # measured on the installed PyVista 0.47.1.
+        self._mesh_contact = _empty_contact_polydata(
+            with_depth_scalars=self._contact_clim is not None
         )
+        if self._contact_clim is None:
+            self._actor_contact = self.plotter.add_mesh(
+                self._mesh_contact,
+                name="contact_points",
+                color="red",
+                render_points_as_spheres=True,
+                point_size=self._point_sizes["contact_points"],
+            )
+        else:
+            self._actor_contact = self.plotter.add_mesh(
+                self._mesh_contact,
+                name="contact_points",
+                scalars=CONTACT_SCALAR_NAME,
+                cmap=COLORMAP,
+                # Explicit and global.  Without it the mapper reverts to
+                # per-frame autoscale on PyVista 0.47.1, which makes the
+                # animation lie about relative depth.
+                clim=self._contact_clim,
+                show_scalar_bar=True,
+                scalar_bar_args={
+                    "title": SCALAR_BAR_TITLE,
+                    "vertical": True,
+                    "n_labels": 6,
+                    "fmt": "%.2f",
+                    "title_font_size": 16,
+                    "label_font_size": 13,
+                    # Explicit white: the theme default is black, which is
+                    # invisible against this viewer's black background — the bar
+                    # renders but its title and ticks do not.
+                    "color": "white",
+                    "position_x": 0.85,
+                    "position_y": 0.12,
+                    "width": 0.05,
+                    "height": 0.72,
+                },
+                render_points_as_spheres=True,
+                point_size=self._point_sizes["contact_points"],
+            )
+            # Flat red is what the mapper falls back to when scalar visibility
+            # is switched off, so it is set even in depth-colouring mode.
+            self._actor_contact.GetProperty().SetColor(1.0, 0.0, 0.0)
 
         if self._total_frames == 0:
             self.plotter.add_text(
@@ -466,6 +592,10 @@ class PostprocessingStageViewer(QMainWindow):
 
         if self._bounds_proxy_active and (
             self._forearm_pv is not None
+            # A depth field is real geometry too, and on a stage whose CSV
+            # carries no contact_points blob it is the only geometry — without
+            # this the invisible proxy would never be retired.
+            or self._depth_series is not None
             or (
                 self._contact_pts_by_frame
                 and any(
@@ -480,18 +610,40 @@ class PostprocessingStageViewer(QMainWindow):
             except Exception:
                 pass
 
-        if self._contact_pts_by_frame:
-            _cpts = None
+        if self._has_contact_source:
+            # Source precedence: the depth field when this stage has one,
+            # otherwise the CSV's pre-parsed contact_points.  Never a mix — the
+            # two are different point sets.  The CSV blob is `%.1f` text, the
+            # sidecar float32, so the same vertex differs between them by up to
+            # 0.05 mm per axis and pairing the two would mean matching rows by
+            # coordinate value, which the sidecar's design record forbids.
+            _cpts: Optional[np.ndarray] = None
+            _cdepths: Optional[np.ndarray] = None
             if self._visibility.get("contact_points", True):
-                _cpts = (
-                    self._contact_pts_by_frame[frame_idx]
-                    if frame_idx < len(self._contact_pts_by_frame)
-                    else None
-                )
+                if self._depth_series is not None:
+                    _pair = depth_frame_at_position(
+                        self._depth_series, self._frame_indices, frame_idx
+                    )
+                    if _pair is not None:
+                        _cpts, _cdepths = _pair
+                elif frame_idx < len(self._contact_pts_by_frame):
+                    _cpts = self._contact_pts_by_frame[frame_idx]
+
             if _cpts is not None and len(_cpts) > 0:
-                self._mesh_contact.DeepCopy(pv.PolyData(_cpts.astype(np.float32)))
+                self._mesh_contact.DeepCopy(
+                    contact_polydata(_cpts.astype(np.float32), _cdepths)
+                )
             else:
-                self._mesh_contact.DeepCopy(pv.PolyData(np.empty((0, 3), dtype=np.float32)))
+                self._mesh_contact.DeepCopy(
+                    _empty_contact_polydata(
+                        with_depth_scalars=self._contact_clim is not None
+                    )
+                )
+            # Re-asserted after every dataset swap: without it the mapper
+            # reverts to per-frame autoscale on PyVista 0.47.1 and the same
+            # depth would take a different colour on a different frame.
+            if self._contact_clim is not None:
+                self._actor_contact.mapper.scalar_range = self._contact_clim
 
         if hasattr(self, "_actor_forearm") and self._actor_forearm is not None:
             if self._visibility.get("forearm", True):
