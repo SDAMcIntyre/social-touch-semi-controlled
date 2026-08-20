@@ -96,7 +96,10 @@ result, downstream, in the other repository.
 ## Success Criteria
 
 - [ ] Opening any of the five sidecar-bearing stages colours the contact points by penetration depth,
-      with a scalar bar titled "Penetration depth (mm)".
+      with a scalar bar titled "Penetration depth (mm)". *(Phase 6: the **state** is measured on real
+      ST14-02 artifacts for all five stages — mapper bound to `penetration_depth_mm`, `scalar_range`
+      = `series.clim_penetration_mm`, exactly one bar titled "Penetration depth (mm)". Left unticked
+      because "colours" is a visual claim and nothing was seen; that is Phase 6.3.)*
 - [x] The colour range for a given stage is identical on every frame of that stage — asserted by
       reading `actor.mapper.scalar_range` on at least three frames including one with no contact and
       one immediately after a stage switch. *(Phase 3: six frames, three of them empty, plus one
@@ -127,7 +130,9 @@ result, downstream, in the other repository.
 - [ ] **The render check that Phase 9 could not perform:** on `2022-06-15_ST14-02` the RF-centred
       depth patch is visually seated on the RF-centred forearm surface, on the correct side, moving
       coherently with the hand across the block. Recorded with screenshots in this plan.
-- [ ] Full suite green; the new adapter tests import no Qt, VTK or Open3D.
+- [x] Full suite green; the new adapter tests import no Qt, VTK or Open3D. *(Phase 6.7: 674 passed,
+      7 skipped, `MKL_THREADING_LAYER=TBB`; the Phase 2 static AST test asserts the leaf and its
+      adapter import no GUI toolkit.)*
 
 ## Definitions
 
@@ -635,8 +640,368 @@ render check itself.
 - [ ] 6.4 — Drive `2022-06-14_ST13-01` (the no-cluster passthrough) and confirm stage 5 behaves
       correctly when RF-centring is a passthrough copy.
 - [ ] 6.5 — Confirm stage 0's disabled control and its message on both sessions.
-- [ ] 6.6 — Record peak memory across a full six-stage walk, to confirm the cache bound holds.
-- [ ] 6.7 — Full suite; record pass/skip counts against the current 585 passed / 7 skipped baseline.
+- [x] 6.6 — Record peak memory across a full six-stage walk, to confirm the cache bound holds.
+- [x] 6.7 — Full suite; record pass/skip counts against the current 585 passed / 7 skipped baseline.
+
+**Started:** 2026-08-20T10:05Z  **Completed (headless half):** 2026-08-20T11:20Z
+
+#### Verification Results — headless, against REAL artifacts
+
+Everything below was measured on the production artifacts under
+`.../02_data/semi-controlled/3_merged/`, not on synthetic fixtures. Phases 1-5 were verified against
+synthetic sidecars; this is the first time the feature has met the real pipeline's output.
+
+**Environment — a real condition of reproducing these numbers.**
+
+| Condition | Value |
+|-----------|-------|
+| Interpreter | `D:/Programming/anaconda3/envs/social-touch/python.exe` |
+| `MKL_THREADING_LAYER` | **must** be `TBB`. Without it a broken Intel OpenMP runtime kills the interpreter with `0xc06d007f` as soon as anything imports `sklearn`/`threadpoolctl` |
+| `PYTHONUTF8` | `1` — unrelated to this feature, but `forearm_extraction/.../point_cloud_visualizer.py:10` prints an emoji at import and a `cp1252` console raises `UnicodeEncodeError` before any of this code runs |
+| `QtInteractor` | **still cannot initialise here** — VTK's `RenderWindowInteractor.initialize` blows the stack (`0xC00000FD`), offscreen included. Every render-path measurement below substitutes an off-screen `pv.Plotter` **for the `QtInteractor` class only**; every other line executed is the viewer's own |
+| PyVista / pandas | 0.47.1 / 2.3.3 |
+
+##### 6.1 (headless half) — the data path over real ST14-02, all six stages, two blocks
+
+`resolve_stage_paths` → `resolve_stage_depth_field` → `kinect_frame_indices` →
+`depth_frame_at_position` → `forearm_depth_scalars`, driven for every stage of
+`block-order-01` and `block-order-05`.
+
+`2022-06-15_ST14-02`, **block-order-01** — CSV 73 100 rows / 2 193 Kinect frames (stage 0: 3 149):
+
+| Stage | Sidecar dir | MB | Rows | Contact frames | `coordinate_space` | `vertex_id` | `clim_penetration_mm` |
+|-------|-------------|----|------|----------------|--------------------|-------------|------------------------|
+| 0 Merged (Raw) | `blocks_merged/` | — | — | — | *(absent)* | — | — |
+| 1 ICP Registered | `blocks_registered/` | 7.07 | 647 169 | 983 | `icp_registered` | no | `(-0.0, 18.62079620361328)` |
+| 2 Deduplicated | `blocks_deduped/` | 4.64 | 423 111 | 983 | `icp_registered` | no | `(-0.0, 18.62079620361328)` |
+| 3 Contact Projected | `blocks_projected/` | 5.23 | 423 111 | 983 | `icp_registered` | **yes** | `(-0.0, 18.62079620361328)` |
+| 4 PCA Calibrated | `blocks_pca_calibrated/` | 5.23 | 423 111 | 983 | `pca_calibrated` | **yes** | `(-0.0, 18.62079620361328)` |
+| 5 RF Centered | `blocks_rf_centered/` | 5.23 | 423 111 | 983 | `rf_centered` | **yes** | `(-0.0, 18.62079620361328)` |
+
+`2022-06-15_ST14-02`, **block-order-05** (the largest block) — CSV 98 766 rows / 2 963 Kinect frames:
+
+| Stage | MB | Rows | Contact frames | Space | `vertex_id` | `clim_penetration_mm` |
+|-------|----|------|----------------|-------|-------------|------------------------|
+| 1 | 41.94 | 3 632 693 | 2 678 | `icp_registered` | no | `(-5.7220458984375e-06, 22.561479568481445)` |
+| 2 | 25.96 | 2 273 340 | 2 678 | `icp_registered` | no | `(-5.394796517066425e-06, 22.561479568481445)` |
+| 3 | 29.54 | 2 273 340 | 2 678 | `icp_registered` | **yes** | `(-5.394796517066425e-06, 22.561479568481445)` |
+| 4 | 29.56 | 2 273 340 | 2 678 | `pca_calibrated` | **yes** | `(-5.394796517066425e-06, 22.561479568481445)` |
+| 5 | 29.56 | 2 273 340 | 2 678 | `rf_centered` | **yes** | `(-5.394796517066425e-06, 22.561479568481445)` |
+
+Join properties, every stage of both blocks:
+
+| Property | Measured |
+|----------|----------|
+| `kinect_frame_indices` on the real CSV | succeeds; no missing, non-finite or non-integral `frame_index` in any of the four blocks driven |
+| `frame_index` range | `[0, n-1]`, strictly increasing, all unique — i.e. on **these** artifacts it happens to coincide with row position, so real data cannot by itself distinguish the correct join from the positional shortcut. The synthetic non-contiguous fixture of Phase 3 remains the test that can |
+| `depth_frame_at_position(series, fi, p)` vs `series.frame(fi[p])` | identical on the first 50 probe positions of every stage of every block (bitwise, points and depths) |
+| 400 probe positions, ST14-02 b01 | 179 with contact, 221 empty; every drawn depth inside the stage's own clim |
+| 400 probe positions, ST14-02 b05 | 362 with contact, 38 empty; same |
+| Geometry source when depth colouring is on | the parquet's float32 coordinates, not the CSV `%.1f` blob (Phase 3 measurement, unchanged) |
+
+##### 6.2 — the clim-identity check. **The clims are NOT identical, and it is not a defect in the field.**
+
+Measured `clim_penetration_mm` across the sidecar-bearing stages of four real blocks, compared by
+IEEE-754 hex so no formatting hides a difference:
+
+| Block | Stages 1-5 clim identical? | Where it differs |
+|-------|---------------------------|-------------------|
+| ST14-02 `block-order-01` | **yes, bitwise** (`-0x0.0p+0` … `0x1.29eec80000000p+4` on all five) | — |
+| ST14-02 `block-order-05` | **no** | stage 1 low `-5.7220458984375e-06`; stages 2-5 low `-5.394796517066425e-06`. High bitwise identical (`0x1.68fbd20000000p+4`) on all five |
+| ST13-01 `block-order-01` | **yes, bitwise** across stages 1-4 (stage 5 raises — see 6.4) | — |
+| ST13-01 `block-order-03` | **no** | stage 1 low `0.0`; stages 2-4 low `6.748888699803501e-05`. High bitwise identical (`0x1.df431c0000000p+2`) |
+
+The plan said a difference "is a defect and must be investigated, not accepted". It was
+investigated, and the premise it rests on is the thing that is wrong.
+
+**The measurement.** Comparing the `(frame_index, signed_depth_mm)` multiset of `blocks_registered/`
+against `blocks_deduped/`, with the depth compared by its 64-bit pattern rather than by value:
+
+| Block | Registered rows | Deduped rows | Dropped | Deduped pairs **not** accounted for in registered |
+|-------|-----------------|--------------|---------|---------------------------------------------------|
+| ST14-02 b01 | 647 169 | 423 111 | 224 058 | **0** |
+| ST14-02 b05 | 3 632 693 | 2 273 340 | 1 359 353 | **0** |
+| ST13-01 b01 | 187 056 | 83 492 | 103 564 | **0** |
+| ST13-01 b03 | 804 323 | 335 528 | 468 795 | **0** |
+
+So every depth value that survives deduplication survives it **bitwise**; the deduped field is a
+strict sub-multiset of the registered one. And the *deep* end is preserved exactly in all four
+blocks — `min(signed_depth_mm)`, which is `clim_penetration_mm[1]`, is bitwise identical
+registered↔deduped everywhere.
+
+What moves is the *shallow* end — `max(signed_depth_mm)`, i.e. `-clim_penetration_mm[0]`, the vertex
+that was barely touching or a fraction of a micron outside the surface — and it moves precisely when
+deduplication drops the single row that carried it:
+
+| Block | Registered `signed max` | On frame | That frame: reg rows → ded rows | Value still present after dedup? | Deduped `signed max` |
+|-------|--------------------------|----------|----------------------------------|----------------------------------|-----------------------|
+| ST14-02 b01 | `0.0` | 470 | 286 → 173 | **yes** | `0.0` |
+| ST13-01 b01 | `-0.0` | 354 | 259 → 110 | no, but another row carries `-0.0` | `-0.0` |
+| ST14-02 b05 | `5.7220458984375e-06` | 1260 | 4097 → 2389 | **no** | `5.394796517066425e-06` |
+| ST13-01 b03 | `-0.0` | 878 | 311 → 117 | **no** | `-6.748888699803501e-05` |
+
+**Conclusion: the plan's expectation was too strong, not the artifact wrong.** "Depth is bitwise
+preserved through every transform" is a statement about *values*; `clim` is the min/max over a *row
+set*, and deduplication is a set-shrinking transform. Preserving every surviving value does not
+preserve the extremes of the set. Stages 2→3→4→5 change no rows at all and their clims are
+consequently bitwise identical in all four blocks — the only boundary that can move the clim is
+1→2, and only at its shallow end.
+
+Magnitude, for the record:
+
+| Block | Δ clim low | Δ as a fraction of the block's full clim span |
+|-------|-----------|-----------------------------------------------|
+| ST14-02 b05 | 3.272493e-07 mm | 1.45e-08 |
+| ST13-01 b03 | 6.748889e-05 mm | 9.01e-06 |
+
+Both are far below any visible difference in an inferno ramp and far below the depth field's own
+resolution. **No action is warranted**; what should change is this plan's stated expectation, and
+this section is that correction.
+
+##### 6.4 (headless half) — **DEFECT: stage 5 of `2022-06-14_ST13-01` cannot be opened at all**
+
+Driving the no-cluster passthrough session, stage 5 raises before anything is drawn:
+
+```
+ValueError: Stage 5 ('RF Centered') expects a contact depth field in coordinate space
+'rf_centered', but '...\3_merged\2022-06-14_ST13-01\blocks_rf_centered\
+2022-06-14_ST13-01_semicontrolled_block-order-01_contact_depth_field_pca-xyz.parquet'
+declares 'pca_calibrated'. Refusing to draw it: ...
+```
+
+Measured facts:
+
+| Fact | Measurement |
+|------|-------------|
+| Blocks affected | **all four** of ST13-01 (`block-order-01/02/03/04`) |
+| `rf_center_origin.json` | `{"status": "no_cluster_found", "rf_center": null, "total_points_evaluated": 1506, "points_above_threshold": 2}` |
+| `blocks_rf_centered/` sidecar vs `blocks_pca_calibrated/` sidecar | **md5-identical** on all four blocks (`ee0c5f4496e3`, `5cfa10964cb9`, `30df842335e9`, `f1ec65ad8b35`) — a byte copy |
+| Declared `coordinate_space` in the copied file | `pca_calibrated`, schema v2 |
+| Same check on ST14-02 (`status: "ok"`) | the two files differ (`36ffcc6d471c` vs `be2c4dde1efe`) and stage 5 declares `rf_centered` — correct |
+| Where the copy is made | `code/scripts/_5_postprocessing/center_on_receptive_field.py:370` `_copy_field_unchanged` |
+| Where the expectation is stated | `code/src/postprocessing/gui/stage_depth_field.py:149` `EXPECTED_SPACE_BY_STAGE[5] = COORDINATE_SPACE_RF_CENTERED` |
+
+**This is a genuine contract collision between two branches, not a coding slip on either side.**
+`_copy_field_unchanged`'s docstring argues the copy deliberately: *"the points did not move, so the
+file's declared `coordinate_space` — `pca_calibrated` — is still the truth, and copying the bytes is
+the only way to guarantee nothing was restamped on the way past."* The viewer's map states the
+opposite invariant — that whatever sits in `blocks_rf_centered/` declares `rf_centered` — and both
+positions are defensible in isolation. They cannot both hold.
+
+Blast radius in the viewer: `_load_stage_data` is called unguarded at
+`postprocessing_stage_viewer.py:864`, inside the `currentIndexChanged` slot, so the `ValueError`
+propagates out of a Qt slot. `self._current_stage_idx` has already been set to `5` on line 863, so
+after the failure the viewer's idea of the current stage disagrees with the data it is displaying
+(measured: the subsequent switch to stage 3 still worked, and stages 0-4 remain fully functional).
+
+**Not fixed here — Phase 6 is verification only.** Recording the options rather than choosing one:
+
+1. Restamp `coordinate_space` to `rf_centered` in the passthrough (a read-modify-write, contradicting
+   `_copy_field_unchanged`'s stated reason for being a byte copy), or
+2. make `EXPECTED_SPACE_BY_STAGE[5]` accept `pca_calibrated` **when** `rf_center_origin.json` says
+   `no_cluster_found` — which requires the viewer to read that file, i.e. new policy in the leaf, or
+3. introduce a fourth space name meaning "RF-centring was a no-op".
+
+Option 2 is the only one that keeps both branches' stated invariants; it is also the only one that
+adds a new input to the leaf. This belongs in its own change with its own plan.
+
+##### 6.5 (headless half) — stage 0 resolves to the ordinary absent state on both real sessions
+
+| Property | ST14-02 | ST13-01 |
+|----------|---------|---------|
+| `blocks_merged/` sidecar path derived | yes (`..._merged_data` → `..._contact_depth_field.parquet`) | yes |
+| That file exists | **no** | **no** |
+| `StageDepthField.is_present` | `False` | `False` |
+| Checkbox enabled / checked | `False` / `False` | `False` / `False` |
+| Tooltip byte-identical to `StageDepthField.message` | **yes** | **yes** |
+| Message names the producing task | yes — names `blocks_filtered/`, the directory `filter_contact_depth_field_by_neural_quality` writes, and points the user at stage 1 | yes |
+| `plotter.scalar_bars` | `[]` | `[]` |
+| Contact actor | `scalar_visibility == False`, `GetProperty()` colour `(1.0, 0.0, 0.0)` | same |
+| Exception | none | none |
+
+##### Widget render path, driven over real artifacts
+
+Substituting an off-screen `pv.Plotter` for the `QtInteractor` class only, the real
+`__init__` → `_load_stage_data` → `_build_ui` → `_init_actors` → `_update_frame` →
+`_on_stage_changed` path was driven on `ST14-02 block-order-01` (opened at stage 5) and
+`ST13-01 block-order-01` (opened at stage 4, since stage 5 raises).
+
+| Property | ST14-02 b01 |
+|----------|-------------|
+| `mapper.scalar_range` on open @ stage 5 | `(-0.0, 18.62079620361328)` = `series.clim_penetration_mm` |
+| `mapper.scalar_range` over 8 frames (4 empty incl. first and last, 3 with contact, plus a re-visit of frame 0) | `(-0.0, 18.62079620361328)` on every one |
+| Points drawn, positions 77 / 78 / 79 | 53 / 95 / 144 |
+| `plotter.scalar_bars` on stages 5 → 4 → 3 → 2 → 1 → 0 | `1 → 1 → 1 → 1 → 1 → 0`, always exactly `"Penetration depth (mm)"` |
+| `mapper.scalar_range` after each of those five switches | unchanged; stage 0 falls back to VTK's default `(0.0, 1.0)` with `scalar_visibility == False` |
+| Contact "Colour by depth" enabled on stages 1-5 / stage 0 | `True` / `False` |
+| Forearm "Colour by depth" **present** on stages 3, 4, 5; **absent** on 0, 1, 2 | confirmed (absent, not disabled) |
+| Forearm PLY loaded at stage 5 | `forearm_rf_centered/2022-06-15_ST14-02_forearm.ply`, **10 712 points** |
+| Contact toggle OFF → ON round trip | `scalar_visibility` `False`→`True`; `scalar_range` unchanged; **actor count unchanged (5 → 5)** |
+| Forearm layer ON, position 77 (Kinect frame 77) | mapper array and active scalars both `forearm_penetration_depth_mm`; `mapper.scalar_range` = the contact clim; **53 lit / 10 659 NaN**; depths 0.00702 … 4.26 mm |
+| Forearm layer ON, a no-contact frame | array all-NaN — no paint persists from the previous frame |
+| Forearm layer OFF | active scalars back to `colors`; actor count unchanged |
+| Scalar bar with contact OFF but forearm ON | still visible (one bar serves both layers) |
+
+`ST13-01 block-order-01`, same drive from stage 4: clim `(0.0, 6.510202407836914)` on open and on
+every frame; forearm PLY `forearm_pca_calibrated/2022-06-14_ST13-01_forearm.ply`, **1 807 points**;
+forearm layer ON at position 168 → 3 lit / 1 804 NaN, 0.329 … 0.912 mm; stage 5 raises as above;
+stages 3, 2, 1, 0 then all switch cleanly with exactly one bar (zero on stage 0).
+
+##### 6.3's numeric half — `vertex_id` against the REAL forearm PLYs
+
+`forearm_depth_scalars` was called with `len(pv.read(ply).points)` of the **actual** stage PLYs, which
+is the check that would catch a provenance mismatch on real data:
+
+| Session | Stage | Forearm PLY | `len(ply.points)` | `reference_ply_vertex_count` in the sidecar | Match |
+|---------|-------|-------------|-------------------|---------------------------------------------|-------|
+| ST14-02 | 3 | `forearm_deduped/2022-06-15_ST14-02_forearm.ply` | 10 712 | `10712` | ✔ |
+| ST14-02 | 4 | `forearm_pca_calibrated/2022-06-15_ST14-02_forearm.ply` | 10 712 | `10712` | ✔ |
+| ST14-02 | 5 | `forearm_rf_centered/2022-06-15_ST14-02_forearm.ply` | 10 712 | `10712` | ✔ |
+| ST13-01 | 3 | `forearm_deduped/2022-06-14_ST13-01_forearm.ply` | 1 807 | `1807` | ✔ |
+| ST13-01 | 4 | `forearm_pca_calibrated/2022-06-14_ST13-01_forearm.ply` | 1 807 | `1807` | ✔ |
+
+Provenance recorded in every stage-3/4/5 sidecar of both sessions:
+`{reference_ply: <session>_forearm.ply, reference_ply_vertex_count: 10712|1807, dedup_epsilon: 0.5}`.
+Verified on both blocks of ST14-02 and both blocks of ST13-01:
+
+- the scatter lights only vertices the frame touched — ST14-02 b01 frame 82: **223 lit / 10 489 NaN**
+  from 225 contact rows (two rows address one vertex and resolve to the deeper); ST14-02 b05 frame
+  126: **152 lit / 10 560 NaN** from 160 rows; ST13-01 b03 frame 134: **19 lit / 1 788 NaN** from 20 rows;
+- a frame with no contact still validates and returns an **all-NaN** array (so a re-deduplicated
+  forearm is refused on the first frame drawn, not the first frame that happens to touch);
+- calling with `vertex_count + 1` raises `ValueError` on **every** stage of **every** block driven —
+  the count check is live against real provenance, not only against the synthetic fixture.
+
+##### 6.6 — memory across a full six-stage walk, and the cache bound
+
+`STAGE_DEPTH_FIELD_CACHE_SIZE == len(STAGE_LABELS) == 6`, so a walk of the six stages **never
+evicts**: the bound is "one full sweep resident", and that is what these numbers price.
+
+| Drive | Peak working set | RSS at exit |
+|-------|------------------|-------------|
+| Data path only, ST14-02 b01, six stages | **587.3 MB** | 422.0 MB |
+| Data path only, ST14-02 b05 (largest block), six stages | **1 118.6 MB** | 585.0 MB |
+| Data path only, ST13-01 b01 + b03, twelve stage resolutions | 627.9 MB | 443.5 MB |
+| Full widget drive (VTK + real PLYs), ST14-02 b01, six stages + toggles | **741.2 MB** | 643.9 MB |
+| Full widget drive, ST14-02 b05, six stages + toggles | **1 378.5 MB** | 1 169.2 MB |
+| 14-visit walk `5,4,3,2,1,0,5,4,3,2,1,0,3,5` on b05 | 1 201.4 MB | 933.5 MB |
+
+Read accounting on that 14-visit walk, counted by wrapping `read_contact_depth_field`:
+
+| Point | Reads |
+|-------|-------|
+| After constructing all six loaders | **0** |
+| After the first full sweep (stages 5→0) | **5** — one per sidecar-bearing stage, none for stage 0 |
+| After 14 visits total | **5**, 5 distinct files — **every revisit was served from the cache** |
+
+The bound therefore holds in the sense it was written for (residency is a property of the constant,
+not of how long the window stays open), and a full sweep of the largest block in the dataset costs
+~1.4 GB peak with VTK in the process. **Eviction itself is still untested** — with `maxsize` equal to
+the stage count it cannot occur on any real walk; the corresponding Testing-Plan box stays unticked.
+
+##### 6.7 — full suite
+
+`MKL_THREADING_LAYER=TBB pytest -q` → **674 passed, 7 skipped in 25.50s**, identical to the Phase 5
+baseline. No test was added, removed or modified in this phase (Phase 6 is verification only; the
+working tree carries no source, test or config change from it).
+
+#### What was NOT verified — every one of these needs a real window
+
+Stated plainly so nothing here is mistaken for the render check:
+
+- **Nothing was seen.** No colour, no ramp, no scalar bar, no grey untouched skin, no geometry was
+  put in front of a human eye. `QtInteractor` cannot initialise in this environment (`0xC00000FD`),
+  so "the mapper is bound to `penetration_depth_mm` with clim X and a bar titled Y" is the whole of
+  what was established. Whether that renders as an inferno-ramped patch seated on the forearm is
+  exactly the open question, and it is exactly what Phase 9 owed.
+- **6.1's GUI walk, 6.2's screenshots, 6.3 the render check, and 6.5's visual confirmation remain
+  undone**, and their boxes are deliberately left unticked.
+- **Playback frame rate** on the largest block is unmeasured — the timer never ran.
+- **The `wglMakeCurrent` hazard** at `postprocessing_stage_viewer.py:523-527` is untested: the
+  deferred `QTimer.singleShot(0, ...)` tick was invoked synchronously by the harness, so the generation
+  guard and the real OpenGL context release were never exercised. Rapid stage switching during
+  playback likewise.
+- **Cache eviction** — see 6.6.
+- **Real data cannot distinguish the frame-index join from a positional one.** On all four blocks
+  driven, `frame_index` equals row position exactly. The join is correct — it was measured against
+  `series.frame(fi[p])` — but the artifact that would *catch* a regression here is still only the
+  synthetic non-contiguous fixture from Phase 3.
+
+#### Remaining for a real window (human)
+
+Everything below needs a machine where `QtInteractor` initialises. Do them in this order.
+
+**Launch.**
+
+```bash
+conda activate social-touch-env
+cd F:/GitHub/touch_projects/social-touch-semi-controlled
+python code/scripts/launch_pipeline_gui.py     # Postprocess category
+```
+
+or drive the DAG directly:
+
+- config: `configs/postprocess_visualization_dag.yaml`
+- task: `view_postprocessing_stages`
+- set `kinect_configs` to `kinect_configs/valid_configs_ST14-02` (start with
+  `kinect_config_2022-06-15_ST14-02_semicontrolled_block-order01.yaml`; `block-order05` is the
+  3.6 M-row stress case)
+
+**Step 1 — 6.1, the six-stage walk.** Open at stage 0 and step 0 → 1 → 2 → 3 → 4 → 5, then back
+5 → 0. Look for: no VTK context error on any switch (the `wglMakeCurrent` hazard); exactly one scalar
+bar titled "Penetration depth (mm)" on stages 1-5 and none on stage 0; the bar's numeric endpoints
+reading `-0.00` and `18.62` on block-order-01 at *every* stage 1-5.
+**FAILURE** = a crash or a black frame on switch, two bars at once, a bar surviving onto stage 0, or
+a bar whose numbers change between stages 2, 3, 4 and 5. (Between stage 1 and stage 2 a change in the
+*low* endpoint below display precision is expected — see 6.2 above; on block-order-01 there is none
+at all, on block-order-05 it is 3e-07 mm and cannot be visible.)
+
+**Step 2 — 6.2, screenshots.** One screenshot per stage 1-5 of `block-order-01`, on a frame with
+substantial contact (positions 77-79 have 53, 95 and 144 contact points; positions 82, 104, 109 have
+225-240 in the deduped stages). Paste them into this section. Include the scalar bar in the frame.
+
+**Step 3 — 6.3, THE RENDER CHECK — the one thing this whole plan exists for.** On stage 5
+(`RF Centered`) of `2022-06-15_ST14-02`, with "Colour by depth" ON for the contact points:
+
+1. Scrub to a frame with a large patch and confirm the coloured patch is **on the forearm surface** —
+   not floating beside it, not behind it, not inside it, not mirrored across the arm's long axis.
+2. Rotate the camera 180° and confirm the patch is on the side of the arm the hand is on.
+3. Turn the **Forearm** group's "Colour by depth" ON. Where the patch overlaps the surface, the two
+   must agree in colour; untouched skin must be the plain neutral grey (`#a0a0a0`), visibly distinct
+   from the darkest end of the inferno ramp — that distinction is "nobody touched this" vs "touched
+   at the shallowest depth in the recording", and it is the one thing `nan_color` exists for.
+4. Play the block through and confirm the patch **tracks the hand coherently** — it moves with the
+   stroke rather than jumping, wrapping around the mesh, or staying put.
+5. Compare against stage 4 (`PCA Calibrated`): the patch must sit in the same anatomical place on the
+   arm, only the origin of the axes having moved.
+
+**FAILURE of the render check** = any of: the patch is off the surface by more than the mesh's own
+thickness; the patch is on the wrong side of the arm; the patch is mirrored or translated relative to
+where the hand visibly is; the patch does not move with the hand; the patch sits somewhere different
+at stage 5 than at stage 4 relative to the anatomy. **If it fires, this plan stops.** The finding goes
+back to `propagate-contact-depth-field-through-postprocessing.md` as a defect in the propagation, and
+the viewer must *not* be adjusted to make the picture look right.
+
+If it passes, tick 6.3 here **and** the render-check box in Phase 9 of
+`propagate-contact-depth-field-through-postprocessing.md`, and attach the screenshots to both.
+
+**Step 4 — 6.5 visual, stage 0.** On stage 0 confirm the contact points render **visibly flat red**
+with no bar, and that the "Colour by depth" box is greyed out and its tooltip (hover) names
+`blocks_filtered/` and points at stage 1. The state was measured headlessly; only "visibly" is left.
+
+**Step 5 — toggles.** Uncheck "Colour by depth" on stage 5: the points must turn flat red and the bar
+must disappear. Re-check: inferno and bar return, with the *same* endpoints as before.
+**FAILURE** = the colours change scale on the way back, or the bar comes back with different numbers.
+
+**Step 6 — playback rate.** Play `block-order-05` (2 963 frames, 2.27 M sidecar rows) end to end at
+stage 5 with both depth layers on. Record the observed frame rate here.
+**FAILURE** = a rate low enough that scrubbing is unusable, which would put the per-frame scalar
+update back on the table.
+
+**Step 7 — 6.4 visual, ST13-01.** Point `kinect_configs` at
+`kinect_configs/valid_configs_ST13-01` and walk stages 0-4. **Stage 5 will raise** — that is the
+defect recorded in 6.4 above, it is expected until that contract collision is resolved, and reaching
+it will take the window down. Do not select stage 5 unless you want to see the failure mode.
 
 **Files Modified:** none (verification only); results recorded in this plan
 
@@ -656,7 +1021,10 @@ render check itself.
 - [x] Stage 0 returns absent without calling a loader.
 - [x] Missing sidecar → absent with a non-empty message; corrupt sidecar → raises.
 - [x] A loader returning a non-series raises `TypeError`.
-- [ ] The cache evicts at its bound and re-reads an evicted stage.
+- [ ] The cache evicts at its bound and re-reads an evicted stage. *(Phase 6.6: **cannot occur on a
+      real walk** — `STAGE_DEPTH_FIELD_CACHE_SIZE == len(STAGE_LABELS) == 6`, and a 14-visit walk over
+      one block performed 5 reads and zero re-reads. Testing eviction needs a deliberately undersized
+      cache; left unticked rather than quietly reinterpreted.)*
 - [x] *(Ph.5)* `forearm_depth_scalars` scatters to the right vertices; NaN elsewhere; provenance
       mismatch raises; no `vertex_id` → `None`. *(Plus: the mismatch raises on a no-contact frame too,
       so a re-deduplicated forearm is refused on the first frame drawn rather than the first frame
@@ -673,8 +1041,11 @@ render check itself.
       the positional shortcut is taken. *(Plus a guard-the-guard test asserting the fixture can still
       tell the two joins apart.)*
 - [x] A `_kinect_df` without a `frame_index` column raises rather than falling back.
-- [ ] Six `StagePaths` built by `resolve_stage_paths` against a synthetic session tree carry the
-      expected loaders, with stage 0's resolving to a non-existent path.
+- [x] Six `StagePaths` built by `resolve_stage_paths` against a synthetic session tree carry the
+      expected loaders, with stage 0's resolving to a non-existent path. *(Phase 6 did this against
+      **real** session trees instead, which is strictly stronger: four blocks across ST14-02 and
+      ST13-01, six `StagePaths` each, stage 0's sidecar path derived and non-existent every time,
+      stages 1-5 pairing to the files that are actually on disk.)*
 
 ### Manual Verification
 - [ ] All six stages open without a VTK context error on stage switch (the `wglMakeCurrent` hazard
@@ -693,7 +1064,10 @@ render check itself.
 - [ ] A single-depth-value recording → degenerate but valid clim (covered upstream at
       `test_neural_kinect_depth_field_view.py:263`).
 - [ ] Rapid stage switching during playback (generation guard).
-- [ ] A session where `blocks_rf_centered/` is a passthrough copy (ST13-01).
+- [ ] A session where `blocks_rf_centered/` is a passthrough copy (ST13-01). **Tested and it
+      FAILS** — stage 5 raises `ValueError` on all four ST13-01 blocks because the passthrough copies
+      the sidecar byte-for-byte with `coordinate_space: pca_calibrated`. See Phase 6.4 for the
+      measurements and the three options; not fixed here.
 - [x] *(Ph.5)* A forearm PLY whose vertex count disagrees with `reference_ply_vertex_count` — must
       raise, since this is the silent-renumbering hazard. *(Driven through the widget with a 15-vertex
       forearm against a sidecar declaring 12: every id is still in range, so only the count check
