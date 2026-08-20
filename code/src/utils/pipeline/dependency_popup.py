@@ -11,8 +11,9 @@ def show_dependency_error_popup(error: "PipelineDependencyError") -> None:
     Blocks the calling thread until the user dismisses the dialog; the
     pipeline then continues to the next session. Must be called from the
     main thread — Qt GUI operations are not thread-safe. If invoked from
-    a worker thread (e.g. under Prefect parallel execution) the popup is
-    skipped and the error is logged instead.
+    a worker thread the popup is skipped and the error is logged instead.
+    (The pipeline is sequential today, but the guard is kept: this function
+    is reachable from any caller, including future non-main-thread ones.)
     """
     try:
         import sys

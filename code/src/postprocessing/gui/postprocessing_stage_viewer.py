@@ -486,7 +486,7 @@ class PostprocessingStageViewer(QMainWindow):
         self.plotter.render()
 
         if self._neural_panel is not None:
-            self._neural_panel.update_cursor(frame_idx, self._neural_scale)
+            self._neural_panel.update_cursor(int(frame_idx * self._neural_scale))
 
         if self._total_frames > 0:
             self.frame_label.setText(f"{frame_idx + 1} / {self._total_frames}")

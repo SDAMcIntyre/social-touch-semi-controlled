@@ -7,8 +7,6 @@ import time
 import traceback
 from multiprocessing import Queue, freeze_support
 
-from prefect import flow, get_run_logger
-
 # Setup a basic logger
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -78,13 +76,13 @@ from _3_preprocessing._7_unification import unify_datasets
 
 # --- 3. Sub-Flows (Formerly Tasks) ---
 
-@flow(name="0. Analyse MKV video")
+# Stage 0: Analyse MKV video
 def validate_mkv_video(source_video: Path, output_dir: Path, *, force_processing: bool = False) -> Path:
     print(f"[{output_dir.name}] Analysing MKV video...")
     analysis_csv_path = output_dir / "mkv_analysis_report.csv"
     return generate_mkv_stream_analysis(source_video, analysis_csv_path, force_processing=force_processing)
 
-@flow(name="1. Generate RGB Video")
+# Stage 1: Generate RGB Video
 def generate_rgb_video(source_video: Path, output_dir: Path, *, force_processing: bool = False) -> Path:
     print(f"[{output_dir.name}] Generating RGB video...")
     base_filename = os.path.splitext(os.path.basename(source_video))[0]
@@ -92,14 +90,14 @@ def generate_rgb_video(source_video: Path, output_dir: Path, *, force_processing
     rgb_video_path = extract_color_to_mp4(source_video, rgb_path, force_processing=force_processing)
     return Path(rgb_video_path) if not isinstance(rgb_video_path, Path) else rgb_video_path
 
-@flow(name="2. Generate Depth Images")
+# Stage 2: Generate Depth Images
 def generate_depth_images(source_video: Path, output_dir: Path, *, force_processing: bool = False) -> Path:
     print(f"[{output_dir.name}] Generating depth images...")
     depth_dir = output_dir / source_video.name.replace(".mkv", "_depth")
     extract_depth_to_tiff(source_video, depth_dir, force_processing=force_processing)
     return depth_dir
 
-@flow(name="3. Track LED Blinking")
+# Stage 3: Track LED Blinking
 def track_led_blinking(video_path: Path, stimulus_metadata: Path, output_dir: Path, *, force_processing: bool = False) -> Path:
     print(f"[{output_dir.name}] Tracking LED blinking...")
     name_baseline = video_path.stem + "_LED"
@@ -118,7 +116,7 @@ def track_led_blinking(video_path: Path, stimulus_metadata: Path, output_dir: Pa
 
     return csv_led_path_corrected
 
-@flow(name="5. Validate Forearm Extraction")
+# Stage 5: Validate Forearm Extraction
 def validate_forearm_extraction(session_output_dir: Path) -> Path:
     print(f"[{session_output_dir.name}] Validating forearm extraction...")
     is_valid = is_forearm_valid(session_output_dir / "forearm_pointclouds", verbose=True)
@@ -127,7 +125,7 @@ def validate_forearm_extraction(session_output_dir: Path) -> Path:
     # Returning the boolean status directly, as it does not produce a file path for downstream tasks.
     return is_valid
 
-@flow(name="5. Validate Hand Extraction")
+# Stage 5: Validate Hand Extraction
 def validate_hand_extraction(rgb_video_path: Path, hand_models_dir: Path, expected_labels: list, output_dir: Path) -> Path:
     print(f"[{output_dir.name}] Validating hand extraction...")
     name_baseline = rgb_video_path.stem + "_handmodel"
@@ -138,7 +136,7 @@ def validate_hand_extraction(rgb_video_path: Path, hand_models_dir: Path, expect
     return is_valid
 
 # --- REFACTORED: Track Stickers Raw Flow ---
-@flow(name="6a. Track Stickers (Raw 2D)")
+# Stage 6a: Track Stickers (Raw 2D)
 def track_stickers_raw_flow(
     rgb_video_path: Path, 
     output_dir: Path, 
@@ -158,7 +156,7 @@ def track_stickers_raw_flow(
     return stickers_roi_csv_path, metadata_roi_path
 
 # --- REFACTORED: Refine Sticker Features Flow ---
-@flow(name="6b. Refine Sticker Features")
+# Stage 6b: Refine Sticker Features
 def refine_sticker_features_flow(
     rgb_video_path: Path,
     output_dir: Path,
@@ -213,7 +211,7 @@ def refine_sticker_features_flow(
 
     return final_csv_path, True
 
-@flow(name="6. Generate XYZ Sticker Positions (3D)")
+# Stage 6: Generate XYZ Sticker Positions (3D)
 def generate_xyz_stickers(
     stickers_2d_path: Path, 
     source_video: Path, 
@@ -237,7 +235,7 @@ def generate_xyz_stickers(
     )
     return result_csv_path
 
-@flow(name="6c. Correct XYZ Sticker Motion")
+# Stage 6c: Correct XYZ Sticker Motion
 def correct_xyz_stickers_motion_flow(
     stickers_xyz_path: Path,
     output_dir: Path,
@@ -271,7 +269,7 @@ def correct_xyz_stickers_motion_flow(
 
 
 # --- REFACTORED: Track Hands Model Flow ---
-@flow(name="7a. Track Hands Model")
+# Stage 7a: Track Hands Model
 def track_hands_model_flow(
     rgb_video_path: Path,
     output_dir: Path,
@@ -295,7 +293,7 @@ def track_hands_model_flow(
     return tracked_hands_path
 
 # --- REFACTORED: Generate 3D Hand Motion Flow ---
-@flow(name="7b. Generate 3D Hand in Motion")
+# Stage 7b: Generate 3D Hand in Motion
 def generate_3d_hand_in_motion_flow(
     rgb_video_path: Path, 
     tracked_hands_path: Path, 
@@ -332,7 +330,7 @@ def generate_3d_hand_in_motion_flow(
 
     return out_motion_npz_path, metadata_path
 
-@flow(name="7c. Stabilise Hand Motion")
+# Stage 7c: Stabilise Hand Motion
 def stabilise_hand_motion_flow(
     hand_motion_npz_path: Path,
     output_dir: Path,
@@ -361,7 +359,7 @@ def stabilise_hand_motion_flow(
 
     return out_stabilised_npz_path
 
-@flow(name="8. Generate Somatosensory Characteristics")
+# Stage 8: Generate Somatosensory Characteristics
 def compute_somatosensory_characteristics_flow(
     hand_motion_npz_path: Path,
     hand_metadata_path: Path,
@@ -372,27 +370,34 @@ def compute_somatosensory_characteristics_flow(
     *,
     monitor: bool = False,
     force_processing: bool = False
-) -> Path:
+) -> tuple[Path, Path]:
     print(f"[{output_dir.name}] Generating somatosensory characteristics...")
     name_baseline = Path(current_video_filename).stem
     forearm_pointcloud_dir = session_processed_dir / "forearm_pointclouds"
     forearm_metadata_path = forearm_pointcloud_dir / (session_id + "_arm_roi_metadata.json")
 
     contact_characteristics_path = output_dir / (name_baseline + "_contact_and_kinematic_data.csv")
+    # Per-vertex sidecar of the same stem, in the same directory. Derived from
+    # path arithmetic alone so the skip check stays resolvable without opening
+    # either artifact.
+    contact_depth_field_path = output_dir / (name_baseline + "_contact_depth_field.parquet")
     compute_somatosensory_characteristics(
         hand_motion_npz_path,
         hand_metadata_path,
-        forearm_metadata_path, 
+        forearm_metadata_path,
         forearm_pointcloud_dir,
-        current_video_filename, 
-        contact_characteristics_path, 
-        monitor=monitor, 
+        current_video_filename,
+        contact_characteristics_path,
+        contact_depth_field_path,
+        monitor=monitor,
         force_processing=force_processing
     )
-    return contact_characteristics_path
+    # Order matters: the registry binds these positionally, and
+    # unify_processed_data consumes the CSV as somatosensory_chars_path.
+    return contact_characteristics_path, contact_depth_field_path
 
 
-@flow(name="10. Define Trial IDs")
+# Stage 10: Define Trial IDs
 def define_trial_ids_flow(rgb_video_path: Path, output_dir: Path, *, force_processing: bool = False) -> Path:
     print(f"[{output_dir.name}] Defining Trial IDs...")
     name_baseline = Path(rgb_video_path).stem
@@ -407,7 +412,7 @@ def define_trial_ids_flow(rgb_video_path: Path, output_dir: Path, *, force_proce
     
     return output_path
 
-@flow(name="11. Add Stimuli Metadata")
+# Stage 11: Add Stimuli Metadata
 def generate_stimuli_metadata_flow(trial_data_path: Path, stimulus_metadata: Path, output_dir: Path, *, force_processing: bool = False) -> tuple[Path, Path]:
     print(f"[{output_dir.name}] Adding Stimuli Metadata...")
     name_baseline = Path(trial_data_path).stem.replace("_trial_ids_only", "")
@@ -421,7 +426,7 @@ def generate_stimuli_metadata_flow(trial_data_path: Path, stimulus_metadata: Pat
                                       force_processing=force_processing)
     return output_path, aligned_output_path
 
-@flow(name="12. Find Single Touches")
+# Stage 12: Find Single Touches
 def find_single_touches_flow(trial_data_path: Path, stickers_xyz_path: Path, stimuli_metadata_path: Path, output_dir: Path, *, force_processing: bool = False) -> Path:
     print(f"[{output_dir.name}] Finding Single Touches...")
     name_baseline = Path(trial_data_path).stem.replace("_trial-ids", "")
@@ -439,7 +444,7 @@ def find_single_touches_flow(trial_data_path: Path, stickers_xyz_path: Path, sti
     
     return final_path
     
-@flow(name="13. Unify Processed Data")
+# Stage 13: Unify Processed Data
 def unify_processed_data_flow(led_path: Path, 
                               contact_path: Path, 
                               trial_path: Path, 
@@ -455,7 +460,6 @@ def unify_processed_data_flow(led_path: Path,
     return final_path
 
 # --- 4. The "Worker" Flow ---
-# @flow(name="Run Single Session Pipeline")
 def run_single_session_pipeline(
     config: KinectConfig,
     dag_handler: DagConfigHandler,
@@ -585,7 +589,7 @@ def run_single_session_pipeline(
                             "session_id": config.session_id,
                             "current_video_filename": context.get("rgb_video_path").name,
                             "output_dir": config.video_processed_output_dir / "kinematics_analysis"},
-         "outputs": ["somatosensory_chars_path"]},
+         "outputs": ["somatosensory_chars_path", "contact_depth_field_path"]},
 
         {"name": "find_single_touches",
          "func": find_single_touches_flow,
@@ -656,46 +660,39 @@ def run_batch_processing(
     report_file_path: Path,
     parallel: bool,
 ):
+    # `parallel` is still read from the DAG config so existing YAML stays valid, but
+    # the parallel execution path has been removed; enabling it raises immediately.
+    if parallel:
+        raise NotImplementedError(
+            "parallel_execution is not supported: the parallel batch path was removed "
+            "along with Prefect. It never functioned -- it was disabled in every shipped "
+            "config, unreachable from the GUI, and broken or empty at three of its four "
+            "call sites. Set 'parallel_execution: false' in the DAG config. "
+            "See docs/development/plans/active/remove-prefect-orchestration.md."
+        )
+
     dag_handler_template = DagConfigHandler(dag_config_path)
 
-    mode = "PARALLEL" if parallel else "SEQUENTIAL"
-    logging.info(f"🚀 Starting batch processing for {len(block_files)} sessions in {mode} mode.")
+    logging.info(f"🚀 Starting batch processing for {len(block_files)} sessions in SEQUENTIAL mode.")
 
-    submitted_runs = []
     for block_file in block_files:
         logging.info(f"Preparing session: {block_file.stem}")
         config_data = KinectConfigFileHandler.load_and_resolve_config(block_file)
         validated_config = KinectConfig(config_data=config_data, database_path=project_data_root)
         dag_handler_instance = dag_handler_template.copy()
 
-        if parallel:
-            run = run_single_session_pipeline.submit(
+        try:
+            run_single_session_pipeline(
                 config=validated_config,
                 dag_handler=dag_handler_instance,
                 monitor_queue=monitor_queue,
-                report_file_path=report_file_path,
-                flow_run_name=f"session-{validated_config.session_id}",
+                report_file_path=report_file_path
             )
-            submitted_runs.append(run)
-        else:
-            try:
-                run_single_session_pipeline(
-                    config=validated_config,
-                    dag_handler=dag_handler_instance,
-                    monitor_queue=monitor_queue,
-                    report_file_path=report_file_path
-                )
-                logging.info(f"--- Completed session: {block_file.stem} ---")
-            except Exception as e:
-                logging.error(f"Failed to process session {block_file.stem}. Error: {e}")
-                continue
+            logging.info(f"--- Completed session: {block_file.stem} ---")
+        except Exception as e:
+            logging.error(f"Failed to process session {block_file.stem}. Error: {e}")
+            continue
 
-    if parallel:
-        logging.info("All flows submitted. Waiting for parallel runs to complete...")
-        for i, run in enumerate(submitted_runs):
-            run.wait()
-            logging.info(f"({i+1}/{len(submitted_runs)}) Completed flow run: {run.name}")
-    
     logging.info("✅ All batch processing tasks have finished.")
 
 

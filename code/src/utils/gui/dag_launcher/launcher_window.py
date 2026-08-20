@@ -28,7 +28,6 @@ from PyQt5.QtWidgets import (
 from utils.gui.dag_launcher.console_widget import ConsoleWidget
 from utils.gui.dag_launcher.kinect_directory_selector import SessionConfigSelector
 from utils.gui.dag_launcher.launcher_config import WorkflowEntry
-from utils.gui.dag_launcher.prefect_server_manager import PrefectServerManager
 from utils.gui.dag_launcher.process_output_reader import ProcessOutputReader
 from utils.gui.dag_launcher.task_panel import TaskPanel
 from utils.gui.dag_launcher.workflow_selector import WorkflowSelector
@@ -64,10 +63,6 @@ class LauncherWindow(QMainWindow):
         self._build_toolbar()
         self._build_ui()
         self.setStatusBar(QStatusBar())
-
-        self._server_manager = PrefectServerManager()
-        self._server_manager.start()
-        QTimer.singleShot(0, self._wait_for_prefect_server)
 
     # ------------------------------------------------------------------
     # UI construction
@@ -289,19 +284,7 @@ class LauncherWindow(QMainWindow):
             if not self._confirm_discard():
                 event.ignore()
                 return
-        self._server_manager.stop()
         event.accept()
-
-    def _wait_for_prefect_server(self) -> None:
-        self.statusBar().showMessage("Starting Prefect server…")
-        if self._server_manager.wait_until_ready(timeout_seconds=30.0):
-            self.statusBar().showMessage("Prefect server ready", 5000)
-            logger.info("Prefect server ready at %s", self._server_manager.api_url)
-        else:
-            self.statusBar().showMessage(
-                "Prefect server unavailable — workflows will use ephemeral mode"
-            )
-            logger.warning("Prefect server did not become ready within timeout")
 
     # ------------------------------------------------------------------
     # Run button
@@ -327,23 +310,21 @@ class LauncherWindow(QMainWindow):
             return
         if self._model:
             self._on_save()
-        if not self._server_manager.is_running():
-            self.statusBar().showMessage("Restarting Prefect server…")
-            self._server_manager.start()
-            if not self._server_manager.wait_until_ready(timeout_seconds=30.0):
-                logger.warning(
-                    "Prefect server unavailable — falling back to ephemeral mode"
-                )
         project_root = self._configs_dir.parent
-        cmd = [sys.executable, str(self._current_entry.script)]
+        # -u forces unbuffered stdout/stderr in the child. Its stdout is a pipe,
+        # so CPython would otherwise block-buffer it (~8 KB) and the console below
+        # would show long silences followed by bursts instead of live progress.
+        # Chosen over PYTHONUNBUFFERED=1 because the flag keeps the decision
+        # visible at this call site rather than hidden in inherited environment
+        # state.
+        cmd = [sys.executable, "-u", str(self._current_entry.script)]
         if self._current_entry.dag_config is not None:
             cmd += ["--dag-config", str(self._current_entry.dag_config)]
-        env = self._server_manager.get_env() if self._server_manager.is_running() else None
         self._aborting = False
+        # No `env=`: the child inherits this process's environment unchanged.
         self._process = subprocess.Popen(
             cmd,
             cwd=str(project_root),
-            env=env,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
         )

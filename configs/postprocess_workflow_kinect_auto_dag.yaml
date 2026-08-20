@@ -6,10 +6,19 @@
 parameters:
   # Set to true to run different sessions in parallel, false to run them one by one.
   parallel_execution: false
-  kinect_configs: [valid_configs_ST13-01, valid_configs_ST13-02, 
-      valid_configs_ST13-03, valid_configs_ST14-01, valid_configs_ST14-02, 
-      valid_configs_ST14-04, valid_configs_ST15-01, valid_configs_ST16-02, 
-      valid_configs_ST16-03, valid_configs_ST16-05, valid_configs_ST18-01, 
+  # ST15-01 is deliberately absent. Postprocessing now treats the per-vertex
+  # contact depth field as a hard input -- it is what the five spatial stages
+  # carry into the RF-centred frame -- and 3_merged/2022-06-16_ST15-01/
+  # blocks_filtered/ has 4 merged CSVs and 0 *_contact_depth_field.parquet.
+  # Its config group was also renamed _NOT_ENOUGH_DATA_valid_configs_ST15-01,
+  # so the stale 'valid_configs_ST15-01' entry made resolve_session_configs()
+  # raise FileNotFoundError before any session ran at all. Excluded explicitly
+  # rather than left to fail. Every other session listed here has a 1:1
+  # CSV/parquet pairing in blocks_filtered/.
+  kinect_configs: [valid_configs_ST13-01, valid_configs_ST13-02,
+      valid_configs_ST13-03, valid_configs_ST14-01, valid_configs_ST14-02,
+      valid_configs_ST14-04, valid_configs_ST16-02,
+      valid_configs_ST16-03, valid_configs_ST16-05, valid_configs_ST18-01,
       valid_configs_ST18-04]
 
 tasks:

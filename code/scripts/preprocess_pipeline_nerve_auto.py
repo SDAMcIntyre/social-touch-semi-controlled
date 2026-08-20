@@ -4,7 +4,9 @@ import logging
 from pathlib import Path
 from multiprocessing import freeze_support
 
-from prefect import flow, get_run_logger
+# Setup a basic logger
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 import utils.path_tools as path_tools
 from utils import DagConfigHandler
@@ -19,14 +21,12 @@ from _3_preprocessing._9_nerve_data_extraction import (
 
 # --- Session-level Flows ---
 
-@flow(name="Convert Mat to CSV")
 def convert_mat_to_csv_flow(
     config: KinectConfig,
     dag_handler: DagConfigHandler,
     nerve_mat_dir: Path,
     nerve_csv_output_dir: Path,
 ) -> list[dict]:
-    logger = get_run_logger()
     task_name = "convert_mat_to_csv"
     options = dag_handler.get_task_options(task_name)
     force = options.get("force_processing", False)
@@ -50,7 +50,6 @@ def convert_mat_to_csv_flow(
     return all_results
 
 
-@flow(name="Rename to Block Order")
 def rename_to_block_order_flow(
     config: KinectConfig,
     dag_handler: DagConfigHandler,
@@ -58,7 +57,6 @@ def rename_to_block_order_flow(
     nerve_block_order_output_dir: Path,
     quality_check_xlsx: Path,
 ) -> list[dict]:
-    logger = get_run_logger()
     task_name = "rename_to_block_order"
     options = dag_handler.get_task_options(task_name)
     force = options.get("force_processing", False)
@@ -74,13 +72,11 @@ def rename_to_block_order_flow(
     return results or []
 
 
-@flow(name="Adjust Conduction Velocity")
 def adjust_conduction_velocity_flow(
     config: KinectConfig,
     dag_handler: DagConfigHandler,
     metadata_csv_path: Path,
 ) -> list[dict]:
-    logger = get_run_logger()
 
     if config.nerve_processed_dir is None:
         raise ValueError(f"nerve_processed_dir not set for session {config.session_id}")
@@ -128,7 +124,6 @@ def adjust_conduction_velocity_flow(
 
 # --- Single Session Pipeline ---
 
-@flow(name="Run Single Session Pipeline")
 def run_single_session_pipeline(
     config: KinectConfig,
     dag_handler: DagConfigHandler,
@@ -138,7 +133,6 @@ def run_single_session_pipeline(
     nerve_block_order_output_dir: Path,
     quality_check_xlsx: Path,
 ) -> dict:
-    logger = get_run_logger()
     logger.info(f"Starting pipeline for session: {config.session_id}")
 
     try:
@@ -185,13 +179,11 @@ def run_single_session_pipeline(
 
 # --- Batch Dispatcher ---
 
-@flow(name="Batch Process All Sessions")
 def run_batch_processing(
     block_files: list[Path],
     project_data_root: Path,
     dag_config_path: Path,
 ):
-    logger = get_run_logger()
     logger.info(f"Starting batch processing for {len(block_files)} block files.")
 
     dag_handler_template = DagConfigHandler(dag_config_path)

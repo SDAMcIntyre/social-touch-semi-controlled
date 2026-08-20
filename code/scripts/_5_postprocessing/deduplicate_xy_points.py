@@ -1,4 +1,26 @@
+"""Postprocessing step 2: deduplicate (x, y) duplicates in the forearm PLY and
+in every registered block's contact points.
+
+The per-vertex contact depth field
+----------------------------------
+Deduplication is not a coordinate transform — it *removes rows*.  The sidecar
+must therefore lose exactly the rows the CSV lost, and it must lose them by the
+CSV's **own** clustering: re-running DBSCAN against the sidecar's float32
+coordinates would collapse a different set of points wherever two candidates sit
+either side of the epsilon boundary, and would do so silently.
+:func:`deduplicate_contact_points_csv` surfaces that clustering as
+``frame_mappings``; :func:`deduplicate_contact_depth_field` is the only
+consumer, and it must be handed the mapping from the *same* call, so the epsilon
+is the one actually applied even when the operator overrode it interactively.
+
+A survivor inherits the deepest penetration of the group that collapsed into it.
+That is what keeps the pipeline's strongest cross-artifact invariant true: per
+frame, ``max(|signed_depth_mm|)`` still equals the CSV's ``contact_depth``, a
+column computed before deduplication and never recomputed after it.
+"""
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Dict, Mapping
 
 import numpy as np
 import open3d as o3d
@@ -9,6 +31,121 @@ from preprocessing.forearm_extraction.registration.csv_spatial_transformer impor
     parse_contact_points,
     serialize_contact_points,
 )
+from preprocessing.motion_analysis.tactile_quantification.io.contact_depth_field_io import (
+    read_contact_depth_field,
+    write_contact_depth_field_table,
+)
+from postprocessing.depth_field_stage_io import (
+    DEPTH_COLUMN,
+    PIPELINE_STAGE_POSTPROCESSING,
+    DedupMappingLike,
+    apply_dedup_mapping_to_field,
+    assert_max_depth_agrees_with_csv,
+    assert_row_counts_agree_with_csv,
+)
+
+# --- Deduplicated-forearm provenance sidecar -------------------------------
+#
+# The format lives in ``postprocessing.forearm_dedup_metadata`` because two
+# stage scripts need it and stage scripts must not import one another: this one
+# writes it, and ``project_contacts_onto_forearm`` reads it to stamp the
+# reference-PLY provenance onto the depth field it assigns ``vertex_id`` to.
+# Re-exported here so existing importers keep working.
+from postprocessing.forearm_dedup_metadata import (  # noqa: E402
+    EPSILON_SOURCE_DAG_CONFIG,
+    EPSILON_SOURCE_INTERACTIVE_MONITOR,
+    EPSILON_SOURCES,
+    FOREARM_DEDUP_METADATA_SCHEMA_VERSION,
+    FOREARM_DEDUP_METADATA_SUFFIX,
+    ForearmDedupMetadata,
+    forearm_dedup_metadata_path,
+    read_forearm_dedup_metadata,
+    write_forearm_dedup_metadata,
+)
+
+#: CSV column that identifies the Kinect frame a row belongs to. Contact data is
+#: keyed by this value, never by row position: the merged CSV is upsampled to the
+#: nerve rate, so a row index means nothing outside one particular file, while
+#: ``frame_index`` is what every other stage of this pipeline aligns on.
+FRAME_INDEX_COLUMN = "frame_index"
+
+
+@dataclass(frozen=True)
+class DedupMapping:
+    """How one set of points collapsed under (x, y) deduplication.
+
+    Both arrays describe the *input* points, so a parallel per-point payload
+    (e.g. a per-vertex depth field) can be reduced by the very same mapping the
+    CSV was reduced by, instead of re-running the clustering against it — which
+    would diverge silently wherever two candidates are near-equidistant.
+
+    Attributes:
+        kept_indices: 1-D ``intp`` array, ascending, of the input rows that
+            survived. ``deduped == points[kept_indices]``.
+        labels: 1-D ``intp`` array with one entry per *input* row, giving the
+            cluster that row was assigned to. Rows sharing a label collapsed
+            into a single survivor — the one whose index is in *kept_indices*.
+            Labels are arbitrary ints, dense over ``range(n_clusters)``; there
+            is no noise label, because the clustering runs with
+            ``min_samples=1``.
+    """
+
+    kept_indices: np.ndarray
+    labels: np.ndarray
+
+    @property
+    def n_input(self) -> int:
+        """Number of points the mapping was computed from."""
+        return len(self.labels)
+
+    @property
+    def n_removed(self) -> int:
+        """Number of points that were collapsed into a survivor."""
+        return len(self.labels) - len(self.kept_indices)
+
+
+def deduplicate_xy_mapping(points: np.ndarray, epsilon: float) -> DedupMapping:
+    """Compute the (x, y) deduplication mapping for *points*, applying nothing.
+
+    Split out of :func:`deduplicate_xy` so the mapping can be reused by a
+    consumer that must reduce a second array the same way. There is exactly one
+    implementation of the clustering; :func:`deduplicate_xy` is a thin
+    application of what this returns.
+
+    Args:
+        points: Array of shape (N, 3) in mm, float64.
+        epsilon: Radius in mm. Two points within this distance in (x, y) are
+            considered in the same cluster.
+
+    Returns:
+        The :class:`DedupMapping` describing which rows survive and which rows
+        collapsed together.
+    """
+    if len(points) == 0:
+        return DedupMapping(
+            kept_indices=np.empty(0, dtype=np.intp),
+            labels=np.empty(0, dtype=np.intp),
+        )
+
+    labels = DBSCAN(eps=epsilon, min_samples=1).fit_predict(points[:, :2])
+
+    # Stable sort: primary key = z ascending; secondary key = original index ascending.
+    order = np.lexsort((np.arange(len(points)), points[:, 2]))
+
+    seen: set[int] = set()
+    kept: list[int] = []
+    for i in order:
+        lbl = int(labels[i])
+        if lbl in seen:
+            continue
+        seen.add(lbl)
+        kept.append(int(i))
+    kept.sort()  # restore input order
+
+    return DedupMapping(
+        kept_indices=np.array(kept, dtype=np.intp),
+        labels=np.asarray(labels, dtype=np.intp),
+    )
 
 
 def deduplicate_xy(
@@ -33,34 +170,19 @@ def deduplicate_xy(
             Tuple of (deduped_points, n_removed, kept_indices) where
             kept_indices is a 1-D int array such that
             deduped_points == points[kept_indices].
+
+    See :func:`deduplicate_xy_mapping` for the cluster membership itself, which
+    this function discards.
     """
-    if len(points) == 0:
-        if return_indices:
-            return points, 0, np.empty(0, dtype=np.intp)
-        return points, 0
+    mapping = deduplicate_xy_mapping(points, epsilon)
 
-    labels = DBSCAN(eps=epsilon, min_samples=1).fit_predict(points[:, :2])
-
-    # Stable sort: primary key = z ascending; secondary key = original index ascending.
-    order = np.lexsort((np.arange(len(points)), points[:, 2]))
-
-    seen: set[int] = set()
-    kept: list[int] = []
-    for i in order:
-        lbl = int(labels[i])
-        if lbl in seen:
-            continue
-        seen.add(lbl)
-        kept.append(int(i))
-    kept.sort()  # restore input order
-
-    deduped = points[kept]
+    deduped = points[mapping.kept_indices]
     n_removed = len(points) - len(deduped)
     assert len(deduped) + n_removed == len(points), (
         f"Deduplication invariant violated: {len(deduped)} + {n_removed} != {len(points)}"
     )
     if return_indices:
-        return deduped, n_removed, np.array(kept, dtype=np.intp)
+        return deduped, n_removed, mapping.kept_indices
     return deduped, n_removed
 
 
@@ -254,7 +376,7 @@ def monitor_deduplicate_xy_interactive(
     return initial_epsilon
 
 
-def deduplicate_forearm_ply(input_ply: Path, output_ply: Path, epsilon: float = 0.35) -> dict:
+def deduplicate_forearm_ply(input_ply: Path, output_ply: Path, *, epsilon: float) -> dict:
     """Deduplicate a forearm PLY point cloud by (x, y) position.
 
     Loads the PLY, removes (x, y) duplicates keeping the lowest z (outermost
@@ -263,10 +385,15 @@ def deduplicate_forearm_ply(input_ply: Path, output_ply: Path, epsilon: float = 
     Args:
         input_ply: Path to the input PLY file.
         output_ply: Path to write the deduplicated PLY.
-        epsilon: Bin size in mm for (x, y) deduplication.
+        epsilon: Bin size in mm for (x, y) deduplication. Required — a default
+            here would silently repoint every vertex index derived from the
+            output PLY (see the sidecar note at the top of this module).
 
     Returns:
-        Dict with keys n_original, n_deduped, n_removed.
+        Dict with keys n_original, n_deduped, n_removed and kept_indices, where
+        kept_indices is a 1-D intp array of the surviving source-PLY vertex
+        indices in output order: output vertex i is source vertex
+        kept_indices[i].
     """
     pcd = o3d.io.read_point_cloud(str(input_ply))
     vertices = np.asarray(pcd.points, dtype=np.float64)
@@ -274,7 +401,12 @@ def deduplicate_forearm_ply(input_ply: Path, output_ply: Path, epsilon: float = 
     if len(vertices) == 0:
         output_ply.parent.mkdir(parents=True, exist_ok=True)
         o3d.io.write_point_cloud(str(output_ply), pcd)
-        return {"n_original": 0, "n_deduped": 0, "n_removed": 0}
+        return {
+            "n_original": 0,
+            "n_deduped": 0,
+            "n_removed": 0,
+            "kept_indices": np.empty(0, dtype=np.intp),
+        }
 
     deduped, n_removed, kept_indices = deduplicate_xy(vertices, epsilon, return_indices=True)
 
@@ -296,7 +428,25 @@ def deduplicate_forearm_ply(input_ply: Path, output_ply: Path, epsilon: float = 
         "n_original": len(vertices),
         "n_deduped": len(deduped),
         "n_removed": n_removed,
+        "kept_indices": kept_indices,
     }
+
+
+def _frame_index_key(value, *, csv_path: Path, row_position: int) -> int:
+    """Coerce a ``frame_index`` cell to the integer key the mapping is stored under.
+
+    The column arrives as float64 because rows without a Kinect frame hold NaN,
+    so the value must be checked, not merely cast: a NaN or a fractional index
+    would otherwise become a silently wrong dict key.
+    """
+    as_float = float(value)
+    if not np.isfinite(as_float) or as_float != int(as_float):
+        raise ValueError(
+            f"Row {row_position} of {csv_path} carries contact points but its "
+            f"{FRAME_INDEX_COLUMN} is {value!r}, which is not a whole number. "
+            f"Contact rows must be anchored to a Kinect frame."
+        )
+    return int(as_float)
 
 
 def deduplicate_contact_points_csv(
@@ -315,20 +465,37 @@ def deduplicate_contact_points_csv(
         epsilon: Bin size in mm for (x, y) deduplication.
 
     Returns:
-        Dict with keys n_rows_processed, total_points_before, total_points_after.
+        Dict with keys n_rows_processed, total_points_before, total_points_after
+        and frame_mappings. ``frame_mappings`` maps ``frame_index`` to the
+        :class:`DedupMapping` that was applied to that frame's contact points,
+        for the frames that had any — it is what lets a per-point sidecar be
+        reduced by this CSV's own clustering rather than by a re-run of it.
+
+    Raises:
+        ValueError: If the ``frame_index`` column is absent, if a contact-bearing
+            row has a non-integral ``frame_index``, or if two contact-bearing
+            rows share one ``frame_index`` (which would make the mapping
+            ambiguous).
     """
     df = pd.read_csv(input_csv)
+
+    if FRAME_INDEX_COLUMN not in df.columns:
+        raise ValueError(
+            f"{input_csv} has no {FRAME_INDEX_COLUMN!r} column; the per-frame "
+            f"deduplication mapping cannot be keyed."
+        )
 
     n_rows_processed = 0
     total_points_before = 0
     total_points_after = 0
+    frame_mappings: dict[int, DedupMapping] = {}
 
     new_contact_points = []
     new_location_x = []
     new_location_y = []
     new_location_z = []
 
-    for _, row in df.iterrows():
+    for row_position, (_, row) in enumerate(df.iterrows()):
         raw = row.get("contact_points", None)
         points = parse_contact_points(raw) if raw is not None and str(raw).strip() else []
 
@@ -342,7 +509,20 @@ def deduplicate_contact_points_csv(
         pts_array = np.array(points, dtype=np.float64)
         total_points_before += len(pts_array)
 
-        deduped_array, _ = deduplicate_xy(pts_array, epsilon)
+        mapping = deduplicate_xy_mapping(pts_array, epsilon)
+        deduped_array = pts_array[mapping.kept_indices]
+
+        frame_index = _frame_index_key(
+            row[FRAME_INDEX_COLUMN], csv_path=input_csv, row_position=row_position
+        )
+        if frame_index in frame_mappings:
+            raise ValueError(
+                f"{input_csv} has two contact-bearing rows with "
+                f"{FRAME_INDEX_COLUMN}={frame_index} (second at row {row_position}); "
+                f"the per-frame deduplication mapping would be ambiguous."
+            )
+        frame_mappings[frame_index] = mapping
+
         total_points_after += len(deduped_array)
         n_rows_processed += 1
 
@@ -368,4 +548,115 @@ def deduplicate_contact_points_csv(
         "n_rows_processed": n_rows_processed,
         "total_points_before": total_points_before,
         "total_points_after": total_points_after,
+        "frame_mappings": frame_mappings,
     }
+
+
+def _assert_depth_only_reduced(
+    original: pd.DataFrame, deduped: pd.DataFrame, *, parquet_name: str
+) -> None:
+    """Raise unless every surviving depth is a value that was already in the frame.
+
+    Deduplication is the one stage allowed to change ``signed_depth_mm``, and it
+    is allowed to change it in exactly one way: a survivor may inherit the
+    deepest penetration of the group that collapsed into it.  Nothing is
+    averaged, interpolated or re-measured, so every value written out must be a
+    value that was read in — asserted per frame, because a value borrowed from
+    another frame would be just as wrong as an invented one.
+
+    Args:
+        original: The field as read, before deduplication.
+        deduped: The field after :func:`apply_dedup_mapping_to_field`.
+        parquet_name: Name used in the error message.
+
+    Raises:
+        ValueError: If the dtype changed, or if any surviving depth is not one
+            of the depths its own frame held before deduplication.
+    """
+    before_dtype = original[DEPTH_COLUMN].to_numpy().dtype
+    after_dtype = deduped[DEPTH_COLUMN].to_numpy().dtype
+    if before_dtype != after_dtype:
+        raise ValueError(
+            f"{parquet_name}: deduplication changed the {DEPTH_COLUMN!r} dtype "
+            f"({before_dtype} -> {after_dtype}). A depth is a measurement that "
+            "is re-attributed, never recomputed."
+        )
+
+    for frame, group in deduped.groupby(FRAME_INDEX_COLUMN, sort=False):
+        source = original.loc[
+            original[FRAME_INDEX_COLUMN] == frame, DEPTH_COLUMN
+        ].to_numpy()
+        survivors = group[DEPTH_COLUMN].to_numpy()
+        if not np.isin(survivors, source).all():
+            raise ValueError(
+                f"{parquet_name}: frame {int(frame)} carries a "
+                f"{DEPTH_COLUMN!r} value that was not measured at that frame. "
+                "Deduplication may only re-attribute an existing measurement to "
+                "the vertex that now stands for its group."
+            )
+
+
+def deduplicate_contact_depth_field(
+    input_parquet: Path,
+    output_parquet: Path,
+    output_csv: Path,
+    frame_mappings: Mapping[int, DedupMappingLike],
+) -> Path:
+    """Reduce a contact depth field by the mapping its CSV was reduced by.
+
+    The mapping **must** come from the :func:`deduplicate_contact_points_csv`
+    call that produced *output_csv*.  That is the only way the epsilon applied
+    to the sidecar is guaranteed to be the epsilon actually applied to the CSV —
+    which under ``monitor: true`` is chosen interactively and appears in no
+    config file.  DBSCAN is never re-run here.
+
+    Deduplication removes rows; it does not move them.  ``coordinate_space`` is
+    therefore carried through verbatim along with the rest of the metadata: the
+    surviving points are exactly where they were.
+
+    Args:
+        input_parquet: The block's depth field as the previous stage left it.
+        output_parquet: Destination in ``blocks_deduped/``.
+        output_csv: The deduplicated CSV **this stage just wrote** for the same
+            block — the only CSV the cross-checks are meaningful against.
+        frame_mappings: ``frame_index -> DedupMapping`` from the same CSV run.
+
+    Returns:
+        *output_parquet*.
+
+    Raises:
+        FileNotFoundError: If *input_parquet* does not exist.
+        ValueError: If the mapping does not cover exactly the frames the field
+            holds, if a frame's mapping disagrees with its row count, if a
+            surviving depth was not one the frame already held, if the written
+            field and CSV disagree about a frame's contact-point count, or if
+            per-frame ``max(|signed_depth_mm|)`` no longer equals the CSV's
+            ``contact_depth``.
+    """
+    input_parquet = Path(input_parquet)
+    if not input_parquet.exists():
+        raise FileNotFoundError(
+            f"Contact depth field sidecar missing: {input_parquet}. The "
+            "per-vertex depth field is a required input of postprocessing; "
+            "re-run the previous stage for this block rather than "
+            "deduplicating without it."
+        )
+
+    table, source_metadata = read_contact_depth_field(input_parquet)
+    reduced = apply_dedup_mapping_to_field(table, frame_mappings)
+    _assert_depth_only_reduced(table, reduced, parquet_name=input_parquet.name)
+
+    # Verbatim apart from ``pipeline_stage``: nothing moved, so the declared
+    # space and the rest of the provenance are unchanged, but the file in
+    # ``blocks_deduped/`` was written by postprocessing and must say so rather
+    # than repeating the merging stamp its input carried.
+    metadata: Dict[str, str] = dict(source_metadata)
+    metadata["pipeline_stage"] = PIPELINE_STAGE_POSTPROCESSING
+
+    output_parquet = Path(output_parquet)
+    output_parquet.parent.mkdir(parents=True, exist_ok=True)
+    write_contact_depth_field_table(reduced, output_parquet, metadata=metadata)
+
+    assert_row_counts_agree_with_csv(reduced, output_csv)
+    assert_max_depth_agrees_with_csv(reduced, output_csv)
+    return output_parquet

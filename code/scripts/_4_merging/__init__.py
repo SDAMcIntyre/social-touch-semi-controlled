@@ -6,3 +6,6 @@ from .filter_merged_by_neural_quality import (
     filter_block_by_neural_quality,
     extract_unit_and_block_order,
 )
+from .filter_contact_depth_field_by_neural_quality import (
+    filter_contact_depth_field_by_neural_quality,
+)

@@ -1,8 +1,8 @@
 """Standalone MKV-to-Forearm-Mesh Tool.
 
 Extracts a forearm mesh from a single Kinect MKV frame, fully decoupled
-from the existing pipeline (no DAG config, no Prefect flow, no session
-configs).  The user navigates the video, picks a frame, draws an ROI,
+from the existing pipeline (no DAG config, no workflow entry point, no
+session configs).  The user navigates the video, picks a frame, draws an ROI,
 tunes segmentation parameters interactively, and gets a saved mesh file
 -- all in one invocation.
 

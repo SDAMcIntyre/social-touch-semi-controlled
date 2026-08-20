@@ -24,6 +24,40 @@ recording overlays.  Key design invariants:
 - All merged-CSV features (NeuralDataPanel, StickerVelocityCompass) are
   optional and skipped entirely when merged_csv_path=None.
 
+Contact depth colouring
+~~~~~~~~~~~~~~~~~~~~~~~
+The block spec carries a ``contact_depth_field_loader`` — a zero-argument
+callable — which ``_load_block`` invokes for the block being opened and for no
+other; a batch is around a hundred blocks and loading them all up front is a
+regression the callable exists to prevent.  When that call returns a
+``ContactDepthFieldSeries``, the contact actor is driven by that field instead of
+the CSV's ``contact_points`` blob, and is coloured by penetration depth.  A
+``None`` return is an announced absence, and the "Colour by depth" checkbox is
+present but disabled for that block.  This viewer is a **pure sink** for that
+data:
+
+- The colour range arrives precomputed and **global** over the whole recording
+  (``series.clim_penetration_mm``).  Per-frame autoscaling is prohibited — it
+  would make the animation lie about relative depth, so the same frame would
+  look different depending on whether it was reached by scrubbing forward or
+  back.  Nothing here derives a statistic from the field.
+- ``penetration_depth_mm = -signed_depth_mm`` is applied by the producer, once.
+  No arithmetic is performed on the depths here.
+- ``actor.mapper.scalar_range`` is re-asserted after **every** dataset swap.
+  On PyVista 0.47.1 a mapper with no explicit clim silently reverts to
+  per-frame autoscale (see ``contact_depth_field_viewer.py`` for the measured
+  behaviour), so the assertion is what keeps a given depth the same colour at
+  every frame.
+- The colourmap is ``inferno``, never ``jet``: ``jet`` has non-monotonic
+  lightness, invents boundaries the data does not contain, and is hostile to
+  colour-vision deficiency
+  (``investigation-jet-colormap-perceptual-problems.md``).
+- In registered-frame mode the depth *points* are transformed by the block's
+  ICP matrix exactly like the cloud, hand mesh and stickers; the depth *values*
+  are invariant under a rigid transform and are never recomputed.
+- The field is columnar, so it needs no string parsing:
+  ``_parse_contact_points_cell`` is not involved in this path at all.
+
 Hot-swap navigation
 ~~~~~~~~~~~~~~~~~~~
 ``NeuralKinectViewer`` now accepts an *all_blocks* dict
@@ -122,8 +156,24 @@ from preprocessing.forearm_extraction import (
     get_forearms_with_fallback,
 )
 from preprocessing.motion_analysis import HandMotionManager
+# Imported from the module, not the package facade: the facade resolves this
+# name lazily and the direct import keeps the dependency narrow.  These three
+# constants are shared with the tactile-quantification depth viewer so the
+# scalar array name, the colourbar title and the colourmap have exactly one
+# definition between the two windows.
+from preprocessing.motion_analysis.tactile_quantification.gui.contact_depth_field_viewer import (
+    COLORMAP as CONTACT_DEPTH_COLORMAP,
+    CONTACT_SCALAR_NAME,
+    SCALAR_BAR_TITLE as CONTACT_DEPTH_SCALAR_BAR_TITLE,
+)
 from preprocessing.stickers_analysis import XYZDataFileHandler
 
+from ..contact_depth_field_series import ContactDepthFieldLoader, ContactDepthFieldSeries
+from ..frame_navigation import (
+    FrameNavigation,
+    build_frame_navigation_from_merged_df,
+    build_frame_navigation_over_range,
+)
 from .sticker_velocity_compass import StickerVelocityCompass
 
 
@@ -161,6 +211,27 @@ class NeuralKinectBlockSpec:
     registration_transforms_by_forearm_key:
         Optional mapping ``{forearm_key: 4×4 transform}`` for registered-frame
         display.  ``None`` → identity (no registration applied).
+    contact_depth_field_loader:
+        Optional **zero-argument callable** returning this block's per-vertex
+        contact depth field — already indexed by frame and carrying its own
+        **global** colour range — or ``None`` when the sidecar is absent.
+
+        A *loader*, not a loaded series, and deliberately so.  Every spec in a
+        batch is built before the window opens; a batch is around a hundred
+        blocks and a block's field is 10^5-10^6 vertices, so a loaded series
+        here would mean minutes of parquet before the first frame renders and
+        gigabytes resident for blocks nobody looks at.  The viewer calls it
+        inside :meth:`NeuralKinectViewer._load_block`, once, for the block the
+        user actually opened.
+
+        A callable rather than a path because the viewer must not learn about
+        files, parquet or session identity: it calls what it was handed and asks
+        nothing about where the data comes from.
+
+        A ``None`` *return* is an explicit absent state — the producer resolved
+        the sidecar, did not find it, and said so at that moment — not a display
+        preference.  When a series comes back it becomes the source of the
+        contact geometry, replacing the CSV's ``contact_points`` blob.
     """
     xyz_csv_path: Path
     kinect_mkv_path: Path
@@ -171,6 +242,7 @@ class NeuralKinectBlockSpec:
     recording_name: str
     merged_csv_path: Optional[Path]
     registration_transforms_by_forearm_key: Optional[Dict[int, np.ndarray]] = field(default=None)
+    contact_depth_field_loader: Optional[ContactDepthFieldLoader] = field(default=None)
 
 
 # ---------------------------------------------------------------------------
@@ -211,6 +283,64 @@ def _parse_contact_points_cell(cell) -> Optional[np.ndarray]:
             except ValueError:
                 pass
     return np.array(points, dtype=np.float64) if points else None
+
+
+def _empty_contact_polydata() -> pv.PolyData:
+    """A zero-point contact dataset that still carries the mapped scalar array.
+
+    The array must exist even when empty, or the mapper loses its binding to
+    ``CONTACT_SCALAR_NAME`` the first time a no-contact frame is displayed and
+    the colours never come back.
+    """
+    mesh = pv.PolyData(np.empty((0, 3), dtype=np.float32))
+    mesh[CONTACT_SCALAR_NAME] = np.empty((0,), dtype=np.float64)
+    return mesh
+
+
+def contact_polydata(
+    points: np.ndarray,
+    penetration_depth_mm: Optional[np.ndarray] = None,
+) -> pv.PolyData:
+    """Build the contact-actor dataset from points and optional depth scalars.
+
+    Parameters
+    ----------
+    points:
+        ``(N, 3)`` contact-vertex positions in millimetres.
+    penetration_depth_mm:
+        ``(N,)`` positive-is-deeper penetration depths, already sign-flipped by
+        the producer, or ``None`` when this block has no depth field at all
+        (contact geometry then comes from the CSV and renders flat).
+
+        ``None`` carries no scalar array rather than a zero-filled one: the
+        actor in that configuration was never bound to ``CONTACT_SCALAR_NAME``,
+        and fabricating depths of zero for points whose depth is simply unknown
+        would put invented numbers on screen.
+
+    Raises
+    ------
+    ValueError
+        If *points* is not ``(N, 3)``, or the depths are not index-aligned with
+        it.  A misaligned pair would paint one vertex with another's depth,
+        which is worse than not drawing at all.
+    """
+    pts = np.asarray(points, dtype=np.float32)
+    if pts.ndim != 2 or pts.shape[1] != 3:
+        raise ValueError(f"contact points must be (N, 3), got {pts.shape}.")
+
+    mesh = pv.PolyData(pts)
+    if penetration_depth_mm is None:
+        return mesh
+
+    depths = np.asarray(penetration_depth_mm, dtype=np.float64)
+    if depths.ndim != 1 or len(depths) != len(pts):
+        raise ValueError(
+            f"{len(pts)} contact points vs {depths.shape} penetration depths; "
+            "the field must be index-aligned with the points."
+        )
+    mesh[CONTACT_SCALAR_NAME] = depths
+    mesh.set_active_scalars(CONTACT_SCALAR_NAME)
+    return mesh
 
 
 def extract_touch_boundaries(touch_ids: np.ndarray) -> List[tuple]:
@@ -420,10 +550,43 @@ class NeuralDataPanel(QWidget):
         total_kinect_frames: int,
         neural_fps: int = 1000,
         parent=None,
+        *,
+        kinect_anchor_rows: Optional[np.ndarray] = None,
     ):
         super().__init__(parent)
         self._total_kinect_frames = total_kinect_frames
         self._total_samples: int = len(merged_df)
+
+        # ------------------------------------------------------------------
+        # Navigation position -> merged-CSV row.
+        #
+        # ``kinect_anchor_rows[i]`` is the POSITIONAL row of the i-th navigable
+        # kinect frame — the same space the x-axis is drawn in
+        # (``np.arange(len(merged_df))`` in ``_setup_axes``).  It is supplied by
+        # callers whose frames do not map to rows uniformly: a neural-quality
+        # filtered merged CSV covers fewer frames than the recording, and may
+        # have mid-recording gaps, so no single multiplier can express the map.
+        #
+        # When omitted, the caller's own data model already makes position and
+        # row proportional — the postprocessing viewers index their anchor
+        # DataFrame by ``frame_idx`` directly — and click-to-frame uses the
+        # uniform inverse those callers have always used.  This is a documented
+        # call-site exception, not a fallback for a failed lookup.
+        # ------------------------------------------------------------------
+        if kinect_anchor_rows is not None:
+            kinect_anchor_rows = np.asarray(kinect_anchor_rows, dtype=np.int64)
+            if kinect_anchor_rows.shape != (total_kinect_frames,):
+                raise ValueError(
+                    "kinect_anchor_rows must hold exactly one merged-CSV row "
+                    f"per navigable frame: got shape {kinect_anchor_rows.shape} "
+                    f"for {total_kinect_frames} frames."
+                )
+            if kinect_anchor_rows.size and not np.all(np.diff(kinect_anchor_rows) > 0):
+                raise ValueError(
+                    "kinect_anchor_rows must be strictly increasing — the "
+                    "cursor and the click-to-frame search both rely on it."
+                )
+        self._kinect_anchor_rows: Optional[np.ndarray] = kinect_anchor_rows
 
         # Zoom state — zoomed ±30 s window is the default
         self._neural_fps: int = neural_fps
@@ -614,9 +777,16 @@ class NeuralDataPanel(QWidget):
     # Cursor update — hot path
     # ------------------------------------------------------------------
 
-    def update_cursor(self, frame_idx: int, scale_factor: float) -> None:
+    def update_cursor(self, sample_idx: int) -> None:
         """
-        Move the red vertical cursor to *frame_idx* in merged-CSV sample space.
+        Move the red vertical cursor to *sample_idx*, a merged-CSV ROW POSITION.
+
+        The caller resolves the row; this panel never derives it.  It used to
+        take ``(frame_idx, scale_factor)`` and compute
+        ``int(frame_idx * scale_factor)``, which silently assumed the CSV spans
+        the whole recording at a constant rate.  A neural-quality filtered CSV
+        does not, and the cursor drifted linearly away from the displayed frame.
+        A multiplication cannot express a non-uniform mapping; a lookup can.
 
         Fast path: restore the cached background bitmap, draw only the cursor
         lines via ``ax.draw_artist`` + ``canvas.blit`` — ~1–3 ms per call.
@@ -631,7 +801,7 @@ class NeuralDataPanel(QWidget):
         Mode ``_centered_mode=False`` (edge-pan): resnap when cursor reaches
         within 5 % of the left or right edge of the current view.
         """
-        sample_idx = int(frame_idx * scale_factor)
+        sample_idx = int(sample_idx)
         self._current_sample = sample_idx
 
         # Update cursor line positions
@@ -693,12 +863,32 @@ class NeuralDataPanel(QWidget):
         self.canvas.draw_idle()
 
     def _on_canvas_click(self, event) -> None:
-        """Convert a matplotlib left-click to a kinect frame and emit frame_requested."""
+        """Convert a left-click to a NAVIGATION POSITION and emit frame_requested.
+
+        With ``kinect_anchor_rows`` supplied the click resolves to the nearest
+        anchor row — the exact inverse of ``update_cursor``'s lookup, so a click
+        followed by a cursor update is a round trip.  Without it, position and
+        frame are proportional by the caller's own construction and the uniform
+        inverse is used (see ``__init__``).
+        """
         if event.inaxes is None or event.button != 1:
             return
         sample_idx = event.xdata
         if sample_idx is None:
             return
+
+        rows = self._kinect_anchor_rows
+        if rows is not None:
+            if rows.size == 0:
+                return
+            pos = int(np.searchsorted(rows, sample_idx))
+            if pos >= rows.size:
+                pos = rows.size - 1
+            elif pos > 0 and abs(sample_idx - rows[pos - 1]) <= abs(rows[pos] - sample_idx):
+                pos -= 1
+            self.frame_requested.emit(pos)
+            return
+
         scale = self._total_samples / self._total_kinect_frames
         frame = int(round(sample_idx / scale))
         frame = max(0, min(frame, self._total_kinect_frames - 1))
@@ -821,6 +1011,29 @@ class NeuralKinectViewer(QMainWindow):
         self._interactive_stride: int = 4
         self._is_interactive: bool = False
 
+        # Depth colouring is ON by default whenever the block carries a field:
+        # the field is the more informative rendering, and flat colour exists
+        # only as a comparison mode.  The preference persists across hot-swaps
+        # like the visibility flags and point sizes beside it.
+        self._colour_contact_by_depth: bool = True
+        # Per-block; re-seeded by _load_block / _init_actors.  Declared here so
+        # that an interim _update_frame fired during a hot-swap (before the new
+        # block's actors exist) cannot hit an undefined attribute.
+        self._depth_series: Optional[ContactDepthFieldSeries] = None
+        # Keyed by kinect ``frame_index``, never by position — see _load_block.
+        self._contact_pts_by_frame: Optional[Dict[int, Optional[np.ndarray]]] = None
+        self._contact_clim: Optional[Tuple[float, float]] = None
+
+        # ------------------------------------------------------------------
+        # Navigation model — which kinect frames this block can display and
+        # where each one sits in the merged CSV.  All the logic lives in the
+        # ``merging.frame_navigation`` leaf; this viewer only asks it questions.
+        # Declared here so an interim _update_frame fired during a hot-swap
+        # cannot hit an undefined attribute.
+        # ------------------------------------------------------------------
+        self._nav: FrameNavigation = build_frame_navigation_over_range(0)
+        self.current_position: int = 0
+
         # ------------------------------------------------------------------
         # Build the Qt UI (plotter + static right panel + frame controls)
         # ------------------------------------------------------------------
@@ -942,19 +1155,62 @@ class NeuralKinectViewer(QMainWindow):
         )
 
         # ------------------------------------------------------------------
+        # 4a-bis. Navigation model: frame -> merged-CSV row, and the sorted set
+        # of frames the CSV actually contains.  Built from the CSV itself; the
+        # MKV length is NOT the navigable range when a merged CSV is present.
+        # ------------------------------------------------------------------
+        self._build_navigable_frames(spec.merged_csv_path)
+
+        # ------------------------------------------------------------------
+        # 4a. Contact depth field (columnar; needs no parsing of any kind)
+        #
+        # The spec carries a LOADER, not a series, and this call is the moment
+        # the parquet is read — for THIS block only.  Loading every block's
+        # field while the specs were being built was a measured regression: a
+        # hundred blocks of 10^5-10^6 vertices each, all read before the window
+        # ever appeared.
+        #
+        # A ``None`` return means the producer looked for the sidecar and did
+        # not find it; it reported that as it happened.  When a series comes
+        # back it — not the CSV blob — supplies the contact geometry, so the
+        # drawn points and the drawn depths cannot disagree.
+        # ------------------------------------------------------------------
+        self._depth_series: Optional[ContactDepthFieldSeries] = None
+        if spec.contact_depth_field_loader is not None:
+            loaded = spec.contact_depth_field_loader()
+            if loaded is not None and not isinstance(loaded, ContactDepthFieldSeries):
+                raise TypeError(
+                    "contact_depth_field_loader returned "
+                    f"{type(loaded).__name__}; it must return a "
+                    "ContactDepthFieldSeries or None. Drawing whatever this is "
+                    "would put unvalidated geometry in the scene."
+                )
+            self._depth_series = loaded
+
+        # ------------------------------------------------------------------
         # 4b. Pre-extract contact points indexed by kinect frame
         # ------------------------------------------------------------------
-        self._contact_pts_by_frame: Optional[List[Optional[np.ndarray]]] = None
+        #
+        # Keyed by kinect ``frame_index``, NOT by position in the anchor list.
+        # The two coincide only when the CSV covers the whole recording; a
+        # neural-quality filtered CSV does not, and positional indexing silently
+        # served a different frame's contact points.  Currently masked whenever
+        # a depth field is present (it takes precedence), which is exactly why
+        # it had to be fixed rather than left as "the path nobody takes".
+        self._contact_pts_by_frame: Optional[Dict[int, Optional[np.ndarray]]] = None
         if (
             self.merged_df is not None
             and 'contact_points' in self.merged_df.columns
-            and 'time_kinect' in self.merged_df.columns
         ):
-            kinect_rows = self.merged_df.dropna(subset=['time_kinect'])
-            self._contact_pts_by_frame = [
-                _parse_contact_points_cell(cell)
-                for cell in kinect_rows['contact_points']
-            ]
+            assert self._nav.rows is not None, (
+                "the navigation must carry rows whenever a merged CSV exists; "
+                "_build_navigable_frames guarantees it a few lines above"
+            )
+            _cells = self.merged_df['contact_points'].to_numpy()[self._nav.rows]
+            self._contact_pts_by_frame = {
+                int(frame): _parse_contact_points_cell(cell)
+                for frame, cell in zip(self._nav.frames, _cells)
+            }
 
         # ------------------------------------------------------------------
         # 5. Contact centroid (used for GPU crop centre)
@@ -988,6 +1244,20 @@ class NeuralKinectViewer(QMainWindow):
         self._point_cloud_view = KinectPointCloudView(self._mkv)
         self._total_frames: int = len(self._point_cloud_view)
 
+        # The MKV length is the only authority on which frames can be decoded.
+        # In pure-3D mode it is also the navigable set; otherwise it is a bound
+        # the CSV's frames must respect.  A frame the CSV claims but the MKV
+        # does not have means the two artifacts describe different recordings.
+        if self.merged_df is None:
+            self._nav = build_frame_navigation_over_range(self._total_frames)
+        elif self._nav.size and int(self._nav.frames[-1]) >= self._total_frames:
+            raise ValueError(
+                f"Merged CSV '{spec.merged_csv_path}' references kinect frame "
+                f"{int(self._nav.frames[-1])}, but '{spec.kinect_mkv_path}' holds "
+                f"only {self._total_frames} frames. The CSV and the MKV are not "
+                "the same recording."
+            )
+
         # ------------------------------------------------------------------
         # 7. Background preloader (512-frame ring buffer)
         # ------------------------------------------------------------------
@@ -1000,7 +1270,8 @@ class NeuralKinectViewer(QMainWindow):
         # ------------------------------------------------------------------
         # 8. Reset per-block interaction state
         # ------------------------------------------------------------------
-        self.current_index: int = 0
+        self.current_index: int = self._nav.frame_at(0) if self._nav.size else 0
+        self.current_position: int = 0
         self._slider_dragging: bool = False
         self._exact_frame_pending: Optional[int] = None
         self._recording_name: str = spec.recording_name
@@ -1017,9 +1288,12 @@ class NeuralKinectViewer(QMainWindow):
         # ------------------------------------------------------------------
         # 9. Update frame slider range + window title
         # ------------------------------------------------------------------
-        self.frame_slider.setRange(0, max(self._total_frames - 1, 0))
+        # The slider indexes the NAVIGABLE SET, not the MKV.  Frames the merged
+        # CSV does not contain have no neural data at all, so scrubbing into
+        # them would show a scene with nothing to compare it against.
+        self.frame_slider.setRange(0, max(self._nav.size - 1, 0))
         self.frame_slider.setValue(0)
-        self.frame_label.setText(f"1 / {self._total_frames}")
+        self.frame_label.setText(self._format_frame_label(0))
         self._buffer_label.setText(f"Buf: 0/{self._preloader_buf_size}")
         self.crop_spinbox.blockSignals(True)
         self.crop_spinbox.setValue(int(self._crop_half_size))
@@ -1048,7 +1322,13 @@ class NeuralKinectViewer(QMainWindow):
             self.neural_panel = None
 
         if self.merged_df is not None:
-            self.neural_panel = NeuralDataPanel(self.merged_df, self._total_frames)
+            self.neural_panel = NeuralDataPanel(
+                self.merged_df,
+                self._nav.size,
+                kinect_anchor_rows=self._nav.rows,
+            )
+            # ``frame_requested`` carries a navigation POSITION, which is
+            # exactly what the slider indexes.
             self.neural_panel.frame_requested.connect(self.frame_slider.setValue)
             self._outer_layout.addWidget(self.neural_panel)
         else:
@@ -1063,7 +1343,38 @@ class NeuralKinectViewer(QMainWindow):
         # 13. Deferred render (if already shown)
         # ------------------------------------------------------------------
         if self._initial_render_done:
-            QTimer.singleShot(0, lambda: self._update_frame(0))
+            _first = self._frame_at(0)
+            QTimer.singleShot(0, lambda: self._update_frame(_first))
+
+    # ======================================================================
+    # Navigation model — frame <-> merged-CSV row <-> slider position
+    # ======================================================================
+
+    def _build_navigable_frames(self, merged_csv_path: Optional[Path]) -> None:
+        """Install this block's navigable frame set from the merged CSV.
+
+        Delegates entirely to ``merging.frame_navigation``, which documents why
+        the mapping is a lookup rather than a scale factor and why the navigable
+        set is an array rather than a count.
+
+        Leaves the set empty when there is no merged CSV; ``_load_block`` fills
+        it from the MKV once the recording is open.  That is the pure-3D case —
+        nothing was filtered, so nothing is being hidden.
+        """
+        if self.merged_df is None:
+            self._nav = build_frame_navigation_over_range(0)
+            return
+        self._nav = build_frame_navigation_from_merged_df(
+            self.merged_df, merged_csv_path
+        )
+
+    def _frame_at(self, position: int) -> int:
+        """Return the kinect frame at navigation *position* (fail-fast)."""
+        return self._nav.frame_at(position)
+
+    def _format_frame_label(self, position: int) -> str:
+        """``"<kinect frame> (<position>/<navigable>)"`` for the frame readout."""
+        return self._nav.format_label(position)
 
     # ======================================================================
     # UI construction
@@ -1161,6 +1472,24 @@ class NeuralKinectViewer(QMainWindow):
         cam_layout.addWidget(self._cam_pos_label)
         self._right_panel_layout.addWidget(cam_box)
 
+    @property
+    def _has_contact_source(self) -> bool:
+        """Whether this block has any source of contact geometry at all.
+
+        Either the depth field sidecar or the merged CSV's ``contact_points``
+        column will do; the field takes precedence when both are present.
+        """
+        return self._depth_series is not None or self._contact_pts_by_frame is not None
+
+    @property
+    def _depth_colouring_active(self) -> bool:
+        """Whether contact vertices are currently coloured by penetration depth.
+
+        Requires both a field to colour by and the user's checkbox.  These are
+        different facts: the first is about the data, the second about the view.
+        """
+        return self._depth_series is not None and self._colour_contact_by_depth
+
     def _build_right_panel_data(self) -> None:
         """
         Populate the data-dependent portion of the right panel.
@@ -1188,7 +1517,13 @@ class NeuralKinectViewer(QMainWindow):
         self._point_sizes.setdefault('contact_points', 15.0)
         self._compass_widgets: Dict[str, StickerVelocityCompass] = {}
 
-        def _add_object_group(label: str, key: str, has_slider: bool = False, point_size: int = 3):
+        def _add_object_group(
+            label: str,
+            key: str,
+            has_slider: bool = False,
+            point_size: int = 3,
+            extra_widgets: Tuple[QWidget, ...] = (),
+        ):
             box = QGroupBox(label)
             box_layout = QVBoxLayout(box)
 
@@ -1214,13 +1549,56 @@ class NeuralKinectViewer(QMainWindow):
                 slider_layout.addWidget(sl)
                 box_layout.addWidget(slider_row)
 
+            for extra in extra_widgets:
+                box_layout.addWidget(extra)
+
             self._right_panel_layout.addWidget(box)
 
         _add_object_group("Kinect Cloud",    "kinect_point_cloud", has_slider=True)
         _add_object_group("Forearms",        "forearms",           has_slider=True)
         _add_object_group("Hand Mesh",       "hand_meshes",        has_slider=False)
-        if self._contact_pts_by_frame is not None:
-            _add_object_group("Contact Points", "contact_points", has_slider=True)
+        if self._has_contact_source:
+            # "Colour by depth" sits beside the point-size slider so flat colour
+            # stays one click away for comparison.
+            #
+            # The checkbox ALWAYS exists and is enabled/disabled per block; it
+            # is not created conditionally.  Under lazy loading nothing knows at
+            # widget-construction time whether any block in the batch carries a
+            # field, and a control that is absent rather than greyed out reads as
+            # "this viewer cannot do that" instead of "this block has no field".
+            # A disabled box with a tooltip saying why states the actual fact.
+            _has_field = self._depth_series is not None
+            depth_cb = QCheckBox("Colour by depth")
+            depth_cb.setEnabled(_has_field)
+            # blockSignals: seeding the widget must not be mistaken for the user
+            # clicking it.  Without this, a fieldless block would write
+            # ``False`` back over the persisted preference and the next block
+            # that does have a field would open in flat red.
+            depth_cb.blockSignals(True)
+            depth_cb.setChecked(self._colour_contact_by_depth and _has_field)
+            depth_cb.blockSignals(False)
+            if _has_field:
+                low, high = self._depth_series.clim_penetration_mm
+                depth_cb.setToolTip(
+                    "Colour contact vertices by penetration depth (inferno), on a "
+                    f"colour scale fixed over the whole recording: {low:.2f} to "
+                    f"{high:.2f} mm. Unchecked renders them in flat red."
+                )
+            else:
+                depth_cb.setToolTip(
+                    "This block has no contact depth field sidecar, so there is "
+                    "nothing to colour by and the contact points render in flat "
+                    "red. Run the merging DAG task "
+                    "'filter_contact_depth_field_by_neural_quality' to produce "
+                    "it. Other blocks in this batch may still have one."
+                )
+            depth_cb.stateChanged.connect(self._on_contact_depth_colour_changed)
+            _add_object_group(
+                "Contact Points",
+                "contact_points",
+                has_slider=True,
+                extra_widgets=(depth_cb,),
+            )
 
         for sticker_name in self._stickers_xyz_dict:
             _add_object_group(sticker_name, sticker_name)
@@ -1255,8 +1633,10 @@ class NeuralKinectViewer(QMainWindow):
         self.frame_slider.sliderReleased.connect(self._on_slider_released)
         layout.addWidget(self.frame_slider)
 
-        self.frame_label = QLabel("1 / 0")
-        self.frame_label.setFixedWidth(100)
+        # "<kinect frame> (<position>/<navigable>)" — wider than the old
+        # "<n> / <total>" because the real frame and the position are both shown.
+        self.frame_label = QLabel("— (0/0)")
+        self.frame_label.setFixedWidth(150)
         layout.addWidget(self.frame_label)
 
         self._buffer_label = QLabel(f"Buf: 0/{self._preloader_buf_size}")
@@ -1326,7 +1706,7 @@ class NeuralKinectViewer(QMainWindow):
         self._mesh_forearm = pv.PolyData(_seed.copy())
         self._mesh_forearm['colors'] = _seed_col.copy()
         self._mesh_hand = pv.PolyData(np.empty((0, 3), dtype=np.float32))
-        self._mesh_contact = pv.PolyData(np.empty((0, 3), dtype=np.float32))
+        self._mesh_contact = _empty_contact_polydata()
         # Force a full DeepCopy on the next _update_frame call so the freshly
         # created PolyData objects (no faces, no points) get populated correctly.
         # Without this reset, an interim _update_frame fired by frame_slider.setValue(0)
@@ -1379,13 +1759,59 @@ class NeuralKinectViewer(QMainWindow):
             point_size=self._point_sizes['forearms'],
         )
         self.plotter.add_mesh(self._mesh_hand, name='hand_meshes', style='wireframe')
-        self._actor_contact = self.plotter.add_mesh(
-            self._mesh_contact,
-            name='contact_points',
-            color='red',
-            render_points_as_spheres=True,
-            point_size=self._point_sizes['contact_points'],
+
+        # --- Contact points -------------------------------------------------
+        # Registered ONCE per block load.  The colour range is the producer's,
+        # computed over the whole recording; nothing here derives it.  The
+        # previous block's scalar bar is removed first: two blocks have
+        # different global ranges, and a bar shared between their mappers would
+        # label one of them wrongly.
+        if CONTACT_DEPTH_SCALAR_BAR_TITLE in self.plotter.scalar_bars:
+            self.plotter.remove_scalar_bar(CONTACT_DEPTH_SCALAR_BAR_TITLE)
+
+        self._contact_clim: Optional[Tuple[float, float]] = (
+            self._depth_series.clim_penetration_mm
+            if self._depth_series is not None else None
         )
+        if self._contact_clim is None:
+            self._actor_contact = self.plotter.add_mesh(
+                self._mesh_contact,
+                name='contact_points',
+                color='red',
+                render_points_as_spheres=True,
+                point_size=self._point_sizes['contact_points'],
+            )
+        else:
+            self._actor_contact = self.plotter.add_mesh(
+                self._mesh_contact,
+                name='contact_points',
+                scalars=CONTACT_SCALAR_NAME,
+                cmap=CONTACT_DEPTH_COLORMAP,
+                clim=self._contact_clim,
+                show_scalar_bar=True,
+                scalar_bar_args={
+                    'title': CONTACT_DEPTH_SCALAR_BAR_TITLE,
+                    'vertical': True,
+                    'n_labels': 6,
+                    'fmt': '%.2f',
+                    'title_font_size': 16,
+                    'label_font_size': 13,
+                    # Explicit white: the theme default is black, which is
+                    # invisible against this viewer's dark background — the bar
+                    # renders but its title and ticks do not.
+                    'color': 'white',
+                    'position_x': 0.88,
+                    'position_y': 0.12,
+                    'width': 0.05,
+                    'height': 0.72,
+                },
+                render_points_as_spheres=True,
+                point_size=self._point_sizes['contact_points'],
+            )
+            # Flat red is what the mapper falls back to when scalar visibility
+            # is switched off, so it must be set even in depth-colouring mode.
+            self._actor_contact.GetProperty().SetColor(1.0, 0.0, 0.0)
+            self._apply_contact_scalar_mode()
 
         # Register ALL stickers and cache actor refs.
         self._sticker_actors: Dict[str, Any] = {}
@@ -1418,15 +1844,8 @@ class NeuralKinectViewer(QMainWindow):
         # Also reset the last-forearm-key sentinel so the forearm is redrawn
         self._last_forearm_key: Any = object()
 
-        # Neural scale: ratio of merged-CSV rows to kinect frames.
-        # Must be set here (not only in _deferred_start) so that hot-swap
-        # renders triggered by _load_block use the correct scale for the
-        # new block.
-        self._neural_scale: float = (
-            len(self.merged_df) / self._total_frames
-            if self.merged_df is not None and self._total_frames > 0
-            else 1.0
-        )
+        # No neural scale here any more: the cursor position comes from
+        # ``self._nav``, built in _load_block from the CSV itself.
 
     # ======================================================================
     # Frame update — the hot path
@@ -1451,6 +1870,11 @@ class NeuralKinectViewer(QMainWindow):
         ``plotter.render()`` at the end propagates all VTK Modified() flags.
         """
         self.current_index = frame_idx
+        # Raises rather than clamping: a frame outside the navigable set was
+        # removed by neural-quality filtering, and rendering it anyway would put
+        # the timeseries cursor on some other frame's row.
+        _position = self._nav.position_of(frame_idx)
+        self.current_position = _position
 
         # Dirty flags — set by each per-actor block when data actually changes.
         # dirty:       at least one actor was modified → need plotter.render()
@@ -1638,15 +2062,28 @@ class NeuralKinectViewer(QMainWindow):
                 if not np.any(np.isnan(prev_pos)) and pos is not None and not np.any(np.isnan(pos)):
                     self._compass_widgets[name].update_velocity(pos - prev_pos)
 
-        # 5. Contact points (kinect-frame-aligned, pre-parsed at load) ------
-        if self._contact_pts_by_frame is not None:
+        # 5. Contact points -------------------------------------------------
+        # Source precedence: the depth field when the block has one, otherwise
+        # the CSV's pre-parsed contact_points.  Never a mix — the two are
+        # different point sets (the CSV blob is quantised to 0.1 mm) and pairing
+        # them would mean matching rows by coordinate value, which the sidecar's
+        # design record explicitly forbids.
+        if self._has_contact_source:
             _cpts: Optional[np.ndarray] = None
+            _cdepths: Optional[np.ndarray] = None
             if self._visibility.get('contact_points', True):
-                _cpts = (
-                    self._contact_pts_by_frame[frame_idx]
-                    if frame_idx < len(self._contact_pts_by_frame)
-                    else None
-                )
+                if self._depth_series is not None:
+                    _pair = self._depth_series.frame(frame_idx)
+                    if _pair is not None:
+                        _cpts, _cdepths = _pair
+                elif self._contact_pts_by_frame is not None:
+                    if frame_idx not in self._contact_pts_by_frame:
+                        raise KeyError(
+                            f"Kinect frame {frame_idx} has no contact_points row "
+                            "in the merged CSV. Reading a neighbouring frame's "
+                            "points instead would silently draw the wrong contact."
+                        )
+                    _cpts = self._contact_pts_by_frame[frame_idx]
             _contact_is_empty = _cpts is None or len(_cpts) == 0
 
             if frame_idx == self._last_contact_frame:
@@ -1659,16 +2096,21 @@ class NeuralKinectViewer(QMainWindow):
                 # Data actually changed (or empty↔non-empty transition).
                 if not _contact_is_empty:
                     if T is not None:
+                        # A rigid transform moves the vertices; it cannot change
+                        # a distance, so _cdepths is carried through untouched.
                         _cpts = apply_rigid_transform(
                             _cpts.astype(np.float64), T
                         ).astype(np.float32)
                     self._mesh_contact.DeepCopy(
-                        pv.PolyData(_cpts.astype(np.float32))
+                        contact_polydata(_cpts, _cdepths)
                     )
                 else:
-                    self._mesh_contact.DeepCopy(
-                        pv.PolyData(np.empty((0, 3), dtype=np.float32))
-                    )
+                    self._mesh_contact.DeepCopy(_empty_contact_polydata())
+                # Re-asserted after every dataset swap: without it the mapper
+                # reverts to per-frame autoscale on PyVista 0.47.1 and the same
+                # depth would take a different colour on a different frame.
+                if self._contact_clim is not None:
+                    self._actor_contact.mapper.scalar_range = self._contact_clim
                 dirty = True
                 if _contact_is_empty != self._last_contact_empty:
                     # Bounds changed: empty↔non-empty transition.
@@ -1686,10 +2128,10 @@ class NeuralKinectViewer(QMainWindow):
 
         # 7. Neural panel cursor --------------------------------------------
         if self.neural_panel is not None:
-            self.neural_panel.update_cursor(frame_idx, self._neural_scale)
+            self.neural_panel.update_cursor(self._nav.row_of(frame_idx))
 
         # 8. Frame label + buffer fill indicator ----------------------------
-        self.frame_label.setText(f"{frame_idx + 1} / {self._total_frames}")
+        self.frame_label.setText(self._format_frame_label(_position))
         buf_n = self._preloader.buffer_count()
         buf_max = self._preloader._buffer_size
         if not self._play_timer.isActive() or (frame_idx % 5 == 0):
@@ -1840,7 +2282,7 @@ class NeuralKinectViewer(QMainWindow):
         self._slider_dragging = False
         self._drag_timer.stop()
         self._pending_drag_frame = None
-        self._update_frame(self.frame_slider.value())
+        self._update_frame(self._frame_at(self.frame_slider.value()))
         self._refresh_cam_pos_label()
 
     def _on_drag_timer_fired(self) -> None:
@@ -1851,12 +2293,14 @@ class NeuralKinectViewer(QMainWindow):
             self._update_frame(frame)
 
     def _on_slider_change(self, value: int) -> None:
+        """*value* is a navigation POSITION, not a kinect frame index."""
+        frame = self._frame_at(value)
         if self._slider_dragging:
-            self.frame_label.setText(f"{value + 1} / {self._total_frames}")
-            self._preloader.seek(value)
-            self._pending_drag_frame = value
+            self.frame_label.setText(self._format_frame_label(value))
+            self._preloader.seek(frame)
+            self._pending_drag_frame = frame
         else:
-            self._update_frame(value)
+            self._update_frame(frame)
 
     def _on_visibility_changed(self, key: str, state: int) -> None:
         self._visibility[key] = state == Qt.Checked
@@ -1867,6 +2311,38 @@ class NeuralKinectViewer(QMainWindow):
             else:
                 self._preloader.pause()
         self._update_frame(self.current_index)
+
+    def _apply_contact_scalar_mode(self) -> None:
+        """Switch the contact actor between depth colouring and flat red.
+
+        Deliberately *not* an ``add_mesh`` / ``remove_actor`` cycle: re-adding
+        the mesh re-enters PyVista's scalar-bar range logic, which does not
+        preserve a global ``clim``.  Toggling ``scalar_visibility`` leaves the
+        actor, its mapper and its lookup table exactly where they are, so the
+        colour scale is identical before and after the round trip.
+        """
+        actor = getattr(self, '_actor_contact', None)
+        if actor is None or self._contact_clim is None:
+            return
+
+        show_scalars = self._depth_colouring_active
+        actor.mapper.scalar_visibility = show_scalars
+        # Re-assert on every mode change for the same reason it is re-asserted
+        # after every dataset swap.
+        actor.mapper.scalar_range = self._contact_clim
+
+        if CONTACT_DEPTH_SCALAR_BAR_TITLE in self.plotter.scalar_bars:
+            # A colourbar with nothing mapped to it would claim the flat-red
+            # points mean something on that scale.
+            self.plotter.scalar_bars[CONTACT_DEPTH_SCALAR_BAR_TITLE].SetVisibility(
+                bool(show_scalars)
+            )
+
+    def _on_contact_depth_colour_changed(self, state: int) -> None:
+        """Handle the 'Colour by depth' checkbox."""
+        self._colour_contact_by_depth = state == Qt.Checked
+        self._apply_contact_scalar_mode()
+        self.plotter.render()
 
     def _on_point_size_changed(self, key: str, value: int) -> None:
         self._point_sizes[key] = float(value)
@@ -1953,7 +2429,10 @@ class NeuralKinectViewer(QMainWindow):
             self.play_button.setText("⏸ Pause")
 
     def _play_advance(self) -> None:
-        nxt = (self.current_index + 1) % self._total_frames
+        """Advance one step through the NAVIGABLE set (which may have gaps)."""
+        if not self._nav.size:
+            return
+        nxt = (self.current_position + 1) % self._nav.size
         self.frame_slider.setValue(nxt)
 
     # ======================================================================
@@ -1963,10 +2442,9 @@ class NeuralKinectViewer(QMainWindow):
     def _deferred_start(self) -> None:
         """Initialize the VTK interactor (once), then render frame 0.
 
-        ``_neural_scale`` is already set by ``_load_block()`` so it does not
-        need to be recomputed here.  The VTK interactor initialisation is
-        guarded so it only runs once even when this method is called on the
-        first show.
+        The frame -> row lookup is already built by ``_load_block()`` so nothing
+        needs recomputing here.  The VTK interactor initialisation is guarded so
+        it only runs once even when this method is called on the first show.
         """
         if not getattr(self, '_vtk_interactor_initialized', False):
             try:
@@ -1979,7 +2457,9 @@ class NeuralKinectViewer(QMainWindow):
         if sz.width() > 0 and sz.height() > 0:
             self.plotter.render_window.SetSize(sz.width(), sz.height())
 
-        self._update_frame(0)
+        # Frame 0 is not necessarily navigable: truncating filtering can drop
+        # the opening trials outright.  Start at the first frame that exists.
+        self._update_frame(self._frame_at(0))
 
     def showEvent(self, event) -> None:  # noqa: N802
         """Trigger the first render once the window has real geometry."""

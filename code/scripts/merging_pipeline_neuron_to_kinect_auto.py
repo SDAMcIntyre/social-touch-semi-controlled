@@ -5,8 +5,9 @@ from pathlib import Path
 from typing import Dict, List, Optional
 from multiprocessing import freeze_support
 
-from prefect import flow, task, get_run_logger
-from prefect.futures import PrefectFuture
+# Setup a basic logger
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 import utils.path_tools as path_tools
 from utils import DagConfigHandler
@@ -19,6 +20,7 @@ from primary_processing import (
 from _4_merging import (
     align_and_merge_neural_and_kinect,
     filter_block_by_neural_quality,
+    filter_contact_depth_field_by_neural_quality,
 )
 
 # --- Data Structures ---
@@ -58,15 +60,34 @@ def resolve_filenames(config: KinectConfig) -> Dict[str, Path]:
     # Output: Merged Block Data
     output_name = f"{config.session_id}_semicontrolled_{config.block_id}_merged_data.csv"
 
+    # Output: Merged Block Data, stripped of Not2Use trials
+    filtered_dir = config.session_merged_output_dir / "blocks_filtered"
+
+    # Input: Space-1 per-vertex contact depth field sidecar (preprocessing artifact).
+    # Note the two block-id spellings are BOTH config attributes and are used as-is:
+    # `source_video.stem` carries `block-order02` while `config.block_id` carries
+    # `block-order-02`. No string surgery converts between them.
+    depth_field_name = f"{config.source_video.stem}_contact_depth_field.parquet"
+
+    # Output: the same depth field reduced to the neurally usable frames
+    depth_field_output_name = (
+        f"{config.session_id}_semicontrolled_{config.block_id}_contact_depth_field.parquet"
+    )
+
     return {
         "nerve_path": config.nerve_processed_dir / nerve_name,
         "kinect_path": kinect_path,
-        "output_path": config.session_merged_output_dir / "blocks_merged" / output_name
+        "output_path": config.session_merged_output_dir / "blocks_merged" / output_name,
+        "filtered_csv_path": filtered_dir / output_name,
+        "depth_field_path": (
+            config.video_processed_output_dir / "kinematics_analysis" / depth_field_name
+        ),
+        "depth_field_output_path": filtered_dir / depth_field_output_name,
     }
 
 # --- Individual Flows ---
 
-@task(name="9. Unify Dataset")
+# Stage 9: Unify Dataset
 def unify_dataset(
     kinect_data_path: Path,
     nerve_data_path: Path,
@@ -77,7 +98,6 @@ def unify_dataset(
     """
     Merges Kinect contact data with Nerve data (Block-level Unification).
     """
-    logger = get_run_logger()
     
     # Create parent directory if it doesn't exist
     output_file_path.parent.mkdir(parents=True, exist_ok=True)
@@ -95,7 +115,7 @@ def unify_dataset(
     return output_file_path
 
 
-@task(name="11. Filter by Neural Quality")
+# Stage 11: Filter by Neural Quality
 def filter_by_neural_quality_flow(
     merged_csv: Path,
     output_csv: Path,
@@ -107,7 +127,6 @@ def filter_by_neural_quality_flow(
     """
     Flow to filter a single block's merged CSV by removing Not2Use trials.
     """
-    logger = get_run_logger()
     logger.info(f"[{merged_csv.name}] Filtering by neural quality xlsx: {xlsx_path.name}")
     return filter_block_by_neural_quality(
         input_csv=merged_csv,
@@ -118,7 +137,30 @@ def filter_by_neural_quality_flow(
     )
 
 
-@flow(name="Run Single Session Pipeline")
+# Stage 12: Filter Contact Depth Field by Neural Quality
+def filter_contact_depth_field_by_neural_quality_flow(
+    depth_field_path: Path,
+    filtered_csv_path: Path,
+    output_path: Path,
+    *,
+    force_processing: bool = False,
+) -> Optional[Path]:
+    """
+    Flow to reduce a block's Space-1 contact depth field to the frames that
+    survived the neural-quality filter applied to the merged CSV.
+    """
+    logger.info(
+        f"[{depth_field_path.name}] Filtering depth field by surviving frames "
+        f"of {filtered_csv_path.name}"
+    )
+    return filter_contact_depth_field_by_neural_quality(
+        depth_field_path=depth_field_path,
+        filtered_csv_path=filtered_csv_path,
+        output_path=output_path,
+        force_processing=force_processing,
+    )
+
+
 def run_single_session_pipeline(
     config: KinectConfig,
     dag_handler: DagConfigHandler
@@ -127,7 +169,6 @@ def run_single_session_pipeline(
     Processes a single dataset block.
     Returns a PipelineResult object instead of a raw dict.
     """
-    logger = get_run_logger()
     block_name = config.source_video.stem
     logger.info(f"🚀 Starting pipeline for block: {block_name}")
     
@@ -178,15 +219,29 @@ def run_single_session_pipeline(
             force = options.get('force_processing', False)
             discard_from_first = options.get('discard_from_first_not2use', True)
 
-            filtered_output = (
-                config.session_merged_output_dir / "blocks_filtered" / output_file_path.name
-            )
             filter_by_neural_quality_flow(
                 merged_csv=output_file_path,
-                output_csv=filtered_output,
+                output_csv=paths["filtered_csv_path"],
                 xlsx_path=xlsx_path,
                 force_processing=force,
                 discard_from_first_not2use=discard_from_first,
+            )
+
+            dag_handler.mark_completed(task_name)
+
+        # --- Filter Contact Depth Field by Neural Quality ---
+        task_name = 'filter_contact_depth_field_by_neural_quality'
+        if dag_handler.can_run(task_name):
+            logger.info(f"[{block_name}] ==> Running task: {task_name}")
+
+            options = dag_handler.get_task_options(task_name)
+            force = options.get('force_processing', False)
+
+            filter_contact_depth_field_by_neural_quality_flow(
+                depth_field_path=paths["depth_field_path"],
+                filtered_csv_path=paths["filtered_csv_path"],
+                output_path=paths["depth_field_output_path"],
+                force_processing=force,
             )
 
             dag_handler.mark_completed(task_name)
@@ -213,7 +268,6 @@ def run_single_session_pipeline(
 
 # --- Main Dispatcher ---
 
-@flow(name="Batch Process All Sessions")
 def run_batch_processing(
     block_files: list[Path],
     project_data_root: Path,
@@ -221,54 +275,37 @@ def run_batch_processing(
     parallel: bool
 ):
     """
-    Dispatches pipeline runs for all session configs found in a directory.
-    Handles both sequential and parallel execution uniformly.
+    Dispatches pipeline runs sequentially for all session configs found in a directory.
+
+    `parallel` is still read from the DAG config so existing YAML stays valid, but
+    the parallel execution path has been removed; enabling it raises immediately.
     """
-    logger = get_run_logger()
+    if parallel:
+        raise NotImplementedError(
+            "parallel_execution is not supported: the parallel batch path was removed "
+            "along with Prefect. It never functioned -- it was disabled in every shipped "
+            "config, unreachable from the GUI, and broken or empty at three of its four "
+            "call sites. Set 'parallel_execution: false' in the DAG config. "
+            "See docs/development/plans/active/remove-prefect-orchestration.md."
+        )
+
     dag_handler_template = DagConfigHandler(dag_config_path)
 
-    mode = "PARALLEL" if parallel else "SEQUENTIAL"
-    logger.info(f"🚀 Starting batch processing for {len(block_files)} sessions in {mode} mode.")
+    logger.info(f"🚀 Starting batch processing for {len(block_files)} sessions in SEQUENTIAL mode.")
 
-    # 1. Dispatch Runs
-    futures_or_states = []
-    
     for block_file in block_files:
         try:
             config_data = KinectConfigFileHandler.load_and_resolve_config(block_file)
             validated_config = KinectConfig(config_data=config_data, database_path=project_data_root)
             dag_handler_instance = dag_handler_template.copy()
 
-            if parallel:
-                # Submit returns a PrefectFuture
-                run_future = run_single_session_pipeline.submit(
-                    config=validated_config,
-                    dag_handler=dag_handler_instance,
-                    flow_run_name=f"block-{validated_config.source_video.stem}"
-                )
-                futures_or_states.append(run_future)
-            else:
-                # Direct call returns the result object immediately
-                result = run_single_session_pipeline(
-                    config=validated_config,
-                    dag_handler=dag_handler_instance
-                )
-                futures_or_states.append(result)
-                
+            run_single_session_pipeline(
+                config=validated_config,
+                dag_handler=dag_handler_instance
+            )
+
         except Exception as e:
             logger.error(f"Failed to initialize config for {block_file}: {e}")
-
-    # 2. Wait for parallel runs to complete and log any failures
-    if parallel:
-        logger.info("Waiting for parallel runs to complete...")
-        for future in futures_or_states:
-            try:
-                if isinstance(future, PrefectFuture):
-                    state = future.wait()
-                    if not state.is_completed():
-                        logger.error(f"Flow run failed: {state}")
-            except Exception as e:
-                logger.error(f"Error retrieving future result: {e}")
 
     logger.info("✅ All batch processing tasks have finished.")
 

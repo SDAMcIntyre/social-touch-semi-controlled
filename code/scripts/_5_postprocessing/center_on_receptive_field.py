@@ -7,18 +7,50 @@ so that the coordinate origin sits at the RF center.
 
 If RF estimation fails (no valid DBSCAN cluster), a warning is logged and
 input data is passed through unchanged.
+
+The per-vertex contact depth field
+----------------------------------
+This is the last of the five spatial stages, so ``blocks_rf_centered/`` is where
+the depth field sidecar comes to rest — the terminal artifact the whole
+propagation exists to produce.  It is a **replayable** stage: the transform is
+one 4x4 translation, so each block's sidecar is moved by the *same* matrix its
+CSV was moved by.
+
+Three rules govern how:
+
+1. **The RF estimate never sees the field.**  ``_compute_rf_center`` reads the
+   CSVs only.  Feeding contact vertices — let alone depth-weighting them — into
+   the estimate would move the origin of this space and invalidate every
+   ``rf_center_origin.json`` already on disk.  The field is a passenger.
+2. **Passthrough copies the sidecar too.**  When RF estimation fails the CSVs
+   are copied through untranslated; the sidecar is copied with them, byte for
+   byte, which keeps ``coordinate_space = "pca_calibrated"`` — the correct
+   declaration, because those points genuinely did not move.  A read-modify-write
+   here could restamp a key in passing; a byte copy cannot.
+3. **Depth and vertex identity are not coordinates.**  ``signed_depth_mm`` is a
+   penetration measurement and a translation does not re-measure it;
+   ``vertex_id`` indexes a forearm this stage translates in place, in file order,
+   so index *i* still names the same physical vertex afterwards.  Both are
+   carried through bitwise and asserted to be.
 """
 
 import json
 import logging
 import shutil
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import open3d as o3d
 import pandas as pd
 
+from postprocessing.depth_field_stage_io import (
+    DEPTH_COLUMN,
+    PIPELINE_STAGE_POSTPROCESSING,
+    apply_rigid_transform_to_field,
+    assert_row_counts_agree_with_csv,
+    depth_field_path_for_csv,
+)
 from postprocessing.receptive_field.rf_clustering import (
     GroupedSpatialData,
     RFMappingEngine,
@@ -28,9 +60,21 @@ from preprocessing.forearm_extraction.registration.csv_spatial_transformer impor
     parse_contact_points,
     transform_spatial_columns_in_place,
 )
+from preprocessing.motion_analysis.tactile_quantification.io.contact_depth_field_io import (
+    VERTEX_ID_COLUMN,
+    read_contact_depth_field,
+    write_contact_depth_field_table,
+)
 from utils.should_process_task import clean_task_outputs, should_process_task
 
 logger = logging.getLogger(__name__)
+
+#: The space the depth field declares once this stage has translated it — the
+#: terminal space of the whole pipeline.  A member of
+#: ``contact_depth_field_io.COORDINATE_SPACES``, which the writer validates, so
+#: a typo here is a rejected write rather than a file whose declared frame
+#: nothing recognises.
+COORDINATE_SPACE_AFTER_RF_CENTERING: str = "rf_centered"
 
 
 def _compute_rf_center(
@@ -196,6 +240,159 @@ def _translate_forearm_ply(
     o3d.io.write_point_cloud(str(output_ply), pcd)
 
 
+def _resolve_input_parquets(
+    input_files: Sequence[Path], input_parquets: Optional[Sequence[Path]]
+) -> List[Path]:
+    """Return the sidecar path for every input CSV, proven to exist.
+
+    Args:
+        input_files: The block CSVs this stage will translate.
+        input_parquets: Explicit sidecar paths, index-aligned with
+            *input_files*.  When ``None`` they are derived with
+            ``depth_field_path_for_csv``, which resolves the ``_pca-xyz`` fork
+            the previous stage applied to both artifacts alike.
+
+    Returns:
+        One existing sidecar path per input CSV, in the same order.
+
+    Raises:
+        ValueError: If *input_parquets* is supplied with a different length.
+        FileNotFoundError: If any sidecar is absent.  The depth field is a hard
+            input of postprocessing; a block that reaches this stage without one
+            cannot produce the terminal artifact, and skipping it would leave a
+            gap nothing downstream would notice.
+    """
+    if input_parquets is None:
+        resolved = [depth_field_path_for_csv(path) for path in input_files]
+    else:
+        resolved = [Path(path) for path in input_parquets]
+        if len(resolved) != len(input_files):
+            raise ValueError(
+                f"input_parquets has {len(resolved)} entr(ies) but input_files "
+                f"has {len(input_files)}. The two lists are matched by position, "
+                "one sidecar per block CSV, so a length mismatch would pair a "
+                "block with another block's depth field."
+            )
+
+    missing = [path for path in resolved if not path.exists()]
+    if missing:
+        raise FileNotFoundError(
+            "Contact depth field sidecar(s) missing: "
+            f"{[str(path) for path in missing]}. The per-vertex depth field is a "
+            "required input of this stage — it is written beside the block CSV "
+            "by calibrate_pca_xyz. Re-run that stage for the affected block(s) "
+            "rather than centring without it."
+        )
+    return resolved
+
+
+def _assert_depth_and_vertex_preserved(
+    original: pd.DataFrame, moved: pd.DataFrame, *, parquet_name: str
+) -> None:
+    """Raise unless the measurement and the vertex identity survived bit for bit.
+
+    ``signed_depth_mm`` is how far the hand penetrated the forearm; translating
+    the whole scene does not change it.  ``vertex_id`` is a row index into the
+    session's reference forearm, which this stage translates **in place, in file
+    order, with no reordering or count change** — index *i* still names the same
+    physical vertex afterwards and must not be recomputed or renumbered.
+
+    The leaf module preserves both columns by construction; asserting it at the
+    stage boundary anyway is what makes a silently re-derived value
+    distinguishable from a measured one in the output file.
+    """
+    before_depth = original[DEPTH_COLUMN].to_numpy()
+    after_depth = moved[DEPTH_COLUMN].to_numpy()
+    if after_depth.dtype != before_depth.dtype or not np.array_equal(
+        after_depth, before_depth
+    ):
+        raise ValueError(
+            f"{parquet_name}: RF centring altered {DEPTH_COLUMN!r} (dtype "
+            f"{before_depth.dtype} -> {after_depth.dtype}). Penetration depth is "
+            "a measurement and is invariant under a translation; only "
+            "coordinates may move at this stage."
+        )
+
+    if VERTEX_ID_COLUMN not in original.columns:
+        raise ValueError(
+            f"{parquet_name}: the depth field carries no {VERTEX_ID_COLUMN!r} "
+            "column. It is assigned by project_contacts_onto_forearm, two stages "
+            "earlier, so a field without one has not been projected — re-run "
+            "that stage rather than centring an unaddressed field."
+        )
+    before_id = original[VERTEX_ID_COLUMN].to_numpy()
+    after_id = moved[VERTEX_ID_COLUMN].to_numpy()
+    if after_id.dtype != before_id.dtype or not np.array_equal(after_id, before_id):
+        raise ValueError(
+            f"{parquet_name}: RF centring altered {VERTEX_ID_COLUMN!r} (dtype "
+            f"{before_id.dtype} -> {after_id.dtype}). The forearm is translated "
+            "in place and in file order, so vertex i is the same physical vertex "
+            "before and after; the index must be carried through untouched."
+        )
+
+
+def _translate_single_field(
+    input_parquet: Path,
+    output_parquet: Path,
+    output_csv: Path,
+    translation_matrix: np.ndarray,
+) -> None:
+    """Translate a sidecar, restamp its space, and check it against the CSV.
+
+    Args:
+        input_parquet: The block's depth field as the PCA stage left it.
+        output_parquet: Destination in ``blocks_rf_centered/``.
+        output_csv: The RF-centred CSV **this stage just wrote** for the same
+            block — the only CSV the row-count check is meaningful against.
+        translation_matrix: The very 4x4 matrix applied to the CSV.
+
+    Raises:
+        ValueError: If the translation disturbed ``signed_depth_mm`` or
+            ``vertex_id``, or if the written field and the written CSV disagree
+            about any frame's contact-point count.
+    """
+    table, source_metadata = read_contact_depth_field(input_parquet)
+    moved = apply_rigid_transform_to_field(table, translation_matrix)
+    _assert_depth_and_vertex_preserved(table, moved, parquet_name=input_parquet.name)
+
+    # Provenance is carried through verbatim — schema version, reference PLY,
+    # vertex count, epsilon — because none of it changed. Only the declared
+    # space does, because only the coordinates did.
+    metadata: Dict[str, str] = dict(source_metadata)
+    metadata["coordinate_space"] = COORDINATE_SPACE_AFTER_RF_CENTERING
+    metadata["pipeline_stage"] = PIPELINE_STAGE_POSTPROCESSING
+
+    output_parquet.parent.mkdir(parents=True, exist_ok=True)
+    write_contact_depth_field_table(moved, output_parquet, metadata=metadata)
+    assert_row_counts_agree_with_csv(moved, output_csv)
+
+
+def _copy_field_unchanged(
+    input_parquet: Path, output_parquet: Path, output_csv: Path
+) -> None:
+    """Copy a sidecar through the no-cluster passthrough and check it.
+
+    A byte copy, not a read-modify-write: the points did not move, so the file's
+    declared ``coordinate_space`` — ``pca_calibrated`` — is still the truth, and
+    copying the bytes is the only way to guarantee nothing was restamped on the
+    way past.  The CSVs beside it are copied through for the same reason.
+
+    ``copy2`` rather than ``copyfile``, matching the CSV copy two lines above it
+    in the caller: the timestamp is copied as well as the bytes, so a re-run of
+    an unchanged session reproduces the previous run's outputs exactly, mtimes
+    included, instead of making the sidecar look newer than the CSV it belongs
+    to.
+
+    Raises:
+        ValueError: If the copied field and the CSV this stage produced disagree
+            about any frame's contact-point count.
+    """
+    output_parquet.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(input_parquet, output_parquet)
+    table, _ = read_contact_depth_field(output_parquet)
+    assert_row_counts_agree_with_csv(table, output_csv)
+
+
 def center_on_receptive_field(
     input_files: List[Path],
     forearm_ply_path: Path,
@@ -203,8 +400,9 @@ def center_on_receptive_field(
     forearm_output_dir: Path,
     rf_origin_path: Path,
     *,
+    input_parquets: Optional[Sequence[Path]] = None,
     force_processing: bool = False,
-) -> List[Path]:
+) -> Tuple[List[Path], List[Path]]:
     """Center all spatial data on the receptive field coordinate origin.
 
     Estimates the RF center from *input_files* (block CSVs from
@@ -226,27 +424,46 @@ def center_on_receptive_field(
             (``forearm_rf_centered/``).
         rf_origin_path: Destination for the per-session
             ``rf_center_origin.json`` metadata file.
+        input_parquets: Per-block contact depth field sidecars, index-aligned
+            with *input_files*.  When omitted they are derived from the CSV
+            paths — the sidecar sits beside its CSV.
         force_processing: Re-run even if outputs are up-to-date.
 
     Returns:
-        List of output CSV paths (written or already up-to-date).
+        ``(csv_paths, parquet_paths)``: the output CSVs in *output_dir* and
+        their depth field sidecars, index-aligned with each other.
+
+    Raises:
+        FileNotFoundError: If a block's depth field sidecar is missing.
+        ValueError: If *input_parquets* is misaligned with *input_files*, if the
+            translation disturbs ``signed_depth_mm`` or ``vertex_id``, or if any
+            written pair of artifacts disagrees about a frame's contact-point
+            count.
     """
     if not input_files:
         logger.warning("center_on_receptive_field: no input files provided.")
-        return []
+        return [], []
+
+    resolved_parquets = _resolve_input_parquets(input_files, input_parquets)
 
     output_csvs = [output_dir / f.name for f in input_files]
+    output_parquets = [output_dir / p.name for p in resolved_parquets]
     forearm_output_ply = (
         forearm_output_dir / forearm_ply_path.name
         if forearm_ply_path.exists()
         else None
     )
 
-    all_outputs: List[Path] = list(output_csvs) + [rf_origin_path]
+    # Both artifacts sit on both sides of the idempotency check, at this stage's
+    # own boundary — the session — so deleting either one regenerates the pair
+    # and they can never be produced out of step with each other.
+    all_outputs: List[Path] = (
+        list(output_csvs) + list(output_parquets) + [rf_origin_path]
+    )
     if forearm_output_ply:
         all_outputs.append(forearm_output_ply)
 
-    input_paths: List[Path] = list(input_files)
+    input_paths: List[Path] = list(input_files) + list(resolved_parquets)
     if forearm_ply_path.exists():
         input_paths.append(forearm_ply_path)
 
@@ -256,7 +473,7 @@ def center_on_receptive_field(
         force=force_processing,
     ):
         logger.info("RF centering up-to-date. Skipping session.")
-        return output_csvs
+        return output_csvs, output_parquets
 
     clean_task_outputs(all_outputs)
 
@@ -272,12 +489,18 @@ def center_on_receptive_field(
         output_dir.mkdir(parents=True, exist_ok=True)
         for src, dst in zip(input_files, output_csvs):
             shutil.copy2(src, dst)
+        # The CSVs were not translated, so the sidecars must not be either: they
+        # keep pca_calibrated, which is the space they are still in.
+        for src_parquet, dst_parquet, dst_csv in zip(
+            resolved_parquets, output_parquets, output_csvs
+        ):
+            _copy_field_unchanged(src_parquet, dst_parquet, dst_csv)
         if forearm_output_ply and forearm_ply_path.exists():
             forearm_output_dir.mkdir(parents=True, exist_ok=True)
             shutil.copy2(forearm_ply_path, forearm_output_ply)
         rf_origin_path.parent.mkdir(parents=True, exist_ok=True)
         rf_origin_path.write_text(json.dumps(metadata, indent=2))
-        return output_csvs
+        return output_csvs, output_parquets
 
     logger.info(
         "RF center estimated at [%.2f, %.2f, %.2f] mm "
@@ -290,11 +513,16 @@ def center_on_receptive_field(
 
     T = _build_translation_matrix(rf_center)
 
-    # --- Translate block CSVs ---
+    # --- Translate block CSVs and their depth fields ---
     output_dir.mkdir(parents=True, exist_ok=True)
-    for src, dst in zip(input_files, output_csvs):
+    for src, dst, src_parquet, dst_parquet in zip(
+        input_files, output_csvs, resolved_parquets, output_parquets
+    ):
         _translate_single_csv(src, dst, T)
         logger.info("RF-centered block CSV: %s", dst.name)
+        # The same 4x4 matrix, applied to the same points, in the same order.
+        _translate_single_field(src_parquet, dst_parquet, dst, T)
+        logger.info("RF-centered depth field: %s", dst_parquet.name)
 
     # --- Translate forearm PLY ---
     if forearm_ply_path.exists() and forearm_output_ply:
@@ -310,4 +538,4 @@ def center_on_receptive_field(
     rf_origin_path.write_text(json.dumps(metadata, indent=2))
     logger.info("Wrote RF origin metadata: %s", rf_origin_path.name)
 
-    return output_csvs
+    return output_csvs, output_parquets

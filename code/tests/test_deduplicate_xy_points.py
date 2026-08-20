@@ -2,17 +2,49 @@
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import pytest
 
 # Add scripts to path for imports
 _SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts" / "_5_postprocessing"
 sys.path.insert(0, str(_SCRIPTS_DIR))
 
-from deduplicate_xy_points import deduplicate_xy
+from deduplicate_xy_points import (
+    EPSILON_SOURCE_DAG_CONFIG,
+    EPSILON_SOURCE_INTERACTIVE_MONITOR,
+    FOREARM_DEDUP_METADATA_SCHEMA_VERSION,
+    FRAME_INDEX_COLUMN,
+    DedupMapping,
+    deduplicate_contact_points_csv,
+    deduplicate_forearm_ply,
+    deduplicate_xy,
+    deduplicate_xy_mapping,
+    forearm_dedup_metadata_path,
+    write_forearm_dedup_metadata,
+)
+from preprocessing.forearm_extraction.registration.csv_spatial_transformer import (
+    parse_contact_points,
+    serialize_contact_points,
+)
+
+o3d = pytest.importorskip("open3d", reason="deduplicate_forearm_ply needs Open3D")
+
+
+def _write_ply(path: Path, points, colors=None, normals=None) -> None:
+    """Materialise a point cloud as a PLY so tests exercise the real IO path."""
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(np.asarray(points, dtype=np.float64).reshape(-1, 3))
+    if colors is not None:
+        pcd.colors = o3d.utility.Vector3dVector(np.asarray(colors, dtype=np.float64))
+    if normals is not None:
+        pcd.normals = o3d.utility.Vector3dVector(np.asarray(normals, dtype=np.float64))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    assert o3d.io.write_point_cloud(str(path), pcd)
 
 
 class TestDeduplicateXyBasic:
@@ -502,3 +534,672 @@ class TestDeduplicateXyReturnIndices:
 
         assert n_removed == 0
         np.testing.assert_array_equal(indices, [0, 1, 2])
+
+
+class TestForearmDedupMetadataPath:
+    """The sidecar location must be derived in exactly one place."""
+
+    def test_path_sits_beside_the_ply(self) -> None:
+        ply = Path("/data/forearm_deduped/ST14-01_forearm.ply")
+        meta = forearm_dedup_metadata_path(ply)
+
+        assert meta.parent == ply.parent
+        assert meta.name == "ST14-01_forearm_dedup_metadata.json"
+
+    def test_path_is_deterministic(self) -> None:
+        ply = Path("a/b/c.ply")
+        assert forearm_dedup_metadata_path(ply) == forearm_dedup_metadata_path(ply)
+
+
+class TestWriteForearmDedupMetadata:
+    """The effective epsilon and vertex count must survive on disk."""
+
+    @staticmethod
+    def _stats(n_original: int = 10, n_deduped: int = 7, n_removed: int = 3) -> dict:
+        return {
+            "n_original": n_original,
+            "n_deduped": n_deduped,
+            "n_removed": n_removed,
+        }
+
+    def test_writes_all_provenance_fields(self, tmp_path: Path) -> None:
+        deduped = tmp_path / "forearm_deduped" / "session_forearm.ply"
+        source = tmp_path / "forearm_source" / "session_forearm.ply"
+
+        out = write_forearm_dedup_metadata(
+            deduped,
+            source_ply=source,
+            epsilon=0.5,
+            epsilon_source=EPSILON_SOURCE_DAG_CONFIG,
+            stats=self._stats(),
+        )
+
+        assert out == forearm_dedup_metadata_path(deduped)
+        payload = json.loads(out.read_text(encoding="utf-8"))
+        assert payload == {
+            "schema_version": FOREARM_DEDUP_METADATA_SCHEMA_VERSION,
+            "source_ply": "session_forearm.ply",
+            "deduplicated_ply": "session_forearm.ply",
+            "dedup_epsilon": 0.5,
+            "epsilon_source": EPSILON_SOURCE_DAG_CONFIG,
+            "n_vertices_original": 10,
+            "n_vertices_deduped": 7,
+            "n_vertices_removed": 3,
+        }
+
+    def test_records_the_interactive_epsilon_not_the_configured_one(
+        self, tmp_path: Path
+    ) -> None:
+        """A monitor run is only reproducible if the chosen epsilon is stored."""
+        deduped = tmp_path / "forearm.ply"
+
+        out = write_forearm_dedup_metadata(
+            deduped,
+            source_ply=tmp_path / "src.ply",
+            epsilon=1.234,
+            epsilon_source=EPSILON_SOURCE_INTERACTIVE_MONITOR,
+            stats=self._stats(),
+        )
+
+        payload = json.loads(out.read_text(encoding="utf-8"))
+        assert payload["dedup_epsilon"] == pytest.approx(1.234)
+        assert payload["epsilon_source"] == EPSILON_SOURCE_INTERACTIVE_MONITOR
+
+    def test_output_is_byte_identical_on_rewrite(self, tmp_path: Path) -> None:
+        """No timestamps — an unchanged re-run must not churn the artifact."""
+        deduped = tmp_path / "forearm.ply"
+        kwargs = dict(
+            source_ply=tmp_path / "src.ply",
+            epsilon=0.5,
+            epsilon_source=EPSILON_SOURCE_DAG_CONFIG,
+            stats=self._stats(),
+        )
+
+        first = write_forearm_dedup_metadata(deduped, **kwargs).read_bytes()
+        second = write_forearm_dedup_metadata(deduped, **kwargs).read_bytes()
+
+        assert first == second
+
+    def test_creates_parent_directory(self, tmp_path: Path) -> None:
+        deduped = tmp_path / "does" / "not" / "exist" / "forearm.ply"
+
+        out = write_forearm_dedup_metadata(
+            deduped,
+            source_ply=tmp_path / "src.ply",
+            epsilon=0.5,
+            epsilon_source=EPSILON_SOURCE_DAG_CONFIG,
+            stats=self._stats(),
+        )
+
+        assert out.exists()
+
+    @pytest.mark.parametrize("bad_epsilon", [0.0, -0.5, float("nan"), float("inf")])
+    def test_rejects_non_positive_or_non_finite_epsilon(
+        self, tmp_path: Path, bad_epsilon: float
+    ) -> None:
+        with pytest.raises(ValueError, match="positive finite"):
+            write_forearm_dedup_metadata(
+                tmp_path / "forearm.ply",
+                source_ply=tmp_path / "src.ply",
+                epsilon=bad_epsilon,
+                epsilon_source=EPSILON_SOURCE_DAG_CONFIG,
+                stats=self._stats(),
+            )
+
+    def test_rejects_unknown_epsilon_source(self, tmp_path: Path) -> None:
+        with pytest.raises(ValueError, match="Unknown epsilon_source"):
+            write_forearm_dedup_metadata(
+                tmp_path / "forearm.ply",
+                source_ply=tmp_path / "src.ply",
+                epsilon=0.5,
+                epsilon_source="guessed",
+                stats=self._stats(),
+            )
+
+    def test_rejects_missing_stats_key(self, tmp_path: Path) -> None:
+        with pytest.raises(ValueError, match="missing required key"):
+            write_forearm_dedup_metadata(
+                tmp_path / "forearm.ply",
+                source_ply=tmp_path / "src.ply",
+                epsilon=0.5,
+                epsilon_source=EPSILON_SOURCE_DAG_CONFIG,
+                stats={"n_original": 10, "n_deduped": 7},
+            )
+
+    def test_rejects_inconsistent_vertex_counts(self, tmp_path: Path) -> None:
+        with pytest.raises(ValueError, match="Inconsistent dedup vertex counts"):
+            write_forearm_dedup_metadata(
+                tmp_path / "forearm.ply",
+                source_ply=tmp_path / "src.ply",
+                epsilon=0.5,
+                epsilon_source=EPSILON_SOURCE_DAG_CONFIG,
+                stats=self._stats(n_original=10, n_deduped=7, n_removed=2),
+            )
+
+
+class TestDeduplicateForearmPly:
+    """The source -> deduped vertex mapping must be recoverable by the caller."""
+
+    def test_returns_kept_indices(self, tmp_path: Path) -> None:
+        points = [
+            [0.0, 0.0, 2.0],
+            [0.0, 0.0, 0.5],
+            [5.0, 0.0, 1.0],
+        ]
+        src = tmp_path / "src.ply"
+        out = tmp_path / "deduped" / "out.ply"
+        _write_ply(src, points)
+
+        stats = deduplicate_forearm_ply(src, out, epsilon=0.1)
+
+        assert stats["n_original"] == 3
+        assert stats["n_deduped"] == 2
+        assert stats["n_removed"] == 1
+        np.testing.assert_array_equal(stats["kept_indices"], [1, 2])
+
+    def test_kept_indices_index_the_source_vertices(self, tmp_path: Path) -> None:
+        points = [
+            [0.0, 0.0, 0.0],
+            [0.5, 0.0, 1.0],
+            [5.0, 0.0, 2.0],
+            [5.5, 0.0, 3.0],
+            [10.0, 0.0, 4.0],
+        ]
+        src = tmp_path / "src.ply"
+        out = tmp_path / "out.ply"
+        _write_ply(src, points)
+
+        stats = deduplicate_forearm_ply(src, out, epsilon=1.0)
+
+        source_pts = np.asarray(o3d.io.read_point_cloud(str(src)).points)
+        deduped_pts = np.asarray(o3d.io.read_point_cloud(str(out)).points)
+        np.testing.assert_allclose(
+            deduped_pts, source_pts[stats["kept_indices"]], atol=1e-6
+        )
+
+    def test_kept_indices_match_written_vertex_count(self, tmp_path: Path) -> None:
+        points = [[float(i % 4), float(i // 4), float(i)] for i in range(16)]
+        src = tmp_path / "src.ply"
+        out = tmp_path / "out.ply"
+        _write_ply(src, points)
+
+        stats = deduplicate_forearm_ply(src, out, epsilon=0.5)
+
+        n_written = len(np.asarray(o3d.io.read_point_cloud(str(out)).points))
+        assert len(stats["kept_indices"]) == n_written == stats["n_deduped"]
+
+    def test_kept_indices_agree_with_carried_colors(self, tmp_path: Path) -> None:
+        points = [
+            [0.0, 0.0, 2.0],
+            [0.0, 0.0, 0.5],
+            [5.0, 0.0, 1.0],
+        ]
+        colors = [
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ]
+        src = tmp_path / "src.ply"
+        out = tmp_path / "out.ply"
+        _write_ply(src, points, colors=colors)
+
+        stats = deduplicate_forearm_ply(src, out, epsilon=0.1)
+
+        source_colors = np.asarray(o3d.io.read_point_cloud(str(src)).colors)
+        deduped_colors = np.asarray(o3d.io.read_point_cloud(str(out)).colors)
+        np.testing.assert_allclose(
+            deduped_colors, source_colors[stats["kept_indices"]], atol=1e-6
+        )
+
+    def test_empty_ply_returns_empty_kept_indices(self, tmp_path: Path) -> None:
+        # Open3D refuses to *write* a 0-point cloud, so the empty PLY is
+        # hand-written; it reads back as an empty cloud all the same.
+        src = tmp_path / "src.ply"
+        out = tmp_path / "out.ply"
+        src.write_text(
+            "ply\nformat ascii 1.0\nelement vertex 0\n"
+            "property float x\nproperty float y\nproperty float z\n"
+            "end_header\n",
+            encoding="ascii",
+        )
+        assert len(np.asarray(o3d.io.read_point_cloud(str(src)).points)) == 0
+
+        stats = deduplicate_forearm_ply(src, out, epsilon=0.5)
+
+        assert stats["n_original"] == 0
+        assert stats["n_deduped"] == 0
+        assert stats["n_removed"] == 0
+        assert len(stats["kept_indices"]) == 0
+        assert stats["kept_indices"].dtype == np.intp
+
+    def test_epsilon_is_required_and_keyword_only(self, tmp_path: Path) -> None:
+        """A silent default epsilon would repoint every derived vertex index."""
+        src = tmp_path / "src.ply"
+        out = tmp_path / "out.ply"
+        _write_ply(src, [[0.0, 0.0, 0.0]])
+
+        with pytest.raises(TypeError):
+            deduplicate_forearm_ply(src, out)
+
+        with pytest.raises(TypeError):
+            deduplicate_forearm_ply(src, out, 0.5)
+
+    def test_stats_feed_the_metadata_writer_directly(self, tmp_path: Path) -> None:
+        """The dict returned by the dedup is the dict the sidecar writer consumes."""
+        points = [[float(i % 3), 0.0, float(i)] for i in range(9)]
+        src = tmp_path / "src.ply"
+        out = tmp_path / "out.ply"
+        _write_ply(src, points)
+
+        stats = deduplicate_forearm_ply(src, out, epsilon=0.5)
+        meta_path = write_forearm_dedup_metadata(
+            out,
+            source_ply=src,
+            epsilon=0.5,
+            epsilon_source=EPSILON_SOURCE_DAG_CONFIG,
+            stats=stats,
+        )
+
+        payload = json.loads(meta_path.read_text(encoding="utf-8"))
+        n_written = len(np.asarray(o3d.io.read_point_cloud(str(out)).points))
+        assert payload["n_vertices_deduped"] == n_written
+        assert payload["n_vertices_deduped"] == len(stats["kept_indices"])
+
+
+class TestDeduplicateXyMapping:
+    """The mapping is what a parallel per-point payload must be reduced by."""
+
+    def test_labels_cover_every_input_point(self) -> None:
+        pts = np.array([
+            [0.0, 0.0, 2.0],
+            [0.0, 0.0, 0.5],
+            [5.0, 0.0, 1.0],
+        ], dtype=np.float64)
+
+        mapping = deduplicate_xy_mapping(pts, 0.1)
+
+        assert mapping.labels.shape == (len(pts),)
+        assert mapping.n_input == len(pts)
+        assert mapping.n_removed == len(pts) - len(mapping.kept_indices)
+
+    def test_exactly_one_survivor_per_cluster(self) -> None:
+        pts = np.array([
+            [0.0, 0.0, 2.0],
+            [0.0, 0.0, 0.5],
+            [5.0, 0.0, 1.0],
+            [5.05, 0.0, 3.0],
+            [10.0, 0.0, 0.0],
+        ], dtype=np.float64)
+
+        mapping = deduplicate_xy_mapping(pts, 0.1)
+
+        survivor_labels = mapping.labels[mapping.kept_indices]
+        assert len(set(survivor_labels.tolist())) == len(survivor_labels)
+        assert set(survivor_labels.tolist()) == set(mapping.labels.tolist())
+
+    def test_labels_identify_which_rows_collapsed_together(self) -> None:
+        """The group membership — not just the survivors — must be recoverable."""
+        pts = np.array([
+            [0.0, 0.0, 2.0],
+            [0.0, 0.0, 0.5],
+            [5.0, 0.0, 1.0],
+            [5.05, 0.0, 3.0],
+            [10.0, 0.0, 0.0],
+        ], dtype=np.float64)
+
+        mapping = deduplicate_xy_mapping(pts, 0.1)
+
+        np.testing.assert_array_equal(mapping.kept_indices, [1, 2, 4])
+        assert mapping.labels[0] == mapping.labels[1]
+        assert mapping.labels[2] == mapping.labels[3]
+        assert mapping.labels[4] not in (mapping.labels[0], mapping.labels[2])
+        assert mapping.labels[0] != mapping.labels[2]
+
+    def test_agrees_with_deduplicate_xy(self) -> None:
+        """deduplicate_xy is exactly the application of this mapping."""
+        rng = np.random.default_rng(20260818)
+        pts = rng.normal(size=(200, 3))
+
+        deduped, n_removed, kept = deduplicate_xy(pts, 0.2, return_indices=True)
+        mapping = deduplicate_xy_mapping(pts, 0.2)
+
+        np.testing.assert_array_equal(mapping.kept_indices, kept)
+        assert mapping.n_removed == n_removed
+        assert mapping.n_input == len(pts)
+        np.testing.assert_array_equal(pts[mapping.kept_indices], deduped)
+
+    def test_empty_input(self) -> None:
+        mapping = deduplicate_xy_mapping(np.empty((0, 3), dtype=np.float64), 0.5)
+
+        assert mapping.kept_indices.shape == (0,)
+        assert mapping.labels.shape == (0,)
+        assert mapping.kept_indices.dtype == np.intp
+        assert mapping.labels.dtype == np.intp
+        assert mapping.n_input == 0
+        assert mapping.n_removed == 0
+
+    def test_index_arrays_are_intp(self) -> None:
+        pts = np.array([[0.0, 0.0, 0.0], [0.05, 0.0, 1.0]], dtype=np.float64)
+
+        mapping = deduplicate_xy_mapping(pts, 0.5)
+
+        assert mapping.kept_indices.dtype == np.intp
+        assert mapping.labels.dtype == np.intp
+
+    def test_mapping_is_frozen(self) -> None:
+        mapping = deduplicate_xy_mapping(
+            np.array([[0.0, 0.0, 0.0]], dtype=np.float64), 0.5
+        )
+
+        with pytest.raises(AttributeError):
+            mapping.kept_indices = np.empty(0, dtype=np.intp)  # type: ignore[misc]
+
+
+def _contact_cell(points) -> str:
+    """Serialise points the way the upstream CSV writer does (%.1f)."""
+    return serialize_contact_points([(float(x), float(y), float(z)) for x, y, z in points])
+
+
+def _write_contact_csv(path: Path, rows) -> None:
+    """Write a minimal session CSV. *rows* is a list of (frame_index, cell)."""
+    pd.DataFrame({
+        "time": np.arange(len(rows), dtype=np.float64),
+        FRAME_INDEX_COLUMN: [frame for frame, _ in rows],
+        "contact_location_x": [0.0] * len(rows),
+        "contact_location_y": [0.0] * len(rows),
+        "contact_location_z": [0.0] * len(rows),
+        "contact_points": [cell for _, cell in rows],
+    }).to_csv(path, index=False)
+
+
+class TestDeduplicateContactPointsCsvMapping:
+    """The per-frame mapping the depth field will later be reduced by."""
+
+    _POINTS_A = [(0.0, 0.0, 2.0), (0.0, 0.0, 0.5), (5.0, 0.0, 1.0)]
+    _POINTS_B = [(1.0, 1.0, 3.0), (1.0, 1.0, 1.0)]
+
+    def _run(self, tmp_path: Path) -> dict:
+        src = tmp_path / "in.csv"
+        out = tmp_path / "out.csv"
+        _write_contact_csv(src, [
+            (168.0, "[]"),
+            (168.0, _contact_cell(self._POINTS_A)),
+            (169.0, "[]"),
+            (170.0, "[]"),
+            (205.0, _contact_cell(self._POINTS_B)),
+            (206.0, "[]"),
+        ])
+        stats = deduplicate_contact_points_csv(src, out, epsilon=0.1)
+        stats["_output_csv"] = out
+        return stats
+
+    def test_keyed_by_frame_index_not_row_position(self, tmp_path: Path) -> None:
+        stats = self._run(tmp_path)
+
+        assert set(stats["frame_mappings"]) == {168, 205}
+
+    def test_keys_are_plain_ints(self, tmp_path: Path) -> None:
+        stats = self._run(tmp_path)
+
+        assert all(type(key) is int for key in stats["frame_mappings"])
+
+    def test_values_are_dedup_mappings(self, tmp_path: Path) -> None:
+        stats = self._run(tmp_path)
+
+        assert all(
+            isinstance(value, DedupMapping) for value in stats["frame_mappings"].values()
+        )
+
+    def test_mapping_matches_the_written_cell(self, tmp_path: Path) -> None:
+        """Applying the mapping to the input points reproduces the output cell."""
+        stats = self._run(tmp_path)
+        df = pd.read_csv(stats["_output_csv"])
+
+        inputs = {168: self._POINTS_A, 205: self._POINTS_B}
+        for frame, mapping in stats["frame_mappings"].items():
+            cell = df.loc[df[FRAME_INDEX_COLUMN] == frame, "contact_points"].iloc[-1]
+            written = np.asarray(parse_contact_points(cell), dtype=np.float64)
+            expected = np.asarray(inputs[frame], dtype=np.float64)[mapping.kept_indices]
+
+            np.testing.assert_allclose(written, expected, atol=0.05)
+            assert mapping.n_input == len(inputs[frame])
+
+    def test_rows_without_contact_points_get_no_mapping(self, tmp_path: Path) -> None:
+        stats = self._run(tmp_path)
+
+        assert 169 not in stats["frame_mappings"]
+        assert 206 not in stats["frame_mappings"]
+
+    def test_existing_stat_keys_are_unchanged(self, tmp_path: Path) -> None:
+        stats = self._run(tmp_path)
+
+        assert stats["n_rows_processed"] == 2
+        assert stats["total_points_before"] == 5
+        assert stats["total_points_after"] == 3
+
+    def test_missing_frame_index_column_raises(self, tmp_path: Path) -> None:
+        src = tmp_path / "in.csv"
+        pd.DataFrame({
+            "contact_points": [_contact_cell(self._POINTS_A)],
+            "contact_location_x": [0.0],
+            "contact_location_y": [0.0],
+            "contact_location_z": [0.0],
+        }).to_csv(src, index=False)
+
+        with pytest.raises(ValueError, match=FRAME_INDEX_COLUMN):
+            deduplicate_contact_points_csv(src, tmp_path / "out.csv", epsilon=0.1)
+
+    def test_duplicate_frame_index_raises(self, tmp_path: Path) -> None:
+        src = tmp_path / "in.csv"
+        _write_contact_csv(src, [
+            (168.0, _contact_cell(self._POINTS_A)),
+            (168.0, _contact_cell(self._POINTS_B)),
+        ])
+
+        with pytest.raises(ValueError, match="ambiguous"):
+            deduplicate_contact_points_csv(src, tmp_path / "out.csv", epsilon=0.1)
+
+    def test_nan_frame_index_on_a_contact_row_raises(self, tmp_path: Path) -> None:
+        src = tmp_path / "in.csv"
+        _write_contact_csv(src, [(np.nan, _contact_cell(self._POINTS_A))])
+
+        with pytest.raises(ValueError, match="whole number"):
+            deduplicate_contact_points_csv(src, tmp_path / "out.csv", epsilon=0.1)
+
+    def test_fractional_frame_index_on_a_contact_row_raises(self, tmp_path: Path) -> None:
+        src = tmp_path / "in.csv"
+        _write_contact_csv(src, [(168.5, _contact_cell(self._POINTS_A))])
+
+        with pytest.raises(ValueError, match="whole number"):
+            deduplicate_contact_points_csv(src, tmp_path / "out.csv", epsilon=0.1)
+
+    def test_nan_frame_index_on_an_empty_row_is_tolerated(self, tmp_path: Path) -> None:
+        """Non-contact rows carry no mapping, so their frame_index is irrelevant."""
+        src = tmp_path / "in.csv"
+        out = tmp_path / "out.csv"
+        _write_contact_csv(src, [
+            (np.nan, "[]"),
+            (168.0, _contact_cell(self._POINTS_A)),
+        ])
+
+        stats = deduplicate_contact_points_csv(src, out, epsilon=0.1)
+
+        assert set(stats["frame_mappings"]) == {168}
+
+
+# ---------------------------------------------------------------------------
+# The contact depth field sidecar (Phase 6, task 6.1 / 6.2 / 6.6)
+# ---------------------------------------------------------------------------
+
+from deduplicate_xy_points import deduplicate_contact_depth_field  # noqa: E402
+from preprocessing.motion_analysis.tactile_quantification.io.contact_depth_field_io import (  # noqa: E402
+    read_contact_depth_field,
+    write_contact_depth_field_table,
+)
+
+FIELD_METADATA = {
+    "schema_version": "1",
+    "coordinate_space": "icp_registered",
+    "units": "mm",
+    "sign_convention": "negative_is_penetrating",
+    "produced_by": "compute_somatosensory_characteristics",
+    "source_recording": "unit-test",
+    # What the merging filter stamps, and what the ICP stage would have carried
+    # in before Phase 8 restamped it. Present here so the dedup stage's own
+    # restamp is observable rather than a no-op.
+    "pipeline_stage": "merging",
+}
+
+
+def _write_depth_field(path: Path, frames, points, depths, metadata=None) -> Path:
+    """Write a schema-conforming sidecar whose rows mirror a CSV's contact cells."""
+    points = np.asarray(points, dtype=np.float32).reshape(len(frames), 3)
+    table = pd.DataFrame(
+        {
+            "frame_index": np.asarray(frames, dtype=np.int32),
+            "time_s": np.asarray(frames, dtype=np.float64) / 30.0,
+            "x": points[:, 0],
+            "y": points[:, 1],
+            "z": points[:, 2],
+            "signed_depth_mm": np.asarray(depths, dtype=np.float64),
+        }
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_contact_depth_field_table(
+        table, path, metadata=dict(metadata or FIELD_METADATA)
+    )
+    return path
+
+
+def _write_depth_contact_csv(path: Path, rows) -> Path:
+    """``rows`` is a list of ``(frame_index, points, contact_depth)``."""
+    pd.DataFrame(
+        {
+            "frame_index": [float(f) for f, _, _ in rows],
+            "contact_points": [
+                serialize_contact_points([tuple(float(v) for v in p) for p in pts])
+                for _, pts, _ in rows
+            ],
+            "contact_depth": [float(d) for _, _, d in rows],
+            "contact_location_x": [0.0] * len(rows),
+            "contact_location_y": [0.0] * len(rows),
+            "contact_location_z": [0.0] * len(rows),
+        }
+    ).to_csv(path, index=False)
+    return path
+
+
+class TestDeduplicateContactDepthField:
+    """The sidecar loses exactly the rows the CSV lost, by the CSV's own mapping."""
+
+    #: Frame 10 has three points, two of them within epsilon in (x, y); frame 11
+    #: has two points that are far apart and both survive.
+    ROWS = [
+        (10, [(0.0, 0.0, 5.0), (0.1, 0.0, 1.0), (9.0, 9.0, 2.0)], 4.0),
+        (11, [(0.0, 0.0, 3.0), (20.0, 20.0, 1.0)], 2.0),
+    ]
+    FRAMES = [10, 10, 10, 11, 11]
+    POINTS = [
+        (0.0, 0.0, 5.0), (0.1, 0.0, 1.0), (9.0, 9.0, 2.0),
+        (0.0, 0.0, 3.0), (20.0, 20.0, 1.0),
+    ]
+    DEPTHS = [-4.0, -0.5, -1.25, -2.0, -0.75]
+
+    def _run(self, tmp_path, *, depths=None, epsilon=0.5):
+        in_csv = _write_depth_contact_csv(tmp_path / "in.csv", self.ROWS)
+        in_pq = _write_depth_field(
+            tmp_path / "in.parquet", self.FRAMES, self.POINTS,
+            depths if depths is not None else self.DEPTHS,
+        )
+        out_csv = tmp_path / "out" / "in.csv"
+        out_pq = tmp_path / "out" / "in.parquet"
+        stats = deduplicate_contact_points_csv(in_csv, out_csv, epsilon=epsilon)
+        deduplicate_contact_depth_field(in_pq, out_pq, out_csv, stats["frame_mappings"])
+        return out_csv, out_pq, stats
+
+    def test_the_survivor_inherits_the_groups_deepest_value(self, tmp_path):
+        out_csv, out_pq, _ = self._run(tmp_path)
+        table, _ = read_contact_depth_field(out_pq)
+
+        # Frame 10 collapsed (0,0,5) and (0.1,0,1) into the lower-z one.
+        assert len(table) == 4
+        frame10 = table[table["frame_index"] == 10]
+        assert len(frame10) == 2
+        # The survivor of the collapsed pair carries the pair's deepest value.
+        assert -4.0 in frame10["signed_depth_mm"].tolist()
+
+    def test_the_row_count_matches_the_csv_it_was_written_beside(self, tmp_path):
+        out_csv, out_pq, _ = self._run(tmp_path)
+        table, _ = read_contact_depth_field(out_pq)
+        counts = table.groupby("frame_index").size().to_dict()
+        parsed = {
+            int(row["frame_index"]): len(parse_contact_points(row["contact_points"]))
+            for _, row in pd.read_csv(out_csv).iterrows()
+        }
+        assert {int(k): int(v) for k, v in counts.items()} == parsed
+
+    def test_the_max_magnitude_per_frame_is_preserved(self, tmp_path):
+        _, out_pq, _ = self._run(tmp_path)
+        table, _ = read_contact_depth_field(out_pq)
+        maxima = table.groupby("frame_index")["signed_depth_mm"].apply(
+            lambda s: float(np.max(np.abs(s)))
+        )
+        assert maxima.loc[10] == 4.0
+        assert maxima.loc[11] == 2.0
+
+    def test_only_the_pipeline_stage_is_restamped(self, tmp_path):
+        """Dedup removes rows; it does not move them.
+
+        Every declared key therefore survives verbatim -- ``coordinate_space``
+        above all -- except ``pipeline_stage``, which this stage owns: the file
+        in ``blocks_deduped/`` was written by postprocessing, and repeating its
+        input's ``"merging"`` stamp would misreport where the artifact has been.
+        """
+        _, out_pq, _ = self._run(tmp_path)
+        _, metadata = read_contact_depth_field(out_pq)
+        assert metadata == {**FIELD_METADATA, "pipeline_stage": "postprocessing"}
+        assert FIELD_METADATA["pipeline_stage"] == "merging"
+
+    def test_no_vertex_id_is_assigned_here(self, tmp_path):
+        _, out_pq, _ = self._run(tmp_path)
+        table, _ = read_contact_depth_field(out_pq)
+        assert "vertex_id" not in table.columns
+
+    def test_a_depth_the_frame_never_held_would_be_caught(self, tmp_path):
+        """The stage-level guard, exercised by faking a rule that invents a value."""
+        import deduplicate_xy_points as module
+
+        original = pd.DataFrame(
+            {"frame_index": [10, 10], "signed_depth_mm": [-1.0, -2.0]}
+        )
+        invented = pd.DataFrame(
+            {"frame_index": [10], "signed_depth_mm": [-1.5]}
+        )
+        with pytest.raises(ValueError, match="not measured at that frame"):
+            module._assert_depth_only_reduced(
+                original, invented, parquet_name="x.parquet"
+            )
+
+    def test_a_missing_sidecar_raises_naming_the_file(self, tmp_path):
+        in_csv = _write_depth_contact_csv(tmp_path / "in.csv", self.ROWS)
+        out_csv = tmp_path / "out" / "in.csv"
+        stats = deduplicate_contact_points_csv(in_csv, out_csv, epsilon=0.5)
+        with pytest.raises(FileNotFoundError, match="absent.parquet"):
+            deduplicate_contact_depth_field(
+                tmp_path / "absent.parquet", tmp_path / "o.parquet",
+                out_csv, stats["frame_mappings"],
+            )
+
+    def test_a_field_holding_a_frame_the_mapping_does_not_cover_raises(self, tmp_path):
+        in_csv = _write_depth_contact_csv(tmp_path / "in.csv", self.ROWS)
+        in_pq = _write_depth_field(
+            tmp_path / "in.parquet",
+            self.FRAMES + [12], self.POINTS + [(1.0, 1.0, 1.0)],
+            self.DEPTHS + [-9.0],
+        )
+        out_csv = tmp_path / "out" / "in.csv"
+        stats = deduplicate_contact_points_csv(in_csv, out_csv, epsilon=0.5)
+        with pytest.raises(ValueError):
+            deduplicate_contact_depth_field(
+                in_pq, tmp_path / "o.parquet", out_csv, stats["frame_mappings"]
+            )

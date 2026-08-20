@@ -5,9 +5,11 @@
 parameters:
   # Set to true to run different sessions in parallel, false to run them one by one.
   parallel_execution: false
-  kinect_configs: [valid_configs_ST14-01, valid_configs_ST14-02, 
-      valid_configs_ST14-04, valid_configs_ST15-01, valid_configs_ST16-02, 
-      valid_configs_ST16-03, valid_configs_ST16-05, valid_configs_ST18-01, 
+  # valid_configs_ST15-01 excluded: reclassified as _NOT_ENOUGH_DATA_valid_configs_ST15-01,
+  # so the directory no longer resolves and would abort the pipeline at startup.
+  kinect_configs: [valid_configs_ST14-01, valid_configs_ST14-02,
+      valid_configs_ST14-04, valid_configs_ST16-02,
+      valid_configs_ST16-03, valid_configs_ST16-05, valid_configs_ST18-01,
       valid_configs_ST18-04]
   # Path to the experimenter-maintained xlsx file that annotates unusable trials.
   # Relative paths are resolved from the project data root.
@@ -31,3 +33,13 @@ tasks:
       # When false, remove only the individual Not2Use trial rows (original behaviour).
       discard_from_first_not2use: true
     depends_on: [unify_dataset]
+
+  # Applies the exclusion above to the Space-1 per-vertex contact depth field
+  # sidecar: keeps only the frames that survive into the filtered merged CSV and
+  # writes the reduced parquet beside it in blocks_filtered/. Removes rows only:
+  # no coordinate transformation, no value is recomputed.
+  filter_contact_depth_field_by_neural_quality:
+    enabled: true
+    options:
+      force_processing: false
+    depends_on: [filter_by_neural_quality]

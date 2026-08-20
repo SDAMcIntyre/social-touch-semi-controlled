@@ -25,6 +25,8 @@ dependencies:
       - h5py>=3.14
       - matplotlib>=3.10
       - pandas>=2.3
+      # parquet writer/reader for the contact-depth-field sidecar
+      - pyarrow>=15.0
       - scikit-image>=0.25
       - scikit-learn>=1.7
       - tifffile>=2025.5
@@ -55,9 +57,6 @@ dependencies:
       - PyQt5-sip>=12
       - QtPy>=2.4
       - qimage2ndarray>=1.10
-
-      # --- Workflow Orchestration ---
-      - prefect>=3.4
 
       # --- GPU Acceleration (optional, CUDA 12.x+) ---
       # Install separately after environment creation:
