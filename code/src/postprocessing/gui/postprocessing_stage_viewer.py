@@ -33,6 +33,7 @@ from PyQt5.QtWidgets import (
 )
 from pyvistaqt import QtInteractor
 
+from merging.contact_depth_field_series import ContactDepthFieldLoader
 from merging.gui.neural_kinect_scene_viewer import NeuralDataPanel
 
 
@@ -60,12 +61,32 @@ _PCA_FRAME_STAGES = {4, 5}
 
 @dataclass
 class StagePaths:
-    """Paths and metadata for one postprocessing stage."""
+    """Paths and metadata for one postprocessing stage.
+
+    Attributes:
+        stage_label: The dropdown entry this stage is shown under.
+        csv_path: The stage's merged-data CSV, or ``None`` when the session has
+            no merged output directory.
+        forearm: The forearm surface for this stage — a PLY path or an
+            already-loaded point cloud.
+        coordinate_frame: ``"camera"`` or ``"pca"``.
+        depth_field_loader: Zero-argument callable returning this stage's
+            :class:`~merging.contact_depth_field_series.ContactDepthFieldSeries`,
+            or ``None`` when the sidecar is absent.  A **loader**, never a path
+            and never a loaded table: the caller resolves six of these before
+            the window exists, and reading six stages of 10^5-10^6 vertices
+            before the first pixel is exactly the regression the lazy contract
+            was introduced to prevent.  The field itself defaults to ``None``
+            so every existing construction site stays valid; ``None`` means the
+            caller wired no depth field at all, which is indistinguishable from
+            an absent sidecar as far as this widget is concerned.
+    """
 
     stage_label: str
     csv_path: Optional[Path]
     forearm: Optional[Union[Path, "o3d.geometry.PointCloud"]]
     coordinate_frame: str  # "camera" or "pca"
+    depth_field_loader: Optional[ContactDepthFieldLoader] = None
 
 
 # ---------------------------------------------------------------------------

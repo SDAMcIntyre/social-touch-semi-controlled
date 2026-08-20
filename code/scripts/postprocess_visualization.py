@@ -22,7 +22,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 from PyQt5.QtWidgets import QApplication
@@ -62,6 +62,13 @@ from postprocessing.gui import (
 )
 from postprocessing.gui.forearm_stage_inspector import resolve_all_session_stage_paths
 from postprocessing.xyz_reference_from_gestures.calibration_pca_engine import CalibrationResult
+from postprocessing.depth_field_stage_io import depth_field_path_for_csv
+
+from merging.contact_depth_field_series import (
+    BoundedContactDepthFieldCache,
+    ContactDepthFieldLoader,
+    make_contact_depth_field_loader,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -249,6 +256,64 @@ def _resolve_source_forearm(config: KinectConfig) -> Optional[Path]:
     return source_ply if source_ply.exists() else None
 
 
+# ---------------------------------------------------------------------------
+# Contact depth field
+# ---------------------------------------------------------------------------
+
+# One block's six stages are wired together and the user walks them back and
+# forth from the stage dropdown, so the cache is sized to hold a full sweep:
+# every stage the user returns to is then one read, not two.  It is a *bound*
+# rather than an unlimited memo because a stage's sidecar is ~12 MB on disk
+# (Phase 9 sizing table of propagate-contact-depth-field-through-postprocessing)
+# and appreciably larger once parsed into per-frame arrays — residency has to be
+# a property of this constant, not of how long the window stays open.
+STAGE_DEPTH_FIELD_CACHE_SIZE = len(STAGE_LABELS)
+
+
+def _build_stage_depth_field_loader(
+    stage_label: str,
+    csv_path: Optional[Path],
+    cache: BoundedContactDepthFieldCache,
+    report: Callable[[str], None],
+) -> Optional[ContactDepthFieldLoader]:
+    """Return the lazy depth-field loader belonging to one stage CSV.
+
+    **Nothing is read here.**  Building the loader is a closure over a derived
+    path; the parquet is opened only when the viewer opens that stage.
+
+    A stage whose sidecar simply does not exist is not an error: stage 0 reads
+    ``blocks_merged/``, written *before* the depth field is filtered by neural
+    quality, so its sidecar legitimately never exists and the loader resolves to
+    the ordinary absent state.  A CSV *name* that cannot be paired with a
+    sidecar is a different matter — it means the pipeline's naming contract has
+    been broken — so the resolver's ``ValueError`` is re-raised with the stage
+    that produced it, never swallowed.
+
+    Args:
+        stage_label: The dropdown label, used only to locate a naming failure.
+        csv_path: The stage CSV, or ``None`` when no merged output dir exists.
+        cache: Shared bounded cache; see ``STAGE_DEPTH_FIELD_CACHE_SIZE``.
+        report: Where the resolution message goes when a read happens.
+
+    Returns:
+        A zero-argument loader, or ``None`` when there is no CSV to pair with.
+
+    Raises:
+        ValueError: If *csv_path* does not conform to the stage-CSV naming
+            contract that pairs it with its sidecar.
+    """
+    if csv_path is None:
+        return None
+    try:
+        sidecar_path = depth_field_path_for_csv(csv_path)
+    except ValueError as exc:
+        raise ValueError(
+            f"Stage {stage_label!r}: cannot pair {csv_path} with its contact "
+            f"depth field sidecar. {exc}"
+        ) from exc
+    return make_contact_depth_field_loader(sidecar_path, report, cache)
+
+
 def resolve_stage_paths(config: KinectConfig) -> List[StagePaths]:
     """Return one StagePaths instance per postprocessing stage.
 
@@ -256,6 +321,10 @@ def resolve_stage_paths(config: KinectConfig) -> List[StagePaths]:
     CSV paths are set to None when config.session_merged_output_dir is None;
     otherwise the path is set regardless of whether the file exists yet —
     the viewer handles missing files gracefully.
+
+    Each stage also carries a lazy contact-depth-field loader derived from its
+    own CSV path.  The six loaders share one bounded cache, and building them
+    reads nothing.
     """
     base = config.session_merged_output_dir
     session_id = config.session_id
@@ -276,42 +345,74 @@ def resolve_stage_paths(config: KinectConfig) -> List[StagePaths]:
         forearm_pca_ply = None
         forearm_rf_ply = None
 
+    stage_csv_paths: List[Optional[Path]] = [
+        base / "blocks_merged" / raw_name if base is not None else None,
+        base / "blocks_registered" / raw_name if base is not None else None,
+        base / "blocks_deduped" / raw_name if base is not None else None,
+        base / "blocks_projected" / raw_name if base is not None else None,
+        base / "blocks_pca_calibrated" / pca_name if base is not None else None,
+        base / "blocks_rf_centered" / pca_name if base is not None else None,
+    ]
+
+    # One cache for all six stages; the loaders are closures over it and read
+    # nothing until the viewer opens the stage they belong to.
+    depth_field_cache = BoundedContactDepthFieldCache(
+        maxsize=STAGE_DEPTH_FIELD_CACHE_SIZE
+    )
+    block_name = config.source_video.name
+
+    def _report(message: str) -> None:
+        # Same console channel the rest of this script prints on, so an absent
+        # sidecar announces itself once, where the user is already looking.
+        print(f"[{block_name}] {message}")
+
+    depth_field_loaders: List[Optional[ContactDepthFieldLoader]] = [
+        _build_stage_depth_field_loader(label, csv, depth_field_cache, _report)
+        for label, csv in zip(STAGE_LABELS, stage_csv_paths)
+    ]
+
     return [
         StagePaths(
             stage_label=STAGE_LABELS[0],
-            csv_path=base / "blocks_merged" / raw_name if base is not None else None,
+            csv_path=stage_csv_paths[0],
             forearm=per_video_forearm,
             coordinate_frame="camera",
+            depth_field_loader=depth_field_loaders[0],
         ),
         StagePaths(
             stage_label=STAGE_LABELS[1],
-            csv_path=base / "blocks_registered" / raw_name if base is not None else None,
+            csv_path=stage_csv_paths[1],
             forearm=unified_forearm_ply,
             coordinate_frame="camera",
+            depth_field_loader=depth_field_loaders[1],
         ),
         StagePaths(
             stage_label=STAGE_LABELS[2],
-            csv_path=base / "blocks_deduped" / raw_name if base is not None else None,
+            csv_path=stage_csv_paths[2],
             forearm=deduped_forearm or unified_forearm_ply,
             coordinate_frame="camera",
+            depth_field_loader=depth_field_loaders[2],
         ),
         StagePaths(
             stage_label=STAGE_LABELS[3],
-            csv_path=base / "blocks_projected" / raw_name if base is not None else None,
+            csv_path=stage_csv_paths[3],
             forearm=deduped_forearm or unified_forearm_ply,
             coordinate_frame="camera",
+            depth_field_loader=depth_field_loaders[3],
         ),
         StagePaths(
             stage_label=STAGE_LABELS[4],
-            csv_path=base / "blocks_pca_calibrated" / pca_name if base is not None else None,
+            csv_path=stage_csv_paths[4],
             forearm=forearm_pca_ply,
             coordinate_frame="pca",
+            depth_field_loader=depth_field_loaders[4],
         ),
         StagePaths(
             stage_label=STAGE_LABELS[5],
-            csv_path=base / "blocks_rf_centered" / pca_name if base is not None else None,
+            csv_path=stage_csv_paths[5],
             forearm=forearm_rf_ply,
             coordinate_frame="pca",
+            depth_field_loader=depth_field_loaders[5],
         ),
     ]
 
