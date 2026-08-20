@@ -56,6 +56,17 @@ Absent, corrupt, and no-contact are three different facts
   behind a plausible picture.
 * **No contact this frame** — ``series.frame(i) is None``; the caller draws
   nothing.  Not this module's concern.
+
+Two joins, not one
+------------------
+Drawing the field needs two lookups, and both live here so that neither is an
+expression buried in a widget.  :func:`depth_frame_at_position` turns a slider
+position into a Kinect frame and reads the patch.  :func:`forearm_depth_scalars`
+then turns that frame's ``vertex_id`` column into a scalar per forearm vertex,
+so the depth can be painted on the surface rather than only on the patch.  The
+second join exists only from the projection stage onward and returns ``None``
+before it; see the block comment above that function for why the missing case
+must stay missing.
 """
 
 from __future__ import annotations
@@ -66,6 +77,7 @@ from types import MappingProxyType
 from typing import Any, List, Mapping, Optional, Tuple
 
 import numpy as np
+import pandas as pd
 
 from merging.contact_depth_field_series import (
     ContactDepthFieldLoader,
@@ -75,15 +87,20 @@ from preprocessing.motion_analysis.tactile_quantification.io.contact_depth_field
     COORDINATE_SPACE_ICP_REGISTERED,
     COORDINATE_SPACE_PCA_CALIBRATED,
     COORDINATE_SPACE_RF_CENTERED,
+    VERTEX_ID_COLUMN,
+    validate_vertex_ids_against_reference,
 )
 
 __all__ = [
     "EXPECTED_SPACE_BY_STAGE",
+    "FOREARM_DEPTH_SCALAR_NAME",
     "FRAME_INDEX_COLUMN",
     "PRODUCING_TASK_BY_STAGE",
     "STAGE_LABELS",
     "StageDepthField",
     "depth_frame_at_position",
+    "forearm_depth_scalars",
+    "kinect_frame_at_position",
     "kinect_frame_indices",
     "resolve_stage_depth_field",
 ]
@@ -93,6 +110,14 @@ __all__ = [
 #: depth-field sidecar is keyed by the same number, which is what makes the two
 #: joinable at all.
 FRAME_INDEX_COLUMN: str = "frame_index"
+
+#: Name of the point-data array the forearm PLY carries when it is coloured by
+#: depth.  Deliberately *not* ``CONTACT_SCALAR_NAME``: the two arrays live on
+#: different datasets and mean different things — one is "the depth of this
+#: contact vertex", the other "the depth of whatever touched this forearm vertex
+#: on this frame, or nothing".  Sharing a name would make a mistaken
+#: ``set_active_scalars`` on the wrong dataset silently plausible.
+FOREARM_DEPTH_SCALAR_NAME: str = "forearm_penetration_depth_mm"
 
 
 #: The postprocessing stages the viewer's dropdown offers, in order.
@@ -441,10 +466,137 @@ def depth_frame_at_position(
             "StageDepthField.is_present before joining; there is nothing to "
             "look up and nothing sensible to return."
         )
+    return series.frame(kinect_frame_at_position(frame_indices, position))
+
+
+def kinect_frame_at_position(frame_indices: np.ndarray, position: int) -> int:
+    """Return the Kinect frame index the viewer shows at slider *position*.
+
+    The one expression in the codebase that turns a slider position into a
+    depth-field key.  Both joins — the contact patch and the forearm surface —
+    go through it, so neither can drift into indexing the field positionally
+    while the other does not.
+
+    Args:
+        frame_indices: The map from :func:`kinect_frame_indices`.
+        position: Slider position — a *row position*, not a frame index.
+
+    Returns:
+        The Kinect ``frame_index`` of that row.
+
+    Raises:
+        IndexError: If *position* is outside *frame_indices*.  Clamping it would
+            silently repeat an end frame.
+    """
     if not 0 <= position < len(frame_indices):
         raise IndexError(
             f"slider position {position} is outside the {len(frame_indices)} "
             "frames this stage has. It cannot be clamped: the neighbouring "
             "frame's depths are not this frame's."
         )
-    return series.frame(int(frame_indices[position]))
+    return int(frame_indices[position])
+
+
+# ---------------------------------------------------------------------------
+# The forearm join
+# ---------------------------------------------------------------------------
+#
+# Colouring the contact patch answers "how deep was each contact vertex".
+# Colouring the forearm answers "how deep was this piece of skin pressed", which
+# is the question the surface itself asks, and it needs a second join: from the
+# sidecar's ``vertex_id`` to a row of the forearm PLY's vertex array.
+#
+# Three things make that join dangerous enough to be worth isolating here.
+#
+# 1. ``vertex_id`` exists only from the projection stage onward.  Stages before
+#    it have none, and the honest answer for them is *nothing to show* — never a
+#    nearest-vertex snap computed here, which picks different vertices than the
+#    projection stage did (``depth_field_stage_io`` documents why: the CSV's
+#    points came back through a ``%.1f`` round trip and the parquet's did not)
+#    and which has already been measured overshooting a surface by 29 mm in the
+#    analogous case.
+# 2. The index is only meaningful against the exact mesh it was assigned to.  A
+#    forearm re-deduplicated at a different epsilon renumbers every vertex, and
+#    because task idempotency is decided from file timestamps nothing upstream
+#    notices.  ``validate_vertex_ids_against_reference`` is therefore called
+#    *before* any scatter, never after and never conditionally.
+# 3. A vertex nobody touched is **missing**, not zero-depth.  It gets ``NaN``,
+#    which the renderer paints in its own flat colour, so it is distinguishable
+#    from a genuine 0.00 mm grazing contact at the edge of the patch.
+
+
+def forearm_depth_scalars(
+    series: ContactDepthFieldSeries,
+    frame_index: int,
+    vertex_count: int,
+) -> Optional[np.ndarray]:
+    """Scatter one frame's penetration depths onto a forearm's vertex array.
+
+    Args:
+        series: The stage's depth field.
+        frame_index: The **Kinect frame index** to draw — not a slider position.
+            Convert one to the other with :func:`kinect_frame_indices`.
+        vertex_count: ``len(ply.points)`` of the forearm this stage displays.
+            A count, never a mesh: the validator behind this function must stay
+            importable where no geometry engine is installed.
+
+    Returns:
+        A ``(vertex_count,)`` float64 array of penetration depths in
+        millimetres, ``NaN`` at every vertex this frame did not touch — or
+        ``None`` when *series* carries no ``vertex_id`` at all, which is the
+        case for every stage before projection.  ``None`` means "this stage
+        cannot answer the question"; an all-``NaN`` array means "it can, and the
+        answer for this frame is that nothing was touched".
+
+    Raises:
+        TypeError: If *series* is ``None``.  A caller with no field must not
+            reach the join; arriving here with one missing means an
+            ``is_present`` check was skipped.
+        ValueError: If *vertex_count* is not a positive integer, or if the
+            sidecar's recorded reference-PLY vertex count disagrees with it, or
+            if any ``vertex_id`` falls outside the mesh.  A disagreement means
+            the ids were assigned against a different mesh, so every one of them
+            points at a different vertex than it did when it was written.
+    """
+    if series is None:
+        raise TypeError(
+            "forearm_depth_scalars was called without a depth field. Check "
+            "StageDepthField.is_present before joining; there is nothing to "
+            "look up and nothing sensible to return."
+        )
+    if series.vertex_id_by_frame is None:
+        return None
+
+    ids = series.vertex_id_by_frame.get(int(frame_index))
+    if ids is None:
+        # No contact on this frame.  The provenance is still checked below,
+        # against an empty index, so a mismatched forearm fails on the first
+        # frame drawn rather than on the first frame that happens to touch.
+        ids = np.empty((0,), dtype=np.int32)
+        depths = np.empty((0,), dtype=np.float64)
+    else:
+        depths = series.penetration_depth_by_frame[int(frame_index)]
+
+    # First, always, and with the count the caller actually holds.  The count
+    # check inside runs before the range check on purpose: ids that happen to
+    # remain in range after a renumbering are the dangerous case.
+    validate_vertex_ids_against_reference(
+        pd.DataFrame({VERTEX_ID_COLUMN: ids}),
+        dict(series.reference_ply_provenance),
+        reference_vertex_count=vertex_count,
+        reference_description="the forearm this stage displays",
+    )
+
+    scalars = np.full(int(vertex_count), np.nan, dtype=np.float64)
+    if ids.size:
+        # Projection is a per-point nearest-neighbour lookup with no uniqueness
+        # constraint, so two contact points of one frame may legitimately land
+        # on the same forearm vertex.  Plain assignment would resolve that by
+        # row order — an arbitrary, silent choice that changes with a re-sort.
+        # The deepest of the two wins instead: order-independent, and the
+        # conservative reading of "how hard was this piece of skin pressed".
+        # Seeding the touched entries with -inf keeps NaN meaning *untouched*,
+        # since ``maximum`` propagates NaN and would otherwise erase them.
+        scalars[ids] = -np.inf
+        np.maximum.at(scalars, ids, depths)
+    return scalars

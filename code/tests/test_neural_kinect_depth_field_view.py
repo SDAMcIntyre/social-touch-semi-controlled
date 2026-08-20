@@ -618,3 +618,44 @@ def test_the_loaded_series_is_identical_to_a_direct_load(tmp_path: Path) -> None
     for frame in direct.points_by_frame:
         assert np.array_equal(lazy.frame(frame)[0], direct.frame(frame)[0])
         assert lazy.frame(frame)[1].tobytes() == direct.frame(frame)[1].tobytes()
+
+
+# ---------------------------------------------------------------------------
+# The Phase-5 DTO widening, seen from the merging side
+# ---------------------------------------------------------------------------
+#
+# ``ContactDepthFieldSeries`` gained two optional fields so that the
+# postprocessing stage viewer can colour a forearm PLY by ``vertex_id``.  The
+# acceptance test for that widening is that every test above passes unmodified;
+# these two state the property those tests only imply, so that a future change
+# that starts populating the fields here — or that makes them required — fails
+# loudly rather than by a distant assertion in another file.
+#
+# The merging sidecar is written before projection, so it never carries a
+# ``vertex_id``.  Nothing in this viewer's path may begin to depend on one.
+
+
+def test_a_merging_sidecar_carries_no_vertex_identity(sidecar: Path) -> None:
+    """No ``vertex_id`` column, so both halves of the widening stay ``None``.
+
+    Not a gap: vertex identity is assigned at the postprocessing projection
+    stage, against a reference forearm this space knows nothing about.
+    """
+    series = load_contact_depth_field_series(sidecar)
+
+    assert series.has_vertex_ids is False
+    assert series.vertex_id_by_frame is None
+    assert series.reference_ply_provenance is None
+
+
+def test_the_widened_fields_are_optional_at_construction() -> None:
+    """A series built without them is valid — that is what keeps this viewer working."""
+    series = ContactDepthFieldSeries(
+        points_by_frame={0: np.zeros((1, 3), np.float32)},
+        penetration_depth_by_frame={0: np.zeros((1,), np.float64)},
+        clim_penetration_mm=(0.0, 1.0),
+        signed_depth_range_mm=(-1.0, 0.0),
+        coordinate_space=COORDINATE_SPACE,
+    )
+
+    assert series.has_vertex_ids is False

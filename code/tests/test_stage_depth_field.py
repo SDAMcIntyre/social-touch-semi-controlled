@@ -69,9 +69,11 @@ from preprocessing.motion_analysis.tactile_quantification.io.contact_depth_field
     COORDINATE_SPACE_PCA_CALIBRATED,
     COORDINATE_SPACE_RF_CENTERED,
     PRODUCED_BY,
+    REFERENCE_PLY_METADATA_KEYS,
     SCHEMA_VERSION,
     SIGN_CONVENTION,
     UNITS,
+    VERTEX_ID_COLUMN,
     write_contact_depth_field_table,
 )
 from postprocessing.depth_field_stage_io import depth_field_path_for_csv  # noqa: E402
@@ -83,11 +85,14 @@ from merging.contact_depth_field_series import (  # noqa: E402
 )
 from postprocessing.gui.stage_depth_field import (  # noqa: E402
     EXPECTED_SPACE_BY_STAGE,
+    FOREARM_DEPTH_SCALAR_NAME,
     FRAME_INDEX_COLUMN,
     PRODUCING_TASK_BY_STAGE,
     STAGE_LABELS,
     StageDepthField,
     depth_frame_at_position,
+    forearm_depth_scalars,
+    kinect_frame_at_position,
     kinect_frame_indices,
     resolve_stage_depth_field,
 )
@@ -805,7 +810,301 @@ def test_the_join_is_reachable_from_a_resolved_stage(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 6. Purity — the leaf stays headless
+# 6. The forearm join — vertex_id onto a PLY, or nothing at all
+# ---------------------------------------------------------------------------
+#
+# Phase 5 paints the depth on the surface rather than only on the patch, and the
+# join that does it is the one place in this feature where a wrong answer is
+# invisible.  ``vertex_id`` indexes a *specific* forearm: a re-dedup at another
+# epsilon renumbers every vertex, and nothing upstream notices because task
+# idempotency is decided from file timestamps.  So the provenance check runs
+# before the scatter, unconditionally, and a count disagreement raises rather
+# than colouring a plausible-looking wrong surface.
+#
+# The other half is the missing/zero distinction: a vertex nobody touched is
+# ``NaN``, never ``0.0``.  A grazing contact at the rim of the patch is a
+# genuine 0.00 mm and must stay distinguishable from the untouched skin next to
+# it.
+
+#: The forearm the synthetic sidecars below are written against.
+_REFERENCE_VERTEX_COUNT = 12
+_REFERENCE_PLY_NAME = "forearm_deduped.ply"
+_DEDUP_EPSILON = "0.001"
+
+#: ``(frame, time_s, x, y, z, signed_depth_mm, vertex_id)``.
+#:
+#: Frame 7 addresses vertex 4 twice, which the projection stage explicitly
+#: permits: it is a per-point nearest-neighbour lookup with no uniqueness
+#: constraint, so two contact points may land on one vertex.  The two rows carry
+#: different depths so that the tie-break is observable rather than assumed.
+_VERTEX_ROWS = [
+    (7, 0.233, 1.0, 2.0, 3.0, -0.25, 4),
+    (7, 0.233, 1.5, 2.5, 3.5, -0.50, 4),
+    (7, 0.233, 2.0, 3.0, 4.0, 0.00, 9),
+    (19, 0.633, 10.0, 20.0, 30.0, -4.00, 0),
+    (23, 0.766, 40.0, 50.0, 60.0, -9.50, 11),
+]
+
+
+def _vertex_metadata(coordinate_space: str, vertex_count: int) -> Dict[str, str]:
+    """Stage metadata plus the provenance triple a ``vertex_id`` requires."""
+    metadata = _metadata(coordinate_space)
+    metadata.update(
+        {
+            "reference_ply": _REFERENCE_PLY_NAME,
+            "reference_ply_vertex_count": str(vertex_count),
+            "dedup_epsilon": _DEDUP_EPSILON,
+        }
+    )
+    return metadata
+
+
+def _vertex_table(rows: Sequence[tuple]) -> pd.DataFrame:
+    """A schema-v2 table: the six required columns plus ``vertex_id``."""
+    table = _table([r[:6] for r in rows])
+    table[VERTEX_ID_COLUMN] = np.array([r[6] for r in rows], dtype=np.int32)
+    return table
+
+
+def _provenance() -> Dict[str, str]:
+    """The triple as the series carries it, for direct DTO construction."""
+    return {
+        "reference_ply": _REFERENCE_PLY_NAME,
+        "reference_ply_vertex_count": str(_REFERENCE_VERTEX_COUNT),
+        "dedup_epsilon": _DEDUP_EPSILON,
+    }
+
+
+@pytest.fixture()
+def projected_series(tmp_path: Path):
+    """A stage-3 series loaded from a real sidecar that carries ``vertex_id``."""
+    sidecar = tmp_path / "blocks_projected" / "field.parquet"
+    sidecar.parent.mkdir(parents=True, exist_ok=True)
+    write_contact_depth_field_table(
+        _vertex_table(_VERTEX_ROWS),
+        sidecar,
+        metadata=_vertex_metadata(
+            COORDINATE_SPACE_ICP_REGISTERED, _REFERENCE_VERTEX_COUNT
+        ),
+    )
+    return load_contact_depth_field_series(sidecar)
+
+
+@pytest.fixture()
+def series_without_vertex_ids(tmp_path: Path):
+    """A stage-1 series: a valid sidecar with no ``vertex_id`` column."""
+    sidecar = tmp_path / "blocks_registered" / "field.parquet"
+    sidecar.parent.mkdir(parents=True, exist_ok=True)
+    write_contact_depth_field_table(
+        _table(_ROWS), sidecar, metadata=_metadata(COORDINATE_SPACE_ICP_REGISTERED)
+    )
+    return load_contact_depth_field_series(sidecar)
+
+
+def test_a_v2_sidecar_carries_its_vertex_ids_and_provenance(projected_series) -> None:
+    """The widening is what makes the surface join possible at all."""
+    series = projected_series
+
+    assert series.has_vertex_ids
+    assert set(series.vertex_id_by_frame) == set(series.points_by_frame)
+    assert series.vertex_id_by_frame[7].tolist() == [4, 4, 9]
+    # int32 by schema, asserted rather than coerced: a widened index is an index
+    # that came from somewhere other than the projection stage.
+    assert series.vertex_id_by_frame[7].dtype == np.int32
+    assert set(series.reference_ply_provenance) == set(REFERENCE_PLY_METADATA_KEYS)
+    assert series.reference_ply_provenance["reference_ply"] == _REFERENCE_PLY_NAME
+    assert series.reference_ply_provenance["reference_ply_vertex_count"] == str(
+        _REFERENCE_VERTEX_COUNT
+    )
+
+
+def test_a_series_without_vertex_ids_carries_neither_half(
+    series_without_vertex_ids,
+) -> None:
+    """The widening is optional in both halves, and they travel together."""
+    assert series_without_vertex_ids.has_vertex_ids is False
+    assert series_without_vertex_ids.vertex_id_by_frame is None
+    assert series_without_vertex_ids.reference_ply_provenance is None
+
+
+def test_the_scatter_lands_on_the_vertices_the_sidecar_names(projected_series) -> None:
+    """Each touched vertex gets its own depth; the array is not shifted or sorted."""
+    scalars = forearm_depth_scalars(projected_series, 19, _REFERENCE_VERTEX_COUNT)
+
+    assert scalars is not None
+    assert scalars.shape == (_REFERENCE_VERTEX_COUNT,)
+    # signed -4.00 stored, +4.00 displayed: the negation happens once, upstream.
+    assert scalars[0] == pytest.approx(4.0)
+    assert np.count_nonzero(np.isfinite(scalars)) == 1
+
+
+def test_untouched_vertices_are_nan_and_a_grazing_contact_is_zero(
+    projected_series,
+) -> None:
+    """Missing is not zero.
+
+    Frame 7 touches vertex 9 at exactly 0.00 mm — a real, grazing contact at the
+    rim of the patch.  Every other vertex was not touched at all.  If untouched
+    vertices were filled with 0.0 the two would render identically, and the
+    patch would appear to extend across the whole forearm at its shallowest
+    colour.
+    """
+    scalars = forearm_depth_scalars(projected_series, 7, _REFERENCE_VERTEX_COUNT)
+
+    assert scalars[9] == 0.0, "a genuine 0.00 mm contact must survive as 0.0"
+    assert not np.isnan(scalars[9])
+    untouched = [v for v in range(_REFERENCE_VERTEX_COUNT) if v not in (4, 9)]
+    assert np.all(np.isnan(scalars[untouched]))
+
+
+def test_two_contact_points_on_one_vertex_resolve_to_the_deeper(
+    projected_series,
+) -> None:
+    """Frame 7 addresses vertex 4 twice, at 0.25 mm and 0.50 mm.
+
+    Row order must not decide the colour of a vertex: the sidecar promises a
+    column set, not a row order, and the loader is free to re-sort by frame.
+    The deeper of the two wins, which is order-independent.
+    """
+    scalars = forearm_depth_scalars(projected_series, 7, _REFERENCE_VERTEX_COUNT)
+
+    assert scalars[4] == pytest.approx(0.50)
+
+
+def test_a_frame_with_no_contact_paints_nothing_rather_than_zero(
+    projected_series,
+) -> None:
+    """Frame 12 carries no rows at all; the whole forearm is untouched."""
+    scalars = forearm_depth_scalars(projected_series, 12, _REFERENCE_VERTEX_COUNT)
+
+    assert scalars is not None, "the stage can answer; the answer is 'nothing'"
+    assert np.all(np.isnan(scalars))
+
+
+def test_a_stage_without_vertex_ids_returns_none_not_an_empty_array(
+    series_without_vertex_ids,
+) -> None:
+    """Stages 1-2 have no index, and ``None`` is the only honest answer.
+
+    An empty array would read as "a forearm of zero vertices"; a zero-filled one
+    as "touched everywhere at zero depth".  Both answer a question this stage
+    cannot answer, and the alternative — snapping the points to their nearest
+    vertex here — picks different vertices than the projection stage did.
+    """
+    assert (
+        forearm_depth_scalars(
+            series_without_vertex_ids, 7, _REFERENCE_VERTEX_COUNT
+        )
+        is None
+    )
+
+
+def test_a_forearm_of_the_wrong_size_refuses_the_join(projected_series) -> None:
+    """The silent-renumbering hazard, and why validation precedes the scatter.
+
+    A forearm re-deduplicated at a different epsilon has a different vertex
+    count and a completely different numbering.  Every id here would still be
+    *in range* against the larger mesh, so the range check alone would pass and
+    the surface would be painted with the right depths on the wrong vertices.
+    """
+    with pytest.raises(ValueError, match="provenance mismatch"):
+        forearm_depth_scalars(projected_series, 7, _REFERENCE_VERTEX_COUNT + 3)
+
+
+def test_the_provenance_check_runs_before_the_scatter(projected_series) -> None:
+    """Even a frame with no contact refuses a mismatched forearm.
+
+    Otherwise a mismatch would surface only on the first frame that happens to
+    touch — which, on a block that starts with the hand off the arm, is not the
+    first frame drawn.
+    """
+    with pytest.raises(ValueError, match="provenance mismatch"):
+        forearm_depth_scalars(projected_series, 12, _REFERENCE_VERTEX_COUNT + 3)
+
+
+def test_a_forearm_with_no_vertices_refuses_the_join(projected_series) -> None:
+    with pytest.raises(ValueError, match="no vertices"):
+        forearm_depth_scalars(projected_series, 7, 0)
+
+
+def test_the_forearm_join_refuses_to_run_without_a_field() -> None:
+    """Reaching the join with no series means an ``is_present`` check was skipped."""
+    with pytest.raises(TypeError, match="without a depth field"):
+        forearm_depth_scalars(None, 7, _REFERENCE_VERTEX_COUNT)
+
+
+def test_the_dto_refuses_vertex_ids_without_their_provenance() -> None:
+    """An index whose mesh identity is unknown cannot be validated against anything."""
+    with pytest.raises(ValueError, match="present together"):
+        ContactDepthFieldSeries(
+            points_by_frame={0: np.zeros((1, 3), np.float32)},
+            penetration_depth_by_frame={0: np.zeros((1,), np.float64)},
+            clim_penetration_mm=(0.0, 1.0),
+            signed_depth_range_mm=(-1.0, 0.0),
+            coordinate_space=COORDINATE_SPACE_ICP_REGISTERED,
+            vertex_id_by_frame={0: np.zeros((1,), np.int32)},
+        )
+
+
+def test_the_dto_refuses_misaligned_vertex_ids() -> None:
+    with pytest.raises(ValueError, match="aligned with the points"):
+        ContactDepthFieldSeries(
+            points_by_frame={0: np.zeros((3, 3), np.float32)},
+            penetration_depth_by_frame={0: np.zeros((3,), np.float64)},
+            clim_penetration_mm=(0.0, 1.0),
+            signed_depth_range_mm=(-1.0, 0.0),
+            coordinate_space=COORDINATE_SPACE_ICP_REGISTERED,
+            vertex_id_by_frame={0: np.zeros((2,), np.int32)},
+            reference_ply_provenance=_provenance(),
+        )
+
+
+def test_the_dto_refuses_a_widened_vertex_index() -> None:
+    """int32 by schema. A widened index came from somewhere other than the sidecar."""
+    with pytest.raises(ValueError, match="int32"):
+        ContactDepthFieldSeries(
+            points_by_frame={0: np.zeros((1, 3), np.float32)},
+            penetration_depth_by_frame={0: np.zeros((1,), np.float64)},
+            clim_penetration_mm=(0.0, 1.0),
+            signed_depth_range_mm=(-1.0, 0.0),
+            coordinate_space=COORDINATE_SPACE_ICP_REGISTERED,
+            vertex_id_by_frame={0: np.zeros((1,), np.int64)},
+            reference_ply_provenance=_provenance(),
+        )
+
+
+def test_the_forearm_join_uses_the_same_position_to_frame_map_as_the_patch(
+    projected_series,
+) -> None:
+    """One expression turns a slider position into a frame key; both joins use it.
+
+    The forearm layer takes a *frame index*, not a position.  If the widget
+    passed it a position the surface would be painted from a different frame
+    than the patch drawn on top of it — two layers of one field, disagreeing,
+    with nothing on screen to say so.
+    """
+    kinect_df = pd.DataFrame({FRAME_INDEX_COLUMN: [7, 12, 19, 23]})
+    indices = kinect_frame_indices(kinect_df, "<synthetic>")
+
+    position = 2
+    frame = kinect_frame_at_position(indices, position)
+    patch = depth_frame_at_position(projected_series, indices, position)
+    surface = forearm_depth_scalars(projected_series, frame, _REFERENCE_VERTEX_COUNT)
+
+    assert frame == 19
+    assert patch is not None
+    # The patch's single vertex is vertex 0, and that is the one the surface lit.
+    assert np.flatnonzero(np.isfinite(surface)).tolist() == [0]
+    assert surface[0] == pytest.approx(patch[1][0])
+
+
+def test_the_forearm_scalar_array_is_not_the_contact_one() -> None:
+    """Two datasets, two meanings; a shared name would make a mix-up plausible."""
+    assert FOREARM_DEPTH_SCALAR_NAME != "penetration_depth_mm"
+
+
+# ---------------------------------------------------------------------------
+# 7. Purity — the leaf stays headless
 # ---------------------------------------------------------------------------
 
 #: The toolkits that would make this module untestable without a display.  The

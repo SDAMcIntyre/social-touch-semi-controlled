@@ -55,8 +55,11 @@ from .stage_depth_field import STAGE_LABELS  # noqa: F401
 # there is none, and how a slider position becomes a frame index — lives in that
 # same leaf, and is testable without a window because of it.
 from .stage_depth_field import (
+    FOREARM_DEPTH_SCALAR_NAME,
     StageDepthField,
     depth_frame_at_position,
+    forearm_depth_scalars,
+    kinect_frame_at_position,
     kinect_frame_indices,
     resolve_stage_depth_field,
 )
@@ -208,6 +211,13 @@ class PostprocessingStageViewer(QMainWindow):
         # on the stage, so switching to a stage without a sidecar leaves it
         # untouched and the next stage that has one opens coloured again.
         self._colour_contact_by_depth: bool = True
+        # The forearm's own layer preference, and a separate attribute for the
+        # same reason: it is a view preference, not a data fact.  Default OFF,
+        # unlike the contact layer -- the PLY's own vertex colours are the
+        # anatomical context the contact patch has to be judged against, and a
+        # surface repainted on every frame would replace that context by
+        # default rather than on request.
+        self._colour_forearm_by_depth: bool = False
 
         self.setWindowTitle(f"Postprocessing Stage Viewer | {recording_name}")
 
@@ -235,6 +245,29 @@ class PostprocessingStageViewer(QMainWindow):
         absent field indistinguishable from an unchecked box.
         """
         return self._depth_series is not None and self._colour_contact_by_depth
+
+    @property
+    def _forearm_depth_available(self) -> bool:
+        """Whether this stage *could* paint penetration depth on the forearm.
+
+        Three independent facts, all required: a depth field, a ``vertex_id``
+        column in it, and a forearm with vertices for the index to address.
+        The middle one is why the control is absent rather than disabled before
+        the projection stage -- there is no index there, and the only way to
+        invent one is a nearest-vertex snap that picks different vertices than
+        the projection stage did.
+        """
+        return (
+            self._depth_series is not None
+            and self._depth_series.has_vertex_ids
+            and self._forearm_pv is not None
+            and self._forearm_pv.n_points > 0
+        )
+
+    @property
+    def _forearm_depth_colouring_active(self) -> bool:
+        """Whether the forearm is currently painted by penetration depth."""
+        return self._forearm_depth_available and self._colour_forearm_by_depth
 
     # ------------------------------------------------------------------
     # Data loading
@@ -441,7 +474,40 @@ class PostprocessingStageViewer(QMainWindow):
                 box_layout.addWidget(extra)
             self._right_panel_layout.addWidget(box)
 
-        _add_group("Forearm", "forearm", has_slider=True, default_size=5.0)
+        # The forearm's depth layer is offered only where the sidecar carries a
+        # ``vertex_id``, i.e. from the projection stage onward.  The control is
+        # *absent* on the earlier stages rather than greyed out, because a
+        # disabled box states "not for this stage yet" while its absence states
+        # the truth -- there is no index, and no honest thing to show.
+        _forearm_extras: Tuple[QWidget, ...] = ()
+        if self._forearm_depth_available:
+            forearm_depth_cb = QCheckBox("Colour by depth")
+            # blockSignals for the same reason the contact box uses it: seeding
+            # the widget must not be mistaken for the user clicking it.
+            forearm_depth_cb.blockSignals(True)
+            forearm_depth_cb.setChecked(self._colour_forearm_by_depth)
+            forearm_depth_cb.blockSignals(False)
+            low, high = self._depth_series.clim_penetration_mm
+            forearm_depth_cb.setToolTip(
+                "Paint each forearm vertex with the penetration depth of "
+                "whatever touched it on this frame, joined by the sidecar's "
+                "vertex_id. Untouched vertices stay flat grey -- that is "
+                "'nothing touched here', which is not the same as 0.00 mm. "
+                f"Same fixed colour scale as the contact points: {low:.2f} to "
+                f"{high:.2f} mm."
+            )
+            forearm_depth_cb.stateChanged.connect(
+                self._on_forearm_depth_colour_changed
+            )
+            _forearm_extras = (forearm_depth_cb,)
+
+        _add_group(
+            "Forearm",
+            "forearm",
+            has_slider=True,
+            default_size=5.0,
+            extra_widgets=_forearm_extras,
+        )
         if self._has_contact_source:
             # "Colour by depth" sits beside the point-size slider so flat red
             # stays one click away for comparison.
@@ -530,12 +596,23 @@ class PostprocessingStageViewer(QMainWindow):
     # VTK actors
     # ------------------------------------------------------------------
 
-    def _init_actors(self) -> None:
-        _seed = np.zeros((1, 3), dtype=np.float32)
-        _seed_col = np.full((1, 3), 128, dtype=np.uint8)
+    def _add_forearm_actor(self):
+        """Add (or replace) the forearm actor in whichever colour mode is on.
 
-        if self._forearm_pv is not None and self._visibility.get("forearm", True):
-            self._actor_forearm = self.plotter.add_mesh(
+        Two mutually exclusive modes, and the switch between them is the one
+        place ``add_mesh`` is re-entered for this actor.  Direct-RGB and
+        mapped-scalar colouring are different mapper configurations, not
+        different arrays, so they cannot be toggled by swapping the active
+        scalars the way the contact actor's on/off is.  Per-*frame* updates do
+        not come through here: they overwrite the existing array in place, so
+        playback never cycles ``remove_actor`` / ``add_mesh``.
+
+        Returns:
+            The forearm actor, already registered under the name ``"forearm"``
+            so this call replaces any previous one.
+        """
+        if not self._forearm_depth_colouring_active:
+            return self.plotter.add_mesh(
                 self._forearm_pv,
                 scalars="colors",
                 rgb=True,
@@ -543,6 +620,41 @@ class PostprocessingStageViewer(QMainWindow):
                 render_points_as_spheres=True,
                 point_size=self._point_sizes["forearm"],
             )
+
+        # Seeded all-NaN: at this point no frame has been drawn, and NaN is
+        # "untouched", which is the truthful state of every vertex until one is.
+        self._forearm_pv[FOREARM_DEPTH_SCALAR_NAME] = np.full(
+            self._forearm_pv.n_points, np.nan, dtype=np.float64
+        )
+        self._forearm_pv.set_active_scalars(FOREARM_DEPTH_SCALAR_NAME)
+        return self.plotter.add_mesh(
+            self._forearm_pv,
+            scalars=FOREARM_DEPTH_SCALAR_NAME,
+            cmap=COLORMAP,
+            # The contact layer's range, taken whole and unmodified: the two
+            # layers paint the same field and a second scale would make the
+            # same depth two colours in one scene.
+            clim=self._contact_clim,
+            # Untouched vertices are NaN, and NaN needs its own flat colour or
+            # the LUT clamps it to the bottom of the ramp -- which would render
+            # "nobody touched this" identically to "touched at the shallowest
+            # depth in the recording".  The grey is the same neutral this module
+            # already paints a colourless PLY with.
+            nan_color="#a0a0a0",
+            nan_opacity=1.0,
+            # One bar for both layers; the contact actor registers it.
+            show_scalar_bar=False,
+            name="forearm",
+            render_points_as_spheres=True,
+            point_size=self._point_sizes["forearm"],
+        )
+
+    def _init_actors(self) -> None:
+        _seed = np.zeros((1, 3), dtype=np.float32)
+        _seed_col = np.full((1, 3), 128, dtype=np.uint8)
+
+        if self._forearm_pv is not None and self._visibility.get("forearm", True):
+            self._actor_forearm = self._add_forearm_actor()
         else:
             _empty_forearm = pv.PolyData(_seed.copy())
             _empty_forearm["colors"] = _seed_col.copy()
@@ -711,6 +823,8 @@ class PostprocessingStageViewer(QMainWindow):
             # depth would take a different colour on a different frame.
             if self._contact_clim is not None:
                 self._actor_contact.mapper.scalar_range = self._contact_clim
+
+        self._update_forearm_depth_scalars(frame_idx)
 
         if hasattr(self, "_actor_forearm") and self._actor_forearm is not None:
             if self._visibility.get("forearm", True):
@@ -916,12 +1030,63 @@ class PostprocessingStageViewer(QMainWindow):
         # to per-frame autoscale.
         actor.mapper.scalar_range = self._contact_clim
 
-        if SCALAR_BAR_TITLE in self.plotter.scalar_bars:
-            # A colourbar with nothing mapped to it would claim the flat-red
-            # points mean something on that scale.
-            self.plotter.scalar_bars[SCALAR_BAR_TITLE].SetVisibility(
-                bool(show_scalars)
-            )
+        self._apply_depth_scalar_bar_visibility()
+
+    def _update_forearm_depth_scalars(self, frame_idx: int) -> None:
+        """Repaint the forearm with this frame's per-vertex penetration depths.
+
+        The array is overwritten in place under the name the mapper was bound
+        to, so this is a value update and not an actor cycle -- the same
+        discipline the contact mesh's ``DeepCopy`` follows, and for the same
+        playback-cost reason.
+
+        The join itself is not done here.  ``forearm_depth_scalars`` validates
+        the sidecar's reference-PLY provenance against this forearm's vertex
+        count *before* scattering anything, which is what stands between a
+        re-deduplicated forearm and a silently mis-coloured surface.  It raises
+        on a mismatch, and that exception is deliberately not caught: a wrong
+        picture here is indistinguishable from a right one.
+        """
+        if not self._forearm_depth_colouring_active:
+            return
+
+        scalars = forearm_depth_scalars(
+            self._depth_series,
+            kinect_frame_at_position(self._frame_indices, frame_idx),
+            self._forearm_pv.n_points,
+        )
+        self._forearm_pv[FOREARM_DEPTH_SCALAR_NAME] = scalars
+        self._forearm_pv.set_active_scalars(FOREARM_DEPTH_SCALAR_NAME)
+        # Re-asserted after every array swap, exactly as the contact actor's is:
+        # PyVista 0.47.1 otherwise reverts the mapper to per-frame autoscale and
+        # the same depth takes a different colour on a different frame.
+        actor = getattr(self, "_actor_forearm", None)
+        if actor is not None and self._contact_clim is not None:
+            actor.mapper.scalar_range = self._contact_clim
+
+    def _apply_depth_scalar_bar_visibility(self) -> None:
+        """Show the depth colourbar while *either* layer is mapped to it.
+
+        One bar serves the contact patch and the forearm: they paint the same
+        field on the same fixed scale.  It must therefore be hidden only when
+        neither layer is using it -- a bar with nothing mapped to it claims the
+        flat-coloured points and the plain forearm mean something on that scale.
+        """
+        if SCALAR_BAR_TITLE not in self.plotter.scalar_bars:
+            return
+        visible = self._depth_colouring_active or self._forearm_depth_colouring_active
+        self.plotter.scalar_bars[SCALAR_BAR_TITLE].SetVisibility(bool(visible))
+
+    def _on_forearm_depth_colour_changed(self, state: int) -> None:
+        """Handle the Forearm group's 'Colour by depth' checkbox."""
+        self._colour_forearm_by_depth = state == Qt.Checked
+        if self._forearm_pv is not None and self._visibility.get("forearm", True):
+            # A colour *mode* change, so the actor is re-added -- see
+            # ``_add_forearm_actor``.  ``_update_frame`` then refills the array
+            # for the frame currently on screen.
+            self._actor_forearm = self._add_forearm_actor()
+        self._apply_depth_scalar_bar_visibility()
+        self._update_frame(self.current_index)
 
     def _on_contact_depth_colour_changed(self, state: int) -> None:
         """Handle the 'Colour by depth' checkbox."""

@@ -118,8 +118,12 @@ result, downstream, in the other repository.
 - [x] A present-but-undecodable sidecar raises; it does not fall back to flat colour.
 - [x] Constructing the six stage loaders reads zero bytes — asserted with a counting reporter, as
       `test_neural_kinect_depth_field_view.py:441` does for blocks.
-- [ ] *(Phase 5)* On stages 3-5, the forearm PLY colours by the current frame's `vertex_id` join, and
-      untouched vertices are visually distinct from zero-depth vertices.
+- [x] *(Phase 5)* On stages 3-5, the forearm PLY colours by the current frame's `vertex_id` join, and
+      untouched vertices are visually distinct from zero-depth vertices. *(Phase 5: the join is
+      measured — vertex 4 lit at 0.50 mm on frame 7, back to NaN on frame 19; a genuine 0.00 mm
+      contact survives as 0.0 while every untouched vertex is NaN, and NaN is bound to an explicit
+      `nan_color` of #a0a0a0 rather than clamped to the bottom of the ramp. \Visually\ — seeing the
+      grey next to the shallowest inferno — is Phase 6.)*
 - [ ] **The render check that Phase 9 could not perform:** on `2022-06-15_ST14-02` the RF-centred
       depth patch is visually seated on the RF-centred forearm surface, on the correct side, moving
       coherently with the hand across the block. Recorded with screenshots in this plan.
@@ -501,26 +505,119 @@ Not verified here, and left to Phase 6: anything requiring a real window — tha
 **Goal:** Depth on the surface, not just on the patch. **Revertible on its own** — Phases 1-4 deliver
 the core value without it.
 
-- [ ] 5.1 — Widen `ContactDepthFieldSeries` with
+**Started:** 2026-08-20T08:35Z  **Completed:** 2026-08-20T09:30Z
+
+- [x] 5.1 — Widen `ContactDepthFieldSeries` with
       `vertex_id_by_frame: Optional[Dict[int, np.ndarray]] = None`, populated only when the table
       carries the column. A pure addition; v1 and `vertex_id`-less v2 sidecars keep working, and every
       existing merging test must stay green untouched.
-- [ ] 5.2 — Carry the reference-PLY provenance triple onto the series so the join can be validated.
-- [ ] 5.3 — `forearm_depth_scalars(series, frame_index, vertex_count) -> Optional[np.ndarray]` in the
+- [x] 5.2 — Carry the reference-PLY provenance triple onto the series so the join can be validated.
+- [x] 5.3 — `forearm_depth_scalars(series, frame_index, vertex_count) -> Optional[np.ndarray]` in the
       leaf: call `validate_vertex_ids_against_reference` with `len(ply.points)` **first**, then
       scatter. NaN for untouched vertices, so they are visually distinct from a genuine 0 mm.
-- [ ] 5.4 — Switch the forearm actor from `scalars="colors", rgb=True` (`:377-395`) to scalar mode
+- [x] 5.4 — Switch the forearm actor from `scalars="colors", rgb=True` (`:377-395`) to scalar mode
       when the layer is on, and back when off. Only for stages 3-5; the control is absent, not merely
       disabled, on stages 0-2 — there is no `vertex_id` and no honest thing to show.
-- [ ] 5.5 — Handle `nan_color` explicitly so untouched vertices read as the plain forearm.
-- [ ] 5.6 — Tests: correct scatter, NaN placement, provenance mismatch raises, absent `vertex_id`
+- [x] 5.5 — Handle `nan_color` explicitly so untouched vertices read as the plain forearm.
+- [x] 5.6 — Tests: correct scatter, NaN placement, provenance mismatch raises, absent `vertex_id`
       returns `None` rather than an empty array.
 
+**5.1 was a pure addition, and that is measured, not asserted.** `git diff` on
+`test_neural_kinect_depth_field_view.py` is `41 insertions(+), 0 deletions(-)` — every existing test in
+that file passes **unmodified**; the only change is two appended tests stating the property the others
+imply (a merging sidecar carries no vertex identity; the widened fields are optional at construction).
+The two new fields are appended and defaulted, and every construction site in the tree already used
+keyword arguments, so positional construction could not break either.
+
+**The two halves travel together, and the DTO enforces it.** `vertex_id_by_frame` without
+`reference_ply_provenance` raises: an index whose mesh identity is unknown cannot be validated against
+anything, and provenance for an absent index describes nothing. The loader populates both or neither,
+keyed on `VERTEX_ID_COLUMN in table.columns`. `int32` is **asserted, not requested** — passing
+`dtype=np.int32` to `to_numpy` would silently narrow a column that had no business being int64, and the
+whole value of the index is that it is the one the projection stage wrote.
+
+**Stages 3-5 is a consequence, not a constant.** The control is gated on
+`series.has_vertex_ids` — a fact read off the artifact — rather than on a hardcoded `{3, 4, 5}`. The two
+coincide today; where they would not is a v1 sidecar sitting at stage 4, and there the data-driven test
+is the correct one. `_forearm_depth_available` conjoins three independent facts: a field, a `vertex_id`
+in it, and a forearm with vertices for the index to address.
+
+**Duplicate `vertex_id` within one frame resolves to the deeper, not to the last row.** This is not a
+degenerate case: `depth_field_stage_io.py:731-734` states that projection "is a per-point
+nearest-neighbour lookup with no uniqueness constraint, so two rows may legitimately address one
+vertex". Plain fancy-index assignment would resolve that by row order — an arbitrary choice that
+changes under the loader's own frame sort. `np.maximum.at` over a `-inf`-seeded set of touched entries
+is order-independent, and "how hard was this piece of skin pressed" is the conservative reading. NaN
+still means untouched: seeding with `-inf` rather than leaving NaN is what stops `maximum` propagating
+NaN over the touched vertices.
+
+**One expression turns a slider position into a frame key, and now two joins share it.**
+`kinect_frame_at_position(frame_indices, position)` was extracted out of `depth_frame_at_position`,
+which now delegates to it. `forearm_depth_scalars` takes a **Kinect frame index**, not a position, so
+the widget converts through that one function; had it passed a position, the surface would have been
+painted from a different frame than the patch drawn on top of it, with nothing on screen to say so.
+
+**One scalar bar serves both layers.** They paint the same field on the same fixed scale, and PyVista
+keys bars by title, so a second `"Penetration depth (mm)"` bar is not available anyway. The forearm is
+added with `show_scalar_bar=False` and the bar's visibility became
+`_depth_colouring_active or _forearm_depth_colouring_active` (`_apply_depth_scalar_bar_visibility`) —
+otherwise unchecking the contact layer would hide the legend for a forearm still mapped to it.
+
+**Mode changes re-add the actor; frame changes do not.** Direct-RGB and mapped-scalar colouring are
+different mapper configurations, not different arrays, so the on/off switch cannot be a
+`scalar_visibility` toggle the way the contact layer's is — `_add_forearm_actor` re-enters `add_mesh`
+under the same `name="forearm"`. Per-*frame* updates overwrite the array in place under the name the
+mapper is bound to, so playback never cycles `remove_actor`/`add_mesh`; the actor count is measured
+unchanged across a full off → on round trip.
+
+**The layer defaults OFF**, unlike the contact layer. The PLY's own vertex colours are the anatomical
+context the contact patch has to be judged against — the render check Phase 6.3 owes is precisely
+"is the patch seated on the surface" — and a surface repainted every frame would replace that context
+by default rather than on request. The preference is a plain attribute
+(`_colour_forearm_by_depth`), separate from the data fact, and survives a walk through stages that
+cannot offer the control.
+
+**`nan_color` is `#a0a0a0`** — the same neutral grey this module already paints a colourless PLY with.
+Without it the LUT clamps NaN to the bottom of the ramp, which would render "nobody touched this"
+identically to "touched at the shallowest depth in the recording".
+
+**Headless verification.** The Phase 3/4 substitution again (an off-screen `pv.Plotter` for the
+`QtInteractor` class only; `QtInteractor` still cannot initialise offscreen here, `0xC00000FD`) drove
+the real `_load_stage_data` → `_build_right_panel_controls` → `_init_actors` → checkbox →
+`_update_frame` → `_on_stage_changed` path on a synthetic six-stage session whose stages 3-5 carry
+`vertex_id` and whose stages 1-2 do not.
+
+| Property | Measured |
+|----------|----------|
+| Stage 5 on open | Forearm group offers the control, unchecked; mapper array `colors` |
+| Layer ON, frame 7 | mapper + active scalars `forearm_penetration_depth_mm`; range `(0.25, 9.5)` = the contact clim |
+| Frame 7, vertex 4 (addressed twice, 0.25 and 0.50 mm) | `0.50` — the deeper |
+| Frame 7, all other vertices | `NaN`, and vertex 9's genuine `0.00` mm stays `0.0` (unit test) |
+| Frame 19 after frame 7 | vertex 0 = `4.0`, vertex 4 back to `NaN` — no paint persists |
+| Frame 3 (no contact) | every vertex `NaN` |
+| Actor count across the off → on round trip | unchanged |
+| Contact OFF / forearm ON | bar still visible; contact OFF / forearm OFF | bar hidden |
+| Stages 0, 1, 2 | the control is **absent** from the Forearm group, not disabled |
+| Preference ON, walked 5 → 1 → 0 → 3 | still on at stage 3; exactly one bar; vertex 4 = `0.50` |
+| Toggled off | active scalars back to `colors` |
+| Forearm of 15 vertices vs a sidecar declaring 12 (every id still **in range**) | `ValueError: vertex_id provenance mismatch` — only the count check can catch this |
+| Suite | 674 passed, 7 skipped (Phase 4 baseline 656/7; +18 here) |
+
+Not verified here, and left to Phase 6: anything requiring a real window — that untouched skin is
+*visibly* the plain grey, that the patch and the surface agree in colour where they overlap, and the
+render check itself.
+
 **Files Modified:**
-- `code/src/merging/contact_depth_field_series.py` — optional field + provenance
-- `code/src/postprocessing/gui/stage_depth_field.py` — `forearm_depth_scalars`
-- `code/src/postprocessing/gui/postprocessing_stage_viewer.py` — forearm actor scalar mode
-- `code/tests/test_stage_depth_field.py`, `code/tests/test_neural_kinect_depth_field_view.py`
+- `code/src/merging/contact_depth_field_series.py` — `vertex_id_by_frame`,
+  `reference_ply_provenance`, `has_vertex_ids`, `_validate_vertex_identity`; the loader populates both
+- `code/src/postprocessing/gui/stage_depth_field.py` — `FOREARM_DEPTH_SCALAR_NAME`,
+  `forearm_depth_scalars`, `kinect_frame_at_position`
+- `code/src/postprocessing/gui/postprocessing_stage_viewer.py` — `_colour_forearm_by_depth`,
+  `_forearm_depth_available`, `_forearm_depth_colouring_active`, `_add_forearm_actor`,
+  `_update_forearm_depth_scalars`, `_apply_depth_scalar_bar_visibility`,
+  `_on_forearm_depth_colour_changed`, the Forearm group's conditional control
+- `code/tests/test_stage_depth_field.py` — section 6, the forearm join
+- `code/tests/test_neural_kinect_depth_field_view.py` — two appended tests; **no existing test touched**
 
 **Dependencies:** Phase 4
 
@@ -560,10 +657,14 @@ the core value without it.
 - [x] Missing sidecar → absent with a non-empty message; corrupt sidecar → raises.
 - [x] A loader returning a non-series raises `TypeError`.
 - [ ] The cache evicts at its bound and re-reads an evicted stage.
-- [ ] *(Ph.5)* `forearm_depth_scalars` scatters to the right vertices; NaN elsewhere; provenance
-      mismatch raises; no `vertex_id` → `None`.
-- [ ] *(Ph.5)* Every existing test in `test_neural_kinect_depth_field_view.py` passes **unmodified**
-      after the DTO widening.
+- [x] *(Ph.5)* `forearm_depth_scalars` scatters to the right vertices; NaN elsewhere; provenance
+      mismatch raises; no `vertex_id` → `None`. *(Plus: the mismatch raises on a no-contact frame too,
+      so a re-deduplicated forearm is refused on the first frame drawn rather than the first frame
+      that happens to touch; and a vertex addressed twice in one frame resolves to the deeper, not to
+      whichever row the sort left last.)*
+- [x] *(Ph.5)* Every existing test in `test_neural_kinect_depth_field_view.py` passes **unmodified**
+      after the DTO widening. *(`git diff`: 41 insertions, 0 deletions — two appended tests, no
+      existing line touched.)*
 
 ### Integration Tests
 - [x] Frame join: a synthetic sidecar with non-contiguous `frame_index` values that differ from row
@@ -593,8 +694,10 @@ the core value without it.
       `test_neural_kinect_depth_field_view.py:263`).
 - [ ] Rapid stage switching during playback (generation guard).
 - [ ] A session where `blocks_rf_centered/` is a passthrough copy (ST13-01).
-- [ ] *(Ph.5)* A forearm PLY whose vertex count disagrees with `reference_ply_vertex_count` — must
-      raise, since this is the silent-renumbering hazard.
+- [x] *(Ph.5)* A forearm PLY whose vertex count disagrees with `reference_ply_vertex_count` — must
+      raise, since this is the silent-renumbering hazard. *(Driven through the widget with a 15-vertex
+      forearm against a sidecar declaring 12: every id is still in range, so only the count check
+      catches it, and it does.)*
 
 ---
 
