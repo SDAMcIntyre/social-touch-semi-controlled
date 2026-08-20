@@ -1197,6 +1197,89 @@ real window" is updated accordingly.
 
 ---
 
+### Defect fix: the timeseries cursor was placed by a linear scale *(out of scope — not a phase)*
+
+**Found:** 2026-08-20, while answering a question about the neural panel below the 3D scene. Nothing
+in the original scope touches the cursor; it is recorded here only because the fix lands in two files
+this plan owns.
+
+**The defect.** `postprocessing_stage_viewer.py` positioned the `NeuralDataPanel` cursor with
+`update_cursor(int(frame_idx * self._neural_scale))`, where
+`_neural_scale = len(_full_df) / _total_frames`. This is the mechanism commit `a1e8921` diagnosed and
+removed from the panel's other caller. The merged CSV is upsampled to the nerve rate and not
+uniformly, so no multiplier expresses the map.
+
+**What changed.**
+
+1. `stage_depth_field.py` gains `KINECT_ANCHOR_COLUMN` and `kinect_anchor_rows(full_df, source)` — a
+   pure function returning the positional row of `full_df` that each slider position occupies, i.e.
+   exactly the rows `_kinect_df` keeps. It sits in the Qt-free leaf for the same reason
+   `merging/frame_navigation.py` exists: the viewer cannot be unit-tested, the derivation can. The
+   viewer's own `dropna(subset=[...])` now names the same constant, so the two descriptions of "which
+   rows are frames" cannot drift.
+2. `_load_stage_data` builds `self._anchor_rows` for the stage it is loading and asserts its length
+   against `_total_frames`; a failure therefore lands in `_on_stage_changed`'s existing revert rather
+   than in a half-switched widget. `_maybe_create_neural_panel` passes them as `kinect_anchor_rows=`,
+   which fixes both directions at once — `update_cursor`'s lookup and `_on_canvas_click`'s inverse.
+3. `_neural_scale` is **deleted**, not left unused, and a test asserts the identifier is absent from
+   the viewer's source. A cursor placed by a scale still moves smoothly, so reuse would be invisible.
+
+**Measured — and the damage is far smaller here than in `a1e8921`, for a reason worth recording.**
+That commit's denominator was the *MKV* frame count of an unfiltered recording (scale 18.14 against a
+true spacing of 33.33). This viewer's denominator was already `len(_kinect_df)`, so the ratio equals
+the mean anchor spacing whenever the trailing nerve-rate run happens to measure one spacing. On real
+`blocks_rf_centered/` CSVs:
+
+| Session / block / stage | Frames | Rows | Old scale | True spacing | Rows the old code got wrong | Max row drift |
+|---|---|---|---|---|---|---|
+| ST14-02 / block-order-01 / rf_centered | 2 193 | 73 100 | 33.3333 | 33.3330 | 0 | 0 |
+| ST14-02 / block-order-05 / rf_centered | 2 963 | 98 766 | 33.3311 | 33.3332 | **1 481 (50.0 %)** | 1 |
+| ST14-02 / block-order-01 / merged | 3 149 | 104 966 | 33.3331 | 33.3332 | **1 574 (50.0 %)** | 1 |
+| ST13-02 / block-order-01 / rf_centered | 1 734 | 57 800 | 33.3333 | 33.3329 | 0 | 0 |
+
+Every one of those wrong rows is off by exactly one row and lands on a row that is **not an anchor at
+all** — an interpolated nerve-rate sample belonging to no Kinect frame — so the cursor was reading a
+value no frame ever measured, but the nearest frame was still the right one.
+
+Swept over **all 594 stage CSVs** (11 sessions × 6 stages × every block): the old scale put
+**304 297 of 1 270 314** slider positions (24.0 %) on a non-anchor row, affecting **360 of 594**
+files; max row drift 1 and **frame-level drift 0 everywhere**. The new mapping's identity and click
+round trip hold on **594/594**. So the fix corrects a real but bounded error on today's artifacts.
+The unbounded failure it actually prevents is structural: the moment a
+stage drops rows, or a nerve recording outlives its Kinect one, the ratio stops tracking the spacing
+and the error grows with frame number. `test_a_uniform_scale_lands_on_another_frames_row` builds that
+shape (ratio 66 against a spacing of 33) so the regression cannot return unnoticed.
+
+**How the new mapping was proved right, not merely accepted.** The panel validates the anchors' shape
+and monotonicity and nothing else, so a correctly-shaped wrong mapping would be accepted in silence.
+The identity asserted instead, driving the **real** viewer offscreen over the real CSVs, is:
+
+```
+full_df["time_kinect"].to_numpy()[panel._current_sample] == kinect_df["time_kinect"].to_numpy()[p]
+full_df["frame_index"].to_numpy()[panel._current_sample] == kinect_df["frame_index"].to_numpy()[p]
+```
+
+— the row the cursor sits on *is* the row the 3D scene drew — for 25 positions spread across each
+block, on three blocks (ST14-02 block-order-01 and block-order-05, ST13-02 block-order-01) and four
+stage loads each, including two stage switches and a switch back, since the panel and its anchors are
+rebuilt on every switch. The round trip was driven through the real `_on_canvas_click` and the real
+`_on_neural_frame_requested`: a click at `anchors[p]` and at `anchors[p] ± 3` rows leaves
+`frame_slider.value() == p` and `current_index == p` in all 900 combinations.
+
+**Not verified:** nothing was *seen*. `QtInteractor` still cannot initialise here (`0xC00000FD`), so
+the run substitutes an off-screen `pv.Plotter` for that class alone; the cursor's position on screen
+remains measured, not observed.
+
+**Two sibling viewers still carry the identical expression** — `before_after_step_viewer.py:368,729`
+and `postprocessed_scene_viewer.py:351,662` — left untouched deliberately: they were outside this
+fix's scope and neither was measured here.
+
+**Files Modified:** `code/src/postprocessing/gui/stage_depth_field.py`,
+`code/src/postprocessing/gui/postprocessing_stage_viewer.py`,
+`code/tests/test_stage_depth_field.py`, this plan.
+
+---
+
 ## Testing Plan
 
 ### Unit Tests (headless — no Qt, no VTK, no Open3D)

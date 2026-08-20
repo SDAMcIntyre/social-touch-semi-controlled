@@ -99,12 +99,14 @@ from postprocessing.gui.stage_depth_field import (  # noqa: E402
     CANONICAL_SPACE_BY_STAGE,
     FOREARM_DEPTH_SCALAR_NAME,
     FRAME_INDEX_COLUMN,
+    KINECT_ANCHOR_COLUMN,
     PASSTHROUGH_SPACE_BY_STAGE,
     PRODUCING_TASK_BY_STAGE,
     STAGE_LABELS,
     StageDepthField,
     depth_frame_at_position,
     forearm_depth_scalars,
+    kinect_anchor_rows,
     kinect_frame_at_position,
     kinect_frame_indices,
     resolve_stage_depth_field,
@@ -1298,6 +1300,270 @@ def test_the_forearm_join_uses_the_same_position_to_frame_map_as_the_patch(
 def test_the_forearm_scalar_array_is_not_the_contact_one() -> None:
     """Two datasets, two meanings; a shared name would make a mix-up plausible."""
     assert FOREARM_DEPTH_SCALAR_NAME != "penetration_depth_mm"
+
+
+# ---------------------------------------------------------------------------
+# 6b. The timeseries join — slider position -> row of the *full* CSV
+# ---------------------------------------------------------------------------
+#
+# The same silent-failure shape as the frame join above, in the other direction.
+# The neural panel plots the whole merged CSV against ``np.arange(len(full_df))``
+# while the slider walks the anchor rows, and the stage viewer used to bridge the
+# two with ``int(position * len(full_df) / n_frames)``.  That multiplier is exact
+# only if every anchor is equally spaced *and* the trailing nerve-rate rows after
+# the last anchor happen to measure exactly one spacing.  Neither holds in
+# general: real blocks measure 33 or 34 rows between anchors, and any stage that
+# drops rows, or a nerve recording that outlives the Kinect one, moves the ratio
+# away from the spacing entirely.
+#
+# These tests are written so the multiplier cannot pass them: each fixture is
+# non-uniform in a way a single ratio cannot express, and
+# ``test_a_uniform_scale_lands_on_another_frames_row`` asserts the old expression
+# actively disagrees, so restoring it turns the suite red rather than merely
+# leaving it silent.
+
+
+def _upsampled_csv(
+    gaps: Sequence[int],
+    tail: int,
+    first_frame: int = 41,
+) -> pd.DataFrame:
+    """A merged CSV in the shape the stage viewer reads it.
+
+    One *anchor* row per Kinect frame — ``time_kinect`` and ``frame_index``
+    present — followed by ``gap - 1`` nerve-rate rows in which every Kinect
+    column is NaN, and ``tail`` such rows after the last anchor.  ``Nerve_freq``
+    is finite on every row, exactly as the real artifact is: the nerve channel is
+    what the extra rows exist to carry.
+    """
+    time_kinect: List[float] = []
+    frame_index: List[float] = []
+    frame = first_frame
+    for gap in gaps:
+        time_kinect.append(frame / 30.0)
+        frame_index.append(float(frame))
+        time_kinect.extend([np.nan] * (gap - 1))
+        frame_index.extend([np.nan] * (gap - 1))
+        frame += 1
+    time_kinect.append(frame / 30.0)
+    frame_index.append(float(frame))
+    time_kinect.extend([np.nan] * tail)
+    frame_index.extend([np.nan] * tail)
+
+    n = len(time_kinect)
+    return pd.DataFrame(
+        {
+            KINECT_ANCHOR_COLUMN: time_kinect,
+            FRAME_INDEX_COLUMN: frame_index,
+            "Nerve_freq": np.linspace(0.0, 60.0, n),
+        }
+    )
+
+
+#: A realistic block: ~33.33 rows per frame, jittering between 33 and 34, with a
+#: trailing nerve-rate run after the last frame.  Measured on
+#: ``2022-06-15_ST14-02``, whose six blocks all sit at 33/34.
+_REALISTIC_GAPS = [33, 33, 34] * 40
+
+#: The pathological shape a single ratio cannot even approximate: the nerve
+#: channel keeps recording long after the last Kinect frame, so
+#: ``len(full_df) / n_frames`` is nowhere near the anchor spacing.
+_LONG_TAIL_GAPS = [33] * 99
+
+
+def _viewer_kinect_df(full_df: pd.DataFrame) -> pd.DataFrame:
+    """Exactly what ``_load_stage_data`` derives, and what the slider walks."""
+    return full_df.dropna(subset=[KINECT_ANCHOR_COLUMN]).reset_index(drop=True)
+
+
+def _old_linear_rows(full_df: pd.DataFrame, n_frames: int) -> np.ndarray:
+    """The removed expression: ``int(frame_idx * len(full_df) / n_frames)``."""
+    scale = len(full_df) / n_frames
+    return (np.arange(n_frames) * scale).astype(np.int64)
+
+
+@pytest.mark.parametrize(
+    "gaps, tail",
+    [(_REALISTIC_GAPS, 33), (_LONG_TAIL_GAPS, 3300), ([40, 12, 91, 33], 7)],
+)
+def test_the_anchor_row_carries_the_very_record_the_scene_draws(
+    gaps: Sequence[int], tail: int
+) -> None:
+    """The identity the cursor's correctness reduces to.
+
+    For every slider position *p*, ``full_df.iloc[anchors[p]]`` must be the same
+    record as ``kinect_df.iloc[p]`` — the row the 3D scene is drawing.  Asserted
+    on both keys the two halves of the pipeline use: ``time_kinect``, which
+    defines the anchor set, and ``frame_index``, which keys the depth field.
+    """
+    full_df = _upsampled_csv(gaps, tail)
+    kinect_df = _viewer_kinect_df(full_df)
+
+    rows = kinect_anchor_rows(full_df)
+
+    assert np.array_equal(
+        full_df[KINECT_ANCHOR_COLUMN].to_numpy()[rows],
+        kinect_df[KINECT_ANCHOR_COLUMN].to_numpy(),
+    )
+    assert np.array_equal(
+        full_df[FRAME_INDEX_COLUMN].to_numpy()[rows],
+        kinect_df[FRAME_INDEX_COLUMN].to_numpy(),
+    )
+
+
+@pytest.mark.parametrize(
+    "gaps, tail",
+    [(_REALISTIC_GAPS, 33), (_LONG_TAIL_GAPS, 3300), ([40, 12, 91, 33], 7)],
+)
+def test_the_anchors_meet_the_panels_contract(gaps: Sequence[int], tail: int) -> None:
+    """Shape, dtype and monotonicity — what ``NeuralDataPanel`` validates.
+
+    Passing this is necessary and nowhere near sufficient: the panel checks the
+    shape of the mapping, never its content, so a correctly-shaped wrong answer
+    is accepted in silence.  That is why the identity above is the real test and
+    this one only guards the constructor's preconditions.
+    """
+    full_df = _upsampled_csv(gaps, tail)
+    n_frames = len(_viewer_kinect_df(full_df))
+
+    rows = kinect_anchor_rows(full_df)
+
+    assert rows.dtype == np.int64
+    assert rows.shape == (n_frames,)
+    assert np.all(np.diff(rows) > 0)
+    assert rows[-1] < len(full_df)
+
+
+def test_a_uniform_scale_lands_on_another_frames_row() -> None:
+    """The regression guard: the removed expression must fail this fixture.
+
+    With the nerve channel outliving the Kinect one the ratio is 66 rows per
+    frame against a true spacing of 33, so the old cursor drifts a further frame
+    away every frame.  Restoring the multiplication makes this test red.
+    """
+    full_df = _upsampled_csv(_LONG_TAIL_GAPS, tail=3300)
+    n_frames = len(_viewer_kinect_df(full_df))
+
+    rows = kinect_anchor_rows(full_df)
+    old = _old_linear_rows(full_df, n_frames)
+
+    disagreements = int(np.count_nonzero(old != rows))
+    assert disagreements > 0.9 * n_frames, (
+        f"only {disagreements}/{n_frames} rows differ; this fixture exists to "
+        "make the linear scale unambiguously wrong"
+    )
+    # And wrong by whole frames, not by a rounding: the last position's cursor
+    # sits beyond the end of the anchors entirely.
+    assert old[-1] > rows[-1]
+
+
+def test_even_an_almost_uniform_block_is_not_uniform_enough() -> None:
+    """33-or-34 jitter alone already puts the cursor off the anchor row.
+
+    This is the ordinary case — every block of ``2022-06-15_ST14-02`` looks like
+    this — and it is why "close enough" is not a defence: the row the old scale
+    picks is frequently an interpolated nerve-rate row that belongs to no frame
+    at all, so what the cursor reads is not any frame's measurement.
+    """
+    full_df = _upsampled_csv(_REALISTIC_GAPS, tail=33)
+    n_frames = len(_viewer_kinect_df(full_df))
+
+    rows = kinect_anchor_rows(full_df)
+    old = _old_linear_rows(full_df, n_frames)
+
+    off_anchor = int(np.count_nonzero(~np.isin(old, rows)))
+    assert off_anchor > 0, (
+        "the fixture must reproduce the ordinary defect, not just the extreme one"
+    )
+    assert np.array_equal(rows, np.flatnonzero(full_df[KINECT_ANCHOR_COLUMN].notna()))
+
+
+def test_the_click_inverse_returns_the_frame_it_started_from() -> None:
+    """Round trip: ``update_cursor``'s row -> a click there -> the same position.
+
+    This reproduces ``NeuralDataPanel._on_canvas_click``'s anchor branch rather
+    than importing it, because the panel needs PyQt5 and a display.  What is
+    being asserted is a property of the *anchors*: a click anywhere strictly
+    inside the half-gap around an anchor resolves to that anchor's position, and
+    that property is what makes the panel's nearest-anchor search an inverse
+    rather than an approximation.  The live widget is exercised by the offscreen
+    smoke run recorded in the plan.
+    """
+    full_df = _upsampled_csv(_REALISTIC_GAPS, tail=33)
+    rows = kinect_anchor_rows(full_df)
+
+    def click_to_position(xdata: float) -> int:
+        pos = int(np.searchsorted(rows, xdata))
+        if pos >= rows.size:
+            pos = rows.size - 1
+        elif pos > 0 and abs(xdata - rows[pos - 1]) <= abs(rows[pos] - xdata):
+            pos -= 1
+        return pos
+
+    for p in range(rows.size):
+        lo_gap = rows[p] - rows[p - 1] if p > 0 else 33
+        hi_gap = rows[p + 1] - rows[p] if p + 1 < rows.size else 33
+        for jitter in (-0.49 * lo_gap, 0.0, 0.49 * hi_gap):
+            assert click_to_position(float(rows[p]) + jitter) == p
+
+
+def test_a_csv_without_the_anchor_column_refuses_to_guess() -> None:
+    """No column, no anchors — and a uniform scale is not an acceptable answer."""
+    full_df = _upsampled_csv(_REALISTIC_GAPS, tail=33).drop(
+        columns=[KINECT_ANCHOR_COLUMN]
+    )
+
+    with pytest.raises(ValueError, match=KINECT_ANCHOR_COLUMN):
+        kinect_anchor_rows(full_df, "block-order-01.csv")
+
+
+def test_rows_without_a_single_anchor_are_fatal() -> None:
+    """Nerve-rate rows the viewer cannot place against any frame."""
+    full_df = pd.DataFrame(
+        {
+            KINECT_ANCHOR_COLUMN: [np.nan] * 40,
+            FRAME_INDEX_COLUMN: [np.nan] * 40,
+            "Nerve_freq": np.arange(40.0),
+        }
+    )
+
+    with pytest.raises(ValueError, match="not one of them"):
+        kinect_anchor_rows(full_df, "block-order-01.csv")
+
+
+def test_an_empty_csv_yields_no_anchors_rather_than_raising() -> None:
+    """No rows is a different fact from rows that anchor nothing.
+
+    An empty frame has no frames to display and the viewer never builds a panel
+    for it; returning an empty array states that, and the shape check downstream
+    still holds because ``_total_frames`` is zero too.
+    """
+    empty = pd.DataFrame(
+        {KINECT_ANCHOR_COLUMN: [], FRAME_INDEX_COLUMN: [], "Nerve_freq": []}
+    )
+
+    rows = kinect_anchor_rows(empty)
+
+    assert rows.shape == (0,)
+    assert rows.dtype == np.int64
+
+
+def test_the_stage_viewer_no_longer_holds_a_cursor_scale() -> None:
+    """The wrong mechanism is gone from the call site, not merely unused.
+
+    Checked in the source because the viewer imports PyQt5, PyVista and Open3D
+    and cannot be imported here.  A leftover ``_neural_scale`` attribute is an
+    invitation to reuse it, and reuse would be invisible: a cursor placed by a
+    scale still moves smoothly.
+    """
+    viewer = _SRC / "postprocessing" / "gui" / "postprocessing_stage_viewer.py"
+    source = viewer.read_text(encoding="utf-8")
+
+    assert "_neural_scale" not in source, (
+        "postprocessing_stage_viewer.py still defines or uses _neural_scale; the "
+        "cursor must be placed by an anchor lookup, never by a multiplier"
+    )
+    assert "kinect_anchor_rows" in source
 
 
 # ---------------------------------------------------------------------------

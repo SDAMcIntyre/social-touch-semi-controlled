@@ -116,6 +116,7 @@ __all__ = [
     "CANONICAL_SPACE_BY_STAGE",
     "FOREARM_DEPTH_SCALAR_NAME",
     "FRAME_INDEX_COLUMN",
+    "KINECT_ANCHOR_COLUMN",
     "PASSTHROUGH_REASON_BY_STAGE",
     "PASSTHROUGH_SPACE_BY_STAGE",
     "PRODUCING_TASK_BY_STAGE",
@@ -123,6 +124,7 @@ __all__ = [
     "StageDepthField",
     "depth_frame_at_position",
     "forearm_depth_scalars",
+    "kinect_anchor_rows",
     "kinect_frame_at_position",
     "kinect_frame_indices",
     "resolve_stage_depth_field",
@@ -133,6 +135,15 @@ __all__ = [
 #: depth-field sidecar is keyed by the same number, which is what makes the two
 #: joinable at all.
 FRAME_INDEX_COLUMN: str = "frame_index"
+
+#: The merged-CSV column whose non-missing rows *are* the Kinect frames.  The
+#: CSV is upsampled to the nerve sampling rate, so most rows are interpolated
+#: nerve samples with every Kinect column missing; the viewer's ``_kinect_df``
+#: is ``full_df.dropna(subset=[KINECT_ANCHOR_COLUMN])`` and its row positions
+#: are what the slider walks.  Both the viewer and
+#: :func:`kinect_anchor_rows` name this one constant, so the two can never
+#: disagree about which rows are frames.
+KINECT_ANCHOR_COLUMN: str = "time_kinect"
 
 #: Name of the point-data array the forearm PLY carries when it is coloured by
 #: depth.  Deliberately *not* ``CONTACT_SCALAR_NAME``: the two arrays live on
@@ -620,6 +631,85 @@ def kinect_frame_indices(
             f"{bad.tolist()}). A fractional frame addresses nothing."
         )
     return values.astype(np.int64)
+
+
+# ---------------------------------------------------------------------------
+# The timeseries join
+# ---------------------------------------------------------------------------
+#
+# The same shortcut, in the other direction.  The neural panel plots the *full*
+# merged CSV against ``np.arange(len(full_df))``, while the slider walks the
+# anchor rows only.  Turning one into the other with a multiplier —
+#
+#     scale      = len(full_df) / len(kinect_df)
+#     sample_idx = int(position * scale)
+#
+# — assumes the anchors are evenly spaced through the CSV.  They are not: the
+# upsampling to the nerve rate leaves 33 or 34 rows between anchors on real
+# blocks, trailing nerve-rate rows extend past the last anchor, and any stage
+# that drops rows shifts every anchor after it.  The multiplier is right at row
+# 0 and drifts monotonically from there, so the cursor sits on one frame's nerve
+# data while the 3D scene shows another's — and it looks entirely plausible
+# doing it, because the timeseries under a drifting cursor is still smooth.
+#
+# A multiplication cannot express a non-uniform mapping.  A lookup can.  This is
+# the same defect, and the same remedy, as ``merging.frame_navigation``.
+
+
+def kinect_anchor_rows(
+    full_df: Any,
+    source: Any = "<stage CSV>",
+) -> np.ndarray:
+    """Return the positional row of every displayable frame in the *full* CSV.
+
+    Element *p* is the row of ``full_df`` — positional, the space
+    ``np.arange(len(full_df))`` indexes, which is the space the neural panel
+    plots in — that carries the frame shown at slider position *p*.  It is the
+    inverse-free bridge between the slider and the timeseries cursor, and it is
+    exactly the set of rows the viewer's ``_kinect_df`` keeps, in the same
+    order, so ``len(kinect_anchor_rows(full_df)) == len(kinect_df)`` holds by
+    construction rather than by coincidence.
+
+    That identity is why this tests :data:`KINECT_ANCHOR_COLUMN` and nothing
+    else: ``_kinect_df`` is ``full_df.dropna(subset=[KINECT_ANCHOR_COLUMN])``,
+    and two descriptions of "which rows are frames" that are written separately
+    will eventually disagree.
+
+    Args:
+        full_df: The stage's merged CSV, whole and unfiltered, in file order.
+            Duck-typed: anything with ``columns`` and ``__getitem__`` returning
+            a column with ``notna()``.
+        source: Names the offending artifact in error messages only.
+
+    Returns:
+        ``(n_frames,)`` int64 positional rows, strictly increasing.
+
+    Raises:
+        ValueError: If the column is absent, or if the CSV has rows but not one
+            of them anchors a Kinect frame.  An entirely empty CSV yields an
+            empty array — that is the true answer for no rows, not a fallback —
+            but rows without a single anchor mean the viewer is holding
+            nerve-rate samples it cannot place against any frame.
+    """
+    if KINECT_ANCHOR_COLUMN not in full_df.columns:
+        raise ValueError(
+            f"'{source}' has no '{KINECT_ANCHOR_COLUMN}' column, so the rows "
+            "that carry a Kinect frame cannot be told from the nerve-rate rows "
+            "interpolated between them. The timeseries cursor would have to be "
+            "placed by a uniform scale, which is wrong on every block whose "
+            "anchors are not evenly spaced — that is, on every real block. "
+            f"Columns found: {list(full_df.columns)}"
+        )
+
+    mask = np.asarray(full_df[KINECT_ANCHOR_COLUMN].notna().to_numpy(dtype=bool))
+    rows = np.flatnonzero(mask).astype(np.int64)
+    if rows.size == 0 and mask.size > 0:
+        raise ValueError(
+            f"'{source}' holds {mask.size} row(s) but not one of them has a "
+            f"'{KINECT_ANCHOR_COLUMN}', so no row anchors a Kinect frame. There "
+            "is no position the timeseries cursor could correctly take."
+        )
+    return rows
 
 
 def depth_frame_at_position(

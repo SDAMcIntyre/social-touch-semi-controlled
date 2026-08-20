@@ -58,9 +58,11 @@ from .stage_depth_field import STAGE_LABELS  # noqa: F401
 # same leaf, and is testable without a window because of it.
 from .stage_depth_field import (
     FOREARM_DEPTH_SCALAR_NAME,
+    KINECT_ANCHOR_COLUMN,
     StageDepthField,
     depth_frame_at_position,
     forearm_depth_scalars,
+    kinect_anchor_rows,
     kinect_frame_at_position,
     kinect_frame_indices,
     resolve_stage_depth_field,
@@ -306,6 +308,7 @@ class PostprocessingStageViewer(QMainWindow):
             self._kinect_df = pd.DataFrame()
             self._contact_pts_by_frame: List[Optional[np.ndarray]] = []
             self._frame_indices: Optional[np.ndarray] = None
+            self._anchor_rows: np.ndarray = np.zeros(0, dtype=np.int64)
             self._has_contact_source = False
             self._total_frames = 0
             self._forearm_pv = None
@@ -314,8 +317,27 @@ class PostprocessingStageViewer(QMainWindow):
 
         full_df = pd.read_csv(sp.csv_path)
         self._full_df = full_df
-        self._kinect_df = full_df.dropna(subset=["time_kinect"]).reset_index(drop=True)
+        self._kinect_df = full_df.dropna(
+            subset=[KINECT_ANCHOR_COLUMN]
+        ).reset_index(drop=True)
         self._total_frames = len(self._kinect_df)
+
+        # --- Slider position -> row of the *full* CSV ---
+        # The neural panel plots ``full_df`` against ``np.arange(len(full_df))``
+        # while the slider walks ``_kinect_df``'s positions, and the two are not
+        # proportional: the CSV is upsampled to the nerve rate at 33-34 rows per
+        # frame, not exactly 33, and the tail runs past the last anchor.  Built
+        # here, from this stage's own frame, so switching stage rebuilds it with
+        # the data it describes; a failure lands in _on_stage_changed's revert.
+        # See stage_depth_field.kinect_anchor_rows for the measured damage the
+        # scale this replaces was doing.
+        self._anchor_rows = kinect_anchor_rows(full_df, sp.csv_path)
+        if self._anchor_rows.size != self._total_frames:
+            raise ValueError(
+                f"'{sp.csv_path}' yielded {self._anchor_rows.size} anchor row(s) "
+                f"for {self._total_frames} displayable frame(s). The two are the "
+                f"same '{KINECT_ANCHOR_COLUMN}' test and must agree exactly."
+            )
 
         if "contact_points" in self._kinect_df.columns:
             self._contact_pts_by_frame = [
@@ -437,7 +459,6 @@ class PostprocessingStageViewer(QMainWindow):
 
         # --- Neural panel ---
         self._neural_panel: Optional[NeuralDataPanel] = None
-        self._neural_scale: float = 1.0
         self._maybe_create_neural_panel()
 
     def _build_right_panel_controls(self) -> None:
@@ -618,15 +639,20 @@ class PostprocessingStageViewer(QMainWindow):
             len(self._full_df) > 0 and "Nerve_freq" in self._full_df.columns
         )
         if has_neural:
-            self._neural_panel = NeuralDataPanel(self._full_df, self._total_frames)
+            # The anchors make the panel's cursor a lookup in both directions:
+            # ``update_cursor`` reads the row for the frame on screen, and a
+            # click resolves to the nearest anchor, which is the slider position
+            # ``_on_neural_frame_requested`` receives.  Rebuilt with the panel on
+            # every stage switch because ``_load_stage_data`` rebuilt them first.
+            self._neural_panel = NeuralDataPanel(
+                self._full_df,
+                self._total_frames,
+                kinect_anchor_rows=self._anchor_rows,
+            )
             self._neural_panel.frame_requested.connect(self._on_neural_frame_requested)
             self._outer_layout.addWidget(self._neural_panel)
-            self._neural_scale = (
-                len(self._full_df) / self._total_frames if self._total_frames > 0 else 1.0
-            )
         else:
             self._neural_panel = None
-            self._neural_scale = 1.0
 
     # ------------------------------------------------------------------
     # VTK actors
@@ -872,7 +898,17 @@ class PostprocessingStageViewer(QMainWindow):
         self.plotter.render()
 
         if self._neural_panel is not None:
-            self._neural_panel.update_cursor(int(frame_idx * self._neural_scale))
+            # A lookup, never a scale: the panel is told the row this frame
+            # actually occupies in the CSV it is plotting.  The bound is checked
+            # rather than left to numpy, whose negative wraparound would place
+            # the cursor near the end of the block without complaining.
+            if not 0 <= frame_idx < self._anchor_rows.size:
+                raise IndexError(
+                    f"Frame {frame_idx} is outside this stage's "
+                    f"0..{self._anchor_rows.size - 1} frames; it has no row in "
+                    "the CSV the neural panel is plotting."
+                )
+            self._neural_panel.update_cursor(int(self._anchor_rows[frame_idx]))
 
         if self._total_frames > 0:
             self.frame_label.setText(f"{frame_idx + 1} / {self._total_frames}")
