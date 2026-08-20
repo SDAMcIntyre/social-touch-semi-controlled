@@ -297,23 +297,48 @@ that makes `contact_depth_field_series.py` testable while sitting next to viewer
 ### Phase 2: The stage-aware leaf
 **Goal:** All policy — expected space, validation, messaging — in one Qt-free module with tests.
 
-- [ ] 2.1 — Create `code/src/postprocessing/gui/stage_depth_field.py` with
+**Started:** 2026-08-20T06:41Z  **Completed:** 2026-08-20T06:51Z
+
+- [x] 2.1 — Create `code/src/postprocessing/gui/stage_depth_field.py` with
       `EXPECTED_SPACE_BY_STAGE`, `StageDepthField`, `resolve_stage_depth_field`.
-- [ ] 2.2 — Space validation: raise `ValueError` naming the stage label, the expected space, the
+- [x] 2.2 — Space validation: raise `ValueError` naming the stage label, the expected space, the
       declared space and the file path. Stage 0 is absent from the map — resolving it returns the
       absent state without consulting a loader.
-- [ ] 2.3 — Type guard on the loader's return, mirroring `neural_kinect_scene_viewer.py:1178-1188`
+- [x] 2.3 — Type guard on the loader's return, mirroring `neural_kinect_scene_viewer.py:1178-1188`
       (`TypeError`, with the "drawing whatever this is" rationale).
-- [ ] 2.4 — Absent messaging: for stages 1-5 name the postprocessing DAG task that produces the
+- [x] 2.4 — Absent messaging: for stages 1-5 name the postprocessing DAG task that produces the
       sidecar; for stage 0 state plainly that `blocks_merged/` precedes the depth field and point at
       the ICP-registered stage. Every message non-empty.
-- [ ] 2.5 — Let a corrupt-but-present sidecar propagate as `ValueError`. Explicitly no `except`.
-- [ ] 2.6 — Unit tests on synthetic sidecars written with the production writer: correct space per
+- [x] 2.5 — Let a corrupt-but-present sidecar propagate as `ValueError`. Explicitly no `except`.
+- [x] 2.6 — Unit tests on synthetic sidecars written with the production writer: correct space per
       stage, each mismatch pair, absent, corrupt, wrong return type, stage 0.
+
+**Contract correction — the signature is `(stage_idx, loader, sidecar_path)`.**
+Task 2.2 requires the mismatch error to name the *file*, but a
+`ContactDepthFieldLoader` is a zero-argument callable that deliberately hides its path, and
+`ContactDepthFieldSeries` carries none either — so the path is unreachable through the two-argument
+signature this plan's contract table stated. The signature is widened by one **messaging-only**
+parameter: the leaf never opens it, and passing a loader without it raises rather than degrading the
+message. Phase 3 must therefore have `StagePaths` carry the sidecar path beside the loader, derived
+where the loader already is (`resolve_stage_paths`); the widget forwards two opaque fields and still
+derives no parquet path of its own.
+
+**Two departures from the stated Files Modified, both to keep the leaf headless:**
+- `STAGE_LABELS` now *lives* in `stage_depth_field.py` and is re-exported from
+  `postprocessing_stage_viewer.py`, because the validation messages name stages and a second copy of
+  the six strings would drift. Every existing importer is unaffected.
+- `postprocessing/gui/__init__.py` eagerly imports the four Qt/VTK/Open3D viewers, so the export
+  added there cannot be the test import path. `conftest.py` stubs the `postprocessing.gui` package
+  root — the mechanism it already uses for five other heavyweight roots — so the leaf imports on its
+  own. A static AST test asserts the leaf and its adapter import no GUI toolkit; `sys.modules` would
+  be useless for this in a full-suite run.
 
 **Files Modified:**
 - `code/src/postprocessing/gui/stage_depth_field.py` *(new, ~120 LOC)*
 - `code/src/postprocessing/gui/__init__.py` — export
+- `code/src/postprocessing/gui/postprocessing_stage_viewer.py` — `STAGE_LABELS` moved to the leaf and
+  re-exported
+- `code/tests/conftest.py` — stub the `postprocessing.gui` root
 - `code/tests/test_stage_depth_field.py` — extended
 
 **Dependencies:** Phase 1 (for the loader type; developable in parallel)
@@ -429,11 +454,11 @@ the core value without it.
       `_pca-xyz` fork on stages 4-5.
 - [x] Building six loaders reads zero bytes (counting reporter, per
       `test_neural_kinect_depth_field_view.py:441`).
-- [ ] `resolve_stage_depth_field` returns the series for each correct (stage, space) pair.
-- [ ] Every wrong (stage, space) pair raises `ValueError` naming both spaces.
-- [ ] Stage 0 returns absent without calling a loader.
-- [ ] Missing sidecar → absent with a non-empty message; corrupt sidecar → raises.
-- [ ] A loader returning a non-series raises `TypeError`.
+- [x] `resolve_stage_depth_field` returns the series for each correct (stage, space) pair.
+- [x] Every wrong (stage, space) pair raises `ValueError` naming both spaces.
+- [x] Stage 0 returns absent without calling a loader.
+- [x] Missing sidecar → absent with a non-empty message; corrupt sidecar → raises.
+- [x] A loader returning a non-series raises `TypeError`.
 - [ ] The cache evicts at its bound and re-reads an evicted stage.
 - [ ] *(Ph.5)* `forearm_depth_scalars` scatters to the right vertices; NaN elsewhere; provenance
       mismatch raises; no `vertex_id` → `None`.

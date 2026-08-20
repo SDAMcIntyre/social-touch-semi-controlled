@@ -1,9 +1,11 @@
 """Tests for the contact-depth-field wiring behind the postprocessing stage viewer.
 
-Phase 1 of ``render-contact-depth-field-in-postprocessing-viewer`` only makes
-the six postprocessing stages *carry* a depth-field loader: nothing renders and,
-crucially, nothing reads.  These tests guard the two properties that make that
-worth doing at all.
+Two phases of ``render-contact-depth-field-in-postprocessing-viewer`` are
+covered here.  Phase 1 makes the six postprocessing stages *carry* a depth-field
+loader: nothing renders and, crucially, nothing reads.  Phase 2 adds the
+stage-aware policy leaf that turns ``(stage, loader, path)`` into either a
+space-validated series or an announced absence.  These tests guard the
+properties that make both worth doing at all.
 
 **Path pairing.**  A stage's sidecar is found by name, from the stage CSV the
 resolver has already computed.  Four stages write their CSV under the merging
@@ -19,13 +21,24 @@ an eager version would read all six before the first pixel and would draw
 byte-identical pictures, which is precisely why the laziness has to be asserted
 rather than assumed.
 
+**Space validation.**  Six stages span four coordinate spaces, and a field drawn
+in the wrong one lands as a plausible-looking patch in the wrong place rather
+than as an error.  ``ContactDepthFieldSeries.coordinate_space`` has always
+carried the declared space "so a caller can refuse to draw a wrong-space field";
+``resolve_stage_depth_field`` is the first caller that actually refuses, so every
+mismatched (stage, space) pair is exercised here rather than trusted.
+
 Everything here runs against synthetic parquet sidecars written to ``tmp_path``
-with the production writer.  No Qt, no VTK, no Open3D — the read path and the
-path resolver are both leaves, and that is what keeps this file headless.
+with the production writer.  No Qt, no VTK, no Open3D — the read path, the path
+resolver and the policy leaf are all leaves, and that is what keeps this file
+headless.  ``conftest.py`` stubs the ``postprocessing.gui`` package root, whose
+``__init__`` imports the four viewers, so that the Qt-free leaf inside it can be
+imported on its own.
 """
 
 from __future__ import annotations
 
+import ast
 import sys
 from pathlib import Path
 from typing import Dict, List, Sequence
@@ -55,6 +68,13 @@ from merging.contact_depth_field_series import (  # noqa: E402
     BoundedContactDepthFieldCache,
     ContactDepthFieldSeries,
     make_contact_depth_field_loader,
+)
+from postprocessing.gui.stage_depth_field import (  # noqa: E402
+    EXPECTED_SPACE_BY_STAGE,
+    PRODUCING_TASK_BY_STAGE,
+    STAGE_LABELS,
+    StageDepthField,
+    resolve_stage_depth_field,
 )
 
 
@@ -329,3 +349,295 @@ def test_stage_zero_loader_reports_an_announced_absence(tmp_path: Path) -> None:
     assert reporter.calls == 1
     assert reporter.messages[0].strip(), "an absent sidecar must announce itself"
     assert str(sidecars[0]) in reporter.messages[0]
+
+
+# ---------------------------------------------------------------------------
+# 4. The stage-aware leaf — space policy, absence, refusal
+# ---------------------------------------------------------------------------
+
+
+_SIDECAR_BEARING = [row for row in _STAGES if row[3] is not None]
+
+#: Every (stage, declared space) pair that must be refused: each sidecar-bearing
+#: stage crossed with the two spaces it is *not*.
+_MISMATCHES = [
+    (stage_idx, wrong)
+    for stage_idx, _, _, expected in _SIDECAR_BEARING
+    for wrong in (
+        COORDINATE_SPACE_ICP_REGISTERED,
+        COORDINATE_SPACE_PCA_CALIBRATED,
+        COORDINATE_SPACE_RF_CENTERED,
+    )
+    if wrong != expected
+]
+
+
+class _ExplodingLoader:
+    """A loader that fails the test if it is ever called."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def __call__(self):
+        self.calls += 1
+        raise AssertionError("this loader must never be consulted")
+
+
+def _loader_and_path(tmp_path: Path, stage_idx: int):
+    """``(loader, sidecar_path)`` for one stage, with all sidecars on disk."""
+    sidecars = _write_stage_sidecars(tmp_path)
+    cache = BoundedContactDepthFieldCache(maxsize=len(_STAGES))
+    reporter = _CountingReporter()
+    return (
+        make_contact_depth_field_loader(sidecars[stage_idx], reporter, cache),
+        sidecars[stage_idx],
+    )
+
+
+def test_the_expected_space_map_omits_stage_zero_and_covers_the_rest() -> None:
+    """Membership in the map *is* the definition of a sidecar-bearing stage.
+
+    Stage 0 is absent by construction, not by oversight; repairing the absence
+    would point the stage at another directory's file, in another space.
+    """
+    assert 0 not in EXPECTED_SPACE_BY_STAGE
+    assert sorted(EXPECTED_SPACE_BY_STAGE) == [s[0] for s in _SIDECAR_BEARING]
+    assert sorted(PRODUCING_TASK_BY_STAGE) == sorted(EXPECTED_SPACE_BY_STAGE)
+    for stage_idx, _, _, expected in _SIDECAR_BEARING:
+        assert EXPECTED_SPACE_BY_STAGE[stage_idx] == expected
+    assert len(STAGE_LABELS) == len(_STAGES)
+
+
+@pytest.mark.parametrize("stage_idx, _dir, _csv, expected_space", _SIDECAR_BEARING)
+def test_each_stage_accepts_its_own_coordinate_space(
+    tmp_path: Path, stage_idx: int, _dir: str, _csv: str, expected_space: str
+) -> None:
+    """The happy path: three stages share ``icp_registered``, two do not."""
+    loader, sidecar = _loader_and_path(tmp_path, stage_idx)
+
+    resolved = resolve_stage_depth_field(stage_idx, loader, sidecar)
+
+    assert isinstance(resolved, StageDepthField)
+    assert resolved.is_present
+    assert resolved.series.coordinate_space == expected_space
+    assert resolved.message.strip()
+    assert STAGE_LABELS[stage_idx] in resolved.message
+
+
+@pytest.mark.parametrize("stage_idx, declared_space", _MISMATCHES)
+def test_a_wrong_space_field_is_refused(
+    tmp_path: Path, stage_idx: int, declared_space: str
+) -> None:
+    """Both spaces and the file are named; "wrong space" alone is not actionable.
+
+    A field in the wrong space carries correct depths at incorrect positions, so
+    it renders as a plausible patch somewhere it does not belong — the one class
+    of defect a picture cannot be relied on to reveal.
+    """
+    expected_space = EXPECTED_SPACE_BY_STAGE[stage_idx]
+    _, directory, csv_name, _ = _STAGES[stage_idx]
+    sidecar = depth_field_path_for_csv(tmp_path / directory / csv_name)
+    sidecar.parent.mkdir(parents=True, exist_ok=True)
+    write_contact_depth_field_table(
+        _table(_ROWS), sidecar, metadata=_metadata(declared_space)
+    )
+    cache = BoundedContactDepthFieldCache(maxsize=len(_STAGES))
+    loader = make_contact_depth_field_loader(sidecar, _CountingReporter(), cache)
+
+    with pytest.raises(ValueError) as excinfo:
+        resolve_stage_depth_field(stage_idx, loader, sidecar)
+
+    message = str(excinfo.value)
+    assert expected_space in message
+    assert declared_space in message
+    assert str(sidecar) in message
+    assert STAGE_LABELS[stage_idx] in message
+
+
+def test_stage_zero_is_absent_without_consulting_any_loader(tmp_path: Path) -> None:
+    """``blocks_merged/`` precedes the depth field; reading to then refuse is worse.
+
+    A loader is passed deliberately, and must not be called: there is no space
+    stage 0's field could legitimately declare, so opening a file to reject it
+    would only cost a read.
+    """
+    loader = _ExplodingLoader()
+
+    resolved = resolve_stage_depth_field(0, loader, tmp_path / "unused.parquet")
+
+    assert loader.calls == 0
+    assert not resolved.is_present
+    assert resolved.series is None
+    assert "blocks_merged" in resolved.message
+    assert STAGE_LABELS[1] in resolved.message, "point the user at the first real stage"
+
+
+def test_stage_zero_needs_no_loader_at_all() -> None:
+    """The stage the resolver wired nothing for behaves identically."""
+    resolved = resolve_stage_depth_field(0, None, None)
+
+    assert not resolved.is_present
+    assert resolved.message.strip()
+
+
+@pytest.mark.parametrize("stage_idx, _dir, _csv, _space", _SIDECAR_BEARING)
+def test_a_missing_sidecar_is_an_announced_absence(
+    tmp_path: Path, stage_idx: int, _dir: str, _csv: str, _space: str
+) -> None:
+    """Absent is ``None`` plus a message naming the task that would produce it."""
+    sidecar = depth_field_path_for_csv(tmp_path / _dir / _csv)
+    cache = BoundedContactDepthFieldCache(maxsize=len(_STAGES))
+    loader = make_contact_depth_field_loader(sidecar, _CountingReporter(), cache)
+
+    resolved = resolve_stage_depth_field(stage_idx, loader, sidecar)
+
+    assert not resolved.is_present
+    assert str(sidecar) in resolved.message
+    assert PRODUCING_TASK_BY_STAGE[stage_idx] in resolved.message
+
+
+def test_a_stage_wired_without_a_loader_reports_its_absence(tmp_path: Path) -> None:
+    """``depth_field_loader is None`` means no field was wired — still announced."""
+    sidecar = depth_field_path_for_csv(tmp_path / "blocks_registered" / _RAW_CSV_NAME)
+
+    resolved = resolve_stage_depth_field(1, None, sidecar)
+
+    assert not resolved.is_present
+    assert PRODUCING_TASK_BY_STAGE[1] in resolved.message
+
+
+def test_a_corrupt_sidecar_raises_rather_than_reading_as_absent(tmp_path: Path) -> None:
+    """A present-but-undecodable artifact must not be laundered into absence.
+
+    Falling back to flat colour here would hide a broken artifact behind a
+    plausible picture — which is why this module has no ``except`` at all.
+    """
+    sidecar = depth_field_path_for_csv(tmp_path / "blocks_registered" / _RAW_CSV_NAME)
+    sidecar.parent.mkdir(parents=True, exist_ok=True)
+    # A readable parquet with the right columns but none of the sidecar's schema
+    # metadata: the reader's documented corrupt case, and the one most likely to
+    # occur in practice, since it is what any plain ``to_parquet`` produces.
+    _table(_ROWS).to_parquet(sidecar, index=False)
+    cache = BoundedContactDepthFieldCache(maxsize=len(_STAGES))
+    loader = make_contact_depth_field_loader(sidecar, _CountingReporter(), cache)
+
+    with pytest.raises(ValueError, match="schema_version"):
+        resolve_stage_depth_field(1, loader, sidecar)
+
+
+def test_a_file_that_is_not_parquet_at_all_also_raises(tmp_path: Path) -> None:
+    """The other corrupt case: bytes that are not a parquet file."""
+    sidecar = depth_field_path_for_csv(tmp_path / "blocks_registered" / _RAW_CSV_NAME)
+    sidecar.parent.mkdir(parents=True, exist_ok=True)
+    sidecar.write_bytes(b"this is not a parquet file")
+    cache = BoundedContactDepthFieldCache(maxsize=len(_STAGES))
+    loader = make_contact_depth_field_loader(sidecar, _CountingReporter(), cache)
+
+    with pytest.raises(ValueError):
+        resolve_stage_depth_field(1, loader, sidecar)
+
+
+@pytest.mark.parametrize("returned", [object(), "a string", 42, []])
+def test_a_loader_returning_a_non_series_raises(tmp_path: Path, returned) -> None:
+    """Drawing whatever this is would put unvalidated geometry in the scene."""
+    sidecar = depth_field_path_for_csv(tmp_path / "blocks_registered" / _RAW_CSV_NAME)
+
+    with pytest.raises(TypeError, match="ContactDepthFieldSeries"):
+        resolve_stage_depth_field(1, lambda: returned, sidecar)
+
+
+def test_a_loader_without_its_path_is_a_wiring_error() -> None:
+    """The loader hides its path, so the path travels beside it — or not at all.
+
+    Without it a mismatch or absence message could not name the file it is
+    about, which is the difference between an actionable error and a puzzle.
+    """
+    with pytest.raises(ValueError, match="sidecar_path"):
+        resolve_stage_depth_field(1, lambda: None, None)
+
+
+@pytest.mark.parametrize("stage_idx", [-1, len(_STAGES), 99])
+def test_an_unknown_stage_index_raises(tmp_path: Path, stage_idx: int) -> None:
+    """A stage the dropdown cannot show is a wiring error, not a fieldless stage."""
+    with pytest.raises(ValueError, match="names no postprocessing stage"):
+        resolve_stage_depth_field(stage_idx, None, tmp_path / "unused.parquet")
+
+
+def test_every_outcome_carries_a_non_empty_message(tmp_path: Path) -> None:
+    """The message is the whole reason absence cannot be silent."""
+    sidecars = _write_stage_sidecars(tmp_path)
+    cache = BoundedContactDepthFieldCache(maxsize=len(_STAGES))
+    reporter = _CountingReporter()
+    loaders = [make_contact_depth_field_loader(p, reporter, cache) for p in sidecars]
+
+    for stage_idx in range(len(_STAGES)):
+        resolved = resolve_stage_depth_field(
+            stage_idx, loaders[stage_idx], sidecars[stage_idx]
+        )
+        assert resolved.message.strip(), f"stage {stage_idx} must announce its outcome"
+
+
+def test_a_stage_depth_field_refuses_an_empty_message() -> None:
+    """The DTO enforces it, so no construction site can opt out."""
+    with pytest.raises(ValueError, match="message is empty"):
+        StageDepthField(series=None, message="   ")
+
+
+def test_resolving_a_stage_reads_exactly_once(tmp_path: Path) -> None:
+    """The leaf adds no read of its own: the loader is called once, or not at all."""
+    sidecars = _write_stage_sidecars(tmp_path)
+    cache = BoundedContactDepthFieldCache(maxsize=len(_STAGES))
+    reporter = _CountingReporter()
+    loader = make_contact_depth_field_loader(sidecars[5], reporter, cache)
+
+    resolved = resolve_stage_depth_field(5, loader, sidecars[5])
+
+    assert resolved.is_present
+    assert reporter.calls == 1
+    assert len(cache) == 1
+
+
+# ---------------------------------------------------------------------------
+# 5. Purity — the leaf stays headless
+# ---------------------------------------------------------------------------
+
+#: The toolkits that would make this module untestable without a display.  The
+#: leaf lives under ``gui/`` for locality only; every line of it is decidable
+#: from a stage index, a loader and a path.
+_FORBIDDEN_IMPORT_ROOTS = frozenset({"PyQt5", "pyvista", "pyvistaqt", "vtk", "open3d"})
+
+
+def _imported_roots(module_path: Path) -> set:
+    """Top-level package name of every import statement in *module_path*."""
+    tree = ast.parse(module_path.read_text(encoding="utf-8"))
+    roots = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            roots.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+            roots.add(node.module.split(".")[0])
+    return roots
+
+
+@pytest.mark.parametrize(
+    "module",
+    [
+        _SRC / "postprocessing" / "gui" / "stage_depth_field.py",
+        _SRC / "merging" / "contact_depth_field_series.py",
+    ],
+)
+def test_the_policy_leaf_and_its_dependency_import_no_gui_toolkit(module: Path) -> None:
+    """Checked statically, so the result does not depend on what else ran first.
+
+    ``sys.modules`` is useless for this in a full-suite run — a sibling test
+    module importing PyQt5 would poison it — whereas the import statements in
+    the file are the actual contract.  The dependency is checked too, since an
+    import one level down would drag the toolkit in just as effectively.
+    """
+    offenders = _imported_roots(module) & _FORBIDDEN_IMPORT_ROOTS
+
+    assert not offenders, (
+        f"{module.name} imports {sorted(offenders)}; the policy leaf and the "
+        "adapter beneath it must stay importable without a display, which is "
+        "the only reason they are separate modules from the viewers."
+    )

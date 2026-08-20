@@ -36,19 +36,15 @@ from pyvistaqt import QtInteractor
 from merging.contact_depth_field_series import ContactDepthFieldLoader
 from merging.gui.neural_kinect_scene_viewer import NeuralDataPanel
 
+# Re-exported: the labels are defined in the Qt-free policy leaf beside this
+# module, because that leaf names stages in its validation errors and a second
+# copy of the six strings would drift from this one.
+from .stage_depth_field import STAGE_LABELS  # noqa: F401
+
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-
-STAGE_LABELS: List[str] = [
-    "Merged (Raw)",
-    "ICP Registered",
-    "Deduplicated",
-    "Contact Projected",
-    "PCA Calibrated",
-    "RF Centered",
-]
 
 _CAMERA_FRAME_STAGES = {0, 1, 2, 3}
 _PCA_FRAME_STAGES = {4, 5}
