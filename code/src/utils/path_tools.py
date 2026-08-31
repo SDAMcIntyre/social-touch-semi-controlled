@@ -2,10 +2,20 @@ import glob
 import os
 import re
 import socket
+import sys
 import tkinter as tk
 from tkinter import filedialog
 from pathlib import Path
 import json
+
+# Windows consoles default to cp1252, which cannot encode the emoji used throughout
+# this project's log messages -> UnicodeEncodeError. Force UTF-8 so prints never crash.
+# (No-op where stdout is already UTF-8, e.g. macOS/Linux or a UTF-8 terminal.)
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 
 def winapi_path(dos_path, encoding=None):
