@@ -23,15 +23,49 @@ Contacts are morphed from one kinect frame to the next *along the forearm surfac
 1. kNN graph over the forearm cloud `S` (edge weight = euclidean distance to the
    neighbour) — shortest paths through it approximate geodesic distance on the surface.
 2. Contacts of both endpoints are snapped onto `S`.
-3. Dijkstra from every endpoint-1 contact gives the geodesic cost matrix to the
+3. Each endpoint's contacts are split into contiguous patches, and the patches of one
+   endpoint are paired with those of the other (see **Contact mode** below).
+4. Dijkstra from every endpoint-1 contact gives the geodesic cost matrix to the
    endpoint-2 contacts, keeping predecessors so the paths can be rebuilt.
-4. Contacts are paired with the Hungarian algorithm; leftovers on the larger side attach
-   to their cheapest counterpart (contact splits / merges).
-5. Each pair is walked a fraction `t` along its path by arc length, snapping to the
+5. Contacts are paired with the Hungarian algorithm *within each paired patch*; leftovers
+   on the larger side attach to their cheapest counterpart (contact splits / merges).
+6. Each pair is walked a fraction `t` along its path by arc length, snapping to the
    vertex there.
 
 Using geodesic rather than straight-line distance is what keeps points on the surface —
 a contact never tunnels through the forearm.
+
+## Contact mode (one finger vs whole hand)
+
+A one-finger touch leaves a single blob on the arm. A whole hand leaves **2–4 separate
+finger patches** with gaps between them, and those patches merge and split from frame to
+frame. Matching all contacts in one pool lets points drift out of one finger and into the
+next, smearing material across the gaps — on this dataset **7.9 %** (tap) / **3.6 %**
+(stroke) of all matched pairs jumped between fingers, travelling a median of 10–12 mm and
+up to 76 mm across the arm.
+
+So contacts are clustered (single linkage at `--cluster-eps`, default 4 mm) and the morph
+is confined to *corresponding* clusters. Which regime a block is in is decided **once per
+block** from its early contact frames and then held fixed:
+
+| mode | behaviour |
+|---|---|
+| `single` | the whole patch is one group. A lone finger patch can briefly break in two from sensor noise; clustering it would only add jitter. |
+| `multi` | every frame is clustered, and clusters are paired before contacts are matched. |
+
+When two clusters **merge** into one (or one **splits** into two), the shared cluster is
+divided between its claimants along a geodesic nearest-cluster boundary — a merge closes
+the gap from both sides instead of teleporting points across it.
+
+Detection uses the first 200 anchor frames and asks how often a frame holds ≥ 2 substantial
+patches (≥ 5 % of the frame's points): ≥ 25 % of frames → `multi`. It reads the regime off
+many frames rather than the first one because a whole-hand frame legitimately collapses to
+one patch at the very start and end of a tap, when only part of the hand is down. Override
+with `--contact-mode single|multi`.
+
+On this session the detector agrees with the recorded `contact_area_metadata` on all four
+blocks; that column is logged next to the decision as a cross-check but never drives it
+(other datasets may not carry it).
 
 ## Gap rule
 
@@ -65,7 +99,9 @@ so 33 is slightly too strict). Larger gaps mean an intervening kinect frame was 
 
 Options: `--column` (default `contact_points`), `--max-gap` (default `33`), `-k` (default
 `10`), `--precision` (default `1` decimal; `-1` for full precision), `--time-col` (default
-`time_nerve`; `none` to omit).
+`time_nerve`; `none` to omit), `--contact-mode` (`auto` / `single` / `multi`, default
+`auto`), `--cluster-eps` (default `4.0`, in the data's units), `--min-cluster-size`
+(default `3` points).
 
 ## Output
 

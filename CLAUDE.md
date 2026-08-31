@@ -72,6 +72,15 @@ $PY code/interpolate_video.py    # plot/videos/*.mp4  (3D evolution, original vs
 - **`--max-gap 50`**: the single-kinect-frame gap is 33 **or** 34 rows (jitter), so the
   default 33 is too strict. A gap ≥ ~66 means an intervening kinect frame was empty →
   not interpolated (correct).
+- **Contact mode**: blocks are either `one finger tip` (1 contact patch/frame) or
+  `whole hand` (2–4 finger patches with gaps). The tool clusters contacts (single
+  linkage, 4 mm) and confines the morph to *corresponding* patches, otherwise points
+  drift between fingers (was 7.9% of matches on block-02, median 12 mm). Mode is
+  detected **once per block** from the first 200 anchor frames — not per frame, since
+  a whole-hand frame collapses to 1 patch at tap onset/offset. `single` mode is the
+  pre-cluster code path, bit-for-bit (verified on 12.6k rows). Detection agrees with
+  `contact_area_metadata` on all 4 example blocks; that column is logged as a
+  cross-check but never drives the algorithm. Override: `--contact-mode single|multi`.
 - **Output** = 2 columns: `time_nerve` (dense, for aligning to the nerve signal) +
   `contact_points_interpolated`. Same row count as input. Anchor (measured) rows keep
   the **original** contacts; only interpolated in-between rows are snapped to the cloud.
