@@ -12,6 +12,12 @@ Each video shows the contact patch evolving inside a fixed 3D grid box, with a
 faint accumulating trail so the swept path builds up — the original stair-steps
 between the few kinect frames, the interpolated glides continuously.
 
+Points are coloured by contact patch (finger), using the same clustering the
+interpolation itself uses. On a whole-hand block that makes the fix checkable by
+eye: each finger keeps its own colour and the gaps between them stay open,
+instead of one colour bleeding across a gap into the next finger.
+``--no-cluster-colors`` renders everything in one colour instead.
+
 Rendered by hand-rolled 3D projection + OpenCV drawing/encoding (mp4v). No
 matplotlib (its rasteriser segfaults in this conda env) and no OpenGL.
 """
@@ -21,11 +27,16 @@ import argparse
 import logging
 import re
 from pathlib import Path
-from typing import List, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 import cv2
 import numpy as np
 import pandas as pd
+
+# Same clustering as the tool, so the colours show what the morph actually saw.
+from interpolate_contact_points import (
+    DEFAULT_CLUSTER_EPS, DEFAULT_MIN_CLUSTER, cluster_points,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +53,10 @@ CUR_COLOR = (0, 90, 230)      # BGR — current patch (orange-red)
 TRAIL_COLOR = (205, 205, 205) # BGR — accumulated trail
 BOX_COLOR = (150, 150, 150)
 FLOOR_COLOR = (218, 218, 218)
+# Per-patch colours (BGR). Index 0 is CUR_COLOR, so a single-finger block looks
+# exactly as it did before clustering was introduced.
+PATCH_COLORS = [CUR_COLOR, (200, 60, 0), (40, 160, 40), (170, 0, 160),
+                (20, 190, 210), (130, 120, 0), (60, 60, 140)]
 
 
 def parse_contact_points(cell) -> List[Tuple[float, float, float]]:
@@ -137,13 +152,50 @@ def _draw_grid(canvas, bbox, view):
 
 
 def _draw_points(canvas, pts, view, color, radius):
-    if not pts:
+    """Draw ``pts``; ``color`` is one BGR tuple, or one per point."""
+    if not len(pts):
         return
     px, depth = _project(pts, view)
+    per_point = not isinstance(color, tuple)
     for i in np.argsort(-depth):  # painter's order: far first
         x, y = px[i]
         if 0 <= x < SIZE and 0 <= y < SIZE:
-            cv2.circle(canvas, (int(x), int(y)), radius, color, -1, cv2.LINE_AA)
+            cv2.circle(canvas, (int(x), int(y)), radius,
+                       color[i] if per_point else color, -1, cv2.LINE_AA)
+
+
+# ------------------------------------------------------------ patch colouring
+def _patch_axis(frames_pts: Sequence[Sequence[Tuple[float, float, float]]]) -> int:
+    """World axis along which the patches of this touch are spread out.
+
+    Patch labels come out in arbitrary order per frame, so colours would flicker.
+    Ranking patches along one fixed axis pins each finger to its own colour for
+    the whole video.
+    """
+    spread = np.zeros(3)
+    for pts in frames_pts:
+        if len(pts) < 2:
+            continue
+        arr = np.asarray(pts, dtype=float)
+        labels = cluster_points(pts, DEFAULT_CLUSTER_EPS, DEFAULT_MIN_CLUSTER)
+        if labels.max() < 1:
+            continue
+        centers = np.stack([arr[labels == g].mean(axis=0) for g in range(labels.max() + 1)])
+        spread += centers.max(axis=0) - centers.min(axis=0)
+    return int(np.argmax(spread))
+
+
+def _patch_colors(pts, axis: Optional[int]):
+    """One BGR colour per point — by contact patch, ranked along ``axis``."""
+    if axis is None or not pts:
+        return CUR_COLOR
+    arr = np.asarray(pts, dtype=float)
+    labels = cluster_points(pts, DEFAULT_CLUSTER_EPS, DEFAULT_MIN_CLUSTER)
+    n_patches = int(labels.max()) + 1
+    means = [arr[labels == g][:, axis].mean() for g in range(n_patches)]
+    rank = np.empty(n_patches, dtype=int)
+    rank[np.argsort(means)] = np.arange(n_patches)
+    return [PATCH_COLORS[r % len(PATCH_COLORS)] for r in rank[labels]]
 
 
 # ------------------------------------------------------------------ per touch
@@ -155,7 +207,8 @@ def _bbox(all_pts: List[Tuple[float, float, float]]):
     return (lo[0], hi[0], lo[1], hi[1], lo[2], hi[2])
 
 
-def _write_video(path: Path, frame_rows, points_of_row, view, bbox, block, tid, label, fps):
+def _write_video(path: Path, frame_rows, points_of_row, view, bbox, block, tid, label, fps,
+                 axis: Optional[int] = None):
     grid = np.full((SIZE, SIZE, 3), 255, np.uint8)
     _draw_grid(grid, bbox, view)
     trail = grid.copy()
@@ -164,7 +217,7 @@ def _write_video(path: Path, frame_rows, points_of_row, view, bbox, block, tid, 
     for k, row in enumerate(frame_rows):
         pts = points_of_row(row)
         frame = trail.copy()
-        _draw_points(frame, pts, view, CUR_COLOR, 3)
+        _draw_points(frame, pts, view, _patch_colors(pts, axis), 3)
         cv2.putText(frame, f"{block}  touch {tid}", (8, 20),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.45, (40, 40, 40), 1, cv2.LINE_AA)
         cv2.putText(frame, f"{label}   {k + 1}/{n}", (8, 38),
@@ -174,7 +227,8 @@ def _write_video(path: Path, frame_rows, points_of_row, view, bbox, block, tid, 
     vw.release()
 
 
-def videos_for_touch(df_orig, interp_cells, touch, tid, out_dir, block, fps):
+def videos_for_touch(df_orig, interp_cells, touch, tid, out_dir, block, fps,
+                     cluster_colors: bool = True):
     rows = np.where(touch == tid)[0]
     r0, r1 = int(rows.min()), int(rows.max())
     span = np.arange(r0, r1 + 1)
@@ -203,11 +257,15 @@ def videos_for_touch(df_orig, interp_cells, touch, tid, out_dir, block, fps):
         return
     bbox = _bbox(all_pts)
     view = _make_view(bbox)
+    # One axis for both videos, from the measured frames, so the two are comparable.
+    axis = _patch_axis([anchor_pts[r] for r in anchor_rows]) if cluster_colors else None
 
     _write_video(out_dir / f"{block}_touch{tid}_1_original.mp4",
-                 frame_rows, held_original, view, bbox, block, tid, "ORIGINAL (uninterp)", fps)
+                 frame_rows, held_original, view, bbox, block, tid, "ORIGINAL (uninterp)", fps,
+                 axis=axis)
     _write_video(out_dir / f"{block}_touch{tid}_2_interpolated.mp4",
-                 frame_rows, interp_at, view, bbox, block, tid, "INTERPOLATED", fps)
+                 frame_rows, interp_at, view, bbox, block, tid, "INTERPOLATED", fps,
+                 axis=axis)
 
 
 def main(argv=None) -> int:
@@ -218,6 +276,8 @@ def main(argv=None) -> int:
     ap.add_argument("--n-touches", type=int, default=5)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--fps", type=int, default=FPS)
+    ap.add_argument("--no-cluster-colors", action="store_true",
+                    help="Draw every point in one colour instead of one per contact patch")
     args = ap.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
@@ -242,7 +302,8 @@ def main(argv=None) -> int:
         picked = sorted(rng.choice(valid, size=min(args.n_touches, len(valid)), replace=False))
         logger.info("%s: touches %s", block, [int(t) for t in picked])
         for tid in picked:
-            videos_for_touch(orig_cells, interp_cells, touch, int(tid), args.video_dir, block, args.fps)
+            videos_for_touch(orig_cells, interp_cells, touch, int(tid), args.video_dir, block,
+                             args.fps, cluster_colors=not args.no_cluster_colors)
     logger.info("Done. Videos in %s", args.video_dir)
     return 0
 
