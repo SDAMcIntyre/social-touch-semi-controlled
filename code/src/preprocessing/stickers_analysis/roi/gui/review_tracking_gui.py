@@ -521,9 +521,13 @@ class TrackerReviewGUI:
     # --- NEW: Explicit method to destroy window ---
     def destroy_window(self):
         """Destroys the root window."""
+        import gc
         if self.root:
             self.root.destroy()
             self.root = None
+        # Force GC on the main thread so Prefect's background threads don't later trigger
+        # it and hit Tcl_AsyncDelete (Tkinter object garbage-collected on the wrong thread).
+        gc.collect()
 
     # --- UI UPDATE METHODS (Called by the Controller) ---
 

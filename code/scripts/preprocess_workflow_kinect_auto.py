@@ -12,6 +12,13 @@ from prefect import flow, get_run_logger
 # Setup a basic logger
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+# CuPy import guard — must precede any preprocessing imports (NumPy 2.0 removed the
+# bool8 alias CuPy needs; C-extensions imported first corrupt the dtype state).
+try:
+    import cupy  # noqa: F401
+except Exception:
+    pass
+
 import utils.path_tools as path_tools
 from utils import DagConfigHandler, PipelineMonitor, TaskExecutor
 from utils.pipeline.pipeline_dependency_error import PipelineDependencyError

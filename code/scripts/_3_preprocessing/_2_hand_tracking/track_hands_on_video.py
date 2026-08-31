@@ -30,7 +30,7 @@ class ProcessingConfig:
     max_retries: int = 10
     retry_delay_base: int = 2
     max_workers: int = 8  # For parallel frame processing
-    person_selector: str = "second"
+    person_selector: str = "right"  # giver = rightmost person; server can't parse ordinals ("second"->"1") over HTTP. Moot once the hand-tracking ROI is defined.
     hand_side: str = "right"
 
     @property
@@ -168,7 +168,9 @@ def _offset_roi_coordinates(results_map: Dict[int, Any], roi: dict) -> None:
 class HandTrackingPipeline:
     def __init__(self, config: ProcessingConfig):
         self.config = config
-        self.client = HamerClientAPI(self.config.base_url)
+        # video_timeout raised to 10h: batch (whole-video) mode processes every frame in
+        # one request, which at local inference speed exceeds the 1h default.
+        self.client = HamerClientAPI(self.config.base_url, video_timeout=(10, 36000))
 
     @retry_operation(max_retries=10, delay_base=2)
     def _upload_video_safe(self, path: str):

@@ -11,8 +11,7 @@ parameters:
       valid_configs_ST18-04]
   # Path to the experimenter-maintained xlsx file that annotates unusable trials.
   # Relative paths are resolved from the project data root.
-  neural_quality_xlsx: "F:/liu-onedrive-nospecial-carac/_Teams/Social touch Kinect
-    MNG/03_metadata/semicontrolled_data-collection_quality-check.xlsx"
+  neural_quality_xlsx: "metadata/semicontrolled_data-collection_quality-check.xlsx"
 
 tasks:
   # --- Stage 5: Final data integration ---

@@ -3,6 +3,13 @@ import sys
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
+# CuPy import guard — must precede any preprocessing imports (NumPy 2.0 removed the
+# bool8 alias CuPy needs; C-extensions imported first corrupt the dtype state).
+try:
+    import cupy  # noqa: F401
+except Exception:
+    pass
+
 from prefect import flow
 import utils.path_tools as path_tools
 from utils.pipeline.pipeline_config_manager import DagConfigHandler
