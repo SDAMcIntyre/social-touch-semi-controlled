@@ -2,15 +2,31 @@
 """Frame-by-frame 3D videos of the contact point cloud, original vs interpolated.
 
 For each block, randomly picks 5 single touches (``single_touch_id``) and writes
-TWO small mp4s per touch:
+the same touch on two different timelines, one per sub-folder:
 
-    <block>_touch<id>_1_original.mp4       uninterpolated (kinect-rate, held between
-                                           samples so it plays on the same timeline)
-    <block>_touch<id>_2_interpolated.mp4   interpolated (every row)
+    <video-dir>/unaligned/<block>_touch<id>_1_original.mp4
+    <video-dir>/unaligned/<block>_touch<id>_2_interpolated.mp4
+    <video-dir>/aligned/  <block>_touch<id>_1_original.mp4
+    <video-dir>/aligned/  <block>_touch<id>_2_interpolated.mp4
 
-Each video shows the contact patch evolving inside a fixed 3D grid box, with a
-faint accumulating trail so the swept path builds up — the original stair-steps
-between the few kinect frames, the interpolated glides continuously.
+The file names are identical in both folders, so the same touch on the two
+timelines is easy to line up. ``_1_original`` is the uninterpolated data at
+kinect rate, held between samples so it plays on the dense timeline;
+``_2_interpolated`` is every row. Each video shows the contact patch evolving
+inside a fixed 3D grid box, with a faint accumulating trail so the swept path
+builds up — the original stair-steps between the few kinect frames, the
+interpolated glides continuously.
+
+Timelines
+---------
+``unaligned`` samples rows evenly across the touch. Kinect anchors are 33-34
+rows apart and the sampling step rarely divides that, so the held original steps
+at uneven frame counts (e.g. 10, 11, 10, 11 ...) and anchors mostly fall between
+frames. ``aligned`` instead samples a fixed number of frames inside each anchor
+interval, so every anchor lands exactly on a frame and the original steps at a
+perfectly regular cadence. It spans anchors[0]..anchors[-1] rather than the full
+touch, since outside that range there is nothing measured to show. Both share
+one view and one patch-colour axis, so all four videos are comparable.
 
 Points are coloured by contact patch (finger), using the same clustering the
 interpolation itself uses. On a whole-hand block that makes the fix checkable by
@@ -227,8 +243,27 @@ def _write_video(path: Path, frame_rows, points_of_row, view, bbox, block, tid, 
     vw.release()
 
 
+def _aligned_rows(anchors: np.ndarray, max_frames: int = MAX_FRAMES) -> Optional[np.ndarray]:
+    """Rows sampled so every anchor lands exactly on a frame.
+
+    A fixed number of frames per anchor interval, so the held original steps at
+    a regular cadence instead of alternating 10/11 frames. ``per`` is capped at
+    the shortest interval's length to keep the step at >= 1 row (no duplicate
+    frames). Returns None when there are too few anchors to align to.
+    """
+    if len(anchors) < 2:
+        return None
+    gaps = np.diff(anchors)
+    per = max(1, min(max_frames // len(gaps), int(gaps.min())))
+    rows: List[int] = []
+    for a, b in zip(anchors[:-1], anchors[1:]):
+        rows.extend(np.linspace(a, b, per, endpoint=False).round().astype(int).tolist())
+    rows.append(int(anchors[-1]))
+    return np.unique(rows)
+
+
 def videos_for_touch(df_orig, interp_cells, touch, tid, out_dir, block, fps,
-                     cluster_colors: bool = True):
+                     cluster_colors: bool = True, aligned: bool = True):
     rows = np.where(touch == tid)[0]
     r0, r1 = int(rows.min()), int(rows.max())
     span = np.arange(r0, r1 + 1)
@@ -249,23 +284,45 @@ def videos_for_touch(df_orig, interp_cells, touch, tid, out_dir, block, fps,
     def interp_at(row):
         return parse_contact_points(interp_cells[row])
 
+    aligned_rows = _aligned_rows(anchor_arr) if aligned else None
+
     all_pts = [p for r in anchor_rows for p in anchor_pts[r]]
-    for r in frame_rows:
-        all_pts += interp_at(int(r))
+    for rows_ in (frame_rows, aligned_rows):
+        if rows_ is not None:
+            for r in rows_:
+                all_pts += interp_at(int(r))
     if not all_pts:
         logger.warning("touch %s: no points, skipping", tid)
         return
+    # One view and one colour axis for every video of this touch, so all of them
+    # are directly comparable.
     bbox = _bbox(all_pts)
     view = _make_view(bbox)
-    # One axis for both videos, from the measured frames, so the two are comparable.
     axis = _patch_axis([anchor_pts[r] for r in anchor_rows]) if cluster_colors else None
 
-    _write_video(out_dir / f"{block}_touch{tid}_1_original.mp4",
+    plain_dir = out_dir / "unaligned"
+    plain_dir.mkdir(parents=True, exist_ok=True)
+    _write_video(plain_dir / f"{block}_touch{tid}_1_original.mp4",
                  frame_rows, held_original, view, bbox, block, tid, "ORIGINAL (uninterp)", fps,
                  axis=axis)
-    _write_video(out_dir / f"{block}_touch{tid}_2_interpolated.mp4",
+    _write_video(plain_dir / f"{block}_touch{tid}_2_interpolated.mp4",
                  frame_rows, interp_at, view, bbox, block, tid, "INTERPOLATED", fps,
                  axis=axis)
+    if aligned_rows is None:
+        if aligned:
+            logger.info("touch %s: %d anchor(s), too few to align — unaligned only",
+                        tid, len(anchor_rows))
+        return
+
+    # Same file names as above, one folder over — easy to compare the two timelines.
+    aligned_dir = out_dir / "aligned"
+    aligned_dir.mkdir(parents=True, exist_ok=True)
+    _write_video(aligned_dir / f"{block}_touch{tid}_1_original.mp4",
+                 aligned_rows, held_original, view, bbox, block, tid,
+                 "ORIGINAL (aligned)", fps, axis=axis)
+    _write_video(aligned_dir / f"{block}_touch{tid}_2_interpolated.mp4",
+                 aligned_rows, interp_at, view, bbox, block, tid,
+                 "INTERPOLATED (aligned)", fps, axis=axis)
 
 
 def main(argv=None) -> int:
@@ -278,6 +335,8 @@ def main(argv=None) -> int:
     ap.add_argument("--fps", type=int, default=FPS)
     ap.add_argument("--no-cluster-colors", action="store_true",
                     help="Draw every point in one colour instead of one per contact patch")
+    ap.add_argument("--no-aligned", action="store_true",
+                    help="Skip the aligned/ folder; write only the unaligned/ videos")
     args = ap.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
@@ -303,7 +362,8 @@ def main(argv=None) -> int:
         logger.info("%s: touches %s", block, [int(t) for t in picked])
         for tid in picked:
             videos_for_touch(orig_cells, interp_cells, touch, int(tid), args.video_dir, block,
-                             args.fps, cluster_colors=not args.no_cluster_colors)
+                             args.fps, cluster_colors=not args.no_cluster_colors,
+                             aligned=not args.no_aligned)
     logger.info("Done. Videos in %s", args.video_dir)
     return 0
 

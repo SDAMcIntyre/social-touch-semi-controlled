@@ -139,12 +139,27 @@ The interpolated panel should sit in the same footprint as the original (on-surf
 denser, and show a continuous time sweep. Committed examples are in `plot/`.
 
 `code/interpolate_video.py` additionally writes small 3D **videos** — for each block it
-picks 5 random touches and, per touch, two mp4s (`_1_original`, `_2_interpolated`) showing
-the contact patch evolving inside a fixed 3D grid box, with an accumulating trail. The
-original stair-steps between the few kinect frames; the interpolated glides continuously.
+picks 5 random touches and shows the contact patch evolving inside a fixed 3D grid box,
+with an accumulating trail. The original stair-steps between the few kinect frames; the
+interpolated glides continuously. Points are coloured **per contact patch**, using the
+same clustering the interpolation uses, so on a whole-hand block you can check by eye that
+each finger keeps its own colour and the gaps between fingers stay open
+(`--no-cluster-colors` for one flat colour).
+
+Each touch is written on two timelines, one per sub-folder, under the same file name:
+
+| folder | |
+|---|---|
+| `unaligned/` | rows sampled evenly across the touch. Anchors are 33–34 rows apart and the sampling step rarely divides that, so the held original steps at uneven frame counts (10, 11, 10, 11 …). |
+| `aligned/` | a fixed number of frames **inside each anchor interval**, so every anchor lands exactly on a frame and the original steps at a perfectly regular cadence. Spans the first to last anchor rather than the whole touch. Skipped for touches with < 2 anchors. `--no-aligned` to omit. |
+
+Both share one view and one patch-colour axis, so all four videos of a touch are directly
+comparable. Note the original is a **backward** hold — between anchors it shows the last
+measurement, so it trails the interpolated by up to one kinect frame (~33 rows). That is a
+real property of uninterpolated data, not a rendering error.
 
 ```bash
-python code/interpolate_video.py           # writes plot/videos/*.mp4 (git-ignored)
+python code/interpolate_video.py           # writes plot/videos/{unaligned,aligned}/*.mp4 (git-ignored)
 ```
 
 > Both scripts avoid matplotlib and numpy `@`/`dot`: in this conda env both the matplotlib
