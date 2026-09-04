@@ -162,12 +162,23 @@ real property of uninterpolated data, not a rendering error.
 python code/interpolate_video.py           # writes plot/videos/{unaligned,aligned}/*.mp4 (git-ignored)
 ```
 
-> Both scripts avoid matplotlib and numpy `@`/`dot`: in this conda env both the matplotlib
-> rasteriser **and** numpy's BLAS matmul segfault (a machine-level native DLL conflict,
-> unrelated to this code). Plots render via Pillow, videos via OpenCV (mp4v), and all 3D
-> projection is done with element-wise math. The interpolation tool itself is unaffected
-> (it uses no matmul). Videos are regenerable, so they are git-ignored.
+> Both scripts render with Pillow (plots) and OpenCV (videos, mp4v), doing their 3D
+> projection with element-wise math rather than matplotlib. That was originally forced by
+> a broken BLAS in the reference environment, where numpy's matmul — and therefore every
+> matplotlib transform — segfaulted. That is **fixed** (see `environment.yml`: numpy must
+> come from pip, not conda-forge), so new code may use matplotlib; these two scripts keep
+> their renderers because they work. Videos are regenerable, so they are git-ignored.
 
 ## Requirements
 
-`numpy`, `pandas`, `scipy`, `open3d` (tool); plus `Pillow` (plots) and `opencv-python` (videos)
+`numpy`, `pandas`, `scipy`, `open3d` (tool); plus `Pillow` (plots) and `opencv-python`
+(videos); plus `pyarrow` and `matplotlib` for `code/plot_contact_depth_field.py`.
+
+```bash
+conda env create -f environment.yml     # pinned, known-good set
+conda activate social-touch
+```
+
+> `environment.yml` installs numpy from **pip**, not conda-forge. This is deliberate — the
+> conda build links the environment's shared BLAS shim and segfaults on any matmul once
+> that shim drifts out of step. See the comments in the file.

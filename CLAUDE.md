@@ -38,20 +38,30 @@ plot/    verification PNGs                               (committed, small)
 Git-ignored (regenerable — do NOT commit, they are large): `output/` (interpolated
 CSVs, ~1.5 GB) and `plot/videos/` (~11 MB of mp4s).
 
-## Environment — READ before plotting/rendering
-Python: `D:/conda_envs/social-touch/python.exe` (numpy 2.0, opencv 4.12, Pillow ok).
+## Environment
+Python: `D:/conda_envs/social-touch/python.exe` (python 3.10, numpy 2.0, scipy 1.15,
+matplotlib 3.10, pyarrow 23, open3d 0.19, opencv 4.13, Pillow 11).
+Package set is pinned in `environment.yml`.
 
-**This env has native DLL conflicts. Two things segfault (exit 127, no traceback):**
-1. **numpy `@` / `np.dot` (BLAS matmul)** — use element-wise math instead.
-2. **matplotlib rendering** (`canvas.draw` / `savefig`, any backend) — the transforms
-   use matmul. Do **not** use matplotlib for output. Its *colormap data* (LUT lookup)
-   is safe.
+**numpy must stay a pip wheel — do not `conda install numpy` here.** Everything in
+this env except numpy is a pip wheel with its own bundled OpenBLAS. The conda-forge
+numpy instead links the env's shared `libblas` shim, and that pairing had drifted:
+numpy 2.0.0 (built against `libblas >=3.9.0`) was running against `libblas 3.11.0` →
+`mkl 2025.3.0`. The version constraint still matched so conda allowed it, but the
+binary segfaulted (exit 127, no traceback) the moment it called BLAS — `a @ b`,
+2-D `np.dot`, `np.linalg.*`, and therefore **every** matplotlib transform, 2-D and
+3-D alike. Telltale: `scipy.linalg.inv` worked while `np.linalg.inv` crashed.
 
-So: plots are rendered with **Pillow**, videos with **OpenCV** (`mp4v` codec — `avc1`
-/ H.264 fails, no OpenH264 dll), and all 3D projection is hand-rolled element-wise.
-The interpolation tool itself is fine (it never uses matmul).
-Also: interpreter launches can intermittently fail with 127 under heavy concurrent
-CPU/RAM load — run one heavy job at a time.
+Fixed 2026-09-04 with `pip install --force-reinstall --no-deps numpy==2.0.0`, which
+brings numpy's own OpenBLAS. Verified afterwards: matmul, `np.linalg`, matplotlib 2-D
+and 3-D all fine, and the interpolation output is unchanged (12,123 rows re-checked
+cell-for-cell, both single and multi mode). To roll back:
+`conda install -n social-touch numpy=2.0.0=py310h1ec8c79_0`.
+
+**matplotlib now works**, but the verification scripts still render with **Pillow**
+(plots) and **OpenCV** (videos, `mp4v` — `avc1`/H.264 fails, no OpenH264 dll), with 3D
+projection hand-rolled element-wise. That code predates the fix and works; it is not
+worth rewriting. New scripts may use matplotlib freely.
 
 ## Run
 ```bash

@@ -1,0 +1,50 @@
+# Environment for contact_point_interpolation.
+#
+#   conda env create -f environment.yml
+#   conda activate social-touch
+#
+# Recreates the working set as of 2026-09. The existing env on this machine
+# lives at D:/conda_envs/social-touch.
+#
+# Why almost everything is under `pip:` rather than conda
+# ------------------------------------------------------
+# numpy MUST come from pip here. The conda-forge numpy build links against the
+# environment's shared `libblas` shim, which forwards to whatever MKL the env
+# happens to hold. That pairing drifted on this machine -- numpy 2.0.0
+# (py310h1ec8c79_0, built against libblas >=3.9.0) ended up running against
+# libblas 3.11.0 / mkl 2025.3.0. The version constraint still matches, so conda
+# allowed it, but the binary segfaults (exit 127, no traceback) the moment it
+# calls into BLAS: `a @ b`, `np.dot` on 2-D, `np.linalg.*`, and therefore every
+# matplotlib transform, 2-D and 3-D alike.
+#
+# The pip wheels bundle their own OpenBLAS and ignore the conda MKL entirely,
+# which is why scipy (a pip wheel) does linear algebra fine in the same process
+# where numpy cannot. Keeping the whole numeric stack on pip wheels keeps one
+# BLAS per package and avoids the shim.
+#
+# If you do want conda-managed numpy, pin numpy and libblas together and solve
+# them in one transaction -- never upgrade libblas/mkl on their own afterwards.
+
+name: social-touch
+
+channels:
+  - conda-forge
+
+dependencies:
+  - python=3.10
+  - pip
+
+  - pip:
+      # --- core: interpolate_contact_points.py -------------------------------
+      - numpy==2.0.0            # see note above: pip wheel, NOT conda-forge
+      - scipy==1.15.3           # cKDTree, csgraph.dijkstra, linear_sum_assignment
+      - pandas==2.3.3           # CSV I/O
+      - open3d==0.19.0          # reads the forearm .ply
+
+      # --- verification renderers -------------------------------------------
+      - pillow==11.3.0          # interpolate_test.py  -> plot/*.png
+      - opencv-python==4.13.0.92  # interpolate_video.py -> plot/videos/*.mp4 (mp4v)
+
+      # --- plot_contact_depth_field.py --------------------------------------
+      - pyarrow==23.0.1         # reads the contact-depth-field parquet + metadata
+      - matplotlib==3.10.6      # 3-D frame viewer
